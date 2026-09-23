@@ -334,9 +334,17 @@ def resolve_site(
 ) -> list[Binding]:
     """Every slot of one call site, resolved per path (§1b).
 
-    `site` is a call-site row — the raw fact stream's or the projection's; the slots are
-    read off the row handed in. `index` is the fold above, which a caller resolving many
-    sites builds once.
+    `site` NAMES the site — its `caller` and `ordinal` — and the walk resolves the
+    PROJECTED row for that pair, whichever row was handed in. That is unconditional on
+    purpose (fix round 2, 2026-09-23): this function is the front door, and requiring
+    callers to project first would put the Critical back one level out, where a caller
+    that hands a raw `call_sites` row for a compiler-emitted bridge call is answered with
+    the bridge's receiver, its mask and its marker as though they were the callee's
+    arguments. A rule every future caller has to remember is a cause left in place; this
+    removes it. A row for a site the workspace does not hold — a caller's own synthesis —
+    is resolved as handed in, since there is nothing to project it against.
+
+    `index` is the fold above, which a caller resolving many sites builds once.
 
     Returns one `Binding` per coherent path, in a deterministic order (NFR-1): the first
     slot's paths drive the outer order, and each slot's answers arrive in the edge query's
@@ -344,7 +352,9 @@ def resolve_site(
     M-1 ruling taken to its end — the combination a per-position walk would have invented
     is not a row here.
     """
-    walk = _Walk(index if index is not None else value_index(workspace))
+    fold = index if index is not None else value_index(workspace)
+    walk = _Walk(fold)
+    site = fold.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     combined: list[tuple[_Trail, dict[int | str, Answer]]] = [((), {})]
     for slot in _slots_of(site):
         reached = walk.at(site, slot)
@@ -497,13 +507,17 @@ class _Walk:
             return self._resolve((_PARAMETER, method, int(str(parameter))), trail, frames)
         arguments = site["arguments"] or []
         if not isinstance(slot, int) or not 0 <= slot < len(arguments):
-            # A slot the site does not have — a CONSUMER asking about a position that is
-            # not there, which is the only route left. The walk's own back-crossing cannot
-            # reach it: the one place a slot index comes from somewhere other than the row
-            # in hand is a `bound_to_parameter` edge, and a site the projection renumbered
-            # is refused as `unaligned` before this. An answer naming a reason beats an
-            # exception a consumer cannot act on; a caller that wants the strict reading
-            # checks its own site's arity, which it has.
+            # A slot this site does not have, and **this is the guard that holds the
+            # projection boundary** — so what reaches it is worth stating exactly. The
+            # back-crossing DOES arrive here: a `bound_to_parameter` edge carries a raw
+            # slot index, so at a bridge site there is an edge for the receiver shift, for
+            # each mask and for the marker — indices past the projected row's arity. They
+            # are unreachable only because nothing ASKS for them: an index comes from the
+            # callee's own `{kind: parameter, value: N}` facts, and a method never names a
+            # parameter past its own arity. If a future edge ever carries an index from
+            # anywhere else, this refusal is what keeps it from reading a neighbouring
+            # slot — which is the Critical, and the reason the branch is a refusal rather
+            # than an exception a consumer cannot act on.
             return _only(trail, _unresolved(NOT_READABLE))
         return self._entry(arguments[slot], method, (_SLOT, method, ordinal, slot), trail, frames)
 

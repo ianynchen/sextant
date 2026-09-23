@@ -67,13 +67,28 @@
 --   produced_by         | the site's result | NULL        | the site   | NULL
 --   returned_by         | the site's result | the callee  | the site   | NULL
 --   read_from_binding   | NULL              | the binding | the site   | NULL
---   bound_to_parameter  | the argument's    | the callee  | the site   | the
---                       | source, or NULL   |             |            | index
+--   bound_to_parameter  | the argument's    | the callee  | the site   | the RAW
+--                       | source, or NULL   | (PROJECTED) |            | slot
 --   names_declaration   | the argument's    | the         | the site   | NULL
 --                       | source, or NULL   | declaration |            |
 --
--- `to_index` is meaningful for `bound_to_parameter` ALONE — it is a parameter
--- index, and no other edge lands on a parameter.
+-- `to_index` is meaningful for `bound_to_parameter` ALONE, and no other edge
+-- lands on a parameter. **It is the RAW argument slot, and its row's
+-- `to_symbol` is the PROJECTED callee — the two are not numbered against the
+-- same function.** At a compiler-emitted default-argument bridge site they
+-- differ by the leading receiver, and the trailing mask and marker are indices
+-- the callee has no parameter for at all. So this column SELECTS which sites
+-- bind a parameter; it must never be used to index into a row. The arm below
+-- has the whole statement, and `resolve/values.py` is the reader that honours
+-- it (fix round, 2026-09-23 — the mis-pairing this table used to read as an
+-- invitation produced a wrong answer at `resolved`).
+--
+-- `from_value` is the same shape of pairing and carries the same warning: it is
+-- read from the RAW argument at that slot, so a reader joining it to a
+-- projected callee is joining two readings of one site. It is a value id in
+-- `from_method`'s own frame, which the projection never renumbers, so the id
+-- itself is sound; what is not sound is assuming it sits at `to_index` of the
+-- callee's parameter list.
 --
 -- **A NULL `from_value` is an ANSWER, not an absence, and it was measured
 -- rather than assumed.** Read against the fact files: a binding reference, a

@@ -619,6 +619,14 @@ _GREET = "(Ljava/lang/String;Z)V"
 _GREET_BRIDGE = "(Lcom/acme/orders/values/Api;Ljava/lang/String;ZILjava/lang/Object;)V"
 _HANDLER = _PKG + "Handler#"
 _HANDLE = "(Lcom/acme/orders/values/Api;)V"
+# The same bridge shape over a method that HANDS BACK its own parameter, for the forward
+# crossing: the walk descends through the bridge site into `label`'s return, and the frame
+# it pushes has to be the projected row too.
+_LABEL = "(Ljava/lang/String;)Ljava/lang/String;"
+_LABEL_BRIDGE = (
+    "(Lcom/acme/orders/values/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
+)
+_READ = "()V"
 
 
 def _bridge_facts(mask: int) -> list[Fact]:
@@ -652,6 +660,37 @@ def _bridge_facts(mask: int) -> list[Fact]:
                 CallArgument(kind="int", value=mask),
                 CallArgument(kind="null"),
             ],
+        ),
+        # `label(String)` hands its own parameter back, called through its own bridge.
+        _declared(_API, "label", _LABEL),
+        _returns(_API, "label", _LABEL, 0, CallArgument(kind="parameter", value=0)),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_API, "label$default", _LABEL_BRIDGE),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _API,
+            modifiers={"static": True, "synthetic": True},
+            bridge_of="label",
+        ),
+        _declared(_HANDLER, "read", _READ),
+        _site(
+            _symbol(_HANDLER, "read", _READ),
+            0,
+            (_API, "label$default", _LABEL_BRIDGE),
+            result=80,
+            arguments=[
+                CallArgument(kind="instance", symbol=_API, source=70),
+                CallArgument(kind="string", value="z"),
+                CallArgument(kind="int", value=0),
+                CallArgument(kind="null"),
+            ],
+        ),
+        _site(
+            _symbol(_HANDLER, "read", _READ),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=80)],
         ),
         # Two sites inside `greet`, one reading each of its own parameters.
         _site(
@@ -996,6 +1035,42 @@ def test_a_defaulted_parameter_is_a_reason_and_never_the_value_the_bridge_pushed
     # The parameter the caller DID supply still resolves, so this is a narrow refusal.
     supplied = _bindings(bridged[2], _symbol(_API, "greet", _GREET), 0)
     assert [b.slots[0].value for b in supplied] == ["y"]
+
+
+def test_a_raw_row_handed_in_at_the_front_door_is_projected_before_it_is_read(bridged):
+    """**The Critical, one level out** (fix round 2). The walk's internal reads were fixed
+    by reading the projection; `resolve_site` itself still read whatever row it was handed,
+    so a caller passing the RAW row for a bridge call got the bridge's receiver as slot 0 —
+    `com/acme/orders/values/Api#`, the same fabrication, at the exact function a consumer
+    is about to be wired into.
+
+    The fix is to project inside rather than to document a requirement: a rule every future
+    caller must remember is a cause left in place. The row handed in names the site; the
+    walk resolves the projected row for it, so the raw arity of five collapses to the
+    sibling's two and slot 0 is the argument the caller actually wrote."""
+    raw = [
+        row
+        for row in bridged[0].query("call_sites")
+        if row["caller"] == _symbol(_HANDLER, "handle", _HANDLE) and row["ordinal"] == 0
+    ]
+    assert len(raw) == 1 and len(raw[0]["arguments"]) == 5, "the fixture's raw row"
+    bindings = resolve_site(bridged[0], dict(raw[0]))
+    # The sibling's two parameters plus the receiver the projection lifted OUT of slot 0 —
+    # never five slots, and never the receiver standing in for parameter 0.
+    assert [set(b.slots) for b in bindings] == [{0, 1, RECEIVER}]
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("literal", "y")]
+    assert [b.slots[0].value for b in bindings] != [_API], "the bridge's receiver"
+    assert [(b.slots[1].kind, b.slots[1].value) for b in bindings] == [("literal", False)]
+
+
+def test_a_value_returned_through_a_bridge_reads_the_siblings_arguments(bridged):
+    """The FORWARD crossing over the same shape, which rests on the same invariant and
+    would have carried the same defect. `label` hands its own parameter back, so the walk
+    descends into its return and the frame it pushes — the site it descended through — is
+    what answers `label`'s parameter 0. That site is a bridge call: read raw, its slot 0 is
+    the receiver; read projected, it is the `"z"` the caller wrote."""
+    bindings = _bindings(bridged[0], _symbol(_HANDLER, "read", _READ), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("literal", "z")]
 
 
 def test_the_reasons_are_the_closed_set_the_design_declares(walked):
