@@ -461,6 +461,24 @@ def _indices_of(slot: int | str, arity: int) -> tuple[int, ...]:
     return (index,)
 
 
+def _every_identity(catalogs: Sequence[Catalog]) -> list[dict[str, Any]]:
+    """§2's table across every SOURCE the analysis loaded, in catalog order, deduplicated
+    by what an entry matches on — `by` is provenance and not part of the claim, which is
+    the same key `yaml_source._matching_keys` deduplicates one source's table with.
+
+    One source hands every catalog it builds the same list object, so this is one pass over
+    a handful of tables and not one per catalog."""
+    found: list[dict[str, Any]] = []
+    seen: set[tuple[tuple[str, Any], ...]] = set()
+    for catalog in catalogs:
+        for entry in catalog.value_model:
+            key = tuple(sorted((name, value) for name, value in entry.items() if name != "by"))
+            if key not in seen:
+                seen.add(key)
+                found.append(entry)
+    return found
+
+
 def record_value_resolutions(
     workspace: Workspace, catalogs: Sequence[Catalog], *, shadow: bool
 ) -> int:
@@ -490,11 +508,16 @@ def record_value_resolutions(
     # it (Task 7). **A preview that left it out would under-report the conversions it
     # exists to put in front of a reviewer**, and by the one kind that matters most: an
     # identity entry is what unsticks the walk at a producer whose result is opaque (§0b),
-    # which is precisely the position a catalog wrote a hop declaration for. Every catalog
-    # of one source carries the same table (`Catalog.value_model`), so the first is the
-    # source's; `catalogs` is empty only where the whole analysis loaded none, and then
-    # nothing was asked either.
-    identities = catalogs[0].value_model if catalogs else []
+    # which is precisely the position a catalog wrote a hop declaration for.
+    #
+    # **Every SOURCE's table, not the first catalog's** (review round 1). Each catalog
+    # carries its own source's (`Catalog.value_model`), and D02 §6 loads two sets together
+    # and privileges neither — so reading `catalogs[0]` would shadow one source's engines
+    # against another source's identities the day a repository ships its own. One catalog's
+    # table is one list object shared by all of that source's catalogs, so the union is at
+    # most as long as the sources' tables put together, and it is deduplicated on what an
+    # entry matches on, exactly as the loader deduplicates within one source.
+    identities = _every_identity(catalogs)
     # Grouped by SITE, because `resolve_site` is the entry point every migrated engine
     # calls (§1b: one entry point, not two) and it resolves a site's slots TOGETHER — a
     # binding is the site's slots as one path reaches them, and resolving two asked slots

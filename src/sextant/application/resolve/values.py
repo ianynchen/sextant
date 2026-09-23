@@ -466,6 +466,16 @@ def _unresolved(reason: str) -> Answer:
     return Answer(kind=UNRESOLVED, reason=reason)
 
 
+def _used_at(origin: _Position) -> int | None:
+    """WHERE a value is used, which is what bounds the `escapes` window.
+
+    A slot of a call site is a position in control flow (`ordinal`). A method's RETURN is
+    not: `method_returns.ordinal` numbers the return instructions, not the call sites, so
+    nothing there says which calls in that method ran before the `return`. `None` is that
+    answer, and `_through` reads it as the whole tail of the method (T-6)."""
+    return origin[2] if origin[0] == _SLOT else None
+
+
 class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
@@ -595,6 +605,35 @@ class _Walk:
                 return _only(trail, _unresolved(NOT_READABLE))
             return _only(trail, Answer(kind=EXPRESSION, value=template))
         if kind in _DECLARATION_KINDS:
+            # **An identified CONSTRUCTION is answered before the type symbol, and the
+            # order is the whole of the fix** (review round 1, 2026-09-23). An `instance`
+            # entry carries both a `symbol` (the concrete type a `NEW` built) and a
+            # `source` (the constructed value). Answering the symbol first meant a
+            # constructed value never reached `_value`, where the identity arm lives — so
+            # **four of the twenty-five shipped entries, every initialiser one, could never
+            # fire**: a value BUILT from an address answered with the symbol of the type it
+            # was built from, while the same address handed to that type's static factory
+            # answered with the address.
+            #
+            # **Why this does not break what T-3's symbol answer is for.** That ruling
+            # exists so a consumer is never handed a symbol dressed as a string, and that
+            # is untouched: an identity answer is a real value and a consumer testing
+            # `literal_kind` reads it the same way either way. What the two statements
+            # differ in is strength. "The concrete type a value was built from" is true of
+            # EVERY constructed value and is a fallback; an `identified_by` entry is a
+            # measured claim about ONE producer, carrying the probe row §7b requires. Where
+            # both are available the measured one answers; where no entry matches — which
+            # is every constructed type in this estate but four — the symbol answer stands
+            # unchanged, byte for byte. A `class` or an `enum` reference has no
+            # construction to find at all and is never affected.
+            #
+            # The consumers that want the TYPE out of such a slot — a handler's
+            # implementing class, a payload's declared type — read types nobody has
+            # declared an identity for, and a roled entry (`HttpEntity#<init>`,
+            # `ProducerRecord#<init>`) is passed over by `_identified` in any case.
+            constructed = self._identified_construction(argument, method)
+            if constructed is not None:
+                return self._through(method, constructed[0], _used_at(origin), trail, frames)
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -625,13 +664,7 @@ class _Walk:
         source = argument.get("source")
         if source is None:
             return _only(trail, _unresolved(NOT_READABLE))
-        # WHERE the value is used, which is what bounds the `escapes` window below. A slot
-        # of a call site is a position in control flow (`ordinal`). A method's RETURN is
-        # not: `method_returns.ordinal` numbers the return instructions, not the call
-        # sites, so nothing here says which calls in that method ran before the `return`.
-        # `None` is that answer, and `_through` reads it as the whole tail of the method.
-        used_at = origin[2] if origin[0] == _SLOT else None
-        return self._through(method, int(str(source)), used_at, trail, frames)
+        return self._through(method, int(str(source)), _used_at(origin), trail, frames)
 
     def _elements(
         self,
@@ -695,13 +728,72 @@ class _Walk:
         Counting every hand-off would make the commonest readable shape — a value logged
         and then used — unresolved, so the wider rule needs §3a's measurement behind it
         rather than a guess here.
+
+        **A CONSTRUCTOR is a producer, not a mutation** (review round 1). `produced_by` is
+        read off `call_sites.result` and an `<init>` has none — D00 §5's "result is null
+        for a void one" — so a constructed value has no producer ordinal at all here, and
+        the window used to open before its own construction. Every `new Thing(x)` whose
+        value is then used therefore answered `escapes` on the constructor itself. The
+        construction is where the window opens, and `_construction` is what finds it.
         """
         produced = self._index.producers.get((method, value), ())
-        produced_at = min(produced) if produced else -1
+        constructed = self._construction(method, value)
+        produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
         for ordinal in self._index.receivers.get((method, value), ()):
             if ordinal > produced_at and (used_at is None or ordinal < used_at):
                 return _only(trail, _unresolved(ESCAPES))
         return self._resolve((_VALUE, method, value), trail, frames)
+
+    def _construction(self, method: str, value: int) -> int | None:
+        """The ordinal of the call that CONSTRUCTED `value` in `method`, or None where
+        nothing in this method did.
+
+        The facts say it without this module naming a language's constructor spelling, and
+        the three conjuncts are each load-bearing:
+
+        * **no `produced_by` edge.** A value a call handed back is that edge's business, and
+          its earliest receiver-site is an ordinary call ON it (`x = foo(); x.bar()`).
+        * **the site is the EARLIEST the value is the receiver of.** Nothing can be invoked
+          on a value before it exists, so if it was constructed here that call is first. A
+          later one is a call on an already-built value and says nothing about what it is.
+        * **that site produced no value of its own** — D00 §5's "result is null for a void
+          one", which is exactly why `produced_by` carries no edge for a construction and
+          why `_linked_constructor` has always joined an initialiser on `receiver` instead.
+
+        **The third conjunct is what stops a fabrication, and it was found by measuring
+        rather than by reading** (review round 1, second pass). Without it,
+        `session.createProducer(session.createQueue("raw-audit"))` — where `session` is a
+        FIELD, so it has no producer edge either — made `createQueue` the "construction" of
+        the SESSION, and the identity entry for `Session.createQueue` then answered
+        `raw-audit` as what the session is. A queue name published as the identity of a
+        connection: a wrong answer at `resolved`, which is §7's one failure. `createQueue`
+        hands back a `Queue`, so its `result` is not null and it is not a construction of
+        anything.
+        """
+        if self._index.producers.get((method, value)):
+            return None
+        ordinals = self._index.receivers.get((method, value), ())
+        if not ordinals:
+            return None
+        site = self._index.sites.get((method, min(ordinals)))
+        return None if site is None or site.get("result") is not None else min(ordinals)
+
+    def _identified_construction(
+        self, argument: Mapping[str, Any], method: str
+    ) -> tuple[int, int] | None:
+        """`(the value id, the construction's ordinal)` where this argument is a value
+        built here by a producer the identity table names, and None otherwise.
+
+        None is the common answer and the one that keeps `_entry`'s declaration branch
+        exactly as it was: no `source`, no construction, or no entry claiming it."""
+        source = argument.get("source")
+        if source is None:
+            return None
+        value = int(str(source))
+        constructed = self._construction(method, value)
+        if constructed is None or self._identified((method, constructed)) is None:
+            return None
+        return value, constructed
 
     def _value(
         self, method: str, value: int, trail: _Trail, frames: "_Frames"
@@ -738,7 +830,18 @@ class _Walk:
             return tuple(reached)
         producers = self._index.producers.get((method, value), ())
         if not producers:
-            return _only(trail, _unresolved(NOT_READABLE))
+            # No call handed this value back. A CONSTRUCTION is still a producer — one the
+            # `produced_by` edge cannot carry, because `call_sites.result` is null for an
+            # initialiser — so an identity entry naming it answers here (review round 1,
+            # and `_construction` says how the site is found). Where nothing identifies the
+            # construction the answer is exactly what it was before: this branch exists to
+            # reach a MEASURED claim about one producer, not to give constructed values a
+            # second reading of their own.
+            constructed = self._construction(method, value)
+            slot = None if constructed is None else self._identified((method, constructed))
+            if constructed is None or slot is None:
+                return _only(trail, _unresolved(NOT_READABLE))
+            return self._resolve((_SLOT, method, constructed, slot), trail, frames)
         site = (method, min(producers))
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).

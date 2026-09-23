@@ -94,9 +94,9 @@ class YamlCatalogSource:
         **`load` calls this and hands the result to every catalog it builds** (Task 7,
         spec §3c's first migration): the walk resolves through it, so it has to reach the
         engines, and `Catalog.value_model` is where they read it. It still re-reads the
-        directory rather than sharing `load`'s parse — 26 ms against `load`'s own 29 ms,
-        on a resolve that takes 0.8 s — so that the hoist stays one self-contained read
-        that Task 10 can narrow without touching the catalog loop.
+        directory rather than sharing `load`'s parse, so that the hoist stays one
+        self-contained read Task 10 can narrow without touching the catalog loop; `load`'s
+        own call is where what that costs is measured.
         """
         model: list[dict[str, Any]] = []
         # Which file declared each entry, kept so two files claiming one producer are

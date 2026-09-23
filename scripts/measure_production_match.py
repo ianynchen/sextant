@@ -45,9 +45,19 @@ direction, so they are separate columns and no total merges them.
 
 `asked sites` is the distinct `(caller, ordinal)` pairs the shadow reader matched for that
 catalog — sites, not positions: a matcher accepts or refuses a SITE, and one site may carry
-several asked slots. `accepted` is what the production matcher takes; `refused` is the
-slack, and the ratio is the correction factor to apply before quoting a shadow figure as a
-production one.
+several asked slots. A corpus total adds those per catalog, so it counts (catalog, site)
+PAIRS and two catalogs asking about one site count twice; the per-row figure is the one to
+quote.
+
+`accepted` is what the NAMED matcher takes. **`refused` is not "the engine will never see
+this"**, and reading it that way is the mistake this script exists to prevent in the other
+direction: a row can be refused by the matcher named and still be consumed by the same
+engine through a different route. The three `google-pubsub-subscriber` refusals on
+`orders-service` are exactly that — they are the `ProjectSubscriptionName.of` sites, which
+the shadow reader matches through the catalog's hop entry and which the engine reaches
+through the walk's identity hop rather than through `accepts_registration`. What `refused`
+answers is one question only: **would THIS matcher accept this site.** A correction factor
+for a quoted shadow figure needs that answer per matcher, not a single estate ratio.
 
 **A catalog with both a `matches` block and a `parse_calls` block is split in two rows**,
 because the two blocks are matched by different code. The split is made by asking `asks_of`

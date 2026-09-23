@@ -22,12 +22,18 @@ is what §3a step 3 ruled on.
 *Task 7 wired the first engine to it (2026-09-23) and gave the walk §2's identity table to
 resolve through — a hop this harness's own figures were measured without, since it passes no
 identities. **Measured rather than assumed, on the same 27 corpora**: over the whole asked
-surface the identity arm adds **13 visits (413 → 426, +3.1%)**, leaves the maximum depth at
-**3**, and converts **13 misses into answers (552 → 565)**. It pushes no path step — an
-identity hop resolves another slot of the SAME site — so neither the path count nor the depth
-this ruling was made on can move, and the cost it adds is bounded by the number of identified
-producers a corpus actually calls. The §6.1 condition below (re-run this harness before
-capability 9.19) is what keeps that a measurement rather than a standing claim.*
+surface the identity arm adds **19 visits (413 → 432, +4.6%)** and leaves the maximum depth
+at **3**. It pushes no path step — an identity hop resolves another slot of the SAME site —
+so neither the path count nor the depth this ruling was made on can move, and the cost it
+adds is bounded by the number of identified producers a corpus actually calls. The §6.1
+condition below (re-run this harness before capability 9.19) is what keeps that a measurement
+rather than a standing claim.*
+
+*What it moves, on the same surface, is **16 of 1,053 answers**: **13 conversions**, a miss
+becoming an answer, and **3 corrections**, where a value built by an identified initialiser
+answered with the symbol of the type it was built from and now answers with the value. The
+count of RESOLVED answers therefore rises by 13 and not by 16 (552 → 565) — a correction was
+already a resolved answer, and a wrong one.*
 
 > ## RULING (2026-09-23): **no cap.**
 >
@@ -708,8 +714,15 @@ Both halves follow from §3.3 and §1.6.
   of them.** The identity arm (Task 7, the note under the ruling above) costs one `_resolve`
   per hop and pushes no path step, so it cannot move the path or depth figures — but the
   harness itself passes NO identities, so its `visits` column is the walk without them. The
-  gap is +3.1% at 25 shipped entries and is re-derived by the §6.1 re-run rather than by
+  gap is +4.6% at 25 shipped entries and is re-derived by the §6.1 re-run rather than by
   this sentence.
+- **A corpus that CONSTRUCTS the values its catalogs read**, rather than obtaining them from
+  static factories. Reaching an initialiser also moved `escapes` to where it belongs: an
+  initialiser produces no value of its own, so `produced_by` carries no edge for it and the
+  mutation window used to open before the construction itself. MEASURED over the ceiling
+  (every slot of all 27 corpora), that false `escapes` was **719 of 208,430** positions and
+  **none** of them a position any catalog asks about — so no figure in this document moves,
+  and the reason vocabulary is more truthful than it was.
 
 ---
 

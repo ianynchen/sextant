@@ -181,6 +181,11 @@ def _site(
 # The identity producer's two overloads, which only a descriptor or an arity separates.
 _OF_TWO = "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;"
 _OF_ONE = "(Ljava/lang/String;)Ljava/lang/Object;"
+# Its CONSTRUCTORS, which only a descriptor separates — `ContainerProperties(String...)`
+# beside `ContainerProperties(Pattern)` is the shipped pair arity cannot tell apart.
+_CTOR_ONE = "(Ljava/lang/String;)V"
+_CTOR_ARRAY = "([Ljava/lang/String;)V"
+_TOUCH = "()V"
 
 _PAIR_TARGET = (_REGISTRY, "pair", _PAIR)
 _ONE_TARGET = (_REGISTRY, "one", _ONE)
@@ -427,6 +432,85 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=2)],
+        ),
+        # A value BUILT here, by a producer the identity table names. Four methods, because
+        # what the arm must reach, what it must refuse, and what it must not mistake for a
+        # construction are different facts.
+        _declared(_IDENTIFIED, "built", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "built", "()V"),
+            0,
+            (_NAME, "<init>", _CTOR_ONE),
+            kind="special",
+            arguments=[CallArgument(kind="string", value="built-notify")],
+            receiver=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "built", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="instance", source=1, symbol=_NAME)],
+        ),
+        # The same, under the constructor a `descriptor` turns away.
+        _declared(_IDENTIFIED, "built_other", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "built_other", "()V"),
+            0,
+            (_NAME, "<init>", _CTOR_ARRAY),
+            kind="special",
+            arguments=[CallArgument(kind="string", value="other-notify")],
+            receiver=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "built_other", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="instance", source=1, symbol=_NAME)],
+        ),
+        # Built, then written to before it is used.
+        _declared(_IDENTIFIED, "mutated", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "mutated", "()V"),
+            0,
+            (_NAME, "<init>", _CTOR_ONE),
+            kind="special",
+            arguments=[CallArgument(kind="string", value="mutated-notify")],
+            receiver=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "mutated", "()V"),
+            1,
+            (_NAME, "touch", _TOUCH),
+            kind="virtual",
+            receiver=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "mutated", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="instance", source=1, symbol=_NAME)],
+        ),
+        # A value this method did NOT build — held elsewhere, and merely CALLED here. The
+        # `RawJmsBridge` shape: `session.createProducer(session.createQueue("raw-audit"))`.
+        _declared(_IDENTIFIED, "borrowed", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "borrowed", "()V"),
+            0,
+            (_NAME, "of", _OF_ONE),
+            kind="virtual",
+            arguments=[CallArgument(kind="string", value="not-what-the-holder-is")],
+            result=2,
+            receiver=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "borrowed", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1067,6 +1151,84 @@ def test_an_identity_entrys_arity_tells_two_overloads_apart(walked):
         b.slots[0].value
         for b in _identified(walked, at_one, 1, [{"owner": _NAME, "method": "of", "arg": 0}])
     ] == ["sole"]
+
+
+_CTOR_IDENTITY = {"owner": _NAME, "method": "<init>", "arg": 0}
+
+
+def test_a_constructed_value_answers_the_type_symbol_when_nothing_identifies_it(walked):
+    """The negative half first (GUIDELINES §10), and it is ruling T-3 itself: a declaration
+    reference IS the value, so `new Name(…)` answers the concrete type it was built from —
+    as a `symbol`, never as text. Every constructed type in this estate but four is this
+    case, and the arm below must leave it exactly where it is."""
+    [binding] = _bindings(walked, _symbol(_IDENTIFIED, "built", "()V"), 1)
+    assert (binding.slots[0].literal_kind, binding.slots[0].value) == ("symbol", _NAME)
+
+
+def test_an_identity_entry_reaches_a_CONSTRUCTOR_and_not_only_a_factory(walked):
+    """**The arm could not reach a constructor at all until this test existed** (review
+    round 1). `_entry` answered an `instance` argument with its type symbol BEFORE reading
+    its `source`, so a constructed value never reached `_value` — and four of the
+    twenty-five shipped identity entries name `<init>`, including `java.net.URI`'s, through
+    which two shipped catalogs publish a resolved address today. `new Name("x")` and
+    `Name.of(…, "x")` are one question and must answer alike."""
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "built", "()V"), 1, [_CTOR_IDENTITY])
+    assert [(b.slots[0].literal_kind, b.slots[0].value) for b in bindings] == [
+        ("string", "built-notify")
+    ]
+
+
+def test_an_identity_entrys_descriptor_tells_two_constructors_apart(walked):
+    """`descriptor` is what separates two one-argument constructors of one type, which
+    `arity` cannot — `ContainerProperties(String...)` beside `ContainerProperties(Pattern)`
+    is the shipped pair, and both shipped `ContainerProperties`/`ConsumerProperties` entries
+    carry one. The entry names the `(String)` form; the site is the `(String[])` one, so it
+    must answer the type symbol and not the string that constructor was handed."""
+    discriminated = {**_CTOR_IDENTITY, "descriptor": _CTOR_ONE}
+    at_array = _symbol(_IDENTIFIED, "built_other", "()V")
+    [turned_away] = _identified(walked, at_array, 1, [discriminated])
+    assert turned_away.slots[0].literal_kind == "symbol"
+    [matched] = _identified(walked, at_array, 1, [{**_CTOR_IDENTITY, "descriptor": _CTOR_ARRAY}])
+    assert matched.slots[0].value == "other-notify"
+
+
+@pytest.mark.pins("values.a-construction-hands-nothing-back")
+def test_a_call_that_hands_something_back_is_not_a_construction(walked):
+    """**The fabrication this arm nearly shipped, found by measuring the estate rather than
+    by reading the code.** `session.createProducer(session.createQueue("raw-audit"))` holds
+    its `Session` in a FIELD, so that value has no producer edge either — and the first call
+    it is the receiver of is `createQueue`, which an identity entry names. Read as the
+    session's construction, the answer was `raw-audit`: a queue name published as the
+    identity of a connection, at `resolved`, which is spec §7's one failure.
+
+    A construction hands nothing back — D00 §5's "result is null for a void one", which is
+    why `produced_by` carries no edge for one — and `createQueue` hands back a `Queue`. So
+    the value stays unread, and the reason is the one the pre-existing rule already gave it:
+    a call was made ON it before it was used and nothing says what that call wrote."""
+    entry = {"owner": _NAME, "method": "of", "arg": 0}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "borrowed", "()V"), 1, [entry])
+    assert _reasons(bindings) == ["escapes"]
+    assert [binding.slots[0].value for binding in bindings] == [None]
+
+
+def test_a_value_written_to_between_its_construction_and_its_use_escapes(walked):
+    """§1d's `escapes`, at a constructor — the rule still declines here, which is what makes
+    the test above evidence of anything (GUIDELINES §10).
+
+    **And the window opens at the CONSTRUCTION, which it did not before.** `produced_by` is
+    read off `call_sites.result` and an initialiser has none, so a constructed value had no
+    producer ordinal at all and the window opened before its own construction: every
+    `new Thing(x)` later used answered `escapes` on the constructor itself. MEASURED over
+    every slot of all 27 corpora, that false `escapes` was **719 positions**, none of them
+    a position any catalog asks about.
+
+    Unidentified, the slot answers the type symbol and never reaches the window at all —
+    T-3's answer, and the pairing that shows the refusal below belongs to the arm."""
+    site = _symbol(_IDENTIFIED, "mutated", "()V")
+    assert [b.slots[0].literal_kind for b in _bindings(walked, site, 2)] == ["symbol"]
+    identified = _identified(walked, site, 2, [_CTOR_IDENTITY])
+    assert _reasons(identified) == ["escapes"]
+    assert [binding.slots[0].value for binding in identified] == [None]
 
 
 def test_a_value_the_facts_name_nothing_for_is_unresolved_not_readable(walked):
