@@ -31,7 +31,6 @@ from typing import Any
 
 import pytest
 
-from conftest import CATALOGS, FIXTURE, JAR
 from fixture_build import compile_fixture
 from sextant import api
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
@@ -42,7 +41,19 @@ from sextant.application.resolve.shadow import asks_of, positions_asked
 from sextant.application.stages.analyze import analyze
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+# Derived here rather than imported from `conftest`, which is the pattern every other
+# module in this directory follows (`test_pipeline.py`): `tests/architecture/conftest.py`
+# puts its OWN directory on `sys.path[0]`, so `from conftest import ...` resolves to
+# whichever conftest that leaves first on the path — and `pytest tests/application
+# tests/architecture` fails collection outright. The full-suite run and the reverse order
+# both hide it.
+REPO = Path(__file__).parents[2]
+FIXTURE = REPO / "fixtures" / "orders-service"
+JAR = extractor_jar()
+CATALOGS = catalogs_dir()
 
 # The three tables §3c diffs, and the three §7a promises shadow mode leaves alone.
 _PUBLISHED = ("endpoints", "endpoint_metadata", "shapes")
@@ -259,6 +270,9 @@ _ASKS_PER_CATALOG = {
     "spring-stomp-client": (12, 12),
     "spring-stomp-endpoint": (1, 1),
     "spring-stomp-template": (11, 15),
+    # `spring-web`'s five entries are its `parse_calls` block, not `matches` — the one
+    # catalog whose positions the reader reaches outside `matches` (widened 2026-09-23).
+    "spring-web": (5, 8),
     "spring-webclient": (8, 8),
     "spring-webflux-router": (110, 188),
     "spring-websocket": (1, 1),
@@ -283,7 +297,7 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
         if (asks := asks_of(catalog))
     }
     assert counted == _ASKS_PER_CATALOG
-    assert sum(asks for asks, _ in counted.values()) == 802
+    assert sum(asks for asks, _ in counted.values()) == 807
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
@@ -332,3 +346,68 @@ def test_the_facade_records_nothing_without_the_flag(tmp_path: Path):
     finally:
         workspace.close()
     assert result.value_resolutions == 0
+
+
+def _reactor_module(root: Path) -> ModuleModel:
+    return ModuleModel(
+        module_id="com.acme:orders-javalin",
+        coordinates="com.acme/orders-javalin",
+        version="1.0.0",
+        root=root,
+        kind="undetermined",
+        languages=frozenset({"java"}),
+        source_roots=(),
+        output_dirs=(root / "target" / "classes",),
+    )
+
+
+def _reactor_lines(tmp_path: Path, shadow: bool) -> tuple[list[str], Path]:
+    """One reactor walk over a COPY of the tiny fixture, and the lines it echoed.
+
+    A copy because `_analyze_reactor` writes each module's workspace into the module's own
+    directory — `test_app.py`'s reactor test copies for the same reason, and states it: the
+    real fixture's `.sextant/` is read by another worker for the whole session."""
+    compile_fixture(_FACADE_FIXTURE)
+    root = tmp_path / "javalin"
+    shutil.copytree(_FACADE_FIXTURE, root, ignore=shutil.ignore_patterns(".sextant"))
+    module = _reactor_module(root)
+    lines: list[str] = []
+    api._analyze_reactor(
+        tmp_path,
+        RepositoryModel(root=tmp_path, modules=(module,)),
+        False,
+        None,
+        lines.append,
+        shadow=shadow,
+    )
+    return lines, root
+
+
+def test_a_reactor_walk_reports_what_each_module_recorded(tmp_path: Path):
+    """**The one hop the two tests above cannot reach.** A reactor records shadow rows PER
+    MODULE, into each module's own workspace, so no single number on the `AnalyzeResult`
+    can name them and the per-module echo is the only place a reader learns a submodule
+    recorded anything. That echo is fed by the same defaulted keyword as every other hop,
+    and dropping `shadow=shadow` where `_analyze_reactor` calls `_run_analyze` would
+    silence it with nothing failing.
+
+    The count is read back out of the module's OWN workspace rather than trusted from the
+    line, because a line that printed a plausible number from the wrong place would be
+    exactly the failure this whole file exists to make impossible."""
+    lines, root = _reactor_lines(tmp_path, shadow=True)
+    workspace = DuckDbWorkspace(root / ".sextant" / "workspace.duckdb")
+    try:
+        recorded = len(workspace.query("value_resolutions"))
+    finally:
+        workspace.close()
+    assert recorded, "the reactor walk recorded nothing"
+    assert [line for line in lines if line.endswith(f", {recorded} shadow rows")] == lines
+
+
+def test_a_reactor_walk_says_nothing_about_shadow_without_the_flag(tmp_path: Path):
+    """The ordinary reactor line is byte-for-byte what it has always been — the existing
+    reactor tests assert its text, and a count appended unconditionally would have moved
+    output on every multi-module run."""
+    lines, _root = _reactor_lines(tmp_path, shadow=False)
+    assert lines
+    assert not any("shadow" in line for line in lines)

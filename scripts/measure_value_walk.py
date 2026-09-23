@@ -40,9 +40,16 @@ which is how the caveat came to be written down.
   `payload_ctor_arg: last` is not an index but a rule, and it is resolved per site against
   that site's own argument count. The `_ctor_arg` key is REQUIRED: a `payload_arg` beside
   a `type` is a generic TYPE-ARGUMENT index rather than a call slot, so matching on the
-  shape alone would be a wrong answer and not conservative slack (narrowed 2026-09-23,
-  Task 5 review round 2; the four nodes that match, and the five slots this row counts,
-  are unchanged).
+  shape alone would be a wrong answer and not conservative slack (narrowed 2026-09-23;
+  the four nodes that match are unchanged, and they carry SEVEN `_ctor_arg` occurrences
+  between them — the occurrence convention that reproduces the five rows above it).
+
+**A sixth BLOCK, not a seventh shape** (widened 2026-09-23): `parse_calls` is a top-level
+catalog block rather than part of `matches`, and its entries spell shape one exactly — an
+`_arg` integer beside a method name with an owner. `shapes/parse_binding.py` reads them as
+real call-argument indices (`_argument_at` at `:264`, `:329`, `:345`), so they are eight
+positions this harness measured as zero until now. The reader's own docstring lists every
+other block and the line that refuses it.
 
 **The reader itself now lives in `src/sextant/application/resolve/shadow.py`** and this
 harness imports it (Task 5): §3d's shadow table is written for exactly the positions

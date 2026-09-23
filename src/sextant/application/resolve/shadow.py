@@ -17,10 +17,11 @@ rather than by changing code.
 ## What bounds the table, and why the bound is the point
 
 §3d is explicit: the rows are written **only for positions a catalog asked about** —
-bounded by what catalogs ASK, not by the facts. Measured (Task 4, 2026-09-23, twenty-seven
-corpora including `mall-admin`'s 48 MB of facts): **948 distinct positions asked, against
-a ceiling of 98,454** — every argument and receiver of every call site — so the asked
-surface is 0.96% of what a row-per-fact table would hold. A writer that found itself
+bounded by what catalogs ASK, not by the facts. Measured (2026-09-23, twenty-seven corpora
+including `mall-admin`'s 48 MB of facts, re-run after this reader was widened to
+`parse_calls`): **989 distinct positions asked, against a ceiling of 98,454** — every
+argument and receiver of every call site — so the asked surface is 1.0% of what a
+row-per-fact table would hold. A writer that found itself
 emitting a row per fact would have lost the bound, and the table would be a second copy of
 the argument grammar rather than a review list.
 
@@ -50,8 +51,15 @@ how the caveat came to be written down.
   `payload_ctor_arg: last` is a rule rather than an index, resolved per site. The
   `_ctor_arg` key is REQUIRED for this arm, and the branch below says why: without it a
   `payload_arg` beside a `type` would be read as a call slot, and where such nodes live it
-  is a generic type-argument index. MEASURED: four nodes in four catalogs, five slots,
-  naming `ProducerRecord` and `HttpEntity`.
+  is a generic type-argument index. MEASURED: **7 `_ctor_arg` occurrences**, in 4 nodes
+  across 4 catalogs, naming `ProducerRecord` and `HttpEntity`. Seven, not five: the count
+  is of KEY OCCURRENCES, which is the convention that reproduces the neighbouring shapes
+  exactly (139 plain `captures`, 11 nested, 13 `all_strings`, all re-derived 2026-09-23).
+
+**Shape one is also read outside `matches`, in `parse_calls`** — the one block this reader
+opens beside it, because its entries spell a position exactly as shape one does and the code
+that consumes them indexes a call's arguments. Which blocks are read, which are refused and
+why is the next section.
 
 **This reader is WIDER than the engines, deliberately, and that is the safe direction for
 a shadow review.** It matches on the keys the engines match on — owner where declared,
@@ -64,30 +72,54 @@ be published is a review with slack in it; one that sees fewer is a review with 
 Both over-matches, and what they cost, are measured in
 `docs/research/2026-09-23-value-walk-measurement.md` §1.3.
 
-## Where a position could hide from this reader
+## Which blocks are read, and which are refused
 
-**It walks `catalog.matches` and nothing else**, and three top-level blocks sit outside it.
-All three are latent rather than live — the 2026-09-23 audit of the shipped catalogs found
-**no missed call position in any of them** — but they are where the next one would be.
+A `Catalog` has more than `matches`, and arg-shaped keys live in four other blocks.
+**Each was judged from the code that READS it, never from the key's name** — an index into
+a type reference's type arguments and an annotation attribute name are not positions this
+walk can answer, and including one would be a wrong answer rather than conservative slack.
+Measured over the 101 shipped catalogs, 2026-09-23.
 
-* **`wrappers` is the big one: 156 `payload_arg` occurrences across 55 catalog files**, and
-  every one of them is invisible here. That is correct today and not a gap to close by
-  widening: a `wrappers` entry's `payload_arg` is a GENERIC TYPE-ARGUMENT index — which
-  type parameter of `ResponseEntity`, `Optional`, `Mono` carries the payload — not a slot
-  on a call. Reading them as call positions would be a wrong answer, not slack, which is
-  why the constructor arm above requires a `_ctor_arg` key.
-* **`bean_model`** is resolved by the loader and sits outside `matches` too; no shipped
-  model carries an arg-shaped key today. Step models, by contrast, ARE merged into
-  `matches` and so are seen; `shape_model` is immaterial rather than merely empty —
-  `shape-models/json.yml` carries no positional slot of any kind.
-* **The reader cannot CLASSIFY an arg-shaped key it does see.** `spring-cloud-stream.yml`'s
-  `payload_arg: [0, 1]` is silently dropped, harmlessly, because it is again a type-argument
-  index — and the same key name means a call slot under `wrappers:` and a type-argument
-  index under `suffix:`, which nothing in the shape tells apart.
+**Read:**
 
-The alarm for the day any of this changes is the per-catalog ask baseline in
-`tests/application/test_shadow_mode.py`; the classification belongs to Task 10, where the
-hop declarations become invalid and it has to be made anyway.
+* **`matches`** — the five shapes above and shape six.
+* **`parse_calls`** — `bytes_arg` x4 and `class_arg` x4, all in `spring-web.yml`'s
+  `parse_calls.calls`, spelled exactly as shape one. `shapes/parse_binding.py` reads them as
+  CALL-ARGUMENT indices: `_argument_at(site, entry.bytes_arg)` at `:264`,
+  `_argument_at(site, entry.class_arg)` at `:329`, and `_argument_at` itself indexes
+  `site["arguments"]` at `:345`. Eight real call positions, invisible here until 2026-09-23.
+
+**Refused, each with the line that settles it:**
+
+* **`wrappers[].payload_arg` — 151 occurrences across 55 catalog files**, and the largest
+  arg-shaped population outside `matches` by an order of magnitude. It is a GENERIC
+  TYPE-ARGUMENT index, not a call slot: `shapes/rooting.py:118-132` sets
+  `arguments = current["arguments"]` — a TYPE reference's own type arguments — and then
+  reads `arguments[wrapper["payload_arg"]]`. (The raw file count for `payload_arg` is 156:
+  these 151, plus 3 inside `matches` and 2 in comments.)
+* **`wrappers[].when.annotation_arg` (1) and `protocol_hint.hint_when.annotation_arg` (2)** —
+  an annotation ATTRIBUTE, not an index at all. `conditions.py:131-168` parses the block into
+  `AnnotationArg(annotation, names, equals, parses_true)`, where `names` are attribute names.
+* **`serialization.name_from[].arg` — 70 occurrences in 70 files** — likewise an attribute
+  NAME, a string such as `"value"`: `shapes/expansion.py:903-904` reads
+  `json.loads(use["args"]).get(source["arg"])`.
+* **`suffix[].payload_arg` — 3 occurrences, inside `matches`** (`spring-cloud-stream.yml`), so
+  this reader DOES see the key and drops it. It is refused for the same reason as `wrappers`,
+  one level along: `engines/config_join.py:677-679` indexes `returns["arguments"]`, the
+  functional type's type arguments. It is dropped today because its value is a list rather
+  than an integer; the justification is the line above, not that accident.
+
+**`bean_model`** sits outside `matches` too and carries no arg-shaped key in any shipped
+model. Step models ARE merged into `matches` and so are seen. `shape_model` is immaterial
+rather than merely empty: `shape-models/json.yml` carries no positional slot of any kind.
+
+**What remains latent.** This reader is an audit of the shipped files, not a grammar, so a
+catalog that spells a position a seventh way — or puts one in a block not named above — is
+silently not shadowed. The alarm is the per-catalog ask baseline in
+`tests/application/test_shadow_mode.py`. Telling a call slot from a type-argument index by
+its key NAME remains impossible (`payload_arg` is both, two lines apart in one file), and
+that classification belongs to Task 10, where the hop declarations become invalid and it
+has to be made anyway.
 
 ## Cost, and the condition the measurement attached to it
 
@@ -277,8 +309,10 @@ def asks_of(catalog: Catalog) -> list[Ask]:
             # two, and it is the only reason this branch can be trusted to name `<init>`.
             # MEASURED over the 101 shipped catalogs: four nodes reach here, in
             # `kafka-clients`, `spring-kafka-replying`, `spring-kafka-template` and
-            # `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity` — five slots,
-            # which is the count the research document's §1.3 table records.
+            # `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity`, carrying
+            # SEVEN `_ctor_arg` occurrences between them — the count the research
+            # document's §1.3 table records, on the occurrence convention that reproduces
+            # every other row of it.
             if isinstance(node.get("type"), str) and any(
                 str(key).endswith("_ctor_arg") for key in node
             ):
@@ -314,6 +348,20 @@ def asks_of(catalog: Catalog) -> list[Ask]:
             walk(value, inherited)
 
     walk(catalog.matches, _Enclosing())
+    # **`parse_calls` too** (widened 2026-09-23, Task 5 review round 3). It is a top-level
+    # block rather than part of `matches`, and every entry in it is shape one of the six
+    # above — an `_arg` integer beside a method name with an owner —  read by
+    # `shapes/parse_binding.py` as a real CALL-ARGUMENT index: `_argument_at(site,
+    # entry.bytes_arg)` at `:264` and `_argument_at(site, entry.class_arg)` at `:329`, both
+    # indexing `site["arguments"]` at `:345`. Eight positions in `spring-web.yml`, and the
+    # reader's own contract is that a style spelling a position somewhere new is picked up
+    # rather than silently skipped — so a miss here is a hole in the review, not slack.
+    #
+    # An entry that names `owner_hierarchy` instead of `owner` is matched by method name
+    # alone here: `_matches` (`parse_binding.py:272`) resolves it through the type's
+    # ancestry, which this reader does not model. That is the same widening it already
+    # takes for an owner-free `fluent` step, and the same safe direction.
+    walk(catalog.parse_calls, _Enclosing())
     return found
 
 

@@ -73,18 +73,36 @@ under-counted the asked surface by 20 positions.
 | a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
 | a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 26 |
 | `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
-| `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
+| `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 7 |
+| `bytes_arg`/`class_arg` in the top-level **`parse_calls`** block — shape one, outside `matches` | `spring-web` | 8 |
 
-*The reader these six shapes describe now lives in
-`src/sextant/application/resolve/shadow.py` and this harness imports it (Task 5): spec §3d's
-shadow table is written for exactly the positions measured here, and two copies of "what
-does a catalog ask" would be two answers the day a catalog invents a spelling. Row six's
-`_ctor_arg` key was made a REQUIREMENT of the match in the same task — a `payload_arg`
-beside a `type` is a generic type-argument index rather than a call slot, and 156 of those
-live in `wrappers` blocks. Four nodes match, in `kafka-clients`, `spring-kafka-replying`,
-`spring-kafka-template` and `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity`
-— the five slots this row counts. **Every figure in this document was re-measured after
-both changes and none moved.***
+> **Amended 2026-09-23, after Task 5. The reader was corrected twice and WIDENED once, and
+> figures in this document moved.** It now lives in
+> `src/sextant/application/resolve/shadow.py`; this harness imports it, because spec §3d's
+> shadow table is written for exactly the positions measured here and two copies of "what
+> does a catalog ask" would be two answers the day a catalog invents a spelling.
+>
+> * **Row six's count was wrong: 5, now 7.** Every other row counts KEY OCCURRENCES — 139
+>   plain `captures`, 11 nested, 13 `all_strings`, all re-derived and matching — and on that
+>   convention the four matching nodes (`kafka-clients`, `spring-kafka-replying`,
+>   `spring-kafka-template`, `spring-resttemplate`, naming `ProducerRecord` and
+>   `HttpEntity`) carry seven `_ctor_arg` keys between them.
+> * **Row six's match was narrowed** to require a `_ctor_arg` key: a `payload_arg` beside a
+>   `type` is a generic type-argument index, not a call slot, so matching on the shape alone
+>   would have been a wrong answer rather than slack. **No ask changed**, on any catalog.
+> * **Row seven is new.** `parse_calls` is a top-level catalog block outside `matches`, and
+>   its entries spell shape one exactly; `shapes/parse_binding.py` reads them as real
+>   call-argument indices (`_argument_at` at `:264`, `:329`, `:345`). Eight positions this
+>   harness previously measured as zero. **This is what moved the figures below**, and the
+>   moves are recorded where they occur: the asked surface goes from 948 positions / 1,209
+>   asks / 686 sites to **989 / 1,250 / 726**, `orders-service` and `grpc-probe` are the two
+>   corpora affected, and the maximum `visits` on the asked surface goes from 11 to **15**.
+>   The §5 ruling is unchanged and the margins it rests on are unchanged.
+>
+> `wrappers` (`payload_arg` x151 across 55 files), `serialization` (`arg` x70),
+> `protocol_hint` and `wrappers[].when` (`annotation_arg` x2 and x1) are all read and
+> REFUSED, each with the line of its consumer that settles it, in `shadow.py`'s own
+> docstring. None is a call position.
 
 **`all_strings` is the one spelling where a single catalog row asks about an unbounded
 number of positions**, and it is the only bound-free thing in the ask grammar. It adds **20
@@ -113,7 +131,7 @@ that site — and two classes of row are over-matched as a result.
 are really scoped to a chain the engine has already rooted, and `ktor-routing`'s
 `request_reads` reach their receiver through a `via` call. That is 23 of the 802 rows, and
 the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`):
-`ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,209
+`ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,250
 catalog-to-position asks, most of them sites those catalogs would never really claim.
 
 **2. Every `all_strings` row is a `channel_via`, which an engine reaches only by following a
@@ -148,15 +166,15 @@ the asked surface, not an estimate of it.
 
 | basis | asked surface | meaning |
 |---|---|---|
-| **catalog-to-position asks** | **1,209** | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
-| **distinct positions** | **948** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
+| **catalog-to-position asks** | **1,250** | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
+| **distinct positions** | **989** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
 
 Both are printed per corpus and in total. **Every cost figure in §3 is per distinct
 position**; the asks number appears only where the question is "how much do catalogs ask",
 never where the question is "how much does it cost".
 
 (A third base exists and is deliberately not used: counting one catalog ROW per position
-gives 1,997, because a catalog often matches a site through more than one overload row.
+gives 1,997 as first measured, because a catalog often matches a site through more than one overload row.
 The first draft of this document printed that number in a column headed "positions asked"
 beside a headline of distinct positions, which is the mistake this section exists to
 prevent.)
@@ -207,9 +225,9 @@ if anything ever were.
 
 ## 2. Answer 1 — how many positions shipped catalogs actually ask about
 
-**948 distinct positions (1,209 catalog-to-position asks), across all twenty-seven
-corpora.** The ceiling on the same corpora is **98,454**. The asked surface is **0.96%** of
-it.
+**989 distinct positions (1,250 catalog-to-position asks), across all twenty-seven
+corpora.** The ceiling on the same corpora is **98,454**. The asked surface is **1.0%** of
+it. *(948 / 1,209 / 0.96% before the reader was widened to `parse_calls` — see §1.3.)*
 
 §3b's guard shape holds, and harder than it did on `orders-quarkus`:
 
@@ -219,32 +237,38 @@ it.
 | `mall-mbg` | 21,775 | 54,157 | 0 | **0** | 0 | 0% |
 | `spring-petclinic-rest` | 3,037 | 4,032 | 48 | 44 | 44 | 1.4% |
 | `mall-portal` | 2,200 | 2,434 | 43 | 42 | 42 | 1.9% |
-| `orders-service` | 1,818 | 2,090 | 373 | 279 | 209 | 15% |
+| `orders-service` | 1,818 | 2,090 | 402 | 308 | 237 | 17% |
 | `jhipster-sample-app` | 1,710 | 2,058 | 113 | 50 | 44 | 2.9% |
 | `orders-ktor` / `-classlambdas` | 471 / 515 | 584 / 610 | 133 | 123 | 49 | 26% / 24% |
 | `spring-integration-probe` | 198 | 183 | 90 | 52 | 52 | 26% |
-| `grpc-probe`, `orders-quarkus`, `orders-spring7`, `orders-soap-final`, `orders-soap-client` | 391 / 13 / 13 / 6 / 0 | 539 / 7 / 5 / 0 / 0 | 0 | **0** each | 0 | 0% |
+| `grpc-probe` | 391 | 539 | 12 | 12 | 12 | 3.1% |
+| `orders-quarkus`, `orders-spring7`, `orders-soap-final`, `orders-soap-client` | 13 / 13 / 6 / 0 | 7 / 5 / 0 / 0 | 0 | **0** each | 0 | 0% |
 
-Five of the twenty-seven corpora ask about **nothing at all**, and `mall-mbg` — 21,775 call
+Four of the twenty-seven corpora ask about **nothing at all** (five until `parse_calls` was
+read: `grpc-probe`'s protobuf `parseFrom` calls are asked about now), and `mall-mbg` — 21,775 call
 sites of MyBatis-generated model code, which is exactly where the estate's worst shape lives
 — is a sixth. The biggest corpus in the estate asks about 56 positions. The fixtures ask
 proportionally far more because they exist to exercise catalogs; the real applications do
 not.
 
 Which catalogs ask (asks, so one position once per catalog that asks about it; these sum
-to the 1,209):
+to the 1,250):
 
 | engine style | asks matched | catalogs that name a position |
 |---|---|---|
 | `combinator` | 467 | 5 of 5 |
 | `fluent` | 441 | 12 of 12 |
 | `single_call` | 274 | 30 of 30 |
+| `annotation_driven` | 41 | 1 of 38 |
 | `supertype_dispatch` | 18 | 2 of 2 |
 | `interface_implementation` | 9 | 1 of 1 |
 
-Fifty of the 101 shipped catalogs name a call-site position at all; 47 of those matched
-something somewhere. The other 51 — `annotation_driven` and its relatives — ask about
-annotation attributes, which this walk does not serve.
+Fifty-one of the 101 shipped catalogs name a call-site position at all; 48 of those matched
+something somewhere. The other 50 ask about annotation attributes alone, which this walk
+does not serve. **The one `annotation_driven` catalog on that list is `spring-web`**, and it
+is there only through `parse_calls` — its `matches` block names no position. That row was
+absent until the reader was widened (§1.3); before it, the line read "Fifty ... 47 ... the
+other 51 — `annotation_driven` and its relatives".
 
 ---
 
@@ -253,37 +277,41 @@ annotation attributes, which this walk does not serve.
 **No mean appears below.** A mean hides the pathological module, which is the only thing
 this measurement is for.
 
-### 3.1 The asked surface: 948 positions, 686 sites
+### 3.1 The asked surface: 989 positions, 726 sites
+
+*(948 / 686 before the reader was widened to `parse_calls` — §1.3. Every figure in this
+section was re-measured after the widening; the two that moved are marked.)*
 
 | figure | p50 | p90 | p99 | p99.9 | **max** |
 |---|---|---|---|---|---|
-| paths per position | 1 | 1 | 2 | 3 | **11** |
-| hop depth | 0 | 0 | 1 | 2 | **3** |
-| distinct answers | 1 | 1 | 2 | 3 | **11** |
-| positions visited | 0 | 1 | 4 | 7 | **11** |
+| paths per position | 1 | 1 | 3 | 11 | **11** |
+| hop depth | 0 | 0 | 1 | 3 | **3** |
+| distinct answers | 1 | 1 | 2 | 11 | **11** |
+| positions visited | 0 | 1 | 5 | 15 | **15** *(was 11)* |
 
 `resolve_site` over the same sites: **max 11 bindings** (p99: 3).
-**Totals across all twenty-seven corpora: index fold 0.38 s, walking 1.6 ms,
-`resolve_site` 4.0 ms.**
+**Totals across all twenty-seven corpora: index fold 0.38 s, walking 1.7 ms,
+`resolve_site` 4.3 ms.**
 
-Path-count distribution: 933 positions have one path, 7 have two, 7 have three, **one has
-eleven**. Depth: 867 at 0, 77 at 1, 3 at 2, 1 at 3.
+Path-count distribution: 972 positions have one path, 7 have two, 8 have three, one has
+five, **one has eleven**. Depth: 906 at 0, 77 at 1, 4 at 2, 2 at 3.
 
 The maxima come from two unrelated places, and both are worth naming:
 
 | what | position | paths | depth | answers | visits |
 |---|---|---|---|---|---|
 | most paths, most answers, most bindings — **over-matched, see §1.3** | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (attributed to `kafka-consumer`, `kafka-streams` via `all_strings`; the module has no Kafka, so production never asks) | **11** | 1 | **11** | 0 |
-| most work | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`) | 3 | 2 | 1 | **11** |
-| deepest | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
+| most work | `orders-service` `OrderProtos$OrderRequest#parseFrom`@0 slot 0 (`spring-web`, through `parse_calls`) | 5 | **3** | 1 | **15** |
+| most work before the widening | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`) | 3 | 2 | 1 | 11 |
+| deepest, and it ties the new maximum | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
 
 The eleven-path case does **no traversal at all** — `visits` is 0, because it is one varargs
 array argument holding eleven written constants and §1c's array rule enumerates them on the
 spot. It is also the over-match §1.3 describes: on the corpora where that catalog row is
 genuinely reachable the same shape gives **2 paths**. So the highest path count a shipped
 catalog can really be handed is lower than this table's own maximum, and the hardest thing
-one asks about anywhere is a Ktor route mount costing eleven computed positions. There is no
-tail either way.
+one asks about anywhere is a protobuf `parseFrom` argument costing fifteen computed
+positions. There is no tail either way.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
@@ -328,8 +356,8 @@ once per generated table (`PmsProductExample` 337, `OmsOrderReturnApplyExample` 
 | | asked surface | ceiling |
 |---|---|---|
 | index fold, all corpora | **0.38 s** | 0.40 s |
-| walking | 0.0016 s | 0.41–0.44 s |
-| `resolve_site` incl. combination | 0.0040 s | 1.08–1.09 s |
+| walking | 0.0017 s | 0.41–0.44 s |
+| `resolve_site` incl. combination | 0.0043 s | 1.08–1.09 s |
 
 On `mall-admin` alone the fold is **0.16 s** — more than every walk in that corpus put
 together, by three orders of magnitude on the asked surface. It is **irrelevant to the cap**
@@ -358,19 +386,25 @@ answers on real code either.
 
 ## 4. Answer 2 — which `unresolved` reasons fire on real code
 
-**On the asked surface (948 positions, 428 unresolved answers):**
+**On the asked surface (989 positions, 474 unresolved answers):**
 
 | reason | count | never fires? |
 |---|---|---|
-| `external` | 206 | |
+| `external` | 252 | |
 | `not_readable` | 190 | |
 | `no_writer` | 13 | |
 | `escapes` | 12 | |
 | `non_enumerable` | 7 | |
 | **`cycle`** | **0** | **never, on anything a shipped catalog asks about** |
 
-Answer kinds on the asked surface: `literal` 530, `unresolved` 428, `expression` 21,
+Answer kinds on the asked surface: `literal` 531, `unresolved` 474, `expression` 21,
 **`absent` 0**.
+
+*Before the reader was widened to `parse_calls` (§1.3): 948 positions, 428 unresolved,
+`external` 206, `literal` 530. **Every one of the 46 answers the widening added is
+`external`, bar one literal** — a `parseFrom` or `readValue` argument mostly comes from
+outside what was scanned, which is the boundary `external` exists to name. No reason
+changed rank and none became reachable or unreachable.*
 
 **On the ceiling (98,454 positions, 91,522 unresolved answers):**
 
@@ -425,12 +459,18 @@ say which is which:
 
 1. **The asked surface is not near any plausible cap, on any corpus.** Max 11 paths (one
    varargs array of eleven written constants, enumerated on the spot at zero traversal
-   cost), max depth 3, max 11 positions visited, max 11 bindings. Every position every
+   cost), max depth 3, max 15 positions visited, max 11 bindings. Every position every
    shipped catalog asks about, across twenty-seven corpora including the 48 MB one, walks
-   in **1.6 ms total**. A cap would never fire — and the margin is **larger** than these
+   in **1.7 ms total**. A cap would never fire — and the margin is **larger** than these
    figures say, because the 11 is an artefact of §1.3's `channel_via` over-match: where
    that catalog row is genuinely reachable the same shape gives 2 paths, so the real
-   asked-surface maximum is 3 paths at a Ktor route mount.
+   asked-surface maximum is 5 paths at a protobuf `parseFrom` argument.
+
+   *Max visits was 11 and the total 1.6 ms when this was ruled; both moved when the reader
+   was widened to `parse_calls` (§1.3), which is a re-measure and not a re-ruling — the
+   ruling is made over the CEILING as much as over this surface, and the ceiling did not
+   move at all. 15 against a crash barrier the same paragraph sizes at 512 paths and 16
+   crossings is the same answer it was.*
 2. **The ceiling is not near one either, and it is the number that matters** because it is
    what the asked surface could grow into. Resolving **every argument and receiver of every
    call site in the estate** — 98,454 positions, 50,112 `resolve_site` calls — costs
