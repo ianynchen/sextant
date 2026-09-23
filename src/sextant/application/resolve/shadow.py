@@ -45,9 +45,16 @@ how the caveat came to be written down.
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists, and the one spelling where a single catalog row asks about an unbounded number of
   positions;
-* a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg` against a wrapper
-  `type` — a position on that type's CONSTRUCTOR call, so the method name is `<init>`.
-  `payload_ctor_arg: last` is a rule rather than an index, resolved per site.
+* a node that names SLOTS, names no method of its own, and names a `type` — read as a
+  position on that type's CONSTRUCTOR, so the method name is `<init>`. The shape it was
+  written for is a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg`,
+  where `payload_ctor_arg: last` is a rule rather than an index and is resolved per site.
+  **It is matched by SHAPE and not by key, so it fires more widely than that**: a node
+  naming a `type` such as `ResponseEntity`, `Optional` or `Call` beside any slot key mints
+  an `<init>` ask on that type across about thirty catalogs. One row of 374 on
+  `orders-service`, in the safe direction (below), and stated here because in this
+  repository the docstring is the specification and a narrower sentence would not describe
+  this code.
 
 **This reader is WIDER than the engines, deliberately, and that is the safe direction for
 a shadow review.** It matches on the keys the engines match on — owner where declared,
@@ -58,7 +65,22 @@ engine reaches only by following a `source` link back from a matched site is mat
 against every call site in the module. A review that sees more candidates than will ever
 be published is a review with slack in it; one that sees fewer is a review with a hole.
 Both over-matches, and what they cost, are measured in
-`docs/research/2026-09-23-value-walk-measurement.md` §1.3.
+`docs/research/2026-09-23-value-walk-measurement.md` §1.3; the constructor shape above is
+a third of the same kind.
+
+**Two places a position could hide, and neither is covered.** The reader walks
+`catalog.matches` alone. A catalog's `bean_model` block is resolved by the loader and sits
+OUTSIDE `matches`, so a slot spelled there would be invisible here; no shipped model
+carries an arg-shaped key today, and step models are merged into `matches` and so are
+seen. And the reader cannot CLASSIFY an arg-shaped key it does see: audited 2026-09-23,
+about fifty arg-shaped occurrences across the shipped catalogs are legitimately not call
+positions — `spring-cloud-stream.yml`'s `payload_arg: [0, 1]` is a generic TYPE-ARGUMENT
+index, and that same key name means a call slot under `wrappers:` and a type-argument
+index under `suffix:`. Both are latent rather than live: the same audit found **no missed
+call position in any shipped catalog**. The alarm for the day that changes is the
+per-catalog ask baseline in `tests/application/test_shadow_mode.py`; the classification
+belongs to Task 10, where the hop declarations become invalid and it has to be made
+anyway.
 
 ## Cost, and the condition the measurement attached to it
 
@@ -334,9 +356,11 @@ def _indices_of(slot: int | str, arity: int) -> tuple[int, ...]:
 
 def record_value_resolutions(
     workspace: Workspace, catalogs: Sequence[Catalog], *, shadow: bool
-) -> None:
+) -> int:
     """Spec §7a. Writes what the walk WOULD resolve at every position a catalog asks
-    about, and publishes nothing.
+    about, and publishes nothing. Returns how many rows it wrote, so a `--shadow` run can
+    SAY so: a flag that silently did not arrive leaves an empty table, and a reviewer
+    reads "nothing would resolve" as good news.
 
     **The reset is unconditional and the insert is not.** A workspace analysed once with
     shadow mode and again without it must not keep the first run's rows — they would be a
@@ -350,11 +374,11 @@ def record_value_resolutions(
     """
     workspace.derive("value_resolutions_reset")
     if not shadow:
-        return
+        return 0
     asks = [ask for catalog in catalogs for ask in asks_of(catalog)]
     asked = positions_asked(effective_call_sites(workspace), asks)
     if not asked:
-        return
+        return 0
     # Grouped by SITE, because `resolve_site` is the entry point every migrated engine
     # calls (§1b: one entry point, not two) and it resolves a site's slots TOGETHER — a
     # binding is the site's slots as one path reaches them, and resolving two asked slots
@@ -394,6 +418,7 @@ def record_value_resolutions(
                     }
                 )
     workspace.derive("value_resolutions_insert", rows=rows)
+    return len(rows)
 
 
 __all__ = [

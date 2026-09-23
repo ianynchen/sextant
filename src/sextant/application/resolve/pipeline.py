@@ -68,6 +68,11 @@ class ResolveReport:
     # count cannot be acted on and a catalog only grows from observation
     # (FR-17).
     unexpanded_types: tuple[str, ...] = ()
+    # Spec 2026-09-22 §7a: how many rows shadow mode recorded, and 0 on every ordinary
+    # analysis. Carried so a `--shadow` run can SAY what it recorded — the failure mode
+    # this number exists to expose is a flag that silently did not arrive, which leaves an
+    # empty table and reads to a reviewer as "nothing would resolve".
+    value_resolutions: int = 0
 
 
 def coverage_of(workspace: Workspace) -> dict[str, object]:
@@ -307,9 +312,10 @@ def resolve(
     # inside it must run on an ordinary analysis too, or a workspace analysed once
     # with `--shadow` keeps that run's review list for ever (the pass says why).
     with _timed("record_value_resolutions"):
-        record_value_resolutions(workspace, declared, shadow=shadow)
+        recorded = record_value_resolutions(workspace, declared, shadow=shadow)
     return ResolveReport(
         facts_loaded=loaded,
+        value_resolutions=recorded,
         endpoints=workspace.query("endpoints"),
         skipped_catalogs=skipped,
         coverage=coverage_of(workspace),

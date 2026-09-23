@@ -73,7 +73,15 @@ under-counted the asked surface by 20 positions.
 | a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
 | a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 26 |
 | `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
-| `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
+| a node naming slots, no method of its own and a `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
+
+*Row six is described here by the shape the reader MATCHES, not by the key it was written
+for (corrected 2026-09-23, Task 5 review). It fires on any slot-bearing node that names a
+`type` and no method — so a node naming `ResponseEntity`, `Optional` or `Call` mints an
+`<init>` ask on that type, across about thirty catalogs. A third over-match of the same
+kind as the two below, in the same conservative direction; it moves no figure in this
+document, which was re-measured after the reader moved into
+`src/sextant/application/resolve/shadow.py`.*
 
 **`all_strings` is the one spelling where a single catalog row asks about an unbounded
 number of positions**, and it is the only bound-free thing in the ask grammar. It adds **20

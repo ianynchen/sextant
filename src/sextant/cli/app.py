@@ -90,7 +90,15 @@ def module_analyze(
         raise click.ClickException(str(refused)) from refused
 
     if not multi_module:
-        click.echo(json.dumps({"endpoints": result.modules[0].endpoints}))
+        # The shadow count rides on this line ONLY under `--shadow`, so the ordinary
+        # line is what it has always been. It is there because the failure mode of a
+        # five-hop defaulted flag is silence: a `--shadow` run that recorded nothing
+        # exits 0 with an empty table, and a reviewer reads that as "nothing would
+        # resolve" rather than as "the walk never ran".
+        line: dict[str, object] = {"endpoints": result.modules[0].endpoints}
+        if shadow:
+            line["value_resolutions"] = result.value_resolutions
+        click.echo(json.dumps(line))
         return
 
     # No header, no rows, for an empty reactor (2M Task 2 fix round 1, F8):

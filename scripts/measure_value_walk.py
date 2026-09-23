@@ -33,12 +33,22 @@ which is how the caveat came to be written down.
 * `arg: all_strings` — EVERY positional argument of the call, a varargs array read as its
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists. It is the one spelling where a single catalog row can ask about an unbounded
-  number of positions, and it is also this harness's widest over-match — `_indices` has
+  number of positions, and it is also this harness's widest over-match — `_indices_of` has
   the measurement and the reason;
-* a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg` against a wrapper
-  `type` — a position on that type's CONSTRUCTOR call, so the method name is `<init>`.
-  `payload_ctor_arg: last` is not an index but a rule, and it is resolved per site against
-  that site's own argument count.
+* a node that names SLOTS, names no method of its own, and names a `type` — a position on
+  that type's CONSTRUCTOR call, so the method name is `<init>`. The shape it was written
+  for is a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg`, where
+  `payload_ctor_arg: last` is not an index but a rule, resolved per site against that
+  site's own argument count. **Matched by shape and not by key, so it fires more widely
+  than that** (stated 2026-09-23, Task 5 review): a node naming a `type` such as
+  `ResponseEntity`, `Optional` or `Call` beside any slot key mints an `<init>` ask on that
+  type, across about thirty catalogs. A third over-match of the same kind as the two
+  above, in the same conservative direction, and it moves none of the rulings below.
+
+**The reader itself now lives in `src/sextant/application/resolve/shadow.py`** and this
+harness imports it (Task 5): §3d's shadow table is written for exactly the positions
+measured here, and two copies of "what does a catalog ask" would be two answers the day a
+catalog invents a spelling. Every count in this document was reproduced after the move.
 
 **Two bases, and they differ by about a quarter.** An ASK is a distinct (catalog, position)
 pair; a POSITION is a distinct `(site, slot)`, which is what the walk is actually run on —

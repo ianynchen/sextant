@@ -228,9 +228,16 @@ class ModuleOutcome:
 class AnalyzeResult:
     """`analyze`'s own outcome: every module the walk considered, root-
     relative, in the same order `modules.json` would list them (sorted by
-    `dir`) for a reactor, or the one module `path` itself is otherwise."""
+    `dir`) for a reactor, or the one module `path` itself is otherwise.
+
+    `value_resolutions` is spec 2026-09-22 §7a's shadow row count — how many
+    candidate conversions the walk recorded. `0` on any run without `--shadow`,
+    and `None` for a REACTOR walk, which keeps no module's report. Deliberately
+    NOT on `ModuleOutcome`: that dataclass is what `modules.json` records, and a
+    published inventory is exactly what shadow mode must not move."""
 
     modules: tuple[ModuleOutcome, ...]
+    value_resolutions: int | None = None
 
 
 @dataclass(frozen=True)
@@ -793,7 +800,9 @@ def _analyze(
         skip_reason=None,
         endpoints=len(stage_result.report.endpoints),
     )
-    return AnalyzeResult(modules=(outcome,)), False
+    return AnalyzeResult(
+        modules=(outcome,), value_resolutions=stage_result.report.value_resolutions
+    ), False
 
 
 def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
