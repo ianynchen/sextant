@@ -2,12 +2,24 @@
 -- answer *what is this value?*, normalised into ONE shape out of the three
 -- tables that already hold them.
 --
--- **A VIEW, and §3b is the reason.** Every edge below is already held by
--- `call_sites`, `return_flows` or `call_edges`; a materialised copy would add a
--- writer, a reset, schema growth and a second version of rows that can drift
--- from the first. Nothing is stored here — the view normalises three shapes and
--- is linear in the facts, which is what makes it safe to leave unbounded while
--- the walk on top of it is not (§3a).
+-- **NO DATABASE OBJECT AT ALL, which is §3b taken the whole way.** Every edge
+-- below is already held by `call_sites`, `return_flows` or `call_edges`, and
+-- §3b refuses a materialised copy because it would add a writer, a reset,
+-- schema growth and a second version of rows that can drift from the first.
+-- This file was a `CREATE VIEW` for exactly one commit, and a view is still an
+-- object in the catalog: `schema_objects()` found it, the export ratchet quite
+-- correctly demanded a query for it — an object in the schema with no export
+-- query is a TEST FAILURE, with no exclusion class — and every bundle then
+-- carried 420 KB of rows derived from three tables shipping beside it. Schema
+-- growth is on §3b's own list of costs, so the fix is to stop growing the
+-- schema rather than to argue an exception into the ratchet.
+--
+-- So this is the TEXT of a named query, read by `workspace.py` into
+-- `_NAMED_QUERIES` and executed on demand — never `CREATE`d. Nothing is stored,
+-- nothing is exported, nothing can drift, and `workspace.query("value_edges")`
+-- reads the three tables as they stand at that moment. It is linear in the
+-- facts, which is what makes it safe to leave unbounded while the walk on top
+-- of it is not (§3a).
 --
 -- **FIVE kinds, not the design's six, and the absence is an answer.**
 -- `written_by` — a binding assigned anywhere but an initialiser — is the one
@@ -17,11 +29,11 @@
 -- what a reader can act on; an empty-but-present kind would say the walk looked
 -- and found nothing, and the walk has not looked.
 --
--- **Its own file, beside `schema.sql` rather than inside it.** It is the only
--- schema object built over DERIVED tables instead of over `raw_facts`, so it
--- must run after the file that declares them; and a reader who opens it is
--- reading the WALK's input, not looking a column up in the DDL every other
--- object shares. `workspace.py` executes the two in that order.
+-- **Its own file rather than a string literal in `workspace.py`.** Five arms,
+-- each carrying the fact and the projection behind it, is the value of this
+-- text and it would read badly wedged between one-line named queries. A reader
+-- who opens this file is reading the WALK's input; `workspace.py` holds the
+-- ordering the query is read in and nothing else.
 --
 -- **Which projection each arm rides, stated per arm rather than assumed** (the
 -- I-3 finding: the tables disagreed and nothing said so). `effective_call_sites`
@@ -32,7 +44,7 @@
 -- projection, so the two arms over them ride it. The three arms over the
 -- argument grammar read `call_sites` itself, which is the bytecode's own
 -- statement — so at a bridge site their slot numbering is the bridge's and not
--- the function it stands for. That is a stated boundary of this view, and the
+-- the function it stands for. That is a stated boundary of this query, and the
 -- walk's measurement (§3a) is where its size is learned, not a gap to discover.
 --
 -- **The columns are nullable per kind, and this is the table of which kind
@@ -50,10 +62,21 @@
 --                       | source, or NULL   | declaration |            |
 --
 -- `to_index` is meaningful for `bound_to_parameter` ALONE — it is a parameter
--- index, and no other edge lands on a parameter. `from_value` is NULL wherever
--- the facts name no produced value at the position: a binding read is nobody's
--- result, and neither is a literal, a type reference or the caller's own
--- parameter. `to_symbol` is NULL for `produced_by` because that edge lands
+-- index, and no other edge lands on a parameter.
+--
+-- **A NULL `from_value` is an ANSWER, not an absence, and it was measured
+-- rather than assumed.** Read against the fact files: a binding reference, a
+-- type reference and a named constant of its own type each carry a `symbol` and
+-- no `source`, while a constructed value carries both (D00 §5's argument
+-- grammar). So the facts NAME no produced value at those positions — the value
+-- was not produced by running anything in this method, and there is nothing for
+-- a walk to follow BACK to. It is the same statement `call_edges.callee` makes
+-- with a NULL: the boundary is the answer. A reader must not read it as "the
+-- extractor failed to record one"; what an unreadable value looks like is an
+-- `unresolved` argument, which carries its `source` and appears here as a
+-- `bound_to_parameter` row with a value id.
+--
+-- `to_symbol` is NULL for `produced_by` on the same terms: that edge lands
 -- inside `from_method` itself, where `to_ordinal` is the whole address.
 --
 -- **Nothing here re-spells a column that already exists somewhere.** The site's
@@ -62,7 +85,6 @@
 -- `method_returns` and `return_flows`; carrying copies of them would be the
 -- "no fact that was merely copied" rule (D01 §6) broken in the one place a walk
 -- would be worst served by two spellings of one answer.
-CREATE OR REPLACE VIEW value_edges AS
 
 -- `produced_by`: the value a call handed back, and the site in the same method
 -- that handed it back. THE fact is `call_sites.result` — the value id an
@@ -93,7 +115,7 @@ UNION ALL
 -- `method_returns` and of `return_flows` itself, and a callee with two `return`
 -- statements is two of them — two paths, per §1c, which the walk enumerates
 -- from that table rather than from a fan-out baked in here. DISTINCT collapses
--- this view's own duplicate of that fan-out, never the fan-out.
+-- this query's own duplicate of that fan-out, never the fan-out.
 SELECT DISTINCT 'returned_by'      AS kind,
        caller                      AS from_method,
        result                      AS from_value,
@@ -166,7 +188,7 @@ UNION ALL
 -- no value id; the third carries both, which is why `from_value` is the
 -- argument's `source` where there is one. This is where the walk STOPS with an
 -- answer rather than a reason: the declaration is the value, and what the
--- declaration means is the catalog's business and never this view's (§1e).
+-- declaration means is the catalog's business and never this query's (§1e).
 SELECT 'names_declaration'         AS kind,
        caller                      AS from_method,
        (argument ->> 'source')::INTEGER AS from_value,
@@ -177,4 +199,12 @@ FROM (SELECT caller, ordinal,
              UNNEST(json_extract(arguments, '$[*]')) AS argument
       FROM call_sites)
 WHERE (argument ->> 'kind') IN ('class', 'enum', 'instance')
-  AND (argument ->> 'symbol') IS NOT NULL;
+  AND (argument ->> 'symbol') IS NOT NULL
+
+-- Over the whole union, and on every column, which is what makes the ordering
+-- TOTAL (NFR-1). `kind, from_method, to_ordinal` is not: one site binds several
+-- parameters and names several declarations, and the remaining three columns
+-- are what separate those rows from one another. The one tie left is a row
+-- identical in all six, which is one edge stated twice — a site reading the
+-- same binding at two slots — and the same row either way.
+ORDER BY kind, from_method, to_ordinal, to_index, to_symbol, from_value;

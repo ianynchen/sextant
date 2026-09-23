@@ -815,26 +815,29 @@ _NAMED_QUERIES = {
     # read. Ordered on the symbol, which is unique per field.
     "constants": "SELECT * FROM constants ORDER BY symbol",
     # Spec 2026-09-22 §1a's five value edges, normalised out of `call_sites`,
-    # `return_flows` and `call_edges` by `value_edges.sql` — which is a VIEW
-    # rather than a table for §3b's reason, so this query stores nothing and
-    # re-reads the three tables each time it is asked.
+    # `return_flows` and `call_edges`. The ONE named query whose text is read
+    # from a file rather than written here, and the file's header says why: five
+    # arms, each naming the fact and the projection behind it, would read badly
+    # wedged between one-line neighbours.
+    #
+    # **Read, never executed as DDL.** §3b refuses a materialised copy of rows
+    # three tables already hold, and a `CREATE VIEW` is still an object in the
+    # catalog — `schema_objects()` finds it, the export ratchet below quite
+    # correctly demands a query for it, and every bundle then carries a derived
+    # copy beside the three tables it derives from. Measured while it was a
+    # view: 420 KB on `mall-admin`, the second-largest file in the bundle.
+    # Schema growth is one of the costs §3b names, so there is no database
+    # object at all; `query("value_edges")` runs this text against the three
+    # tables as they stand.
     #
     # **Nothing calls it yet, deliberately.** The walk that reads it is the next
     # task and the measurement that gates the walk is the one after; an engine
     # reading a value edge before that measurement lands is exactly what §3a
     # forbids ("Build the edge view and the walk. No engine calls it.").
     #
-    # Ordered on every column, which is what makes it total (NFR-1): `kind,
-    # from_method, to_ordinal` is not — one site binds several parameters and
-    # names several declarations — and the remaining three are what separate
-    # those rows from one another. The one tie it leaves is a row identical in
-    # all six columns, which is one edge stated twice (a site reading the same
-    # binding at two slots) and the same row either way.
-    "value_edges": """
-        SELECT kind, from_method, from_value, to_symbol, to_ordinal, to_index
-        FROM value_edges
-        ORDER BY kind, from_method, to_ordinal, to_index, to_symbol, from_value
-    """,
+    # Its ordering is the file's last statement, over the whole union and on
+    # every column (NFR-1) — stated there, beside the arms whose ties it breaks.
+    "value_edges": (_SQL_DIR / "value_edges.sql").read_text(encoding="utf-8"),
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -1106,15 +1109,6 @@ _EXPORT_QUERIES = {
                ON m.key_path = c.key_path AND m.value = c.value
         ORDER BY c.document_id, c.doc_index, c.seq
     """,
-    # Spec 2026-09-22 §1a's edge view. It travels through its named query
-    # verbatim, and that is a claim rather than an omission: it carries no
-    # masked column. Every value in it is a symbol, a value id or an integer
-    # index — `_REDACTED_ADDRESSES` exists for a column that can hold a whole
-    # URL and this view has none, and the grammar map (`_REDACTED_JSON`) exists
-    # for a column holding the argument JSON, which this view reads and does not
-    # carry. What it does carry is already masked where it needed to be: the
-    # three tables it reads export beside it, each through its own rule.
-    "value_edges": _NAMED_QUERIES["value_edges"],
 }
 
 # Derived, never restated (see the note above `_EXPORT_QUERIES`): the exported
@@ -1370,13 +1364,6 @@ class DuckDbWorkspace:
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._connection.execute(schema)
         self._add_columns_the_schema_has_gained(schema)
-        # The one schema object built over DERIVED tables rather than over `raw_facts`
-        # (spec 2026-09-22 §1a/§3b), so it runs AFTER the file that declares them and
-        # after the column migration above — a view over a table whose column list is
-        # still the old one would bind to the old one. Its own file for the reason its
-        # header states; `schema.sql` still owns every table and every fact view, and
-        # this adds no table and no writer.
-        self._connection.execute((_SQL_DIR / "value_edges.sql").read_text(encoding="utf-8"))
         # Read HERE, while every fact view is still the form `schema.sql` just gave
         # it: once `_materialize_facts` has re-pointed a view at its table, the
         # catalog holds `SELECT * FROM fact_<view>` and the defining SELECT is gone

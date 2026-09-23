@@ -2635,10 +2635,10 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
 
 def _value_edge_facts(root: Path) -> None:
     """One method whose single call site carries, in four slots, every argument
-    shape the edge view reads: a binding read, a type reference, a value another
+    shape the edge query reads: a binding read, a type reference, a value another
     call produced, and a literal that names nothing at all.
 
-    Deliberately ONE site. The view's five arms come out of three tables, and a
+    Deliberately ONE site. The query's five arms come out of three tables, and a
     fixture with one site per arm would let an arm read the wrong table and still
     look right — the same row set has to answer all five."""
     document = Document(
@@ -2715,7 +2715,7 @@ def _workspace_with_value_edges(tmp_path: Path) -> DuckDbWorkspace:
     return workspace
 
 
-def test_the_edge_view_normalises_five_kinds_from_three_tables(tmp_path: Path):
+def test_the_edge_query_normalises_five_kinds_from_three_tables(tmp_path: Path):
     """Spec 2026-09-22 §1a, over `value_edges.sql`. One shape out of three
     sources — and `written_by` is ABSENT until capability 9.19 gives it a fact,
     which is itself the answer: a workspace with no binding-write facts yields
@@ -2733,7 +2733,7 @@ def test_the_edge_view_normalises_five_kinds_from_three_tables(tmp_path: Path):
     workspace.close()
 
 
-def test_the_edge_view_fills_the_columns_its_own_header_says_each_kind_fills(
+def test_the_edge_query_fills_the_columns_its_own_header_says_each_kind_fills(
     tmp_path: Path,
 ):
     """The columns are nullable PER KIND, so "nullable" on its own says nothing a
@@ -2831,24 +2831,31 @@ def test_the_edge_view_fills_the_columns_its_own_header_says_each_kind_fills(
     workspace.close()
 
 
-def test_the_edge_view_stores_nothing_and_no_call_site_row_moved(tmp_path: Path):
-    """§3b: `value_edges` is a VIEW. Three tables already hold these rows, and a
-    materialised copy would add a writer, a reset and a second version that can
-    drift — so the object DuckDB holds must be a view, and asking it must leave
-    the tables it reads exactly as they were."""
+def test_the_edge_query_adds_no_database_object_and_moves_no_row(tmp_path: Path):
+    """§3b taken the whole way: `value_edges` is the TEXT of a named query and
+    nothing else. Three tables already hold these rows, and §3b's list of what a
+    copy would cost includes schema growth — which a `CREATE VIEW` is, whatever
+    it stores. It shipped as a view for one commit and the consequence was
+    immediate and unarguable: `schema_objects()` found it, the export ratchet
+    demanded a query for it (correctly — there is no exclusion class), and every
+    bundle then carried 420 KB of derived rows beside the three tables they came
+    from. So the assertion is the absence of the object, not its type."""
     workspace = _workspace_with_value_edges(tmp_path)
     before = (workspace.query("call_sites"), workspace.query("call_edges"))
     assert workspace.query("value_edges")
     assert (workspace.query("call_sites"), workspace.query("call_edges")) == before
-    (kind,) = workspace._connection.execute(
-        "SELECT table_type FROM information_schema.tables "
+    assert workspace._connection.execute(
+        "SELECT count(*) FROM information_schema.tables "
         "WHERE table_schema = 'main' AND table_name = 'value_edges'"
-    ).fetchone()
-    assert kind == "VIEW"
+    ).fetchone() == (0,)
+    # The two ratchets that would have to be argued with if it were an object,
+    # asserted rather than left to the export test's own sorted comparison.
+    assert "value_edges" not in workspace.schema_objects()
+    assert "value_edges" not in workspace_module._EXPORT_QUERIES
     workspace.close()
 
 
-def test_the_edge_view_is_empty_on_a_workspace_that_loaded_no_calls(tmp_path: Path):
+def test_the_edge_query_is_empty_on_a_workspace_that_loaded_no_calls(tmp_path: Path):
     """Pre-declared like every table in `schema.sql`: a module with nothing to
     walk answers with an empty result rather than an error, which is what lets
     Task 3 call it unconditionally."""
