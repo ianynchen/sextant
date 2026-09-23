@@ -25,6 +25,7 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.values import LITERAL, STRING, Answer
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
@@ -204,6 +205,36 @@ def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
     ):
         return None, str(argument["value"]), "resolved"
     return None, None, "unresolved"
+
+
+def channel_of_answer(answer: "Answer | None") -> tuple[None, str | None, str]:
+    """`channel_of`, for a slot the backward value walk answered (spec 2026-09-22 §1b,
+    Task 7's migration). Same tuple, same `peer` rule, same honest `unresolved`.
+
+    **Only a `string` literal is a destination, and the three refusals are the point.**
+
+    * a `symbol` literal is a DECLARATION reference (`literal_kind`'s fourth member, ruled
+      T-3), and writing `com/acme/OrderWorker#` into `path` publishes a symbol as an
+      address — a fabrication at `resolved`, which is the one failure spec §7 says this
+      whole work risks. The walk carries the symbol precisely so a consumer can tell;
+      this is the consumer telling.
+    * an `expression` is a `${…}` or an assembled template carried with its holes
+      unfilled (§1b, §6 as amended). A broker resolves a destination it is GIVEN; a
+      template is not one, and filling a hole is what §8.2 forbids.
+    * `absent` — the code stating there is no value — is not a destination either. It is
+      a resolved ANSWER and it stays distinguishable in the walk's own vocabulary; what
+      it is not is a channel anything can be addressed on.
+
+    `int` and `bool` literals are refused by the same clause and need no argument of their
+    own: `channel_of` has always read a destination as a string and nothing else.
+
+    A slot the walk answered nothing for at all — a position the site does not have, which
+    is what a catalog naming an argument past the call's own arity reads as — is `None`
+    here and the same one-tuple unresolved answer.
+    """
+    if answer is None or answer.kind != LITERAL or answer.literal_kind != STRING:
+        return None, None, "unresolved"
+    return None, str(answer.value), "resolved"
 
 
 def _array_elements(argument: dict[str, Any] | None) -> list[dict[str, Any]] | None:

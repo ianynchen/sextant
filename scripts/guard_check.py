@@ -160,9 +160,45 @@ _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
 _DOCUMENT = "sextant/egress/render/document.py"
+_VALUES = "sextant/application/resolve/values.py"
 
 
 GUARDS: dict[str, Guard] = {
+    # --- the backward value walk and what it is allowed to answer ----------
+    "values.an-identity-entry-with-a-role-is-not-an-identity": Guard(
+        what="only a ROLE-FREE `identified_by` entry answers what a produced value IS; an "
+        "entry carrying a `role` is passed over",
+        why="a role says something narrower — argument 0 of `new ProducerRecord(topic, …, "
+        "payload)` is the CHANNEL and the last is the PAYLOAD, and the consuming row is "
+        "what selects between them. Read as identities, those two entries answer ONE value "
+        "twice, and the second answer is a payload slot published as the address of a "
+        "destination: a wrong row at `resolved`, which spec §7 names as the one failure this "
+        "whole work risks and which a migration diff cannot tell from a right one",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if entry.get(_ROLE) is not None or not isinstance(slot, int):",
+                replace="            if not isinstance(slot, int):",
+            ),
+        ),
+    ),
+    "arguments.only-a-string-literal-is-a-destination": Guard(
+        what="a walk answer becomes a channel only when it is a `string` literal — a "
+        "`symbol`, an `expression` and an `absent` each read as unresolved",
+        why="the walk carries a declaration reference as a `symbol` literal (spec ruling "
+        "T-3) precisely so a consumer can tell it from text. A channel reader that tested "
+        "the answer KIND alone would write `com/acme/OrderWorker#` into `path` and publish a "
+        "symbol as an address at `resolved`/`compiler`, where nothing downstream can tell it "
+        "from an observation. The same one-word weakening admits an `int` and a `bool` "
+        "literal as destinations, which `channel_of` has refused since it was written",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    if answer is None or answer.kind != LITERAL or answer.literal_kind != STRING:",
+                replace="    if answer is None or answer.kind != LITERAL:",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "

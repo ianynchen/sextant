@@ -565,8 +565,24 @@ safety property**: `arity` and `descriptor` are part of the match, so a discrimi
 and a bare one coexist, and a site the discriminated one turns away still matches the bare
 one. Where a measured form and an older per-consumer spelling disagreed, what settled it was
 editing the catalogs that carried the bare spelling.
-The loader exposes it as `YamlCatalogSource.value_model()`; there is no `Catalog.value_model`
-field, because the table belongs to no catalog.
+The loader builds it once as `YamlCatalogSource.value_model()` and hands **every** `Catalog`
+it loads the same list, as `Catalog.value_model`. *This paragraph used to end "there is no
+`Catalog.value_model` field, because the table belongs to no catalog", which was true while
+nothing consumed the table and stopped being true when something did (spec §3c's first
+migration, 2026-09-23).* The field is not a per-catalog declaration and reading it as one is
+the mistake to avoid: it is the SOURCE's table, carried on the catalogs because that is the
+only thing an engine is handed, and every catalog of one source carries the identical list.
+A source that declares no `value-models/` and writes no hop declaration contributes an empty
+one, which is the state of a repository's own catalog set (§6) that declares neither.
+
+**What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
+takes the table as data and uses it at exactly one place: a produced value whose producing
+call this module never read. The walk has found the call (distance); the table says which of
+its arguments is the value (meaning). Two kinds of entry are passed over there, and
+`values._identified` states both — a ROLED entry, which says something narrower than "this
+argument IS the value" and would answer one value twice, and an entry whose `arg` is a rule
+(`all_strings`, `last`) rather than a slot, which resolves per site and is not a position a
+slot-resolving walk can turn into one.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other three directories: it is knowledge a run was produced with.
@@ -2592,15 +2608,30 @@ matches:
 ```
 
 `registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
-call site that binds a receiver to a channel. **`channel_arg` reads through the same
-capture ladder `single_call`'s own `channel_via` already defines (§2, above), tried in
-that order**: a string literal at that position resolves directly first — `Subscriber.newBuilder(String,
-MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one, and a
-`channel_via`-declared row must still catch it — and only when the argument is not a
-resolved string literal does a declared `channel_via` form follow the linked call's own
-argument instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s);
-anything else is `path` NULL, `unresolved` — the registration was made, only its channel
-is unread.
+call site that binds a receiver to a channel. **`channel_arg` reads through the backward
+value walk** (spec 2026-09-22 §1b, §2b; this is the first style migrated to it, §3c). It
+says what it always said — *this position carries the destination* — and what changed is
+only how far the engine can see from there. *This paragraph used to describe a two-rung
+capture ladder, each rung capped at one hop: the literal at the declared position, then ONE
+`source` link back to a `channel_via`-named call. Both rungs are the walk now.*
+
+A string literal at that position still resolves directly — `Subscriber.newBuilder(String,
+MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one — and so
+does a value that arrived from anywhere the walk can follow: a parameter of the enclosing
+method (each caller its own row, §1c), a value a local callee returned, a chain several
+calls long. Where the value came from a producing call this module never read, the identity
+table (§1f) says which of that producer's arguments IS the value —
+`ProjectSubscriptionName.of`'s own `name` argument, which is where `channel_via` used to say
+it and where the hoist reads it from today. **Only a `string` literal becomes a `path`**: a
+declaration reference arrives as a `symbol` and an assembled address as an `expression`, and
+publishing either as a destination would be a wrong address at `resolved` rather than a
+missing one. Anything else is `path` NULL, `unresolved` — the registration was made, only
+its channel is unread.
+
+**Several paths that agree about this slot are ONE destination.** A registration inside a
+helper called from two places is two bindings; if both read the same subscription — or
+neither reads any — it is one row, because a destination is what a row is keyed on and an
+unresolved wire identity never dedups downstream.
 
 **`receiver_arg` is the argument that names the handler**, read one of two ways depending
 on what the compiler resolved it to: a `lambda`-kind argument names its own synthetic body

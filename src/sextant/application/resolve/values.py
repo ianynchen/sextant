@@ -99,16 +99,19 @@ therefore ends at `no_writer`, which today means *no writer edge exists to follo
 re-derive it from the constructor-only `field_writes` fact: that would be a second spelling
 of an edge the design gives one home, which is the disease §0a records.
 
-**It names no framework and no language.** `identified_by` (§2) is catalog data that
-arrives later; until it does, a producer whose value nothing names answers with a reason
-rather than with framework knowledge this layer is not allowed to hold.
+**It names no framework and no language.** `identified_by` (§2) is catalog data, handed in
+by the caller as `identities` and never held here: the walk finds the producing call
+(distance) and the table says which of its arguments is the value (meaning), which is §1e's
+line drawn exactly where DR-6 puts it. A caller that passes none gets the walk as it was
+before Task 7 — a producer whose value nothing names answers with a reason.
 
-**No ENGINE consumes this, deliberately** (§3a step 1): the walk derives no row, and
-Task 4's measurement was the gate before any engine calls it. One caller exists, and it
-is the one §7a requires before a migration may start — `resolve/shadow.py` runs the walk
-over every position a catalog asks about and writes what it WOULD resolve into
-`value_resolutions`, publishing nothing. It is a RECORDER rather than a consumer: nothing
-reads its answers back, so the first row this walk moves anywhere is still Tasks 7-9's.
+**One engine consumes this, and the migrations add the rest** (§3c). Task 4's measurement
+was the gate before any engine called it and §7a's shadow read is the gate before each
+migration; `resolve/engines/interface_implementation.py` is the first through both (Task 7,
+one catalog — the smallest pinned surface, so the cheapest place to discover the walk is
+wrong). `resolve/shadow.py` is the other caller and is a RECORDER rather than a consumer:
+it runs the walk over every position a catalog asks about, writes what it WOULD resolve
+into `value_resolutions`, and publishes nothing.
 
 **A caller resolving many sites builds `value_index` ONCE and threads it** — the condition
 attached to Task 4's no-cap ruling (`docs/research/2026-09-23-value-walk-measurement.md`
@@ -119,7 +122,7 @@ work that takes under a millisecond.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -200,6 +203,23 @@ _BINDING = "binding"
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
 _ELEMENT_OF = "element-of"
+
+# §2's `identified_by` table, as the walk is handed it: `{owner?, method, arg, arity?,
+# descriptor?, role?}` per producing call, built once by the loader (`yaml_source
+# .value_model`) from `value-models/` plus every hop declaration still written on a
+# catalog. It is DATA the caller passes in, never knowledge this module holds — the rule
+# the module docstring states, and the reason the parameter exists at all.
+Identities = Sequence[Mapping[str, Any]]
+
+# The key a hoisted WRAPPER entry carries and a `_via` entry deliberately does not, and
+# what it decides here. `role` says "argument N of this producer is the CHANNEL" or "the
+# PAYLOAD" — a statement about one of several things a constructed value holds, which the
+# consuming row is what selects. A role-free entry says something else and stronger: this
+# argument IS the value the call stands for, which is the only claim a walk resolving "what
+# is this value" can act on. `new ProducerRecord(topic, …, payload)` carries TWO roled
+# entries, and a walk that read them would answer one value twice; `ProjectSubscriptionName
+# .of(project, id)` carries one role-free entry, and argument 1 is what that object is.
+_ROLE = "role"
 
 
 @dataclass(frozen=True)
@@ -341,7 +361,10 @@ def value_index(workspace: Workspace) -> ValueIndex:
 
 
 def resolve_site(
-    workspace: Workspace, site: Mapping[str, Any], index: ValueIndex | None = None
+    workspace: Workspace,
+    site: Mapping[str, Any],
+    index: ValueIndex | None = None,
+    identities: "Identities" = (),
 ) -> list[Binding]:
     """Every slot of one call site, resolved per path (§1b).
 
@@ -357,6 +380,10 @@ def resolve_site(
 
     `index` is the fold above, which a caller resolving many sites builds once.
 
+    `identities` is §2's `identified_by` table — the MEANING half the walk cannot hold
+    (`Identities` below says what it is and what the walk does with it). Empty is the
+    walk as it was before Task 7: a producer nothing names answers with a reason.
+
     Returns one `Binding` per coherent path, in a deterministic order (NFR-1): the first
     slot's paths drive the outer order, and each slot's answers arrive in the edge query's
     own ordering. An empty list means no path answers every slot at once, which is the
@@ -364,7 +391,7 @@ def resolve_site(
     is not a row here.
     """
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold)
+    walk = _Walk(fold, identities)
     site = fold.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     combined: list[tuple[_Trail, dict[int | str, Answer]]] = [((), {})]
     for slot in _slots_of(site):
@@ -443,8 +470,9 @@ class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
 
-    def __init__(self, index: ValueIndex) -> None:
+    def __init__(self, index: ValueIndex, identities: Identities = ()) -> None:
         self._index = index
+        self._identities = tuple(identities)
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -711,15 +739,71 @@ class _Walk:
         producers = self._index.producers.get((method, value), ())
         if not producers:
             return _only(trail, _unresolved(NOT_READABLE))
-        # The producer is a call. Whether its BODY was read is what separates the two
+        site = (method, min(producers))
+        # **The producer is a call, and this is where the walk used to be stuck** (§0b,
+        # and it is the correction that design says it made three times before it stuck).
+        # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object
+        # and nothing in the facts says what string identifies one; only framework
+        # knowledge does. So `identified_by` answers here, and the answer is the producer's
+        # OWN slot, resolved by the same walk — which is what keeps §1e's line where it is:
+        # the walk found the producing call (distance), the table said which argument of it
+        # is the value (meaning), and no framework is named in this module either way.
+        slot = self._identified(site)
+        if slot is not None:
+            return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+        # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
         # of 2,065 value-producing sites are that boundary, so `external` is the common
-        # answer and not the corner case. Where the body WAS read and still nothing names
-        # the value, the producer is there and unreadable — which is also where
-        # `identified_by` will answer once §2 hoists it into `value-models/`.
-        site = (method, min(producers))
+        # answer and not the corner case.
         return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
+
+    def _identified(self, site: tuple[str, int]) -> int | None:
+        """Which of the producing call's own arguments IS the value it handed back, or
+        None where no identity entry claims it (§2, `Identities` above).
+
+        Matched on what the engines already match a call on — the method name, the `owner`
+        where the entry declares one, and the `arity` or JVM `descriptor` where it declares
+        either. **`owner` is OPTIONAL and its absence matches every owner** (§5a): Go's
+        `nats.Connect(url)` and Python's `boto3.client("sqs")` are free functions, and
+        requiring one would bake OO into a model the fact grammar does not have.
+
+        Two kinds of entry are passed over, and neither is an oversight:
+
+        * a ROLED entry, for the reason `_ROLE` states;
+        * an entry whose `arg` is not an integer. `all_strings` and `last` are RULES
+          resolved per site rather than positions — every argument of a varargs topic list,
+          the final argument of whichever `ProducerRecord` overload was called — and each
+          answers with several values or with one chosen by counting. A slot is what this
+          walk resolves, so a rule it cannot turn into one is passed over here rather than
+          guessed at; the consuming engines still read both spellings as they always have.
+
+        First match wins, in the table's own order — `value-models/` first, then the
+        catalogs (`yaml_source.value_model`), which is stated there to be a reading
+        convenience rather than a safety property because `arity` and `descriptor` are part
+        of what an entry matches on, so a discriminated entry and a bare one coexist and a
+        site the first turns away still meets the second.
+        """
+        row = self._index.sites.get(site)
+        if row is None:
+            return None
+        arguments = row["arguments"] or []
+        for entry in self._identities:
+            slot = entry.get("arg")
+            owner, arity = entry.get("owner"), entry.get("arity")
+            descriptor = entry.get("descriptor")
+            if entry.get(_ROLE) is not None or not isinstance(slot, int):
+                continue
+            if entry.get("method") != row["name"]:
+                continue
+            if owner is not None and row["owner"] != owner:
+                continue
+            if arity is not None and len(arguments) != arity:
+                continue
+            if descriptor is not None and row.get("descriptor") != descriptor:
+                continue
+            return slot
+        return None
 
     def _parameter(
         self, method: str, index: int, trail: _Trail, frames: "_Frames"

@@ -486,6 +486,15 @@ def record_value_resolutions(
     asked = positions_asked(effective_call_sites(workspace), asks)
     if not asked:
         return 0
+    # §2's identity table, resolved through exactly as a migrated engine resolves through
+    # it (Task 7). **A preview that left it out would under-report the conversions it
+    # exists to put in front of a reviewer**, and by the one kind that matters most: an
+    # identity entry is what unsticks the walk at a producer whose result is opaque (§0b),
+    # which is precisely the position a catalog wrote a hop declaration for. Every catalog
+    # of one source carries the same table (`Catalog.value_model`), so the first is the
+    # source's; `catalogs` is empty only where the whole analysis loaded none, and then
+    # nothing was asked either.
+    identities = catalogs[0].value_model if catalogs else []
     # Grouped by SITE, because `resolve_site` is the entry point every migrated engine
     # calls (§1b: one entry point, not two) and it resolves a site's slots TOGETHER — a
     # binding is the site's slots as one path reaches them, and resolving two asked slots
@@ -500,7 +509,7 @@ def record_value_resolutions(
     # order, and the asked slots within a binding in catalog-then-slot order.
     for site_key, positions in sorted(by_site.items()):
         site = index.sites[site_key]
-        for binding in resolve_site(workspace, site, index):
+        for binding in resolve_site(workspace, site, index, identities):
             for position in sorted(positions, key=lambda p: (p.catalog, p.slot)):
                 answer = binding.slots.get(position.slot)
                 if answer is None:

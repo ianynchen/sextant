@@ -21,6 +21,7 @@ argument is the channel and which is the receiver — arrives as catalog data;
 this module never names a framework."""
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -29,13 +30,12 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
-    CallFacts,
     _arg_at,
-    channel_of,
-    linked_channels,
+    channel_of_answer,
     valid_via_arity,
 )
-from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
 from sextant.domain.symbols import (
     bare_descriptor,
     method_name,
@@ -71,11 +71,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     registration = matches["registration"]
     # A LIST or a scalar (§3.1). Plural name, so a consumer still comparing with
     # `==` fails loudly rather than matching nothing.
-    owners = catalog_symbols(registration["owner"], f"{catalog.source}: registration.owner")
+    owners = registration_owners(catalog)
     method_name = registration["method"]
     channel_arg = registration["channel_arg"]
     receiver_arg = registration["receiver_arg"]
-    forms = _channel_via_forms(registration)
     implemented = _implemented_interfaces(workspace)
     method_symbols = _method_symbols(workspace)
     declarations = _declarations(workspace)
@@ -102,32 +101,43 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # registrations of the SAME handler on the SAME channel still collapse,
     # exactly as every other style's own wire-identity dedup does.
     seen: set[tuple[str, str, str, str]] = set()
+    # The walk's five-query fold, built AT MOST ONCE per run and only where a registration
+    # was actually found (spec §3b's own guard shape: on `orders-quarkus` eight catalogs
+    # declared `metadata_from` and zero walks ran). It costs 0.16 s on `mall-admin` —
+    # more than walking every position in that corpus put together — so building it above
+    # this loop would charge every module that declares none of this catalog's framework.
+    index: ValueIndex | None = None
     # `call_sites` is already ordered `caller, ordinal` (NFR-1); filtering it
     # in place, rather than grouping by owner first, keeps that order.
     for site in call_sites:
-        if site["owner"] not in owners or site["name"] != method_name:
+        if not accepts_registration(site, owners, method_name):
             continue
-        arguments = site["arguments"]
         caller = str(site["caller"])
-        # `channel_via`'s linked-call join (`_linked_constructor`) searches
-        # only this caller's own call sites (D00 §5's ids are meaningless
-        # across methods) — `supertypes` and `referenced` are unused here
-        # (this style roots no payload at all) but `CallFacts` still needs
-        # them filled.
-        facts = CallFacts(supertypes={}, caller_call_sites=by_caller.get(caller, []), referenced=[])
-        channel_argument = _arg_at(arguments, channel_arg)
-        # The capture ladder is a LADDER, not an either/or (D02 §2's
-        # `channel_via` precedent, `single_call`'s own non-exclusive reading
-        # of the two): a `channel_via`-declared row still tries the literal
-        # read FIRST — `Subscriber.newBuilder(String, MessageReceiver)`
-        # really exists alongside the `ProjectSubscriptionName` overload — and
-        # only falls back to the linked call when the argument itself is not
-        # a resolved string literal.
-        literal = channel_of(channel_argument)
-        if literal[2] != "resolved" and "channel_via" in registration:
-            destinations = linked_channels(channel_argument, facts, forms)
-        else:
-            destinations = [literal]
+        if index is None:
+            index = value_index(workspace)
+        # **The backward walk, in place of this engine's own copy of `single_call`'s
+        # `channel_of`-then-`linked_channels`** (spec §2b, Task 7). The ladder it replaces
+        # was two rungs, each capped at one hop: the literal at the declared position, then
+        # ONE `source` link back to a `channel_via`-named call. `resolve_site` answers the
+        # same position with no cap and no direction named per catalog — and where the
+        # value came from a producer whose result is opaque, the identity table the loader
+        # hoisted (`catalog.value_model`, §2) says which of that producer's arguments IS
+        # the value. That is the same two statements `channel_via` welded together (§0b),
+        # with the distance half now the walk's and the meaning half still catalog data.
+        # **One tuple per distinct destination, not one per path.** Several paths are
+        # several bindings by design (§1c) — several callers of the method that registers,
+        # several returns of a callee it reads through — and they routinely AGREE about
+        # this one slot while differing elsewhere. Two paths that both read `raw-notify`
+        # are one destination; keeping them apart here would mint a second row for a
+        # subscription declared once, and two paths that both read NOTHING would mint two
+        # unresolved rows where the ladder this replaces minted one (an unresolved wire
+        # identity never dedups downstream, so nothing else would collapse them). Order is
+        # the walk's own, which is deterministic (NFR-1).
+        destinations = _distinct(
+            channel_of_answer(binding.slots.get(channel_arg))
+            for binding in resolve_site(workspace, site, index, catalog.value_model)
+        ) or [(None, None, "unresolved")]
+        arguments = site["arguments"]
         # The activation conjunct, before the handler is resolved: an unstarted
         # registration is not a boundary, and resolving its handler would only make a
         # row we must not mint look better founded. It runs AFTER the destination
@@ -137,8 +147,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 {
                     "protocol": catalog.protocol,
                     "method": None,
-                    # The channel as this site resolved it, `channel_via` included — the
-                    # fixture reaches its subscription through
+                    # The channel as this site resolved it, the walk and the identity
+                    # table included — the fixture reaches its subscription through
                     # `ProjectSubscriptionName.of`, so reading the literal
                     # argument here would file every question against a
                     # null path and make them indistinguishable.
@@ -208,6 +218,35 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # Filed after the rows, so a registration that both derives and asks cannot have
     # its question written and its row lost to a later failure.
     record_open_questions(workspace, unresolved)
+
+
+def registration_owners(catalog: Catalog) -> tuple[str, ...]:
+    """The owner symbols this catalog's `registration` names, converted once — `run`'s own
+    first read, named so that something other than `run` can ask the same question."""
+    return catalog_symbols(
+        catalog.matches["registration"]["owner"], f"{catalog.source}: registration.owner"
+    )
+
+
+def accepts_registration(site: Mapping[str, Any], owners: tuple[str, ...], method: str) -> bool:
+    """Whether a call site is the registration this catalog describes.
+
+    **Exposed rather than inlined so that a MEASUREMENT can ask production the question
+    instead of re-asking it in its own words** (`scripts/measure_production_match.py`).
+    The shadow reader over-matches on purpose — it models the keys, never the engines'
+    reachability — so how much of what it asks about a consuming matcher would really
+    accept is a question only the consuming matcher can answer, and Task 5 published a
+    headline maximum from a corpus whose every site production refuses. One function, one
+    caller in `run` and one in the script, so the two cannot drift."""
+    return site["owner"] in owners and site["name"] == method
+
+
+def _distinct(
+    destinations: "Iterable[tuple[None, str | None, str]]",
+) -> list[tuple[None, str | None, str]]:
+    """The destination tuples, first occurrence kept and order preserved — a `dict` over
+    a `set` for exactly that reason (NFR-1: two runs over one module derive one order)."""
+    return list(dict.fromkeys(destinations))
 
 
 def _handler_of(
@@ -583,18 +622,3 @@ def _completes(
                 return True
             frontier.append(other.get("result"))
     return False
-
-
-def _channel_via_forms(registration: dict[str, Any]) -> list[dict[str, Any]]:
-    """`channel_via` entries, each declared `owner` converted to the SCIP
-    symbol form once — only ever called on a `registration` block
-    `_validate_matches` already passed, at `run` start."""
-    return [
-        {
-            "owner": _catalog_symbol(entry["owner"]),
-            "method": entry["method"],
-            "arg": entry["arg"],
-            **({"arity": entry["arity"]} if "arity" in entry else {}),
-        }
-        for entry in _channel_via_entries(registration)
-    ]

@@ -91,9 +91,12 @@ class YamlCatalogSource:
         same pair of entries between them, and twelve copies of one identity is the
         once-per-consumer shape this table exists to end.
 
-        **Nothing on the analyze path calls this yet**, which is why it re-reads the
-        directory rather than sharing `load`'s parse: the walk is unwired until the
-        migrations (spec §3c), and the tasks that wire it decide how it is threaded.
+        **`load` calls this and hands the result to every catalog it builds** (Task 7,
+        spec §3c's first migration): the walk resolves through it, so it has to reach the
+        engines, and `Catalog.value_model` is where they read it. It still re-reads the
+        directory rather than sharing `load`'s parse — 26 ms against `load`'s own 29 ms,
+        on a resolve that takes 0.8 s — so that the hoist stays one self-contained read
+        that Task 10 can narrow without touching the catalog loop.
         """
         model: list[dict[str, Any]] = []
         # Which file declared each entry, kept so two files claiming one producer are
@@ -138,6 +141,13 @@ class YamlCatalogSource:
         shape_models = self._models("shape-models")
         bean_models = self._models("bean-models")
         step_models = self._models("step-models")
+        # Once, here, and handed to every catalog: an identity is declared once per
+        # PRODUCER (spec §2), so it belongs to the source rather than to any one file.
+        # It re-reads the directory this loop is about to read — measured at 26 ms for the
+        # 101 shipped catalogs against 29 ms for `load` itself, on a resolve that takes
+        # 0.8 s — and that buys the two readings staying independent, which is what lets
+        # Task 10 delete the hop keys from the catalogs without touching this loop.
+        identities = self.value_model()
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
@@ -211,6 +221,8 @@ class YamlCatalogSource:
                     # D02 §1c — the bean model's mapping, resolved above the
                     # way `shape_model` is; `{}` for a catalog naming none.
                     bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
+                    # D02 §1f — the source's own identity table, built above.
+                    value_model=identities,
                 )
             )
         return catalogs

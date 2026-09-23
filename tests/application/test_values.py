@@ -78,6 +78,12 @@ _BUFFER = _PKG + "Buffer#"
 _BINDER = _PKG + "Binder#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
+# The identity arm's producer (spec §2): deliberately NOT declared, so every value it
+# hands back is `external` until an `identified_by` entry says which of its arguments IS
+# that value — which is the real shape, since the producers catalogs write hop
+# declarations for live in jars (`jakarta.jms.Session`, `ProjectSubscriptionName`).
+_NAME = _PKG + "Name#"
+_IDENTIFIED = _PKG + "Identified#"
 _UNREAD = _PKG + "Unread#"
 _LOOP = _PKG + "Loop#"
 _ASSEMBLER = _PKG + "Assembler#"
@@ -172,6 +178,10 @@ def _site(
     )
 
 
+# The identity producer's two overloads, which only a descriptor or an arity separates.
+_OF_TWO = "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;"
+_OF_ONE = "(Ljava/lang/String;)Ljava/lang/Object;"
+
 _PAIR_TARGET = (_REGISTRY, "pair", _PAIR)
 _ONE_TARGET = (_REGISTRY, "one", _ONE)
 _MANY_TARGET = (_REGISTRY, "many", _MANY)
@@ -198,6 +208,7 @@ def _facts() -> list[Fact]:
             _BINDER,
             _ENTRY,
             _OUTSIDE,
+            _IDENTIFIED,
             _UNREAD,
             _LOOP,
             _ASSEMBLER,
@@ -351,6 +362,71 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=9)],
+        ),
+        # The identity arm (spec §2, §0b): a producer this workspace never read, whose
+        # own argument is what the value it handed back IS. Four methods, because the
+        # entry that answers and the entries that must NOT are different facts.
+        _declared(_IDENTIFIED, "use", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "use", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="string", value="raw-notify"),
+            ],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "use", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # The same producer under a ONE-argument overload, which `arity` is the only
+        # thing that tells from the two-argument one once owner and name agree.
+        _declared(_IDENTIFIED, "overload", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "overload", "()V"),
+            0,
+            (_NAME, "of", _OF_ONE),
+            arguments=[CallArgument(kind="string", value="sole")],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "overload", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # An identified producer whose OWN identified argument came from another one:
+        # two hops, which is one more than any hop declaration could ever express.
+        _declared(_IDENTIFIED, "nested", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "nested", "()V"),
+            0,
+            (_NAME, "text", _OF_ONE),
+            arguments=[CallArgument(kind="string", value="deep-notify")],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "nested", "()V"),
+            1,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="unresolved", source=1),
+            ],
+            result=2,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "nested", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=2)],
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -894,6 +970,103 @@ def test_a_value_from_a_body_this_workspace_never_read_is_unresolved_external(wa
     value-producing sites on `mall-admin`, so this is the common case, not the corner."""
     bindings = _bindings(walked, _symbol(_OUTSIDE, "use", "()V"), 1)
     assert _reasons(bindings) == ["external"]
+
+
+# --- The identity table (spec §2, §0b): the MEANING half the walk cannot hold ---------
+# A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object and
+# nothing in the facts says what string identifies one — "the correction this design is
+# built on, made three times before it stuck". These pin that `identified_by` answers
+# exactly there, and that the entries it must pass over are passed over.
+
+_OF_TWO_IDENTITY = {"owner": _NAME, "method": "of", "arg": 1}
+
+
+def _identified(
+    workspace: DuckDbWorkspace, method: str, ordinal: int, identities: list[dict[str, Any]]
+) -> list[Binding]:
+    return resolve_site(workspace, _at(workspace, method, ordinal), None, identities)
+
+
+def test_a_producer_nothing_identifies_stays_the_reason_it_was(walked):
+    """The negative half, first, because every test below is only worth reading against
+    it (GUIDELINES §10): the same position, the same facts, an EMPTY table — and the walk
+    answers what it answered before Task 7. An identity arm that fired on the producer
+    rather than on the entry would pass every test below and fail this one."""
+    bindings = _bindings(walked, _symbol(_IDENTIFIED, "use", "()V"), 1)
+    assert _reasons(bindings) == ["external"]
+
+
+def test_an_identity_entry_answers_with_the_producers_own_argument(walked):
+    """§0b's whole example, one framework along: the value is what `Name.of`'s argument 1
+    says it is, and only framework knowledge says so. The walk found the producing call;
+    the table said which of its arguments is the value (§1e)."""
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [_OF_TWO_IDENTITY])
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("literal", "raw-notify")]
+
+
+def test_an_identity_entry_with_no_owner_matches_a_free_function(walked):
+    """**§5a, and it is a language-neutrality rule rather than a convenience.** Go's
+    `nats.Connect(url)` and Python's `boto3.client("sqs")` are free functions, and
+    `owner_of` already documents that an ownerless symbol is an answer here, never an
+    exception — so requiring `owner` would bake OO into a model the fact grammar does
+    not have."""
+    bindings = _identified(
+        walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [{"method": "of", "arg": 1}]
+    )
+    assert [b.slots[0].value for b in bindings] == ["raw-notify"]
+
+
+def test_an_identity_chain_goes_as_deep_as_the_code_does(walked):
+    """**The cap that is gone** (§3a: no cap in v1). `Name.of(project, Name.text("deep-
+    notify"))` is TWO identified producers in a row, and a hop declaration caps at one by
+    construction — `channel_via` says "it is one hop that way" and has no second hop to
+    say. The walk has no such limit, and the entries are two facts about two producers."""
+    bindings = _identified(
+        walked,
+        _symbol(_IDENTIFIED, "nested", "()V"),
+        2,
+        [_OF_TWO_IDENTITY, {"owner": _NAME, "method": "text", "arg": 0}],
+    )
+    assert [b.slots[0].value for b in bindings] == ["deep-notify"]
+
+
+@pytest.mark.pins("values.an-identity-entry-with-a-role-is-not-an-identity")
+def test_a_roled_identity_entry_is_not_what_this_value_is(walked):
+    """**A `role` says something narrower than "this argument IS the value", and reading
+    one here would answer one value twice.** `new ProducerRecord(topic, …, payload)`
+    hoists as two entries — `role: channel` and `role: payload` — because two positions of
+    one constructor are not interchangeable and the CONSUMING row is what selects between
+    them (`yaml_source._constructor_identities`). A role-free entry makes the whole claim;
+    a roled one makes half of it, and half is not an identity."""
+    roled = {**_OF_TWO_IDENTITY, "role": "channel"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [roled])
+    assert _reasons(bindings) == ["external"]
+
+
+def test_an_identity_entry_whose_arg_is_a_rule_rather_than_a_slot_is_passed_over(walked):
+    """`all_strings` and `last` are resolved per site — every argument of a varargs topic
+    list, the final argument of whichever overload was called — so each answers with
+    several values or with one chosen by counting. A slot is what this walk resolves, and
+    a rule it cannot turn into one is passed over rather than guessed at."""
+    for rule in ("all_strings", "last"):
+        entry = {**_OF_TWO_IDENTITY, "arg": rule}
+        bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [entry])
+        assert _reasons(bindings) == ["external"], rule
+
+
+def test_an_identity_entrys_arity_tells_two_overloads_apart(walked):
+    """`arity` and `descriptor` are part of what an entry MATCHES on, which is what lets a
+    discriminated entry and a bare one coexist in one table (`yaml_source.value_model`).
+    Here the site is the ONE-argument overload and the entry names the two-argument one,
+    so it must not answer — the platform's URI type is the shipped case, where a
+    one-string constructor sits beside four whose argument 0 is the SCHEME."""
+    discriminated = {**_OF_TWO_IDENTITY, "arity": 2}
+    at_one = _symbol(_IDENTIFIED, "overload", "()V")
+    assert _reasons(_identified(walked, at_one, 1, [discriminated])) == ["external"]
+    assert [
+        b.slots[0].value
+        for b in _identified(walked, at_one, 1, [{"owner": _NAME, "method": "of", "arg": 0}])
+    ] == ["sole"]
 
 
 def test_a_value_the_facts_name_nothing_for_is_unresolved_not_readable(walked):
