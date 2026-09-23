@@ -81,12 +81,12 @@ in `parse_calls` rather than in `matches`. A second BLOCK is not a seventh shape
 distinction is the one the amendment below turns on: what was missed for three rounds was a
 block, not a spelling.
 
-| shape | where | rows |
+| shape | where | key occurrences |
 |---|---|---|
 | `arg` / `<name>_arg` integer beside a method name | `single_call`, `combinator`, `interface_implementation`, `supertype_dispatch`, `config_join` | most |
 | `captures: {name: argN}` | `fluent` roots/steps/terminals | 139 |
 | a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
-| a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 22 |
+| a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent`, `single_call` | 22 |
 | `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
 | `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 7 |
 | `bytes_arg`/`class_arg` in the top-level **`parse_calls`** block — shape one, outside `matches` | `spring-web` | 8 |
@@ -108,10 +108,14 @@ block, not a spelling.
 >   `spring-ws-template` (3 / 3) and `spring-kafka-message` (1 / 1). 26 reproduces under no
 >   reading: nodes reaching the arm are 16, keys on them 24, slots they name 24, and the
 >   emitting subsets are 14 and 22. The two excluded nodes are
->   `spring-cloud-stream.yml`'s `suffix[].payload_arg: 0`, which the refusal list below
->   already accounts for; counting them here would list one occurrence as both a shape found
->   and a key refused. Rows two, three and five are unchanged by the same derivation — every
->   one of their occurrences is on a node that emits.
+>   `spring-cloud-stream.yml`'s `suffix[].payload_arg: 0`, which `shadow.py`'s own
+>   *Which blocks are read, and which are refused* section accounts for — **not** the
+>   short refusal list below, which names `wrappers`, `serialization`, `protocol_hint` and
+>   `wrappers[].when` and has never named `suffix[]`. Counting them here would list one
+>   occurrence as both a shape found and a key refused. Rows two, three and five are
+>   unchanged by the same derivation — every one of their occurrences is on a node that
+>   emits, and rows four and six are 22 keys on 14 nodes and 7 keys on 4 nodes, which is
+>   what the KEY OCCURRENCES column heading means.
 > * **Row six's match was narrowed** to require a `_ctor_arg` key: a `payload_arg` beside a
 >   `type` is a generic type-argument index, not a call slot, so matching on the shape alone
 >   would have been a wrong answer rather than slack. **No ask changed**, on any catalog.
@@ -257,14 +261,17 @@ as a headline, not a footnote; §3.3 says why.
 The walk's memo is per resolve and shared across one site's slots, so the harness builds one
 `_Walk` per site and times each slot inside it — the production lifetime, not a friendlier
 one. The subclass that counts computed positions lives in the harness; **nothing in `src/`
-was changed for this measurement**, and the §3a grep
+was changed for the measurement §3a gated** — that is a statement about `02b2fe03`, the tree
+Task 4 measured, and not about the header's snapshot: `ad210319` is a `feat(resolve)` commit
+that widened the reader and moved the figures here (§1.3). The §3a grep
 (`grep -rn "resolve_site\|resolve.values import" src/sextant/ | grep -v "resolve/values.py"`)
-was **empty at `02b2fe03`**, the tree Task 4 measured and ruled on.
+was **empty at that tree**, which is what §3a ruled on.
 
 **It is not empty at the header's snapshot, and that is Task 5 rather than a regression.**
 At `ad210319` it returns five lines, all in
-`src/sextant/application/resolve/shadow.py`: the import of `resolve_site` and `value_index`,
-the one call inside the recording pass, and two docstring mentions. That is spec §3d's
+`src/sextant/application/resolve/shadow.py` and all five named: two docstring mentions
+(`:146`, `:149`), the import of `resolve_site` and `value_index` (`:170`), a code comment
+(`:481`) and **one call** (`:495`). Only the last executes anything. That is spec §3d's
 shadow mode, which is the first consumer and is a RECORDER — it publishes nothing, and §3a's
 gate was that the walk ship unwired *until this document existed*, not for ever. The reader
 moved into the same file (§1.3's amendment), which is why the harness now imports from
@@ -407,8 +414,11 @@ the same shape tops out at 3 paths, depth 2 and 9 visits.**
 **The maxima that survive all three discounts: 3 paths, depth 3, 3 answers, 11 visits.**
 Measured by classifying all 989 positions by whether any **owner-declared,
 non-`all_strings`** ask matches them — exactly the negation of over-matches 1, 2 and 3 —
-which leaves **664 genuine positions**. No one position holds all four, and the four are
-spread over three:
+which leaves **664 genuine positions**. No one position holds all four. The holders are
+**seven positions** (§1.4's unit: a distinct `(site, slot)`) at **three sites**, and **no
+fewer than three positions** carry all four maxima between them — `mount`@5 slot 1 for
+answers, `mount`@5 slot 0 for paths and visits, `orders2`@2 slot 0 for depth. Position and
+site are two counts here and are not interchangeable:
 
 | maximum | value | held by |
 |---|---|---|
@@ -589,8 +599,12 @@ say which is which:
    matcher refuses that site along with 23 others on `orders-service` and all 12 on
    `grpc-probe`; where the row really binds the same shape gives 3 paths and 9 visits.
    **Restricted to the 664 positions an owner-declared, non-`all_strings` ask matches — the
-   negation of all three over-matches — the maxima are 3 paths, depth 3 and 11 visits**, at
-   three `ktor-routing` positions across the two Ktor corpora (§3.1 names which holds which).
+   negation of all three over-matches — the maxima are 3 paths, depth 3 and 11 visits**.
+   Seven POSITIONS hold one or another of those three, at **three SITES** across the two
+   Ktor corpora, and **two positions carry all three between them** — both in
+   `orders-ktor-classlambdas`: `KtorRoutesKt#mount`@5 slot 0 (3 paths *and* 11 visits) and
+   `KtorRoutesKt#orders2`@2 slot 0 (depth 3). §3.1 names every holder; §1.4 is why position
+   and site are spelled apart here.
    Every one of those is further below the crash barrier this section's closing paragraph
    sizes at 512 paths and 16 crossings than the unrestricted figures are.
 
@@ -650,9 +664,10 @@ Both halves follow from §3.3 and §1.6.
 - **Thread the `ValueIndex`.** `resolve_site(workspace, site)` with no index rebuilds the
   whole five-query fold, which costs 0.16 s on `mall-admin` — more than every walk in that
   corpus put together. There is no cache and there cannot be one in `Workspace.once`. An
-  engine resolving `mall-admin`'s **52 asked sites** (56 positions — §1.4's two bases)
-  without threading an index would pay about 8 s where the work itself is under a
-  millisecond. Each migrated engine builds `value_index(workspace)` once per run and passes
+  engine resolving `mall-admin`'s **52 asked SITES** without threading an index would pay
+  about 8 s where the work itself is under a millisecond — SITES, because `resolve_site` is
+  called once per site and the fold is what each call rebuilds. §1.4's two bases are asks and
+  positions, and on this corpus both are **56**; neither is the number that multiplies here. Each migrated engine builds `value_index(workspace)` once per run and passes
   it to every `resolve_site` call.
 - **Report `visits`, not wall time.** A migration that claims "the walk is fast here" from a
   wall-time reading is reading noise: §1.6 measured a 15× spread on identical input. Where
