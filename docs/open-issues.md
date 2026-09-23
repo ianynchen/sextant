@@ -2521,7 +2521,7 @@ fourth origin cannot be written without meeting it.
 **Verify:** `grep -rn "endpoint_metadata_insert" src/sextant | grep -v workspace.py` names
 the three origins; each holds a `Redactor`.
 
-### OI-136 — a VOID ordinary method is read as a construction, so an identity entry naming one would answer what the receiver is
+### OI-133 — a VOID ordinary method is read as a construction, so an identity entry naming one would answer what the receiver is
 **Major · found and LOGGED 2026-09-23 by the Task 7 round-2 review ·
 `src/sextant/application/resolve/values.py` (`_Walk._construction`)**
 
@@ -2560,13 +2560,17 @@ downstream can tell it from an observation. That is `raw-audit`-as-the-Session o
 along, and the existing guard does not notice it.
 
 **Real triggering input: none today, and the reason is on the CATALOG side rather than in
-the rule.** Checked exhaustively — every shipped non-`<init>` `identified_by` entry, against
-every site it matches in every corpus: `URI.create` (14 sites), `List.of` (23),
-`ProjectSubscriptionName.of` (3), `Session.createQueue` (2), `Arrays.asList` (2),
-`Pattern.compile` (2), `Subscriptions.topics` (2), `TopicName.of` (1) — **all have a non-null
-result at every site**, and the one entry naming a setter
-(`MessageConsumerOptions.setAddress`) matches no site at all. The synthetic entry above is
-the only way to reach it.
+the rule.** Checked exhaustively — all **fourteen** shipped non-`<init>` `identified_by`
+entries, against every site each matches in every corpus. **Eight match at least one site,
+and every one of the eight has a non-null result at every site it matches**: `URI.create`
+(14 sites), `List.of` (23), `ProjectSubscriptionName.of` (3), `Session.createQueue` (2),
+`Arrays.asList` (2), `Pattern.compile` (2), `Subscriptions.topics` (2), `TopicName.of` (1).
+**The other six match no site in any corpus**, so nothing about them is measured here and
+nothing can be: `Session.createTopic` and both `javax.jms` siblings,
+`Collections.singletonList`, `Subscriptions.topicPattern`, and
+`MessageConsumerOptions.setAddress` — the one that names a SETTER, and the shape this issue
+is about. That it matches nothing is what makes the conclusion hold today; it is not a
+property anyone chose. The synthetic entry above is the only way to reach the gap now.
 
 **MEASURED both ways, so the exposure is sized rather than asserted:** replacing the rule
 with one that accepts only an initialiser changes **0 of 98,454** ceiling positions across

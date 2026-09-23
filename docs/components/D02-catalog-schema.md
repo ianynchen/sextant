@@ -585,8 +585,10 @@ rather than a slot, which resolves per site and is not a position a slot-resolvi
 turn into one. Both remain the consuming engines' to read, exactly as they are today.
 
 **An entry naming a CONSTRUCTOR is reached too, and finding one is an APPROXIMATION with a
-measured edge.** Four of the shipped entries name `<init>` — the two hoisted from
-`call_wrappers`/`record_wrappers` and the two `_via` entries whose producer is a constructor.
+measured edge.** **Eleven** of the shipped entries name `<init>`, and **four** of them are
+reachable by the walk at all: the seven others carry a `role` (the `call_wrappers` and
+`record_wrappers` hoists) or a rule-valued `arg`, both of which the walk passes over for the
+reasons above. The four are `_via` entries whose producer happens to be a constructor.
 A constructed value is recognised by three conjuncts together: it has no `produced_by` edge,
 the site is the EARLIEST one the value is the receiver of, and that site produced no value of
 its own (D00 §5's "result is null for a void one").
@@ -597,13 +599,14 @@ as having been constructed by that call, and the queue's name was answered as th
 the connection. Pinned by `values.a-construction-hands-nothing-back`.
 
 **What it excludes is a call that hands something back, which is narrower than "is an
-initialiser", and the difference is an open gap** (`OI-136`). A void ordinary method also
+initialiser", and the difference is an open gap** (`OI-133`). A void ordinary method also
 produces no value, so a field- or parameter-held value whose first call happens to return
 nothing is read here as a construction — measured at **395 of the 3,283** values the rule
 names, across all 27 corpora. Nothing acts on them today, and the reason is on the catalog
 side rather than in the rule: every shipped non-`<init>` entry has a non-null result at every
-site it matches. **A new entry naming a void sender or setter would reopen it**, so an author
-adding one must check that the producer it names really hands something back.
+site it matches. **A new entry naming a void sender or setter would reopen it.** An author adding an entry
+must therefore check that the producer it names really hands something back — and if it does
+not, that it is genuinely a constructor rather than an ordinary void call.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other three directories: it is knowledge a run was produced with.

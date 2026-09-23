@@ -610,10 +610,12 @@ class _Walk:
             # entry carries both a `symbol` (the concrete type a `NEW` built) and a
             # `source` (the constructed value). Answering the symbol first meant a
             # constructed value never reached `_value`, where the identity arm lives — so
-            # **four of the twenty-five shipped entries, every initialiser one, could never
-            # fire**: a value BUILT from an address answered with the symbol of the type it
-            # was built from, while the same address handed to that type's static factory
-            # answered with the address.
+            # **no entry naming an initialiser could ever fire**: a value BUILT from an
+            # address answered with the symbol of the type it was built from, while the same
+            # address handed to that type's static factory answered with the address.
+            # ELEVEN of the twenty-five shipped entries name an initialiser and FOUR of
+            # those are reachable here at all — the other seven carry a `role` or a
+            # rule-valued `arg`, which `_identified` passes over for its own reasons.
             #
             # **Why this does not break what T-3's symbol answer is for.** That ruling
             # exists so a consumer is never handed a symbol dressed as a string, and that
@@ -774,7 +776,7 @@ class _Walk:
         wrong answer at `resolved`, which is §7's one failure. `createQueue` hands back a
         `Queue`, so it is excluded.
 
-        **A VOID ORDINARY METHOD is not excluded, and that is an open gap** (`OI-136`). A
+        **A VOID ORDINARY METHOD is not excluded, and that is an open gap** (`OI-133`). A
         field- or parameter-held value whose first call happens to return nothing —
         a logger call, a cache clear, a repository delete, a void setter — is read here as a
         construction. MEASURED over all 27 corpora: of **3,283** values this rule names,
@@ -785,7 +787,7 @@ class _Walk:
         entry naming a setter matches no site at all. MEASURED both ways — answering only an
         initialiser here changes **0 of 98,454** ceiling positions, so neither an identity
         answer nor the `escapes` window below moves for any of the 395. The day a
-        `channel_via` is hoisted onto a void sender or setter, it does: `OI-136` carries the
+        `channel_via` is hoisted onto a void sender or setter, it does: `OI-133` carries the
         demonstration and the measurement that closes it.
         """
         if self._index.producers.get((method, value)):

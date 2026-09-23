@@ -1168,10 +1168,12 @@ def test_a_constructed_value_answers_the_type_symbol_when_nothing_identifies_it(
 def test_an_identity_entry_reaches_a_CONSTRUCTOR_and_not_only_a_factory(walked):
     """**The arm could not reach a constructor at all until this test existed** (review
     round 1). `_entry` answered an `instance` argument with its type symbol BEFORE reading
-    its `source`, so a constructed value never reached `_value` — and four of the
-    twenty-five shipped identity entries name `<init>`, including `java.net.URI`'s, through
-    which two shipped catalogs publish a resolved address today. `new Name("x")` and
-    `Name.of(…, "x")` are one question and must answer alike."""
+    its `source`, so a constructed value never reached `_value` — and **eleven** of the
+    twenty-five shipped identity entries name an initialiser, **four** of them reachable
+    here at all (the rest carry a `role` or a rule-valued `arg`, which `_identified` passes
+    over). One of the four is `java.net.URI`'s, through which two shipped catalogs publish a
+    resolved address today. `new Name("x")` and `Name.of(…, "x")` are one question and must
+    answer alike."""
     bindings = _identified(walked, _symbol(_IDENTIFIED, "built", "()V"), 1, [_CTOR_IDENTITY])
     assert [(b.slots[0].literal_kind, b.slots[0].value) for b in bindings] == [
         ("string", "built-notify")
@@ -1218,9 +1220,11 @@ def test_a_value_written_to_between_its_construction_and_its_use_escapes(walked)
     **And the window opens at the CONSTRUCTION, which it did not before.** `produced_by` is
     read off `call_sites.result` and an initialiser has none, so a constructed value had no
     producer ordinal at all and the window opened before its own construction: every
-    `new Thing(x)` later used answered `escapes` on the constructor itself. MEASURED over
-    every slot of all 27 corpora, that false `escapes` was **719 positions**, none of them
-    a position any catalog asks about.
+    `new Thing(x)` later used answered `escapes` on the constructor itself. How many
+    positions that moved, and how many of them a catalog asks about, is a measured figure
+    and lives in one place — `docs/research/2026-09-23-value-walk-measurement.md` §6.3 —
+    which every other site cites rather than copying. *This docstring carried a figure of
+    its own until 2026-09-23 and it was the one that round re-derived and retracted.*
 
     Unidentified, the slot answers the type symbol and never reaches the window at all —
     T-3's answer, and the pairing that shows the refusal below belongs to the arm."""

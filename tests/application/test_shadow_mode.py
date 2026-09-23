@@ -557,20 +557,28 @@ def test_the_recorder_resolves_through_EVERY_sources_identities(tmp_path: Path):
 
 
 def test_the_shadow_walk_resolves_through_the_identity_table(analyzed):
-    """**The recorder resolves through §2's table, and this is the only test that says so.**
-    Shadow mode is what Tasks 8 and 9 read before they change an engine, and a preview built
-    without the identities would under-report by exactly the conversions those tasks are
-    reviewing — the `external`-at-an-opaque-producer rows, which is every position a catalog
-    wrote a hop declaration for.
+    """**The recorder resolves through §2's table, on the real corpus and through the real
+    stage** — the unit tests above reach the helper and one hand-built call; this is the
+    shipped catalogs against shipped bytecode, which is what Tasks 8 and 9 will read.
 
-    Asserted against the fixture's own destinations rather than a count: the raw JMS bridge
-    reaches both of its queues through `Session.createQueue`, whose identity the loader
-    hoists out of `jakarta-jms.yml`'s own `channel_via`.
+    **Asserted at the CONSUMING position and nowhere else, which is the whole of what makes
+    it a pin.** `jakarta-jms.yml` asks about both calls of
+    `session.createProducer(session.createQueue("raw-audit"))`: ordinal 0 slot 0 is
+    `createQueue`'s own string literal, which resolves with or without any identity, and
+    ordinal 1 slot 0 is the `Queue` OBJECT, which answers `external` unless the table says
+    argument 0 of `createQueue` is what that object is. *An earlier version of this test
+    asserted that the value set contained `raw-audit` and `raw-intake`; the literal rows
+    satisfied that on their own, so it passed with the identity table emptied and pinned
+    nothing (round 3).*
     """
-    resolved = {
-        str(row["value"])
+    consuming = {
+        (str(row["caller"]).rsplit("/", 1)[-1].partition("(")[0], int(str(row["ordinal"]))): (
+            str(row["outcome"]),
+            row["value"],
+        )
         for row in analyzed[True].rows
-        if str(row["outcome"]) == "would_resolve" and str(row["catalog"]) == "jakarta-jms"
+        if str(row["catalog"]) == "jakarta-jms" and str(row["slot"]) == "0"
     }
 
-    assert {"raw-audit", "raw-intake"} <= resolved
+    assert consuming[("RawJmsBridge#createAuditProducer", 1)] == ("would_resolve", "raw-audit")
+    assert consuming[("RawJmsBridge#createIntakeConsumer", 1)] == ("would_resolve", "raw-intake")

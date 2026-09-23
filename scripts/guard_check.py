@@ -177,7 +177,7 @@ GUARDS: dict[str, Guard] = {
         "connection, at `resolved`, where nothing downstream can tell it from an "
         "observation. MEASURED on `orders-service`, which is where it was found. **It "
         'excludes a call that hands something back, which is narrower than "is an '
-        'initialiser"** — a VOID ordinary method still passes, and `OI-136` carries that '
+        'initialiser"** — a VOID ordinary method still passes, and `OI-133` carries that '
         "gap with its own measurement; this guard is the half that is closed",
         edits=(
             Edit(

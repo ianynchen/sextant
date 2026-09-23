@@ -248,12 +248,21 @@ present is further from needing a cap than this document's own headline suggests
 figure below is an upper bound on the asked surface, not an estimate of it — and no figure
 below may be quoted as a *production* maximum without that discount applied.
 
-### 1.4 Two bases, which are not interchangeable
+### 1.4 Three bases, which are not interchangeable
 
-| basis | asked surface | meaning |
-|---|---|---|
-| **catalog-to-position asks** | **1,250** | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
-| **distinct positions** | **989** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
+| basis | asked surface | ceiling | meaning |
+|---|---|---|---|
+| **catalog-to-position asks** | **1,250** | — | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
+| **distinct positions** | **989** | **98,454** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
+| **answers** | **1,026** | **176,269** | one per `(position, path)`. A position with two coherent paths answers twice, so §4's and §5's kind and reason tables add up to THIS and not to the row above |
+
+**The answers row was added 2026-09-23 and its absence had already cost a round.** A Task 7
+report gave "16 of 1,053 answers" and "719 of 208,430 positions", neither of which is any
+figure in this estate: both were counted off `resolve_site`, which COMBINES a site's slots —
+a two-slot site with two coherent paths each yields up to four bindings — where every figure
+here counts `_Walk.at(site, slot)`. Re-derived on this table's own basis they are **16 of
+1,026** and **707 of 98,454**. The failure is the one this section exists to prevent, one
+basis further out than it had been written to reach.
 
 A **site** is a distinct `(caller, ordinal)` — one call, whatever slots are asked about on
 it; the asked surface has **726**. Both rows above are defined in terms of it, and
@@ -556,7 +565,14 @@ answers on real code either.
 | **`cycle`** | **0** | **never, on anything a shipped catalog asks about** |
 
 Answer kinds on the asked surface: `literal` 531, `unresolved` 474, `expression` 21,
-**`absent` 0**.
+**`absent` 0**. (474 + 531 + 21 = 1,026, the answers basis of §1.4, not the 989 positions.)
+
+*Both tables above read differently since Task 7 gave the walk §2's identity table to
+resolve through: `external` **252 → 239**, `literal` **531 → 543**, `expression` **21 → 22**,
+`unresolved` **474 → 461**, every other reason unchanged — sixteen asked positions, which
+§6.3 enumerates and splits. Left at the snapshot's own figures here for the reason §5's
+`escapes` row is: this section is what the walk answered at `ad210319`, and a section half
+re-measured is worse than one that is not.*
 
 *Before the reader was widened to `parse_calls` (§1.3): 948 positions, 428 unresolved,
 `external` 206, `literal` 530. **The widening added 47 answers — 46 `external` and one
@@ -582,8 +598,8 @@ Answer kinds: `unresolved` 91,522, `literal` 83,304, `absent` 915, `expression` 
 CONSTRUCTION rather than before it — the §6.3 bullet below has the measurement and the
 reason. It is left at the snapshot's own figure here, because this table is what the walk
 answered at `ad210319` and a table half re-measured is worse than one that is not.*
-**This table counts ANSWERS; a position may hold several.** On a POSITION basis the same
-`escapes` population is 4,338 → 3,664, which is the same movement of 674 counted twice.
+**This table counts ANSWERS; a position may hold several** (§1.4). On the POSITION basis the
+same `escapes` population reads 4,338 → 3,664 — the same movement of 674, on the two bases.
 
 **So no reason is dead vocabulary** — all six are produced by real code, and so is `absent`.
 Two of them are only reachable outside what catalogs ask about today, and the report has to
@@ -731,22 +747,32 @@ Both halves follow from §3.3 and §1.6.
   gap is +4.6% at 25 shipped entries and is re-derived by the §6.1 re-run rather than by
   this sentence.
 - **A corpus that CONSTRUCTS the values its catalogs read**, rather than obtaining them from
-  static factories. Reaching an initialiser also moved `escapes` to where it belongs: an
-  initialiser produces no value of its own, so `produced_by` carries no edge for it and the
-  mutation window used to open before the construction itself. MEASURED over the ceiling —
-  §3.2's own **98,454 positions**, all 27 corpora — **707 positions move**: **674** where the
-  window now opens at the construction and **33** where an identity entry reaches one.
-  Counted a second way and independently, positions answering `escapes` fall **4,338 →
-  3,664**: the same 674. (§5's reason table counts ANSWERS rather than positions, where the
-  same population reads 4,380 → 3,706 — a note beside that row says so.) **None** of the 707
-  is a position any catalog asks about, so no figure above moves and the reason vocabulary is
-  more truthful than it was.
+  static factories. MEASURED over the ceiling — §3.2's own **98,454 positions**, all 27
+  corpora — **707 positions move, and they are two disjoint populations that must not be
+  described together**:
 
-  *Round 1 of the Task 7 report gave "719 of 208,430", which contradicted §3.2 by 2.1× and
-  does not reproduce. Same cause as the asked-surface denominator above: it counted
-  `(position, path)` keys off `resolve_site` rather than positions. Re-derived on §3.2's own
-  basis, twice and independently — by diffing per-position answers and by counting `escapes`
-  answers before and after.*
+  | | positions | of which ASKED | what it is |
+  |---|---|---|---|
+  | the `escapes` window | **674** | **0** | an initialiser produces no value of its own, so `produced_by` carries no edge for it and the mutation window used to open before the construction itself. Every `new Thing(x)` later used answered `escapes` on its own constructor; all 674 now answer `not_readable` |
+  | the identity arm | **33** | **16** | a value an `identified_by` entry names. **18** of the 33 need a CONSTRUCTION to be found; the other **15** are ordinary factory hops off `produced_by` — `URI.create`, `Pattern.compile`, `ProjectSubscriptionName.of`, `TopicName.of`, `Session.createQueue` — which reach no construction at all and never could, since every one of those sites has a non-null `result` |
+
+  Counted a second way and independently, positions answering `escapes` fall **4,338 →
+  3,664**: the same 674. (§5's reason table counts ANSWERS, a different basis — §1.4 — where
+  the same population reads 4,380 → 3,706. A note beside that row says so.)
+
+  **Sixteen asked positions move, so figures above DO move**, and they are the same sixteen
+  §6.2's own note reports: §3.1's visits go 413 → 432, and §4's asked-surface tables go
+  `external` **252 → 239**, `literal` **531 → 543**, `expression` **21 → 22**, `unresolved`
+  **474 → 461** (`escapes` is 12 either way there — none of the 674 is asked about). Those
+  tables carry the same note §5's `escapes` row does: they are the snapshot's, and §6.3 is
+  where what moved since is stated.
+
+  *Two sentences here were wrong until 2026-09-23 and are corrected rather than deleted,
+  because the shape of the error is the point. "None of the 707 is a position any catalog
+  asks about" was true of the 674 ALONE, and broadening the number while keeping the claim
+  is exactly the conflation the split above exists to stop; "33 where an identity entry
+  reaches one [a construction]" was true of 18 of them. The retracted "719 of 208,430" has
+  its own note at §1.4.*
 
 ---
 
