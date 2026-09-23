@@ -2634,13 +2634,25 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
 
 
 def _value_edge_facts(root: Path) -> None:
-    """One method whose single call site carries, in four slots, every argument
-    shape the edge query reads: a binding read, a type reference, a value another
-    call produced, and a literal that names nothing at all.
+    """One method with three call sites.
 
-    Deliberately ONE site. The query's five arms come out of three tables, and a
-    fixture with one site per arm would let an arm read the wrong table and still
-    look right — the same row set has to answer all five."""
+    Site 0 carries, in four slots, every argument shape the edge query reads: a
+    binding read, a type reference, a value another call produced, and a literal
+    that names nothing at all. The query's five arms come out of three tables,
+    and a fixture with one site per arm would let an arm read the wrong table
+    and still look right — one row set has to answer all five.
+
+    Site 1 is an address the code ASSEMBLES. It produces a value and reaches no
+    body, so `call_edges` holds no row for it (that pass refuses a `dynamic`
+    site whose bootstrap names none) — and D00 §5 says the hole in its template
+    is filled by following `source` -> `result` to exactly this site. Reading
+    `produced_by` off `call_edges` made every such value invisible, which is
+    what this site pins.
+
+    Site 2 is a `dynamic` site that DOES name a body, with one captured value in
+    its argument list. `bound_to_parameter` must refuse it: the capture is not
+    the body's parameter 0, and a row saying otherwise is a wrong answer rather
+    than a missing one."""
     document = Document(
         document_id="doc_edges",
         relative_path="com/acme/Registrar.java",
@@ -2672,7 +2684,34 @@ def _value_edge_facts(root: Path) -> None:
             CallArgument(kind="int", value=7),
         ],
     )
-    write_fact_file(root / "Registrar.jsonl", document, [call_site])
+    assembled = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="java/lang/invoke/StringConcatFactory#",
+            name="makeConcatWithConstants",
+            descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+        ),
+        invoke_kind="dynamic",
+        ordinal=1,
+        result=11,
+        arguments=[CallArgument(kind="parameter", value=0)],
+    )
+    captured = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="java/util/function/Supplier#",
+            name="get",
+            descriptor="()Ljava/lang/Object;",
+        ),
+        invoke_kind="dynamic",
+        ordinal=2,
+        result=13,
+        implementation="com/acme/Registrar#lambda$register$0(sig_3).",
+        arguments=[CallArgument(kind="unresolved", source=12)],
+    )
+    write_fact_file(root / "Registrar.jsonl", document, [call_site, assembled, captured])
 
 
 def _workspace_with_value_edges(tmp_path: Path) -> DuckDbWorkspace:
@@ -2694,7 +2733,21 @@ def _workspace_with_value_edges(tmp_path: Path) -> DuckDbWorkspace:
                 "evidence": "compiler",
                 "terminal_kind": None,
                 "target_kind": None,
-            }
+            },
+            # The `dynamic` site that names a body — `call_edges` takes this hop
+            # and `value_edges` must not turn its capture into a parameter.
+            {
+                "caller": caller,
+                "ordinal": 2,
+                "invoke_kind": "dynamic",
+                "target": "com/acme/Registrar#lambda$register$0(sig_3).",
+                "callee": "s maven p 1 com/acme/Registrar#lambda$register$0(sig_3).",
+                "result": 13,
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "terminal_kind": None,
+                "target_kind": None,
+            },
         ],
     )
     workspace.derive(
@@ -2749,6 +2802,8 @@ def test_the_edge_query_fills_the_columns_its_own_header_says_each_kind_fills(
     for row in rows:
         by_kind.setdefault(str(row["kind"]), []).append(row)
 
+    # Three sites, three produced values — including the assembled address at
+    # ordinal 1, which reaches no body and so has no `call_edges` row at all.
     assert by_kind["produced_by"] == [
         {
             "kind": "produced_by",
@@ -2757,7 +2812,23 @@ def test_the_edge_query_fills_the_columns_its_own_header_says_each_kind_fills(
             "to_symbol": None,
             "to_ordinal": 0,
             "to_index": None,
-        }
+        },
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 11,
+            "to_symbol": None,
+            "to_ordinal": 1,
+            "to_index": None,
+        },
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 13,
+            "to_symbol": None,
+            "to_ordinal": 2,
+            "to_index": None,
+        },
     ]
     assert by_kind["returned_by"] == [
         {
@@ -2861,4 +2932,52 @@ def test_the_edge_query_is_empty_on_a_workspace_that_loaded_no_calls(tmp_path: P
     Task 3 call it unconditionally."""
     workspace = _loaded_workspace(tmp_path)
     assert workspace.query("value_edges") == []
+    workspace.close()
+
+
+def test_the_edge_query_sees_a_value_the_code_assembles(tmp_path: Path):
+    """A `produced_by` edge is about a SITE producing a value, never about a body
+    being reached — and reading it off `call_edges` conflated the two. That table
+    writes no row for a `dynamic` site whose bootstrap names no body, which is
+    right there and fatal here: an assembled address is exactly such a site, and
+    D00 §5's grammar says the hole in its template is filled by following
+    `source` -> `result` to it. Measured when the arm read `call_edges`: 7 of 7
+    such sites on `fixtures/orders-service` and 203 of 203 on `mall-admin` had no
+    edge at all, a URL built from a path and an id among them."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    assert [row["ordinal"] for row in workspace.query("call_edges")] == [0, 2]
+    produced = [
+        row
+        for row in workspace.query("value_edges")
+        if row["kind"] == "produced_by" and row["to_ordinal"] == 1
+    ]
+    assert produced == [
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 11,
+            "to_symbol": None,
+            "to_ordinal": 1,
+            "to_index": None,
+        }
+    ], "the site that reaches no body still produced a value, and this edge is that hop"
+    workspace.close()
+
+
+def test_the_edge_query_binds_no_parameter_where_a_site_only_captures(tmp_path: Path):
+    """`return_flow` refuses a `dynamic` site outright; `bound_to_parameter` makes
+    the same refusal one step along, and for a sharper reason. At such a site
+    `call_edges.callee` is the lambda BODY while the arguments are the
+    metafactory's CAPTURES — two different lists — so calling slot *i* "parameter
+    *i*" states a wrong answer at `resolved` rather than missing one: a walk
+    asking for a parameter is handed a captured value, or the receiver, which
+    D00 §5 says is not a parameter at all. Measured before the refusal: 26 of 238
+    rows on `fixtures/orders-service` and 8 of 33,926 on `mall-admin`."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    rows = workspace.query("value_edges")
+    # The site is reached and its body is named — `call_edges` took that hop.
+    assert any(row["ordinal"] == 2 and row["callee"] for row in workspace.query("call_edges"))
+    # And it still binds nothing, while the ordinary call beside it binds four.
+    assert [row["to_ordinal"] for row in rows if row["kind"] == "bound_to_parameter"] == [0] * 4
     workspace.close()

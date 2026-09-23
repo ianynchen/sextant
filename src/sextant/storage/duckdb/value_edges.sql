@@ -87,22 +87,42 @@
 -- would be worst served by two spellings of one answer.
 
 -- `produced_by`: the value a call handed back, and the site in the same method
--- that handed it back. THE fact is `call_sites.result` — the value id an
+-- that handed it back. The fact is `call_sites.result` — the value id an
 -- argument of a later call in the same method carries as its `source`, which is
--- what makes a chain a chain. Read off `call_edges` rather than off
--- `call_sites`, because that table is written from the projection and the raw
--- site is not: a bridge call's result belongs to the function the bridge stands
--- for. DISTINCT because a site whose dispatch narrowed to several bodies is
--- several `call_edges` rows and exactly ONE produced value — the multiplicity
--- there is about which body runs, which is `returned_by`'s question and not
--- this one.
-SELECT DISTINCT 'produced_by'      AS kind,
+-- what makes a chain a chain.
+--
+-- **Read off `call_sites`, and reading it off `call_edges` was a defect.** The
+-- edge is about a SITE producing a value, not about a body being reached, and
+-- `call_edges` is a table of bodies: it writes no row for a `dynamic` site
+-- whose bootstrap names none, which is correct there and fatal here, because
+-- string concatenation is exactly such a site. D00 §5's grammar states the
+-- contract this edge has to honour — an assembled address is `concat` with a
+-- template, and *"what FILLS the hole is the concat site's own call-site fact,
+-- reached by `source` -> `result`"*. That hop is this edge. MEASURED while the
+-- arm read `call_edges`: every assembled value in both corpora was invisible to
+-- it — 7 of 7 producing sites on `orders-service`, 203 of 203 on `mall-admin`,
+-- including a client whose URL is `".../orders/" + id`, which is the shape this
+-- whole design exists to reach.
+--
+-- The projection buys this arm nothing, which was also measured rather than
+-- argued: `effective_call_sites` re-targets a bridge call's CALLEE, and over
+-- `orders-service` its 1,818 rows carry a `(caller, ordinal, result)` set
+-- identical to raw `call_sites`'s 1,818. A result is a value id in the caller's
+-- own frame; re-targeting the callee cannot move it to another caller or
+-- another ordinal. The arms that need the callee still ride the projection,
+-- through the tables written from it.
+--
+-- No DISTINCT: `call_sites` is one row per site, so a site contributes exactly
+-- one produced value. The DISTINCT this arm carried existed only to collapse
+-- `call_edges`'s per-candidate-body fan-out, and that fan-out is `returned_by`'s
+-- question rather than this one.
+SELECT 'produced_by'               AS kind,
        caller                      AS from_method,
        result                      AS from_value,
        CAST(NULL AS VARCHAR)       AS to_symbol,
        ordinal                     AS to_ordinal,
        CAST(NULL AS INTEGER)       AS to_index
-FROM call_edges
+FROM call_sites
 WHERE result IS NOT NULL
 
 UNION ALL
@@ -136,6 +156,15 @@ UNION ALL
 -- why `from_value` is NULL here and why the walk continues through the
 -- binding's writers rather than through this method. Those writers are the
 -- sixth edge, and it is not here yet.
+--
+-- **The projection: `call_sites`, RAW.** §1a asks for `effective_call_sites`,
+-- and SQL cannot see it (the header says why), so this arm reads the bytecode's
+-- own statement. What that costs is bounded and named: at a compiler-emitted
+-- default-argument bridge site the arguments are the bridge's — the defaulted
+-- slots carry the mask and marker the bridge takes rather than the values the
+-- function it stands for receives. The binding SYMBOL this arm carries is not
+-- affected by that (a binding read is a binding read at either site); what is
+-- affected is which sites exist and how many slots each has.
 SELECT 'read_from_binding'         AS kind,
        caller                      AS from_method,
        CAST(NULL AS INTEGER)       AS from_value,
@@ -154,16 +183,41 @@ UNION ALL
 -- the call reaches. This is the edge the whole design turns on — it is the one
 -- that crosses a method boundary, and §1c's ruling is that it is followed per
 -- PATH: a helper called twice is two bindings, never a per-position cross
--- product. The callee comes from `call_edges`, which Task 1 re-pointed at the
--- projection, so a bridge call names the function it stands for; a row whose
--- `callee` is NULL is the third-party boundary and carries no body to walk
--- into, so it contributes no edge. The slot is the argument's own position,
--- which is the index every language numbers its parameters by (D00 §5: a
--- receiver is not a parameter, and the grammar carries one entry per slot, so a
--- varargs call is ONE array argument and not N). `from_value` is the argument's
--- `source` where the facts name a produced value and NULL where they do not —
--- a literal, a type reference and the caller's own parameter are all read from
--- the argument itself, at (`from_method`, `to_ordinal`), slot `to_index`.
+-- product. The callee comes from `call_edges`; a row whose `callee` is NULL is
+-- the third-party boundary and carries no body to walk into, so it contributes
+-- no edge. The slot is the argument's own position, which is the index every
+-- language numbers its parameters by (D00 §5: a receiver is not a parameter,
+-- and the grammar carries one entry per slot, so a varargs call is ONE array
+-- argument and not N). `from_value` is the argument's `source` where the facts
+-- name a produced value and NULL where they do not — a literal, a type
+-- reference and the caller's own parameter are all read from the argument
+-- itself, at (`from_method`, `to_ordinal`), slot `to_index`.
+--
+-- **A `dynamic` site contributes NOTHING, and that is a refusal rather than an
+-- omission** — the same decision `return_flow` states for the same reason, one
+-- step further along. At an `invokedynamic` site the two halves this arm joins
+-- describe different things: `call_edges.callee` is the lambda BODY the
+-- bootstrap will run, while the arguments are the metafactory's CAPTURES, and
+-- a captured value is not the body's parameter of the same index. The body's
+-- own parameters are supplied when it runs, later, elsewhere, if at all —
+-- nothing at this site binds them. The grammar says it in one line, in the rule
+-- quoted above: a receiver is not a parameter, and at an indy site the captured
+-- receiver sits in the argument list. Emitting the join anyway does not MISS an
+-- answer, it states a wrong one at `resolved`, which is the cardinal sin: a
+-- walk asking for parameter 1 was handed the caller's argument 0. MEASURED
+-- before the refusal: 26 of 238 rows on `orders-service` and 8 of 33,926 on
+-- `mall-admin` were such rows, every one of them a fabrication. Following
+-- `implementation` INTO a lambda body is a traversal step and `call_edges` is
+-- the table that takes it; binding a value to that body's parameters is an
+-- edge nothing in the facts supports.
+--
+-- **The projection, both halves, because they differ.** `callee` rides
+-- `effective_call_sites` — `call_edges` is written from it, so a bridge call
+-- names the function it stands for. The ARGUMENT LIST and the slot numbering do
+-- NOT: they are read off raw `call_sites`, so at a `$default` bridge site the
+-- slots are the bridge's, which means the trailing mask and marker appear here
+-- as parameter indices the function it stands for does not have. That is this
+-- arm's stated boundary — Task 4's measurement is where its size is learned.
 SELECT 'bound_to_parameter'        AS kind,
        e.caller                    AS from_method,
        (a.argument ->> 'source')::INTEGER AS from_value,
@@ -177,6 +231,7 @@ JOIN (SELECT caller, ordinal,
       FROM call_sites) a
   ON a.caller = e.caller AND a.ordinal = e.ordinal
 WHERE e.callee IS NOT NULL
+  AND e.invoke_kind <> 'dynamic'
 
 UNION ALL
 
@@ -189,6 +244,27 @@ UNION ALL
 -- argument's `source` where there is one. This is where the walk STOPS with an
 -- answer rather than a reason: the declaration is the value, and what the
 -- declaration means is the catalog's business and never this query's (§1e).
+--
+-- **A `lambda` argument is NOT one of these, and the exclusion is stated so it
+-- need not be rediscovered.** It carries both a `source` and a body `symbol`,
+-- so it would fit the shape — 62 of them on `orders-service`, 24 on
+-- `mall-admin` — and it is left out on meaning rather than on shape: a lambda
+-- names a BODY, not a declaration whose value can be identified. A walk that
+-- reached one and was handed that symbol would have a method descriptor where
+-- it asked for a value, so the honest answer is `unresolved`. If a later task
+-- needs lambda bodies it is a different edge, named as one (ruled 2026-09-22).
+--
+-- **The projection: `call_sites`, RAW**, on the same terms as
+-- `read_from_binding` above — SQL cannot see `effective_call_sites`, so a
+-- `$default` bridge site is read as the bridge. The declaration SYMBOL is
+-- unaffected; which sites exist and how many slots each has is not. One case is
+-- genuinely lost: a lambda compiled as a CLASS arrives as an `instance`
+-- argument — or, for its non-capturing twin, as a named constant of its own
+-- type — and the projection is what reads either as the `lambda` it is. Both
+-- kinds are read here, so such an argument appears as a `names_declaration` row
+-- naming the synthetic class rather than being excluded with the lambdas above.
+-- Stated, not silently absorbed: the row is honest about the symbol it carries,
+-- and Task 4's measurement is where the size of the difference is learned.
 SELECT 'names_declaration'         AS kind,
        caller                      AS from_method,
        (argument ->> 'source')::INTEGER AS from_value,
