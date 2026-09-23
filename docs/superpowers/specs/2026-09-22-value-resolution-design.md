@@ -89,6 +89,16 @@ corrections of the same kind — a shape the design named in prose and had no wo
 | T-2 | An explicit `null` and a **zero-length** varargs call had no answer: §1b admits a literal, an expression or a reason, so both came back as a miss — and D00 §5 says the opposite in as many words, that "the empty list is the fact ... 'called with no values' is a different statement from 'the array could not be read'" | `Answer.kind` gains **`absent`** — *the code states there is no value here*. A RESOLVED answer, distinguishable from both a literal and every reason. Calling a known-empty call ambiguous contradicted the facts it was read from |
 | T-3 | A declaration reference (`OrderWorker.class`) IS the value and the answer must carry the symbol; carried as a `string` literal, a catalog reading a destination out of that slot publishes `com/acme/OrderWorker#` as an address — a wrong row at `resolved`, which is §7's whole risk | `literal_kind` gains **`symbol`**. The `kind` set is untouched: it is the literal vocabulary that grew, and a consumer wanting text still tests for `string` |
 
+The fix round on the same task added three more. T-5 **reverses a ruling this document's own
+Task 2 made** — that the edge query's raw slot numbering was a boundary for §3a to size. It
+was not a boundary; it was a wrong answer, and those are fixed when they are identified.
+
+| # | Finding | Ruling |
+|---|---|---|
+| T-4 | §1d defines `no_writer` as "a binding nothing in this module writes", which is not what it can mean while `written_by` has no producer — a reader would take today's answer for a property of the code | The row says both: what it will mean, and that today it means *no writer edge exists to follow*. The code says the same at the constant and at the function |
+| T-5 | `bound_to_parameter` pairs a **projected callee** with a **raw slot index**. A walk reading raw `call_sites` was handed the bridge's leading receiver for the sibling's parameter 0 — a type symbol where a string belongs, IN RANGE, so nothing caught it — and answered a defaulted parameter with the value the bridge pushed | The walk reads `effective_call_sites`, which puts the callee and the argument list on one row: parameter *p* is slot *p*, and the edge's index only SELECTS which sites bind a parameter. Measured both ways on the canonical bridge shape. §3a sizes no boundary here because there is none left |
+| T-6 | `escapes` did not survive a return crossing: a value mutated inside a callee before its `return` resolved to the pre-mutation literal — byte for byte the shape the rule exists for (`result.setFilename(x); return result;`), one method along | A return has no position in control flow to bound the window with (`method_returns.ordinal` numbers return instructions), so the CLASS is refused: any call on the value after its producer. **MEASURED across every fixture with compiled classes: 112 of 836 returned values carrying a source, 13.4%; 33 of 413 on `orders-service`.** A miss is the acceptable half of the trade; a stale value asserted at `resolved` is not |
+
 ---
 
 ## 1. Edges, paths, and what `unresolved` is allowed to mean
@@ -181,8 +191,8 @@ A closed set; each names a different thing a reader can act on:
 |---|---|
 | `not_readable` | the producer is there; its value cannot be named (today's bare `unresolved`) |
 | `non_enumerable` | a loop, a branch-merged value, a partly-written array |
-| `escapes` | the value reached a method that might mutate it before use |
-| `no_writer` | a binding nothing in this module writes |
+| `escapes` | the value reached a method that might mutate it before use. **Across a callee's RETURN the whole tail counts** (T-6): a return has no position in control flow to bound the window with, so any call on the value after its producer refuses |
+| `no_writer` | a binding nothing in this module writes — **today: no writer edge exists to follow at all** (T-4), because `written_by` waits on capability 9.19 (§4). It narrows to the left-hand meaning when that lands, and until then a reader must not take it as a property of the code |
 | `external` | the producer is outside what was scanned — a dependency jar |
 | `cycle` | the walk returned to a position it had already visited on this path |
 

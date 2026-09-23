@@ -44,8 +44,19 @@
 -- projection, so the two arms over them ride it. The three arms over the
 -- argument grammar read `call_sites` itself, which is the bytecode's own
 -- statement — so at a bridge site their slot numbering is the bridge's and not
--- the function it stands for. That is a stated boundary of this query, and the
--- walk's measurement (§3a) is where its size is learned, not a gap to discover.
+-- the function it stands for.
+--
+-- **That mismatch is the CONSUMER's to close, and it is not a boundary to be
+-- sized.** It was recorded here as one (2026-09-22) and that was wrong: a walk
+-- reading raw `call_sites` beside a projected callee does not miss an answer,
+-- it gives a WRONG one — measured on the canonical bridge shape, the sibling's
+-- parameter 0 came back as the bridge's leading receiver, a type symbol where a
+-- string belongs, in range so nothing caught it. `resolve/values.py` reads the
+-- projection instead, which makes the callee and the argument list one row
+-- again; the `to_index` below then selects WHICH site binds a parameter and is
+-- never used to index into anything (its module docstring states the invariant).
+-- Nothing in this query changes, because the query is not where the two
+-- readings meet.
 --
 -- **The columns are nullable per kind, and this is the table of which kind
 -- fills which.** NULL here always means *the facts give this position no such
@@ -236,9 +247,18 @@ UNION ALL
 -- `effective_call_sites` — `call_edges` is written from it, so a bridge call
 -- names the function it stands for. The ARGUMENT LIST and the slot numbering do
 -- NOT: they are read off raw `call_sites`, so at a `$default` bridge site the
--- slots are the bridge's, which means the trailing mask and marker appear here
--- as parameter indices the function it stands for does not have. That is this
--- arm's stated boundary — Task 4's measurement is where its size is learned.
+-- slots are the bridge's. TWO things follow, and only one of them was written
+-- down here before (fix round, 2026-09-23):
+--   * the trailing mask and marker appear as parameter indices the function the
+--     bridge stands for does not have; and
+--   * **the LEADING receiver, where the sibling is an instance method, shifts
+--     every index by one** — so index *i* here and parameter *i* of `to_symbol`
+--     are different positions, not merely a longer list.
+-- A consumer must therefore read a slot off the PROJECTION, where the callee
+-- and the arguments are one row and parameter *i* is slot *i*, and use this
+-- index only to select which sites bind a parameter. `resolve/values.py` does,
+-- and says so; reading raw `call_sites` beside this `to_symbol` answers the
+-- receiver where a parameter belongs, which is a wrong row rather than a gap.
 SELECT 'bound_to_parameter'        AS kind,
        e.caller                    AS from_method,
        (a.argument ->> 'source')::INTEGER AS from_value,

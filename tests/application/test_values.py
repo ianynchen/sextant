@@ -374,6 +374,78 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="null")],
         ),
+        # An array the extractor could NOT read end to end: no element list at all, which
+        # is the other half of D00 §5's sentence and stays a reason.
+        _declared(_ARRAYS, "unread", "()V"),
+        _site(
+            _symbol(_ARRAYS, "unread", "()V"),
+            0,
+            _MANY_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="array")],
+        ),
+        # A value produced by a site whose body WAS read and whose returns answer for
+        # nothing: a dispatch the bootstrap names, which `return_flows` refuses outright.
+        _declared(_UNREAD, "body", _MAKES_STRING),
+        _returns(_UNREAD, "body", _MAKES_STRING, 0, CallArgument(kind="string", value="made")),
+        _declared(_UNREAD, "made", "()V"),
+        CallSiteFact(
+            document_id="doc_values",
+            caller=_symbol(_UNREAD, "made", "()V"),
+            target=CallTarget(
+                owner="java/util/function/Supplier#",
+                name="get",
+                descriptor="()Ljava/lang/Object;",
+            ),
+            invoke_kind="dynamic",
+            ordinal=0,
+            result=61,
+            implementation=method_descriptor(_UNREAD, "body", _MAKES_STRING),
+        ),
+        _site(
+            _symbol(_UNREAD, "made", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=61)],
+        ),
+        # A value MUTATED inside the callee before the `return`, and its twin that is not.
+        _declared(_NAMES, "built", _MAKES_STRING),
+        _site(
+            _symbol(_NAMES, "built", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_STRING), result=21
+        ),
+        _site(
+            _symbol(_NAMES, "built", _MAKES_STRING),
+            1,
+            (_BUFFER, "append", _TAKES_STRING),
+            kind="virtual",
+            receiver=21,
+            arguments=[CallArgument(kind="string", value="x")],
+        ),
+        _returns(_NAMES, "built", _MAKES_STRING, 0, CallArgument(kind="unresolved", source=21)),
+        _declared(_NAMES, "passed", _MAKES_STRING),
+        _site(
+            _symbol(_NAMES, "passed", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_STRING), result=41
+        ),
+        _returns(_NAMES, "passed", _MAKES_STRING, 0, CallArgument(kind="unresolved", source=41)),
+        _declared(_MUTATOR, "reads", "()V"),
+        _site(_symbol(_MUTATOR, "reads", "()V"), 0, (_NAMES, "built", _MAKES_STRING), result=31),
+        _site(
+            _symbol(_MUTATOR, "reads", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=31)],
+        ),
+        _declared(_MUTATOR, "quiet", "()V"),
+        _site(_symbol(_MUTATOR, "quiet", "()V"), 0, (_NAMES, "passed", _MAKES_STRING), result=51),
+        _site(
+            _symbol(_MUTATOR, "quiet", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=51)],
+        ),
         # A zero-length varargs call: the empty element list is the FACT (D00 §5).
         _declared(_ARRAYS, "none", "()V"),
         _site(
@@ -537,6 +609,86 @@ def walked(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     return workspace
 
 
+# The canonical compiler-emitted default-argument bridge, from `test_effective_calls.py`'s
+# own fixture: an INSTANCE `greet(String, boolean)` plus the static
+# `greet$default(Api, String, boolean, int, Object)` the compiler emits beside it. Its own
+# workspace, because what it pins is a disagreement between two READINGS of one site, and
+# a fixture that also held ordinary sites would let the walk pass on those alone.
+_API = _PKG + "Api#"
+_GREET = "(Ljava/lang/String;Z)V"
+_GREET_BRIDGE = "(Lcom/acme/orders/values/Api;Ljava/lang/String;ZILjava/lang/Object;)V"
+_HANDLER = _PKG + "Handler#"
+_HANDLE = "(Lcom/acme/orders/values/Api;)V"
+
+
+def _bridge_facts(mask: int) -> list[Fact]:
+    """`api.greet("y")` as the compiler writes it: the receiver, the arguments the caller
+    supplied, the mask saying which were left to their defaults, and the marker."""
+    return [
+        _type(_API),
+        _type(_HANDLER),
+        _declared(_API, "greet", _GREET),
+        _void(_API, "greet", _GREET),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_API, "greet$default", _GREET_BRIDGE),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _API,
+            modifiers={"static": True, "synthetic": True},
+            bridge_of="greet",
+        ),
+        _declared(_HANDLER, "handle", _HANDLE),
+        _site(
+            _symbol(_HANDLER, "handle", _HANDLE),
+            0,
+            (_API, "greet$default", _GREET_BRIDGE),
+            arguments=[
+                # The receiver the caller pushed into slot 0 — a constructed instance, so
+                # a walk that reads this slot as parameter 0 answers a TYPE SYMBOL, which
+                # is the fabrication the fix-round review measured.
+                CallArgument(kind="instance", symbol=_API, source=70),
+                CallArgument(kind="string", value="y"),
+                CallArgument(kind="boolean", value=False),
+                CallArgument(kind="int", value=mask),
+                CallArgument(kind="null"),
+            ],
+        ),
+        # Two sites inside `greet`, one reading each of its own parameters.
+        _site(
+            _symbol(_API, "greet", _GREET),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_API, "greet", _GREET),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+    ]
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> dict[int, DuckDbWorkspace]:
+    """One workspace per mask: 0 (the caller supplied both) and 2 (it left the second to
+    its default). Both handed back open — the tests read through them."""
+    built: dict[int, DuckDbWorkspace] = {}
+    for mask in (0, 2):
+        tmp_path = tmp_path_factory.mktemp(f"values_bridge_{mask}")
+        facts = tmp_path / "facts"
+        write_fact_file(facts / "bridge.jsonl", _document(), _bridge_facts(mask))
+        write_fixture_module_fact(facts)
+        workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+        workspace.load_facts(facts)
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        built[mask] = workspace
+    return built
+
+
 def _at(workspace: DuckDbWorkspace, method: str, ordinal: int) -> dict[str, Any]:
     rows = [
         row
@@ -613,6 +765,53 @@ def test_a_value_that_cannot_be_enumerated_is_one_unresolved_not_several_answers
     bindings = _bindings(walked, _symbol(_ARRAYS, "partly", "()V"), 0)
     assert _reasons(bindings) == ["non_enumerable"]
     assert [b.slots[0].value for b in bindings] == [None]
+
+
+def test_a_value_mutated_inside_the_callee_before_its_return_is_unresolved_escapes(walked):
+    """**`escapes` has to survive a return crossing** (fix round, 2026-09-23). `built()`
+    produces a value, calls a method ON it, and returns it; the caller reads that return.
+    Byte for byte this is the shape `_through`'s own docstring names —
+    `result.setFilename(x); return result;` — one method along, and skipping the check
+    there answered the PRE-mutation literal, which is a stale value asserted at `resolved`.
+
+    A return has no comparable use point (`method_returns.ordinal` numbers return
+    instructions, not call sites), so the whole class is refused: any call on the value
+    after its producer. MEASURED across every fixture with compiled classes, 112 of 836
+    returned values that carry a source — 13.4%, and 33 of 413 on `orders-service`."""
+    bindings = _bindings(walked, _symbol(_MUTATOR, "reads", "()V"), 1)
+    assert _reasons(bindings) == ["escapes"]
+
+
+def test_a_value_the_callee_only_passes_through_still_resolves(walked):
+    """The positive paired with the class refusal above, and the reason it is worth
+    measuring rather than assuming: `passed()` produces the same value and hands it back
+    untouched. A refusal for every returned value would pass the near-miss and quietly
+    stop resolving anything that crosses a return."""
+    bindings = _bindings(walked, _symbol(_MUTATOR, "quiet", "()V"), 1)
+    assert [b.slots[0].value for b in bindings] == ["solo"]
+
+
+def test_an_array_the_extractor_could_not_read_is_non_enumerable_not_absent(walked):
+    """The other half of D00 §5's sentence, and the near-miss for `absent`: an array with
+    no element list at all could not be read, which is a different statement from "called
+    with no values". Without this the two halves collapse into one answer."""
+    bindings = _bindings(walked, _symbol(_ARRAYS, "unread", "()V"), 0)
+    assert _reasons(bindings) == ["non_enumerable"]
+
+
+def test_a_value_from_a_body_that_was_read_but_answers_for_nothing_is_not_readable(walked):
+    """The `external`/`not_readable` discrimination from the other side, and the one
+    `not_readable` branch that real facts reach through the walk rather than through a
+    guard: the body IS named — `call_edges` took the hop — but `return_flows` refuses a
+    site whose dispatch the bootstrap names, so nothing answers for the value. "We cannot
+    see it" and "we can see it and it names no value" must not collapse."""
+    bindings = _bindings(walked, _symbol(_UNREAD, "made", "()V"), 1)
+    assert _reasons(bindings) == ["not_readable"]
+    assert any(
+        row["ordinal"] == 0 and row["callee"] is not None
+        for row in walked.query("call_edges")
+        if row["caller"] == _symbol(_UNREAD, "made", "()V")
+    ), "the fixture must name a body, or this tests `external` by accident"
 
 
 def test_a_value_a_method_might_have_mutated_before_use_is_unresolved_escapes(walked):
@@ -762,6 +961,41 @@ def test_one_position_reached_two_ways_keeps_the_two_paths_apart(walked):
         ),
     ]
     assert [b.slots[0].value for b in bindings] == ["alpha", "alpha"]
+
+
+def test_a_bridge_over_an_instance_method_answers_the_siblings_own_parameters(bridged):
+    """**The Critical this round found, pinned at the exact shape it was found in.** A
+    `bound_to_parameter` edge pairs a PROJECTED callee — the function the bridge stands for
+    — with a RAW slot index, so a walk reading raw `call_sites` was handed the bridge's
+    leading receiver for the sibling's parameter 0: `com/acme/orders/values/Api#`, a type
+    symbol where a string belongs, IN RANGE so nothing caught it. That is the fabrication
+    `literal_kind: symbol` exists to prevent, arriving through another door.
+
+    Reading the PROJECTION fixes the correspondence rather than papering over it: the
+    callee and the argument list then come from one row, so the callee's parameter *p* is
+    that row's slot *p*. The assertion is on both parameters, and on the value NOT being
+    the receiver, because a walk that answered a reason here would also pass a test that
+    only checked "not the receiver"."""
+    bindings = _bindings(bridged[0], _symbol(_API, "greet", _GREET), 0)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("literal", "y")]
+    assert [b.slots[0].value for b in bindings] != [_API], "the bridge's receiver, not p0"
+    second = _bindings(bridged[0], _symbol(_API, "greet", _GREET), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in second] == [("literal", False)]
+
+
+def test_a_defaulted_parameter_is_a_reason_and_never_the_value_the_bridge_pushed(bridged):
+    """The second shape of the same cause. With the mask set, the caller supplied nothing
+    for parameter 1 and the projection marks the slot `defaulted`; the RAW row still holds
+    the `0`/`false` the bridge pushed, which a walk reading it would publish as the value.
+    A parameter that takes its declared default is a reason, not a literal — and not
+    `absent` either, which would claim the code states there is no value."""
+    bindings = _bindings(bridged[2], _symbol(_API, "greet", _GREET), 1)
+    assert [(b.slots[0].kind, b.slots[0].reason) for b in bindings] == [
+        ("unresolved", "not_readable")
+    ]
+    # The parameter the caller DID supply still resolves, so this is a narrow refusal.
+    supplied = _bindings(bridged[2], _symbol(_API, "greet", _GREET), 0)
+    assert [b.slots[0].value for b in supplied] == ["y"]
 
 
 def test_the_reasons_are_the_closed_set_the_design_declares(walked):

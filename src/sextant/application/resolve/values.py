@@ -50,10 +50,30 @@ branches", and today both collapse into a single word.
 
 `value_edges` (spec §1a, the query's own file) is where the walk goes NEXT — it normalises
 five edge kinds out of three existing tables and stores nothing. It carries no VALUE: the
-answers themselves live in D00 §5's argument grammar, on `call_sites` and on
-`method_returns`, so the walk reads those too, and `call_edges` for the one question the
-edges cannot answer (was a body read at all, which is what separates `external` from
-`not_readable`). Five queries, folded into `ValueIndex` once.
+answers themselves live in D00 §5's argument grammar, on `method_returns` and on the call
+sites, so the walk reads those too, and `call_edges` for the one question the edges cannot
+answer (was a body read at all, which is what separates `external` from `not_readable`).
+Five queries, folded into `ValueIndex` once.
+
+**A slot is read off the PROJECTION, and that is load-bearing rather than tidy** (fix
+round, 2026-09-23). `effective_call_sites` is the row every engine sees: a compiler-emitted
+default-argument bridge call re-targeted to the function it stands for, a class-compiled
+lambda argument read as the lambda it is. Reading RAW `call_sites` here was a wrong answer,
+not a miss — MEASURED on the canonical bridge shape, a walk asking for the sibling's
+parameter 0 was handed the bridge's leading RECEIVER, a type symbol where a string belongs,
+in range so nothing caught it; and a DEFAULTED parameter answered with the mask value the
+bridge pushed instead of the marker the projection writes.
+
+**The invariant that makes the index correct, since the edge carries a RAW slot number
+beside a PROJECTED callee.** `call_edges.callee` and this row's argument list are now read
+from the SAME row, so the callee's parameter *p* is that row's slot *p* — for a bridge, the
+projection builds exactly the sibling's slot list; for an untouched row, the callee is the
+raw target and the slots are its own. The edge's `to_index` is used only to SELECT which
+call sites bind parameter *p*, never to index into anything, and a projected row is always
+shorter than the raw one it came from (a receiver, the masks and the marker go), so an edge
+exists for every real parameter and none is missed. MEASURED on the same shape: parameter 0
+answers `"y"` and parameter 1 answers `false` at mask 0, and parameter 1 answers a reason
+at mask 2 rather than the value the caller never passed.
 
 Two of the five edge kinds are therefore read off the grammar rather than off the query:
 `read_from_binding` and `names_declaration` carry **no `to_index`** (the query's own header
@@ -93,6 +113,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
@@ -222,7 +243,8 @@ class ValueIndex:
     as a parameter rather than hidden in a cache with no invalidation.
     """
 
-    # Every call site, by (method, ordinal) — the site's identity everywhere in D01.
+    # Every call site AS THE ENGINES SEE IT, by (method, ordinal) — the site's identity
+    # everywhere in D01, and `effective_call_sites` keeps both columns.
     sites: dict[tuple[str, int], Mapping[str, Any]]
     # (method, value id) -> the ordinals of calls made ON that value, for `escapes`.
     receivers: dict[tuple[str, int], tuple[int, ...]]
@@ -248,7 +270,12 @@ def value_index(workspace: Workspace) -> ValueIndex:
     """The index for one resolve. Built by `resolve_site` when it is not handed one."""
     sites: dict[tuple[str, int], Mapping[str, Any]] = {}
     receivers: dict[tuple[str, int], list[int]] = {}
-    for row in workspace.query("call_sites"):
+    # The PROJECTION, not the raw fact stream — the rows every engine reads (spec
+    # 2026-09-19 §3), and the same rows `call_edges` derived every `bound_to_parameter`
+    # edge's callee from. Reading the raw list beside a projected callee answered the
+    # bridge's receiver for the sibling's parameter 0; the module docstring has the
+    # measurement and the invariant.
+    for row in effective_call_sites(workspace):
         method, ordinal = str(row["caller"]), int(str(row["ordinal"]))
         sites[(method, ordinal)] = row
         if row["receiver"] is not None:
@@ -470,12 +497,13 @@ class _Walk:
             return self._resolve((_PARAMETER, method, int(str(parameter))), trail, frames)
         arguments = site["arguments"] or []
         if not isinstance(slot, int) or not 0 <= slot < len(arguments):
-            # A slot the site does not have. Reachable from data rather than only from a
-            # caller's mistake: three of the edge query's arms read the raw fact stream,
-            # so at a compiler-emitted default-argument bridge site the slot numbering is
-            # the bridge's while the callee is the function it stands for (that query's
-            # own stated boundary), and a parameter index can land past the argument list.
-            # An answer naming the reason beats an exception a consumer cannot act on.
+            # A slot the site does not have — a CONSUMER asking about a position that is
+            # not there, which is the only route left. The walk's own back-crossing cannot
+            # reach it: the one place a slot index comes from somewhere other than the row
+            # in hand is a `bound_to_parameter` edge, and a site the projection renumbered
+            # is refused as `unaligned` before this. An answer naming a reason beats an
+            # exception a consumer cannot act on; a caller that wants the strict reading
+            # checks its own site's arity, which it has.
             return _only(trail, _unresolved(NOT_READABLE))
         return self._entry(arguments[slot], method, (_SLOT, method, ordinal, slot), trail, frames)
 
@@ -536,14 +564,19 @@ class _Walk:
             # `names_declaration` arm, ruled 2026-09-22): it names a body, not a value.
             return _only(trail, _unresolved(NOT_READABLE))
         if kind == "null":
-            # The code STATES there is no value (D00 §5's `null` kind, ACONST_NULL). That
-            # is an answer and not a miss, so it is `absent` rather than a reason: a
-            # consumer told `not_readable` would look for a value that is not there to be
-            # found, which is a different and false claim about the code.
+            # The code STATES there is no value (D00 §5's `null` kind). That is an answer
+            # and not a miss, so it is `absent` rather than a reason: a consumer told
+            # `not_readable` would look for a value that is not there to be found, which is
+            # a different and false claim about the code.
             return _only(trail, Answer(kind=ABSENT))
         source = argument.get("source")
         if source is None:
             return _only(trail, _unresolved(NOT_READABLE))
+        # WHERE the value is used, which is what bounds the `escapes` window below. A slot
+        # of a call site is a position in control flow (`ordinal`). A method's RETURN is
+        # not: `method_returns.ordinal` numbers the return instructions, not the call
+        # sites, so nothing here says which calls in that method ran before the `return`.
+        # `None` is that answer, and `_through` reads it as the whole tail of the method.
         used_at = origin[2] if origin[0] == _SLOT else None
         return self._through(method, int(str(source)), used_at, trail, frames)
 
@@ -593,6 +626,16 @@ class _Walk:
         That is the shape `return_flow.py` records as "responses built by mutation" —
         `result.setFilename(x); return result;` — seen from the consuming end.
 
+        **`used_at` may be unknown, and then the whole tail of the method counts** (fix
+        round, 2026-09-23). A value reached through a callee's RETURN has no comparable use
+        point — `method_returns.ordinal` numbers return instructions, not call sites — so
+        nothing says which calls ran before the `return`. Skipping the check there answered
+        the pre-mutation literal for exactly the shape the paragraph above names, one
+        method along: `result.setFilename(x); return result;` read from the caller. So the
+        class is refused instead — ANY call on the value after its producer — because
+        answering a value that may have been mutated after the point it was read is the
+        same defect as reading the wrong slot, and a miss is the acceptable half.
+
         **Only a call whose RECEIVER is the value counts, and the narrowing is stated
         because it can be wrong**: a value handed to another method as an ARGUMENT can be
         mutated too, and no fact says whether that callee writes through the reference.
@@ -600,12 +643,11 @@ class _Walk:
         and then used — unresolved, so the wider rule needs §3a's measurement behind it
         rather than a guess here.
         """
-        if used_at is not None:
-            produced = self._index.producers.get((method, value), ())
-            produced_at = min(produced) if produced else -1
-            for ordinal in self._index.receivers.get((method, value), ()):
-                if produced_at < ordinal < used_at:
-                    return _only(trail, _unresolved(ESCAPES))
+        produced = self._index.producers.get((method, value), ())
+        produced_at = min(produced) if produced else -1
+        for ordinal in self._index.receivers.get((method, value), ()):
+            if ordinal > produced_at and (used_at is None or ordinal < used_at):
+                return _only(trail, _unresolved(ESCAPES))
         return self._resolve((_VALUE, method, value), trail, frames)
 
     def _value(
