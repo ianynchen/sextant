@@ -2942,7 +2942,7 @@ def test_the_edge_query_sees_a_value_the_code_assembles(tmp_path: Path):
     right there and fatal here: an assembled address is exactly such a site, and
     D00 §5's grammar says the hole in its template is filled by following
     `source` -> `result` to it. Measured when the arm read `call_edges`: 7 of 7
-    such sites on `fixtures/orders-service` and 203 of 203 on `mall-admin` had no
+    such sites on `fixtures/orders-service` and 224 of 224 on `mall-admin` had no
     edge at all, a URL built from a path and an id among them."""
     workspace = _workspace_with_value_edges(tmp_path)
     caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
@@ -2967,13 +2967,17 @@ def test_the_edge_query_sees_a_value_the_code_assembles(tmp_path: Path):
 
 def test_the_edge_query_binds_no_parameter_where_a_site_only_captures(tmp_path: Path):
     """`return_flow` refuses a `dynamic` site outright; `bound_to_parameter` makes
-    the same refusal one step along, and for a sharper reason. At such a site
-    `call_edges.callee` is the lambda BODY while the arguments are the
-    metafactory's CAPTURES — two different lists — so calling slot *i* "parameter
-    *i*" states a wrong answer at `resolved` rather than missing one: a walk
-    asking for a parameter is handed a captured value, or the receiver, which
-    D00 §5 says is not a parameter at all. Measured before the refusal: 26 of 238
-    rows on `fixtures/orders-service` and 8 of 33,926 on `mall-admin`."""
+    the same refusal one step along. At such a site `call_edges.callee` is the
+    lambda BODY while the arguments are the metafactory's CAPTURES — two
+    different lists — and the facts do not record which parameter a capture
+    lands on. At an instance body it provably is not slot *i* (the captured
+    receiver is slot 0, and D00 §5 says a receiver is not a parameter); at a
+    static one it usually is, but only by an unrecorded compiler convention.
+    Measured on `fixtures/orders-service`, of 43 refused rows: 26 were wrong
+    answers at `resolved` — the cardinal sin, and what this test pins — and 17
+    were honest captures into a static body, a named gap for §3a to size.
+    The fixture's site 2 is the instance case. See `value_edges.sql`'s own arm
+    for the three reasons the wide refusal is the right trade."""
     workspace = _workspace_with_value_edges(tmp_path)
     rows = workspace.query("value_edges")
     # The site is reached and its body is named — `call_edges` took that hop.

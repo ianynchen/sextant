@@ -100,7 +100,7 @@
 -- template, and *"what FILLS the hole is the concat site's own call-site fact,
 -- reached by `source` -> `result`"*. That hop is this edge. MEASURED while the
 -- arm read `call_edges`: every assembled value in both corpora was invisible to
--- it — 7 of 7 producing sites on `orders-service`, 203 of 203 on `mall-admin`,
+-- it — 7 of 7 producing sites on `orders-service`, 224 of 224 on `mall-admin`,
 -- including a client whose URL is `".../orders/" + id`, which is the shape this
 -- whole design exists to reach.
 --
@@ -194,22 +194,43 @@ UNION ALL
 -- itself, at (`from_method`, `to_ordinal`), slot `to_index`.
 --
 -- **A `dynamic` site contributes NOTHING, and that is a refusal rather than an
--- omission** — the same decision `return_flow` states for the same reason, one
--- step further along. At an `invokedynamic` site the two halves this arm joins
--- describe different things: `call_edges.callee` is the lambda BODY the
--- bootstrap will run, while the arguments are the metafactory's CAPTURES, and
--- a captured value is not the body's parameter of the same index. The body's
--- own parameters are supplied when it runs, later, elsewhere, if at all —
--- nothing at this site binds them. The grammar says it in one line, in the rule
--- quoted above: a receiver is not a parameter, and at an indy site the captured
--- receiver sits in the argument list. Emitting the join anyway does not MISS an
--- answer, it states a wrong one at `resolved`, which is the cardinal sin: a
--- walk asking for parameter 1 was handed the caller's argument 0. MEASURED
--- before the refusal: 26 of 238 rows on `orders-service` and 8 of 33,926 on
--- `mall-admin` were such rows, every one of them a fabrication. Following
--- `implementation` INTO a lambda body is a traversal step and `call_edges` is
--- the table that takes it; binding a value to that body's parameters is an
--- edge nothing in the facts supports.
+-- omission** — the same decision `return_flow` states, one step further along.
+-- At an `invokedynamic` site the two halves this arm joins describe different
+-- lists: `call_edges.callee` is the lambda BODY the bootstrap will run, while
+-- the arguments are the metafactory's CAPTURES. **The facts do not record which
+-- parameter a capture lands on.** Where the body is an instance method that is
+-- provably not slot *i* — the captured receiver occupies slot 0, and the rule
+-- quoted above says a receiver is not a parameter. Where the body is static it
+-- often IS slot *i*, but only by a compiler convention — captures laid out in
+-- the body's LEADING slots — that nothing in the facts states.
+--
+-- So the refusal removes two different things, and saying otherwise would be a
+-- claim a reader can check and find false. MEASURED on `orders-service`, of 43
+-- rows: **26 were wrong answers** — a walk asking for parameter 1 handed the
+-- caller's argument 0, a fabrication at `resolved`, which is the cardinal sin —
+-- and **17 were honest**, captures into a static body that really are its
+-- leading parameters. `InventoryWebClient#lookup(String sku)` capturing `sku`
+-- into a static synthetic body, where `sku` is that body's parameter 0, is the
+-- exemplar. On `mall-admin`, 8 wrong and 8 honest of 16. **The 17 are a named
+-- gap, not rows that were wrong**, and §3a's measurement is what sizes it.
+--
+-- Three reasons the wide refusal is still the right trade, rather than a
+-- narrower one keeping the static case:
+--   1. **Staticness is a proxy, not evidence.** What would make slot *i* equal
+--      parameter *i* is the leading-slot layout, and no fact records it. A
+--      static callee at a dynamic site that is NOT that desugaring — a bound
+--      method reference, a different bootstrap, another compiler — would
+--      silently re-emit exactly the wrong-at-`resolved` rows this refusal
+--      removes, and no test here could see it.
+--   2. The narrower rule needs a join to `symbols` to read the callee's
+--      modifiers — a FOURTH table, outside the three this query is normalised
+--      out of — to recover rows that are all `from_value IS NULL` anyway.
+--   3. `return_flow` already refuses every dynamic site. Two different dynamic
+--      policies in adjacent arms is a cost every later reader pays.
+--
+-- Following `implementation` INTO a lambda body is a traversal step and
+-- `call_edges` is the table that takes it; binding a value to that body's
+-- parameters is an edge nothing in the facts supports.
 --
 -- **The projection, both halves, because they differ.** `callee` rides
 -- `effective_call_sites` — `call_edges` is written from it, so a bridge call
