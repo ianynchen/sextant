@@ -1159,8 +1159,12 @@ _CTOR_IDENTITY = {"owner": _NAME, "method": "<init>", "arg": 0}
 def test_a_constructed_value_answers_the_type_symbol_when_nothing_identifies_it(walked):
     """The negative half first (GUIDELINES §10), and it is ruling T-3 itself: a declaration
     reference IS the value, so `new Name(…)` answers the concrete type it was built from —
-    as a `symbol`, never as text. Every constructed type in this estate but four is this
-    case, and the arm below must leave it exactly where it is."""
+    as a `symbol`, never as text. Every constructed type in this estate but TWO is this case
+    — MEASURED, the constructions `_construction` finds AND an entry claims have exactly two
+    producers, `URI`'s one-string constructor (8 values) and `Queue`'s (2); the other two
+    reachable initialiser entries match no construction anywhere. Four is the count of
+    reachable ENTRIES and not of types. The arm below must leave every other one exactly
+    where it is."""
     [binding] = _bindings(walked, _symbol(_IDENTIFIED, "built", "()V"), 1)
     assert (binding.slots[0].literal_kind, binding.slots[0].value) == ("symbol", _NAME)
 

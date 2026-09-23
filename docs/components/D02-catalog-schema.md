@@ -588,7 +588,10 @@ turn into one. Both remain the consuming engines' to read, exactly as they are t
 measured edge.** **Eleven** of the shipped entries name `<init>`, and **four** of them are
 reachable by the walk at all: the seven others carry a `role` (the `call_wrappers` and
 `record_wrappers` hoists) or a rule-valued `arg`, both of which the walk passes over for the
-reasons above. The four are `_via` entries whose producer happens to be a constructor.
+reasons above. Three of the four are `_via` entries whose producer happens to be a
+constructor; the fourth, `java.net.URI`'s one-string constructor, is a DECLARED
+`identified_by` entry in `value-models/jdk.yml` with a `by:` probe row behind it — this
+directory's own shape, not a hoist.
 A constructed value is recognised by three conjuncts together: it has no `produced_by` edge,
 the site is the EARLIEST one the value is the receiver of, and that site produced no value of
 its own (D00 §5's "result is null for a void one").

@@ -254,7 +254,7 @@ below may be quoted as a *production* maximum without that discount applied.
 |---|---|---|---|
 | **catalog-to-position asks** | **1,250** | — | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
 | **distinct positions** | **989** | **98,454** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
-| **answers** | **1,026** | **176,269** | one per `(position, path)`. A position with two coherent paths answers twice, so §4's and §5's kind and reason tables add up to THIS and not to the row above |
+| **answers** | **1,026** | **176,269** | one per `(position, path)`. A position with two coherent paths answers twice, so §4's kind and reason tables add up to THIS and not to the row above |
 
 **The answers row was added 2026-09-23 and its absence had already cost a round.** A Task 7
 report gave "16 of 1,053 answers" and "719 of 208,430 positions", neither of which is any
@@ -265,17 +265,21 @@ here counts `_Walk.at(site, slot)`. Re-derived on this table's own basis they ar
 basis further out than it had been written to reach.
 
 A **site** is a distinct `(caller, ordinal)` — one call, whatever slots are asked about on
-it; the asked surface has **726**. Both rows above are defined in terms of it, and
-`resolve_site` is called once per site (§1.5). It is deliberately not a basis for cost: a
+it; the asked surface has **726**. The first two rows above are defined in terms of it — the
+third is per `(position, path)` and so is a level below — and `resolve_site` is called once
+per site (§1.5). It is deliberately not a basis for cost: a
 maximum held at three sites may be held by any number of positions, so §3.1 and §5 each name
 the unit they are counting in. Substituting the site count for the position count is an
 error this document has made and corrected more than once.
 
-Both bases are printed per corpus and in total. **Every cost figure in §3 is per distinct
-position**; the asks number appears only where the question is "how much do catalogs ask",
-never where the question is "how much does it cost".
+**Asks and positions are printed per corpus and in total; ANSWERS are not.** `report()`
+prints the first two per corpus, and the answer counts appear only in the totals block, as
+the kind and reason distributions of §4 — so a per-corpus answer figure has to be derived
+rather than read off. **Every cost figure in §3 is per distinct position**; the asks number
+appears only where the question is "how much do catalogs ask", never where the question is
+"how much does it cost".
 
-(A third base exists and is deliberately not used: counting one catalog ROW per position
+(A FOURTH base exists and is deliberately not used: counting one catalog ROW per position
 gives **2,038**, because a catalog often matches a site through more than one overload row.
 The first draft of this document printed that number — 1,997, on the reader as it then was —
 in a column headed "positions asked" beside a headline of distinct positions, which is the
@@ -570,9 +574,9 @@ Answer kinds on the asked surface: `literal` 531, `unresolved` 474, `expression`
 *Both tables above read differently since Task 7 gave the walk §2's identity table to
 resolve through: `external` **252 → 239**, `literal` **531 → 543**, `expression` **21 → 22**,
 `unresolved` **474 → 461**, every other reason unchanged — sixteen asked positions, which
-§6.3 enumerates and splits. Left at the snapshot's own figures here for the reason §5's
-`escapes` row is: this section is what the walk answered at `ad210319`, and a section half
-re-measured is worse than one that is not.*
+§6.3 counts and splits (they are listed in the Task 7 report's §3, not in this document).
+Left at the snapshot's own figures here because this section is what the walk answered at
+`ad210319`, and a section half re-measured is worse than one that is not.*
 
 *Before the reader was widened to `parse_calls` (§1.3): 948 positions, 428 unresolved,
 `external` 206, `literal` 530. **The widening added 47 answers — 46 `external` and one
@@ -594,10 +598,13 @@ unreachable.*
 
 Answer kinds: `unresolved` 91,522, `literal` 83,304, `absent` 915, `expression` 528.
 
-*The `escapes` row reads **3,706** since Task 7 opened the mutation window at a value's
-CONSTRUCTION rather than before it — the §6.3 bullet below has the measurement and the
-reason. It is left at the snapshot's own figure here, because this table is what the walk
-answered at `ad210319` and a table half re-measured is worse than one that is not.*
+*Seven cells read differently since Task 7, not one, and the whole list is given rather than
+the largest: `escapes` **4,380 → 3,706**, `not_readable` **6,979 → 7,644**, `external`
+**76,773 → 76,757**, `no_writer` **3,321 → 3,322**, `unresolved` **91,522 → 91,498**,
+`literal` **83,304 → 83,316**, `expression` **528 → 540**. `cycle` 7, `non_enumerable` 62,
+`absent` 915 and the 176,269 total are unchanged. §6.3 has the measurement and the reason.
+Left at the snapshot's own figures here, because this table is what the walk answered at
+`ad210319` and a table half re-measured is worse than one that is not.*
 **This table counts ANSWERS; a position may hold several** (§1.4). On the POSITION basis the
 same `escapes` population reads 4,338 → 3,664 — the same movement of 674, on the two bases.
 
@@ -719,8 +726,8 @@ Both halves follow from §3.3 and §1.6.
   corpus put together. There is no cache and there cannot be one in `Workspace.once`. An
   engine resolving `mall-admin`'s **52 asked SITES** without threading an index would pay
   about 8 s where the work itself is under a millisecond — SITES, because `resolve_site` is
-  called once per site and the fold is what each call rebuilds. §1.4's two bases are asks and
-  positions, and on this corpus both are **56**; neither is the number that multiplies here. Each migrated engine builds `value_index(workspace)` once per run and passes
+  called once per site and the fold is what each call rebuilds. §1.4's asks and positions bases are
+  both **56** on this corpus; neither is the number that multiplies here. Each migrated engine builds `value_index(workspace)` once per run and passes
   it to every `resolve_site` call.
 - **Report `visits`, not wall time.** A migration that claims "the walk is fast here" from a
   wall-time reading is reading noise: §1.6 measured a 15× spread on identical input. Where
@@ -757,15 +764,18 @@ Both halves follow from §3.3 and §1.6.
   | the identity arm | **33** | **16** | a value an `identified_by` entry names. **18** of the 33 need a CONSTRUCTION to be found; the other **15** are ordinary factory hops off `produced_by` — `URI.create`, `Pattern.compile`, `ProjectSubscriptionName.of`, `TopicName.of`, `Session.createQueue` — which reach no construction at all and never could, since every one of those sites has a non-null `result` |
 
   Counted a second way and independently, positions answering `escapes` fall **4,338 →
-  3,664**: the same 674. (§5's reason table counts ANSWERS, a different basis — §1.4 — where
-  the same population reads 4,380 → 3,706. A note beside that row says so.)
+  3,664**: the same 674. (§4's ceiling reason table counts ANSWERS, a different basis —
+  §1.4 — where the same population reads 4,380 → 3,706. A note beside that table says so,
+  and lists the six other cells that move with it.)
 
-  **Sixteen asked positions move, so figures above DO move**, and they are the same sixteen
-  §6.2's own note reports: §3.1's visits go 413 → 432, and §4's asked-surface tables go
-  `external` **252 → 239**, `literal` **531 → 543**, `expression` **21 → 22**, `unresolved`
-  **474 → 461** (`escapes` is 12 either way there — none of the 674 is asked about). Those
-  tables carry the same note §5's `escapes` row does: they are the snapshot's, and §6.3 is
-  where what moved since is stated.
+  **Sixteen asked positions move, and what they move is narrower than it sounds.** MEASURED
+  cell by cell: **not one figure in §3.1 changes** — paths `1/1/2/5`/max 11, depth
+  `0/0/1/3`/max 3, answers `1/1/2/3`/max 11, visits `0/1/5/11`/max 15, maximum bindings 11.
+  Visits moved at exactly those 16 positions, by +1 or +2 each, which shifts no percentile
+  and no maximum; only the POPULATION TOTAL moves, 413 → 432, and that total is not in §3.1
+  either — it is in this document's header italic. **So the table the ruling rests on is
+  untouched**, and what does move is §4's two answer tables, where the note beside each says
+  what and by how much. The sixteen are listed in the Task 7 report's §3, not here.
 
   *Two sentences here were wrong until 2026-09-23 and are corrected rather than deleted,
   because the shape of the error is the point. "None of the 707 is a position any catalog

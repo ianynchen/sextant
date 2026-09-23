@@ -625,7 +625,10 @@ class _Walk:
             # EVERY constructed value and is a fallback; an `identified_by` entry is a
             # measured claim about ONE producer, carrying the probe row §7b requires. Where
             # both are available the measured one answers; where no entry matches — which
-            # is every constructed type in this estate but four — the symbol answer stands
+            # is every constructed type in this estate but TWO (`URI`'s one-string
+            # constructor, 8 values, and `Queue`'s, 2 — the other two reachable entries
+            # match no construction anywhere; four is the count of reachable ENTRIES, which
+            # is not a count of types) — the symbol answer stands
             # unchanged, byte for byte. A `class` or an `enum` reference has no
             # construction to find at all and is never affected.
             #
