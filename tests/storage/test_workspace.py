@@ -2631,3 +2631,227 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
         workspace.derive("_broken", rows=[{"no_such": 1}])
     assert workspace._per_value_retries == ["call_edges_insert"]
     workspace.close()
+
+
+def _value_edge_facts(root: Path) -> None:
+    """One method whose single call site carries, in four slots, every argument
+    shape the edge view reads: a binding read, a type reference, a value another
+    call produced, and a literal that names nothing at all.
+
+    Deliberately ONE site. The view's five arms come out of three tables, and a
+    fixture with one site per arm would let an arm read the wrong table and still
+    look right — the same row set has to answer all five."""
+    document = Document(
+        document_id="doc_edges",
+        relative_path="com/acme/Registrar.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:e",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    call_site = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="com/acme/Registry#",
+            name="add",
+            descriptor="(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Object;I)V",
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        result=9,
+        arguments=[
+            CallArgument(kind="field", symbol="com/acme/Registrar#name."),
+            CallArgument(kind="class", symbol="com/acme/OrderWorker#"),
+            CallArgument(kind="unresolved", source=4),
+            CallArgument(kind="int", value=7),
+        ],
+    )
+    write_fact_file(root / "Registrar.jsonl", document, [call_site])
+
+
+def _workspace_with_value_edges(tmp_path: Path) -> DuckDbWorkspace:
+    _value_edge_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    workspace.derive(
+        "call_edges_insert",
+        rows=[
+            {
+                "caller": caller,
+                "ordinal": 0,
+                "invoke_kind": "virtual",
+                "target": "com/acme/Registry#add(sig_2).",
+                "callee": "s maven p 1 com/acme/Registry#add(sig_2).",
+                "result": 9,
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "terminal_kind": None,
+                "target_kind": None,
+            }
+        ],
+    )
+    workspace.derive(
+        "return_flows_insert",
+        rows=[
+            {
+                "caller": caller,
+                "ordinal": 0,
+                "result": 9,
+                "callee": "s maven p 1 com/acme/Registry#add(sig_2).",
+                "return_ordinal": 0,
+                "value": '{"kind":"string","value":"ok"}',
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+        ],
+    )
+    return workspace
+
+
+def test_the_edge_view_normalises_five_kinds_from_three_tables(tmp_path: Path):
+    """Spec 2026-09-22 §1a, over `value_edges.sql`. One shape out of three
+    sources — and `written_by` is ABSENT until capability 9.19 gives it a fact,
+    which is itself the answer: a workspace with no binding-write facts yields
+    no such edge rather than an empty-but-present one a reader would take for
+    "we looked and found nothing"."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    kinds = {row["kind"] for row in workspace.query("value_edges")}
+    assert kinds == {
+        "produced_by",
+        "returned_by",
+        "read_from_binding",
+        "bound_to_parameter",
+        "names_declaration",
+    }
+    workspace.close()
+
+
+def test_the_edge_view_fills_the_columns_its_own_header_says_each_kind_fills(
+    tmp_path: Path,
+):
+    """The columns are nullable PER KIND, so "nullable" on its own says nothing a
+    reader can act on — this pins which kind fills which, against the table in
+    `value_edges.sql`'s header. `to_index` is the one that matters most: it is a
+    parameter index, and an edge that is not `bound_to_parameter` lands on no
+    parameter, so a non-NULL there would be a number with no meaning."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    callee = "s maven p 1 com/acme/Registry#add(sig_2)."
+    rows = workspace.query("value_edges")
+    by_kind: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        by_kind.setdefault(str(row["kind"]), []).append(row)
+
+    assert by_kind["produced_by"] == [
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 9,
+            "to_symbol": None,
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    assert by_kind["returned_by"] == [
+        {
+            "kind": "returned_by",
+            "from_method": caller,
+            "from_value": 9,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    # A binding read is no call's result, so it carries no value id at all.
+    assert by_kind["read_from_binding"] == [
+        {
+            "kind": "read_from_binding",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": "com/acme/Registrar#name.",
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    assert by_kind["names_declaration"] == [
+        {
+            "kind": "names_declaration",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": "com/acme/OrderWorker#",
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    # One edge per SLOT, including the two slots whose value the facts cannot
+    # name: the index is what the walk needs, and a slot left out because its
+    # value is unreadable is a parameter the walk would never ask about.
+    assert by_kind["bound_to_parameter"] == [
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 0,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 1,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": 4,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 2,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 3,
+        },
+    ]
+    assert all(row["to_index"] is None for row in rows if row["kind"] != "bound_to_parameter")
+    workspace.close()
+
+
+def test_the_edge_view_stores_nothing_and_no_call_site_row_moved(tmp_path: Path):
+    """§3b: `value_edges` is a VIEW. Three tables already hold these rows, and a
+    materialised copy would add a writer, a reset and a second version that can
+    drift — so the object DuckDB holds must be a view, and asking it must leave
+    the tables it reads exactly as they were."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    before = (workspace.query("call_sites"), workspace.query("call_edges"))
+    assert workspace.query("value_edges")
+    assert (workspace.query("call_sites"), workspace.query("call_edges")) == before
+    (kind,) = workspace._connection.execute(
+        "SELECT table_type FROM information_schema.tables "
+        "WHERE table_schema = 'main' AND table_name = 'value_edges'"
+    ).fetchone()
+    assert kind == "VIEW"
+    workspace.close()
+
+
+def test_the_edge_view_is_empty_on_a_workspace_that_loaded_no_calls(tmp_path: Path):
+    """Pre-declared like every table in `schema.sql`: a module with nothing to
+    walk answers with an empty result rather than an error, which is what lets
+    Task 3 call it unconditionally."""
+    workspace = _loaded_workspace(tmp_path)
+    assert workspace.query("value_edges") == []
+    workspace.close()
