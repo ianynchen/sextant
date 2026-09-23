@@ -376,7 +376,7 @@ Every `would_resolve` row is a candidate new claim. **Read them all before chang
 
 **This is the step that makes the design hold** (spec §2a step 3, §5b). A design that merely recommends the new way decays: a new catalog author copies the nearest example.
 
-- [ ] **Step 1:** delete the now-redundant `channel_via` / `url_via` / `call_wrappers` declarations from the 14 migrated catalogs.
+- [ ] **Step 1:** delete the now-redundant `channel_via` / `url_via` / `call_wrappers` / `record_wrappers` declarations from the migrated catalogs. **Four keys, not three, and 19 catalogs, not 14** — spec §0's table carries the correction and why (ruled 2026-09-23, Task 6: the original enumeration omitted `record_wrappers`, which three `single_call` catalogs declare and which Task 8's own "13 catalogs" already counted).
 - [ ] **Step 2:** make the loader **refuse** those keys with a `CatalogError` naming the file and pointing at `value-models/`, the way every closed vocabulary here is enforced.
 - [ ] **Step 3:** a test that the refusal fires, and that the error names the replacement.
 - [ ] **Step 4:** confirm **no row moves** — the hoist already made these declarations redundant, so deleting them is cosmetic. Any movement means a migration was incomplete.

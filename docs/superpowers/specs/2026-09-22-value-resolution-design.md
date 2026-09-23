@@ -30,7 +30,22 @@ Run on the repository as it stood at `50d3f6e`. Every number is a count, not an 
 | modules that state **"one hop"** as an explicit cap | **7**, in 18 places |
 | `return_flows` rows on `mall-admin` — built, populated, read by no engine | **552 call sites / 566 returns** |
 | multi-hop follows in the whole resolve layer | **1** — `fluent`'s chain walk, and it runs *forward* from a declared root to a declared terminal |
-| per-catalog hop declarations | **16**, across 14 catalogs (`channel_via` ×13, `url_via` ×2, `call_wrappers` ×1) |
+| per-catalog hop declarations | **19**, across 19 catalogs (`channel_via` ×13, `url_via` ×2, `record_wrappers` ×3, `call_wrappers` ×1) — 79 declaration sites |
+
+*The hop-declaration row read **"16, across 14 catalogs (`channel_via` ×13, `url_via` ×2,
+`call_wrappers` ×1)"** until 2026-09-23. **The enumeration omitted `record_wrappers`**, which is
+`{type, <name>_ctor_arg}` — the same shape as `call_wrappers` — and which three catalogs declare
+(`kafka-clients`, `spring-kafka-replying`, `spring-kafka-template`), each a byte-identical entry for
+`ProducerRecord`'s constructor. The row is corrected above rather than silently renumbered: the count
+was not a measurement that moved, it was an enumeration that was short by a key. The "14 catalogs"
+half was wrong on its own terms too — no catalog declares two of these keys, so 16 pairs could only
+ever have been 16 catalogs. Re-derived at this section's own snapshot `50d3f6e` by a walk of all 101
+shipped catalogs for the four keys, which reproduces every other figure in the row. **The
+undercount was already contradicted inside this document**: §3c's migration table gives `single_call`
+**13 catalogs**, and that 13 only reaches 13 because it counts the three that declare
+`record_wrappers`. Ruled 2026-09-23 (Task 6): `record_wrappers` is hoisted with the other three, and
+Task 10 deletes and refuses four keys, not three. §7's "fourteen" is a DIFFERENT quantity — the
+tasks 7 and 8 migration surface, 1 + 13 — and is untouched by this correction.*
 
 **The conclusion those numbers force:** there is no operation in this codebase that answers *what is
 this value?* There is only *follow exactly one hop, in the direction a catalog named.*
@@ -72,7 +87,7 @@ reading what the key's `arg` is *for*, and it costs a minute.
 | # | Finding | Ruling |
 |---|---|---|
 | M-1 | Resolving positions **independently** across a method boundary mints combinations no code path produces: a helper called as `register("orders", OrderImpl)` and `register("billing", BillingImpl)` yielded 2×2 = four rows, two of them fabricated at `resolved` | **The unit of resolution is the PATH, not the position.** The user's correction: *"it's not 2×2, it's 2 paths — record two paths, because that's the reality."* §1c rebuilt around it; incoherent combinations become structurally impossible rather than contractually forbidden |
-| M-2 | §2 deleted 16 declarations across 14 shipped catalogs, putting all their output in a new walk's blast radius — where the existing declarations already contain exactly what the new model needs | **Hoist, then delete, then refuse.** The loader reads existing hop declarations as identity entries (no catalog edit forced, nothing breaks); the declarations are then deleted and the keys made invalid. Chosen on the "which design holds when the tenth framework arrives" test: leaving two ways to say one thing guarantees new catalogs copy the old one |
+| M-2 | §2 deleted the hop declarations of every catalog that carries one (19 across 19 — the corrected count under §0's table; "16 across 14" as this row originally read), putting all their output in a new walk's blast radius — where the existing declarations already contain exactly what the new model needs | **Hoist, then delete, then refuse.** The loader reads existing hop declarations as identity entries (no catalog edit forced, nothing breaks); the declarations are then deleted and the keys made invalid. Chosen on the "which design holds when the tenth framework arrives" test: leaving two ways to say one thing guarantees new catalogs copy the old one |
 | I-3 | `return_flow.py` and `call_edges.py` read **raw** `call_sites`, bypassing the projection that re-targets `$default` bridges and class-compiled lambdas | §1a names the projection each edge is built over; `effective_call_sites` is the only one the walk rides |
 | I-4 | `value_edges` was specified as a new materialised table, duplicating data three existing tables already hold | It is a **view** (§3b) |
 | I-5 | `identified_by.owner` was required; `field` named an OO concept; the fifth edge was specified as "ASM work" | All three made language-neutral (§5) |
@@ -228,12 +243,18 @@ and a consuming catalog says only `channel_arg: 0`.
 
 ### 2a. Three steps, in this order
 
-1. **Hoist.** The loader reads every existing `channel_via` / `url_via` / `call_wrappers` entry as an
-   `identified_by` entry. They are the same three fields saying the same thing; only the declaration
-   site differs. **No catalog edit is forced and no behaviour changes.**
+1. **Hoist.** The loader reads every existing `channel_via` / `url_via` / `call_wrappers` /
+   `record_wrappers` entry as an `identified_by` entry. They are the same three fields saying the
+   same thing; only the declaration site differs. **No catalog edit is forced and no behaviour
+   changes.** *`record_wrappers` was missing from this list until 2026-09-23 — see the correction
+   under §0's table. It is `{type, <name>_ctor_arg}`, exactly `call_wrappers`' shape, and its three
+   shipped occurrences are byte-identical entries for one producer, which is the duplication
+   "declared once per producer" exists to end. A wrapper entry hoists as the type's `<init>`, one
+   entry per `<name>_ctor_arg` it declares — `record_wrappers` declares two, and they are two
+   claims about two arguments of one constructor.*
 2. **Delete.** Once the walk is proven on a catalog (§3c), its now-redundant hop declarations go.
-3. **Refuse.** The loader rejects the removed keys outright, the way every closed vocabulary here is
-   enforced.
+3. **Refuse.** The loader rejects the removed keys — all four — outright, the way every closed
+   vocabulary here is enforced.
 
 **Step 3 is the one that makes the design hold.** A design that merely *recommends* the new way
 decays: a new catalog author copies the nearest example, and the nearest example is whatever thirteen

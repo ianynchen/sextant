@@ -545,9 +545,13 @@ already take. No `artifact`/`versions` pair beside it: the first entry's produce
 would be a plausible-looking value nobody can check.
 
 **The table also HOISTS what the catalogs already say.** Every `channel_via` (§2's
-`single_call`), `url_via` (§2's `fluent`) and `call_wrappers` (§2h) entry is read as an
-`identified_by` entry — the same three fields, only the declaration site differs — so no
-catalog edit is forced and nothing changes behaviour (spec §2a step 1). Declared entries
+`single_call`), `url_via` (§2's `fluent`), `call_wrappers` (§2h) and `record_wrappers` (§2's
+`single_call`) entry is read as an `identified_by` entry — the same three fields, only the
+declaration site differs — so no catalog edit is forced and nothing changes behaviour (spec
+§2a step 1). The two WRAPPER keys name a type and an argument of its constructor, so they
+hoist as that type's `<init>`, one entry per `<name>_ctor_arg` the block declares: a
+`record_wrappers` block declares two, and they are two claims about two arguments of one
+constructor. Declared entries
 come first in the table and hoisted ones after, deduplicated by value, so a producer whose
 measured form disagrees with an older per-consumer spelling is answered by the measured one.
 The loader exposes it as `YamlCatalogSource.value_model()`; there is no `Catalog.value_model`
@@ -1650,7 +1654,9 @@ deriving method lands in `handler`, not `caller`: it is the consumer, not the ca
 payload** — `send(ProducerRecord)`'s one argument names the record, not the topic or the
 value directly. It resolves through the catalog-level block `record_wrappers: [{type,
 channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
-the string `last`.
+the string `last`. **Every entry is also hoisted into §1f's identity table**, as the record
+type's `<init>` with each declared position — the same thing `call_wrappers` (§2h) does,
+and the three shipped blocks are byte-identical, which is the duplication §1f ends.
 
 **`path_from_argument_type` names the operation off the PAYLOAD rather than the address**
 (2I design §4). Some protocols address every operation at one URL and distinguish them by

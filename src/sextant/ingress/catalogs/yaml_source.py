@@ -68,8 +68,8 @@ class YamlCatalogSource:
         D02 §1f): which argument of a call carries the value its result stands for.
 
         Two declaration sites, one table. The entries `value-models/*.yml` declares come
-        first, then every `channel_via` / `url_via` / `call_wrappers` entry already written
-        on a catalog, HOISTED — the same three fields saying the same thing, so no catalog
+        first, then every hop declaration already written on a catalog (`_HOP_KEYS`, four
+        of them), HOISTED — the same three fields saying the same thing, so no catalog
         edit is forced and nothing changes behaviour (§2a step 1). Declared first because a
         producer whose measured form disagrees with an older per-consumer spelling is then
         answered by the measured one under any first-match read. The shipped estate has
@@ -198,14 +198,25 @@ class YamlCatalogSource:
 
 # Spec 2026-09-22 §2a step 1. The keys a catalog already spells a producer's identity
 # with, each hoisted into the shared table. `channel_via` and `url_via` name the producing
-# call outright; `call_wrappers` names a TYPE and an argument of its constructor, so the
-# method is `<init>` — the same three fields, one spelling along. Named here rather than
-# inline because Task 10 deletes these keys and refuses them, and the deletion has to be
-# able to find every one of them from the list that read them.
-_HOP_KEYS = ("channel_via", "url_via", "call_wrappers")
+# call outright; the two WRAPPER keys name a TYPE and an argument of its constructor, so
+# the method is `<init>` — the same three fields, one spelling along. Named here rather
+# than inline because Task 10 deletes these keys and refuses them, and the deletion has to
+# be able to find every one of them from the list that read them.
+#
+# **`record_wrappers` is the fourth, and the spec's §2a enumeration omitted it** (ruled
+# 2026-09-23; the spec's own §0 row is amended). It is `{type, <name>_ctor_arg}`, the same
+# shape as `call_wrappers`, and its three shipped occurrences are byte-identical entries
+# for one producer — which is the duplication "declared once per producer" exists to end,
+# so leaving it out would have skipped the hoist's clearest case. The undercount was
+# already visible elsewhere in the spec: the migration table's "13 catalogs" for
+# `single_call` only reaches 13 because it counts the three that declare this key.
+_HOP_KEYS = ("channel_via", "url_via", "call_wrappers", "record_wrappers")
 
-# A `call_wrappers` entry's position: `payload_ctor_arg: 0` — the suffix is what
-# distinguishes a constructor slot from an index into a type reference's own type
+# The two of them whose entry names a type rather than a call.
+_WRAPPER_KEYS = ("call_wrappers", "record_wrappers")
+
+# A wrapper entry's position: `payload_ctor_arg: 0`, `channel_ctor_arg: 0` — the suffix is
+# what distinguishes a constructor slot from an index into a type reference's own type
 # arguments, which is what a bare `payload_arg` beside a `type` is everywhere else in the
 # catalogs (`resolve/shadow.py` measures both populations and says which is which).
 _CTOR_ARG = "_ctor_arg"
@@ -309,30 +320,36 @@ def _hoisted(node: Any, path: Path, into: list[dict[str, Any]]) -> None:
         for entry in value:
             if not isinstance(entry, dict):
                 raise CatalogError(f"loading catalog {path}: each `{key}` entry is a mapping")
-            if key == "call_wrappers":
-                into.extend(_constructor_identities(entry, path))
+            if key in _WRAPPER_KEYS:
+                into.extend(_constructor_identities(entry, key, path))
             else:
                 into.append(_identity(entry, entry.get("owner")))
 
 
-def _constructor_identities(entry: dict[str, Any], path: Path) -> list[dict[str, Any]]:
-    """A `call_wrappers` entry as identity entries — one per `<name>_ctor_arg` it declares.
+def _constructor_identities(entry: dict[str, Any], key: str, path: Path) -> list[dict[str, Any]]:
+    """A wrapper entry as identity entries — one per `<name>_ctor_arg` it declares.
 
     The producer is the wrapper type's constructor, so the owner is that type and the
     method is `<init>`: `{type: HttpEntity, payload_ctor_arg: 0}` says `new HttpEntity(x)`
     stands for `x`, which is what `{owner, method, arg}` says in the other two keys.
-    Sorted by key name so an entry declaring two positions hoists in one order on every run.
+
+    ONE ENTRY PER POSITION, not one per wrapper, and the shipped `record_wrappers` blocks
+    are why: each declares `channel_ctor_arg` and `payload_ctor_arg` on one constructor,
+    which is two claims about two arguments of the same producer. `last` is carried
+    verbatim, as `all_strings` is — a rule resolved per site, never an index this layer
+    could evaluate. Sorted by key name so an entry declaring two positions hoists in one
+    order on every run.
     """
     wrapper = entry.get("type")
-    positions = sorted(key for key in entry if str(key).endswith(_CTOR_ARG))
+    positions = sorted(name for name in entry if str(name).endswith(_CTOR_ARG))
     if not isinstance(wrapper, str) or not positions:
         raise CatalogError(
-            f"loading catalog {path}: a `call_wrappers` entry names a `type` and at least one "
+            f"loading catalog {path}: a `{key}` entry names a `type` and at least one "
             f"`<name>{_CTOR_ARG}` — got {entry!r}"
         )
     return [
-        {"owner": type_descriptor(wrapper), "method": "<init>", "arg": entry[key]}
-        for key in positions
+        {"owner": type_descriptor(wrapper), "method": "<init>", "arg": entry[position]}
+        for position in positions
     ]
 
 

@@ -186,9 +186,9 @@ def test_a_catalog_naming_no_step_model_keeps_its_matches_as_written(tmp_path: P
 #
 # The identity of a PRODUCING call — which of its arguments carries the value its result
 # stands for — declared once per producer in `value-models/`, and HOISTED out of every
-# `channel_via` / `url_via` / `call_wrappers` entry the catalogs already carry. The two
-# forms are the same three fields; only the declaration site differs, which is what makes
-# the hoist cost no catalog edit and change no behaviour.
+# `channel_via` / `url_via` / `call_wrappers` / `record_wrappers` entry the catalogs already
+# carry. The two forms are the same three fields; only the declaration site differs, which
+# is what makes the hoist cost no catalog edit and change no behaviour.
 
 _IDENTITIES = (
     "id: invented\n"
@@ -301,6 +301,52 @@ def test_a_call_wrapper_is_hoisted_as_a_constructor_identity(tmp_path: Path):
     model = YamlCatalogSource(tmp_path).value_model()
 
     assert model == [{"owner": "com/acme/Entity#", "method": "<init>", "arg": 0}]
+
+
+def test_a_record_wrapper_hoists_one_entry_per_declared_position(tmp_path: Path):
+    """`record_wrappers` is the fourth hop key — the same `{type, <name>_ctor_arg}` shape
+    `call_wrappers` has, and the spec's §2a enumeration omitted it (ruled 2026-09-23). Its
+    three shipped occurrences are byte-identical entries for one producer, which is the
+    duplication "declared once per producer" exists to end.
+
+    TWO entries from one wrapper, because the block declares two positions of the same
+    constructor: two claims about two arguments, not one. `last` is carried verbatim — a
+    rule resolved per site, never an index this layer could evaluate."""
+    (tmp_path / "invented-kafka.yml").write_text(
+        _HEADER + "matches:\n  record_wrappers:\n"
+        "    - { type: com.acme.Record, channel_ctor_arg: 0, payload_ctor_arg: last }\n",
+        encoding="utf-8",
+    )
+
+    assert YamlCatalogSource(tmp_path).value_model() == [
+        {"owner": "com/acme/Record#", "method": "<init>", "arg": 0},
+        {"owner": "com/acme/Record#", "method": "<init>", "arg": "last"},
+    ]
+
+
+def test_the_shipped_record_wrappers_collapse_to_one_producer():
+    """The three shipped `record_wrappers` blocks say the same thing about the same
+    constructor, in three files. Hoisted, they are two entries — one per position — and
+    not six."""
+    model = YamlCatalogSource(catalogs_dir()).value_model()
+    record = [
+        entry
+        for entry in model
+        if entry.get("owner") == "org/apache/kafka/clients/producer/ProducerRecord#"
+    ]
+
+    assert record == [
+        {
+            "owner": "org/apache/kafka/clients/producer/ProducerRecord#",
+            "method": "<init>",
+            "arg": 0,
+        },
+        {
+            "owner": "org/apache/kafka/clients/producer/ProducerRecord#",
+            "method": "<init>",
+            "arg": "last",
+        },
+    ]
 
 
 def test_a_directory_with_no_value_models_and_no_hop_keys_has_an_empty_model(tmp_path: Path):
