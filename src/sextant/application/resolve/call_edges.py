@@ -82,6 +82,7 @@ from collections.abc import Sequence
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, THROW, Dispatch, dispatch_of
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
@@ -104,7 +105,14 @@ def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) ->
     """
     workspace.derive("call_edges_reset")
     dispatch = dispatch_of(workspace)
-    sites = list(workspace.query("call_sites"))
+    # The PROJECTION, not the raw fact stream (spec 2026-09-22 §1a, I-3). An edge is a
+    # step a walk takes, and a compiler-emitted `$default` bridge is a step the program
+    # does not have: the bridge's body fills in the omitted arguments and then calls the
+    # sibling, so an edge stopping at it names a method no author wrote and puts a
+    # synthetic hop in every trace through a call whose arguments the compiler filled in.
+    # `effective_call_sites` re-targets it, and reads a class-compiled lambda argument
+    # as the lambda it is — what every engine has seen since spec 2026-09-19 §3.
+    sites = list(effective_call_sites(workspace))
     # Built once, outside the loop: two of its three routes are workspace-wide questions,
     # and asking them per site would repeat two queries for each of mall-admin's 24,591
     # edges.

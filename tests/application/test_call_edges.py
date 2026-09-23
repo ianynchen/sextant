@@ -586,3 +586,102 @@ def test_an_interface_method_with_its_own_body_keeps_its_single_candidate(defaul
         _MODULE + method_descriptor(_TAXER, "rate", _INT_JVM)
     ]
     assert [str(row["resolution"]) for row in rows] == ["resolved"]
+
+
+# ---- a compiler-emitted `$default` bridge ---------------------------------------------
+#
+# The shape spec 2026-09-19 §3a projects away. A call the compiler wrote against
+# `send$default` is a call the AUTHOR wrote against `send`, and this table is what a walk
+# steps through — so the body it names has to be the one the author's call runs.
+
+_API = "com/acme/orders/gate/Api#"
+_API_JVM = "(Ljava/lang/String;)Ljava/lang/String;"
+_API_BRIDGE_JVM = (
+    "(Lcom/acme/orders/gate/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
+)
+_TALKS = _CALLER + "talks(" + disambiguator_of(_API_JVM) + ")."
+
+
+def _string_method(owner: str, name: str, jvm: str, **keys: object) -> list[object]:
+    """A method returning a `String`, and the return that says its body was READ — which
+    is what makes it a candidate at all (`dispatch.bodies`). Both the bridge and its
+    sibling carry one, so the two readings differ in which body the edge reaches rather
+    than in whether it reaches one."""
+    symbol = _MODULE + method_descriptor(owner, name, jvm)
+    return [
+        SymbolFact(
+            document_id="doc_gate",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+            **keys,
+        ),
+        MethodReturnFact(document_id="doc_gate", method=symbol, ordinal=0, value=None),
+    ]
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """`Caller#talks` makes one call and the compiler wrote it against the bridge:
+    `invokestatic Api.send$default(this, "y", 0, null)`, the shape kotlinc emits for
+    `api.send("y")` when `send`'s parameter has a default. Both methods have a body this
+    workspace read, so the two readings differ in WHICH body the edge reaches."""
+    tmp_path = tmp_path_factory.mktemp("call_edges_bridged")
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _API, construct_kind=ConstructKind.CLASS
+            ),
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _CALLER, construct_kind=ConstructKind.CLASS
+            ),
+            *_string_method(_API, "send", _API_JVM),
+            *_string_method(
+                _API,
+                "send$default",
+                _API_BRIDGE_JVM,
+                modifiers={"static": True, "synthetic": True},
+                bridge_of="send",
+            ),
+            *_string_method(_CALLER, "talks", _API_JVM),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _TALKS,
+                target=CallTarget(owner=_API, name="send$default", descriptor=_API_BRIDGE_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                result=4,
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    CallArgument(kind="string", value="y"),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="null"),
+                ],
+            ),
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_call_edges(workspace)
+    rows = workspace.query("call_edges")
+    workspace.close()
+    return rows
+
+
+def test_a_default_bridge_call_is_an_edge_into_the_sibling_it_stands_for(bridged):
+    """Read raw `call_sites` and the edge reaches the BRIDGE — a synthetic body that fills
+    in the arguments the caller omitted and then calls the real function. A walk that
+    stops there has one more hop to take than the program does and names a method no
+    author wrote; every `resolve` engine has read the sibling here since spec §3a."""
+    assert [str(row["target"]) for row in bridged] == [
+        _API + "send(" + disambiguator_of(_API_JVM) + ")."
+    ]
+    assert [str(row["callee"]) for row in bridged] == [
+        _MODULE + method_descriptor(_API, "send", _API_JVM)
+    ]
+    assert [str(row["resolution"]) for row in bridged] == [str(Resolution.RESOLVED)]

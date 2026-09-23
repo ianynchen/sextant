@@ -424,3 +424,98 @@ def test_every_hand_built_symbol_is_module_prefixed():
         symbol = getattr(fact, "symbol", None) or getattr(fact, "method", None) or fact.caller
         assert str(symbol).startswith(_MODULE)
         assert bare_descriptor(str(symbol)) != str(symbol)
+
+
+# ---- a compiler-emitted `$default` bridge ----------------------------------
+#
+# The same hand-built discipline, on the shape spec 2026-09-19 §3a projects
+# away: a call the compiler wrote against `send$default` is a call the AUTHOR
+# wrote against `send`, and this pass records the hop between the two methods.
+
+_API = "com/acme/orders/gate/Api#"
+_API_JVM = "(Ljava/lang/String;)Ljava/lang/String;"
+_API_BRIDGE_JVM = (
+    "(Lcom/acme/orders/gate/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
+)
+_SIBLING = _MODULE + method_descriptor(_API, "send", _API_JVM)
+_BRIDGE = _MODULE + method_descriptor(_API, "send$default", _API_BRIDGE_JVM)
+
+
+def _bridge_declaration() -> SymbolFact:
+    """The bridge's own symbol fact as the extractor writes one: synthetic, static, and
+    carrying `bridge_of` — which is the ONLY thing that identifies a bridge, the `$default`
+    suffix being a name anyone may write."""
+    return SymbolFact(
+        document_id="doc_gate",
+        symbol=_BRIDGE,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + _API,
+        modifiers={"static": True, "synthetic": True},
+        bridge_of="send",
+        signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+    )
+
+
+def _bridge_call() -> CallSiteFact:
+    """`invokestatic Api.send$default(this, "y", 0, null)` — the shape kotlinc emits for
+    `api.send("y")` when `send`'s parameter has a default. Mask 0: nothing defaulted, so
+    the projection's only effect on this row is which method it names."""
+    return CallSiteFact(
+        document_id="doc_gate",
+        caller=_MODULE + _RUN,
+        target=CallTarget(owner=_API, name="send$default", descriptor=_API_BRIDGE_JVM),
+        invoke_kind="static",
+        ordinal=0,
+        result=4,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="string", value="y"),
+            CallArgument(kind="int", value=0),
+            CallArgument(kind="null"),
+        ],
+    )
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """`Caller#run` makes one call, and the compiler wrote it against the bridge. Both
+    methods have a body this workspace read and both return, so the two readings differ
+    in which callee the row names rather than in whether there is a row at all."""
+    tmp_path = tmp_path_factory.mktemp("return_flow_bridged")
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            _type(_API, ConstructKind.CLASS),
+            _type(_CALLER, ConstructKind.CLASS),
+            _declared(_API, "send", _API_JVM),
+            _bridge_declaration(),
+            _declared(_CALLER, "run", _SEND_JVM),
+            _returns(_API, "send", _API_JVM, CallArgument(kind="string", value="sent")),
+            MethodReturnFact(
+                document_id="doc_gate",
+                method=_BRIDGE,
+                ordinal=0,
+                value=CallArgument(kind="string", value="bridged"),
+            ),
+            _bridge_call(),
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    rows = workspace.query("return_flows")
+    workspace.close()
+    return rows
+
+
+def test_a_default_bridge_call_flows_from_the_sibling_it_stands_for(bridged):
+    """A Kotlin `$default` bridge is re-targeted by `effective_call_sites` to the sibling
+    it stands for. Reading raw `call_sites` files the flow against the BRIDGE, whose own
+    body returns nothing a caller wants — so the round trip breaks at exactly the hop
+    this pass exists to record: a reader following the callee lands in a synthetic
+    argument-filling body instead of the function the author wrote."""
+    assert [(str(row["callee"]), row["return_ordinal"]) for row in bridged] == [(_SIBLING, 0)]
+    assert [value["value"] for value in _values(bridged)] == ["sent"]

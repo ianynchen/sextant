@@ -4,10 +4,12 @@ re-targeted to the function it stands for (§3a, T4) and a class-compiled lambda
 read as the `lambda` it is (§3b, T5). Both join on shared fields the extractor publishes on
 the declaration it scanned (`bridge_of`, `lambda_body`); nothing here names a language.
 
-`call_sites` itself is untouched: the exported bundle, the graph/trace readers
-(`call_edges`, `return_flow`, `format`) and every raw-fact test keep the bytecode's own
-statement. This module is the ONE projection point (F10) — a reader that wants what the
-engines see calls `effective_call_sites`, never `query("call_sites")` plus its own rewrite.
+`call_sites` itself is untouched: the exported bundle, `format` and every raw-fact test
+keep the bytecode's own statement. The graph/trace readers do NOT — `call_edges` and
+`return_flow` read this projection (spec 2026-09-22 §1a, I-3), because a hop recorded
+against a bridge names a body no caller reads. This module is the ONE projection point
+(F10) — a reader that wants what the engines see calls `effective_call_sites`, never
+`query("call_sites")` plus its own rewrite.
 """
 
 from dataclasses import dataclass

@@ -84,6 +84,7 @@ from collections import defaultdict
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.closed_sets import Evidence, Resolution
 
 
@@ -100,7 +101,14 @@ def record_return_flows(workspace: Workspace) -> None:
     returns = _returns_by_method(workspace)
     dispatch = dispatch_of(workspace)
     rows: list[dict[str, object]] = []
-    for site in workspace.query("call_sites"):
+    # The PROJECTION, not the raw fact stream (spec 2026-09-22 §1a, I-3). A row here
+    # names the method a value came from, and a compiler-emitted `$default` bridge is
+    # not one: its body fills in the arguments the caller omitted and hands back
+    # whatever the sibling returned, so a flow recorded against it names a body no
+    # author wrote and stops the chain one hop short of the function that produced
+    # the value. `effective_call_sites` re-targets it, and reads a class-compiled
+    # lambda argument as the lambda it is, which is what every engine already sees.
+    for site in effective_call_sites(workspace):
         rows.extend(_rows_for(site, returns, dispatch))
     if rows:
         workspace.derive("return_flows_insert", rows=rows)
