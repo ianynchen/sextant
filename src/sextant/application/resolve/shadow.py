@@ -4,8 +4,9 @@
 acceptable, fabrications are not* — and this work's whole purpose is to convert misses
 into ANSWERS, so every conversion is a new assertion, made at scale, across nineteen
 shipped catalogs — every catalog that carries a hop declaration, which is what the whole
-work migrates (spec §0's corrected hop-declaration row; the sentence read "fourteen" until
-2026-09-23, on a count that omitted one of the four keys). §3c's per-engine diff catches MOVEMENT; it does not catch WRONGNESS,
+work migrates (spec §0's corrected hop-declaration row; the sentence read "fourteen"
+until 2026-09-23, on a count that omitted one of the four keys).
+§3c's per-engine diff catches MOVEMENT; it does not catch WRONGNESS,
 because a wrong address looks exactly like a right one in a diff. Shadow mode is the
 mitigation the design names: the walk runs, writes down what it WOULD resolve, and
 **publishes nothing**. Every candidate conversion is reviewable as data, on the real
@@ -331,12 +332,17 @@ def asks_of(catalog: Catalog) -> list[Ask]:
             # is a GENERIC TYPE-ARGUMENT index, not a call slot, so that would be a wrong
             # answer rather than conservative slack. `_ctor_arg` is what distinguishes the
             # two, and it is the only reason this branch can be trusted to name `<init>`.
-            # MEASURED over the 101 shipped catalogs: four nodes reach here, in
-            # `kafka-clients`, `spring-kafka-replying`, `spring-kafka-template` and
-            # `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity`, carrying
-            # SEVEN `_ctor_arg` occurrences between them — the count the research
-            # document's §1.3 table records, on the occurrence convention that reproduces
-            # every other row of it.
+            # Four catalogs reach here — `kafka-clients`, `spring-kafka-replying`,
+            # `spring-kafka-template` and `spring-resttemplate` — naming `ProducerRecord`
+            # and `HttpEntity`. **How many nodes and occurrences that is, is not stated
+            # here.** The measured figure at its own snapshot is the research document's
+            # (`docs/research/2026-09-23-value-walk-measurement.md` §1.3, shape six), and
+            # the LIVE per-catalog counts are pinned in `tests/application/test_shadow_mode.py`'s
+            # `_ASKS_PER_CATALOG`, which is the one place that tracks the current estate and
+            # fails when it moves. This comment used to carry its own copy — "four nodes,
+            # SEVEN occurrences" — and CP-34's descriptor-discriminated `record_wrappers`
+            # rows made it false the moment they landed, while the pinned baseline caught
+            # the same change and was updated. One source, cited, cannot go stale that way.
             if isinstance(node.get("type"), str) and any(
                 str(key).endswith("_ctor_arg") for key in node
             ):
