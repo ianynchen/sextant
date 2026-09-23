@@ -501,6 +501,63 @@ catalog naming the model declares it a terminal.
 
 ---
 
+## 1f. `value-models/` — a producing call's identity, declared once
+
+The fourth, and the one no catalog NAMES. The first three are opt-in — a catalog writes
+`shape_model: json` and takes that file's blocks. This one is a single estate-wide table,
+because the question it answers has nothing to do with which catalog is asking:
+
+> **which argument of a call carries the value its result stands for.**
+
+`java.net.URI.create("https://orders/…")` produces a `URI` whose address is argument 0.
+That is true for the JDK HTTP client, for Apache HttpClient, for a websocket client and for
+every framework not yet written. Declared per consumer it is the same sentence copied once
+per catalog that ever reads a `URI`-typed position — `A-C3`'s shape with a different
+symbol, and it had already drifted: five catalogs declared `java.net.URI`'s constructor and
+two of them declared the `arity: 1` that keeps the type's four multi-argument constructors
+(whose argument 0 is a SCHEME) out of the match.
+
+```yaml
+# value-models/jdk.yml
+identified_by:
+  - { owner: java.net.URI, method: create, arg: 0,
+      by: scripts/probes/a2t8_http_client_builders.md }
+  - { owner: java.net.URI, method: <init>, arg: 0, arity: 1,
+      by: scripts/probes/a2t8_http_client_builders.md }
+```
+
+**`owner` is OPTIONAL** (spec 2026-09-22 §5a). Go's `nats.Connect(url)` and Python's
+`boto3.client("sqs")` are free functions, and `domain/symbols.owner_of` already documents
+that an ownerless symbol is an answer here, never an exception; requiring one would bake OO
+into a model the fact grammar does not have. `method` and `arg` are required. `arity` and
+`descriptor` discriminate overloads exactly as they do in a match row. `arg` carries a
+rule as well as an index, in the spellings the hop keys already use (`all_strings`, `last`).
+
+**`by:` is required on every entry**, and it is what keeps this directory from becoming
+what spec §7b names: a dumping ground, where entries accumulate because adding one is easy
+and nobody measures whether the framework really identifies that value that way. An entry
+here is read by every catalog at once, so an unmeasured one is not one framework's mistake.
+The loader refuses an entry that cites nothing;
+`tests/architecture/test_value_model_probe_rows.py` refuses a shipped one whose citation is
+not a committed probe stating what it measured against — the rule §1a's `measured:` rows
+already take. No `artifact`/`versions` pair beside it: the first entry's producer lives in
+`java.base`, which is not a Maven coordinate, and a coordinate invented to fill the field
+would be a plausible-looking value nobody can check.
+
+**The table also HOISTS what the catalogs already say.** Every `channel_via` (§2's
+`single_call`), `url_via` (§2's `fluent`) and `call_wrappers` (§2h) entry is read as an
+`identified_by` entry — the same three fields, only the declaration site differs — so no
+catalog edit is forced and nothing changes behaviour (spec §2a step 1). Declared entries
+come first in the table and hoisted ones after, deduplicated by value, so a producer whose
+measured form disagrees with an older per-consumer spelling is answered by the measured one.
+The loader exposes it as `YamlCatalogSource.value_model()`; there is no `Catalog.value_model`
+field, because the table belongs to no catalog.
+
+An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
+other three directories: it is knowledge a run was produced with.
+
+---
+
 ## 2. The styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
@@ -1517,7 +1574,8 @@ destination (`peer` always NULL), and a row asking for CP-2's peer/path split as
 have one destination read two incompatible ways depending on which rung of the ladder
 answered. This same ladder — literal first, linked call as fallback — is what `fluent`
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
-too.
+too. **Every entry is also hoisted into §1f's estate-wide identity table**, where the same
+three fields are declared once per producer instead of once per consumer.
 
 **`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
 all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
@@ -4497,7 +4555,9 @@ call site's `result` is `null` by construction and could never carry the join.
 payload; the engine follows exactly that one hop and stops. Beyond one hop, or where no
 `call_wrappers` entry matches
 the `instance` type, the body stays `unresolved` — an envelope Sextant does not know is not
-one worth guessing through.
+one worth guessing through. Every `call_wrappers` entry is also hoisted into §1f's identity
+table, as the wrapper type's `<init>` with that argument: one spelling along, the same
+three fields.
 
 ---
 

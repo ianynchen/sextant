@@ -14,7 +14,7 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
-from sextant.domain.symbols import parameter_types
+from sextant.domain.symbols import parameter_types, type_descriptor
 
 # The safe loader, compiled where the interpreter has the C library and pure
 # Python where it does not — the same YAML subset, the same Python objects
@@ -62,6 +62,51 @@ class YamlCatalogSource:
                 raise CatalogError(f"loading model {path}: not a YAML mapping")
             models[str(_required(raw, "id", path))] = raw
         return models
+
+    def value_model(self) -> list[dict[str, Any]]:
+        """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
+        D02 §1f): which argument of a call carries the value its result stands for.
+
+        Two declaration sites, one table. The entries `value-models/*.yml` declares come
+        first, then every `channel_via` / `url_via` / `call_wrappers` entry already written
+        on a catalog, HOISTED — the same three fields saying the same thing, so no catalog
+        edit is forced and nothing changes behaviour (§2a step 1). Declared first because a
+        producer whose measured form disagrees with an older per-consumer spelling is then
+        answered by the measured one under any first-match read. The shipped estate has
+        exactly one such disagreement and `value-models/jdk.yml` names it: an overload
+        discriminator two consuming catalogs declared and three did not, where the entry
+        without it also matches overloads whose argument 0 is something else entirely.
+
+        Deduplicated by what an entry MATCHES on (`_matching_keys`, so a declared entry and
+        the hoisted catalog spelling of the same producer are one entry, the declared one),
+        and otherwise in declaration order — `value-models/` by
+        filename, then the catalogs by filename and document order — so two runs over one
+        directory build one table (NFR-1). Twelve rows of one shipped catalog carry the
+        same pair of entries between them, and twelve copies of one identity is the
+        once-per-consumer shape this table exists to end.
+
+        **Nothing on the analyze path calls this yet**, which is why it re-reads the
+        directory rather than sharing `load`'s parse: the walk is unwired until the
+        migrations (spec §3c), and the tasks that wire it decide how it is threaded.
+        """
+        model: list[dict[str, Any]] = []
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise CatalogError(f"loading value model {path}: not a YAML mapping")
+            _required(raw, "id", path)
+            model.extend(_identities(raw, path))
+        for path in sorted(self._directory.glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                _hoisted(raw, path, model)
+        deduplicated: list[dict[str, Any]] = []
+        seen: set[tuple[tuple[str, Any], ...]] = set()
+        for entry in model:
+            if (identity := _matching_keys(entry)) not in seen:
+                seen.add(identity)
+                deduplicated.append(entry)
+        return deduplicated
 
     def load(self) -> list[Catalog]:
         """Reads every catalog in the directory, sorted by filename.
@@ -149,6 +194,146 @@ class YamlCatalogSource:
                 )
             )
         return catalogs
+
+
+# Spec 2026-09-22 §2a step 1. The keys a catalog already spells a producer's identity
+# with, each hoisted into the shared table. `channel_via` and `url_via` name the producing
+# call outright; `call_wrappers` names a TYPE and an argument of its constructor, so the
+# method is `<init>` — the same three fields, one spelling along. Named here rather than
+# inline because Task 10 deletes these keys and refuses them, and the deletion has to be
+# able to find every one of them from the list that read them.
+_HOP_KEYS = ("channel_via", "url_via", "call_wrappers")
+
+# A `call_wrappers` entry's position: `payload_ctor_arg: 0` — the suffix is what
+# distinguishes a constructor slot from an index into a type reference's own type
+# arguments, which is what a bare `payload_arg` beside a `type` is everywhere else in the
+# catalogs (`resolve/shadow.py` measures both populations and says which is which).
+_CTOR_ARG = "_ctor_arg"
+
+
+def _identities(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:
+    """One `value-models/` file's `identified_by` entries, shape-checked here (D02 §1f).
+
+    `owner` is OPTIONAL (spec §5a): Go's `nats.Connect(url)` and Python's
+    `boto3.client("sqs")` are free functions, and `domain/symbols.owner_of` already
+    documents that an ownerless symbol is an answer here, never an exception. Requiring one
+    would bake OO into a model the fact grammar does not have.
+
+    `by` is REQUIRED, and it is the rule §7b names: `value-models/` becomes a dumping
+    ground otherwise — entries accumulate because adding one is easy, and nobody measures
+    whether the framework really identifies that value that way. Refused at the edge, as a
+    SHAPE, the way every other value in this file is; that the path names a committed probe
+    which states what it measured against is checked where it can be — over the SHIPPED
+    files, in `tests/architecture/test_value_model_probe_rows.py`, exactly as a `measured:`
+    row's `by` is. A repository's own catalog set (D02 §6) cites its own probes, which are
+    not in this tree, so this layer checks that one is cited and never where it lives.
+    """
+    declared = raw.get("identified_by")
+    if declared is None:
+        return []
+    if not isinstance(declared, list) or not declared:
+        raise CatalogError(
+            f"loading value model {path}: `identified_by` must be a non-empty list — a "
+            f"value model that identifies nothing is not a model (D02 §1f)"
+        )
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict):
+            raise CatalogError(
+                f"loading value model {path}: each `identified_by` entry is a mapping"
+            )
+        missing = [key for key in ("method", "arg", "by") if key not in entry]
+        if missing:
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares no "
+                f"{', '.join(missing)} — `owner` is optional (spec §5a: a free function is an "
+                f"answer, not an error), `method` and `arg` say which position carries the "
+                f"value, and `by` is the probe row behind the claim (§7b)"
+            )
+        if not isinstance(entry["by"], str) or not entry["by"]:
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares a `by` "
+                f"that is not a probe document's path"
+            )
+        entries.append(_identity(entry, entry.get("owner")))
+    return entries
+
+
+def _matching_keys(entry: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    """What makes one identity entry the same claim as another: everything it matches on.
+
+    `by` is left out, and that is the whole point of the helper. It is PROVENANCE — where
+    the claim was measured — not part of the claim, so a declared entry and the hoisted
+    catalog spelling of the same producer are one entry and not two. Deduplicated the other
+    way round, the shipped table would list that producer twice — once with its probe and
+    once without — and a reader counting producers would count it twice.
+    """
+    return tuple(sorted((key, value) for key, value in entry.items() if key != "by"))
+
+
+def _identity(entry: dict[str, Any], owner: Any) -> dict[str, Any]:
+    """One entry with its `owner` converted to the SCIP symbol form the facts carry
+    (`domain/symbols.type_descriptor`), and every other key verbatim.
+
+    Converted HERE rather than where the walk reads it for the reason the engines already
+    convert a catalog's owners once at run start: the catalogs stay readable in their own
+    dotted notation, the facts stay one grammar, and the comparison happens against a
+    string that was built once. An entry with no `owner` keeps none.
+    """
+    if owner is None:
+        return dict(entry)
+    return {**entry, "owner": type_descriptor(owner)}
+
+
+def _hoisted(node: Any, path: Path, into: list[dict[str, Any]]) -> None:
+    """Every hop declaration anywhere in one catalog document, as identity entries.
+
+    Anywhere, because the three keys are not at one depth: `url_via` sits on a `fluent`
+    root, a step and a terminal; `channel_via` on a `single_call` method row and on an
+    `interface_implementation` entry; `call_wrappers` is a block of `matches`. A walk of the
+    whole document reads all of them without this layer learning any style's shape — which
+    is also what keeps it reading them after Task 10 has deleted the ones it can.
+    """
+    if isinstance(node, list):
+        for entry in node:
+            _hoisted(entry, path, into)
+        return
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        if key not in _HOP_KEYS:
+            _hoisted(value, path, into)
+            continue
+        if not isinstance(value, list):
+            raise CatalogError(f"loading catalog {path}: `{key}` must be a list of entries")
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise CatalogError(f"loading catalog {path}: each `{key}` entry is a mapping")
+            if key == "call_wrappers":
+                into.extend(_constructor_identities(entry, path))
+            else:
+                into.append(_identity(entry, entry.get("owner")))
+
+
+def _constructor_identities(entry: dict[str, Any], path: Path) -> list[dict[str, Any]]:
+    """A `call_wrappers` entry as identity entries — one per `<name>_ctor_arg` it declares.
+
+    The producer is the wrapper type's constructor, so the owner is that type and the
+    method is `<init>`: `{type: HttpEntity, payload_ctor_arg: 0}` says `new HttpEntity(x)`
+    stands for `x`, which is what `{owner, method, arg}` says in the other two keys.
+    Sorted by key name so an entry declaring two positions hoists in one order on every run.
+    """
+    wrapper = entry.get("type")
+    positions = sorted(key for key in entry if str(key).endswith(_CTOR_ARG))
+    if not isinstance(wrapper, str) or not positions:
+        raise CatalogError(
+            f"loading catalog {path}: a `call_wrappers` entry names a `type` and at least one "
+            f"`<name>{_CTOR_ARG}` — got {entry!r}"
+        )
+    return [
+        {"owner": type_descriptor(wrapper), "method": "<init>", "arg": entry[key]}
+        for key in positions
+    ]
 
 
 # D02 §1b. The payload-TYPE blocks, which a catalog takes from the shared shape

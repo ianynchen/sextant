@@ -12,6 +12,7 @@ import pytest
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 
 _HEADER = "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
 _TINY = (
@@ -179,3 +180,132 @@ def test_a_catalog_naming_no_step_model_keeps_its_matches_as_written(tmp_path: P
     [catalog] = YamlCatalogSource(tmp_path).load()
 
     assert catalog.matches == {"steps": []}
+
+
+# --- the value model (spec 2026-09-22 §2a, §5a, §7b; D02 §1f) ---------------------------
+#
+# The identity of a PRODUCING call — which of its arguments carries the value its result
+# stands for — declared once per producer in `value-models/`, and HOISTED out of every
+# `channel_via` / `url_via` / `call_wrappers` entry the catalogs already carry. The two
+# forms are the same three fields; only the declaration site differs, which is what makes
+# the hoist cost no catalog edit and change no behaviour.
+
+_IDENTITIES = (
+    "id: invented\n"
+    "identified_by:\n"
+    "  - { owner: com.acme.Session, method: queue, arg: 0, by: scripts/probes/cp1_spring_paths.md }\n"
+)
+
+
+def _write_value_model(directory: Path, text: str) -> None:
+    (directory / "value-models").mkdir()
+    (directory / "value-models" / "invented.yml").write_text(text, encoding="utf-8")
+
+
+def test_an_existing_channel_via_is_read_as_an_identity_entry():
+    """Spec §2a step 1. The two forms are the same three fields; only the declaration site
+    differs. Hoisting costs no catalog edit and changes no behaviour."""
+    model = YamlCatalogSource(catalogs_dir()).value_model()
+
+    assert {"owner": "jakarta/jms/Session#", "method": "createQueue", "arg": 0} in model
+
+
+def test_an_identity_entry_without_an_owner_loads(tmp_path: Path):
+    """§5a: a free function is an answer, not an error. Requiring `owner` would bake OO into
+    a model the fact grammar does not."""
+    _write_value_model(
+        tmp_path,
+        "id: invented\nidentified_by:\n"
+        "  - { method: connect, arg: 0, by: scripts/probes/cp1_spring_paths.md }\n",
+    )
+
+    model = YamlCatalogSource(tmp_path).value_model()
+
+    assert model == [{"method": "connect", "arg": 0, "by": "scripts/probes/cp1_spring_paths.md"}]
+
+
+def test_an_identity_entry_without_a_probe_row_is_refused(tmp_path: Path):
+    """§7b: `value-models/` becomes a dumping ground otherwise. The same rule the architecture
+    suite already applies to `measured:` blocks."""
+    _write_value_model(
+        tmp_path,
+        "id: invented\nidentified_by:\n  - { owner: com.acme.Session, method: queue, arg: 0 }\n",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).value_model()
+
+    assert "identified_by" in str(raised.value)
+    assert "invented.yml" in str(raised.value)
+    assert "by" in str(raised.value)
+
+
+def test_a_declared_identity_is_read_beside_the_hoisted_ones(tmp_path: Path):
+    """A `value-models/` entry and a hoisted one land in one table, the declared entries
+    first: a producer whose measured form disagrees with a catalog's older spelling is then
+    answered by the measured one under any first-match read."""
+    _write_value_model(tmp_path, _IDENTITIES)
+    (tmp_path / "invented-jms.yml").write_text(
+        _HEADER + "matches:\n  methods:\n"
+        "    - { name: send, channel_arg: 0,\n"
+        "        channel_via: [{ owner: com.acme.Session, method: topic, arg: 0 }] }\n",
+        encoding="utf-8",
+    )
+
+    model = YamlCatalogSource(tmp_path).value_model()
+
+    assert model == [
+        {
+            "owner": "com/acme/Session#",
+            "method": "queue",
+            "arg": 0,
+            "by": "scripts/probes/cp1_spring_paths.md",
+        },
+        {"owner": "com/acme/Session#", "method": "topic", "arg": 0},
+    ]
+
+
+def test_a_declared_entry_and_its_hoisted_twin_are_one_entry(tmp_path: Path):
+    """`by` is provenance, not part of the claim. The producer a `value-models/` file
+    declares and the catalog spelling the hoist finds are the same identity, so the table
+    holds it once — the declared one, with its probe. Deduplicating on the whole mapping
+    instead would list `java.net.URI#create` twice in the shipped table, once measured and
+    once not."""
+    _write_value_model(tmp_path, _IDENTITIES)
+    (tmp_path / "invented-jms.yml").write_text(
+        _HEADER + "matches:\n  methods:\n"
+        "    - { name: send, channel_arg: 0,\n"
+        "        channel_via: [{ owner: com.acme.Session, method: queue, arg: 0 }] }\n",
+        encoding="utf-8",
+    )
+
+    assert YamlCatalogSource(tmp_path).value_model() == [
+        {
+            "owner": "com/acme/Session#",
+            "method": "queue",
+            "arg": 0,
+            "by": "scripts/probes/cp1_spring_paths.md",
+        }
+    ]
+
+
+def test_a_call_wrapper_is_hoisted_as_a_constructor_identity(tmp_path: Path):
+    """`call_wrappers` names a TYPE and a constructor argument, so the producer is that
+    type's `<init>` — the same three fields the other two keys spell directly."""
+    (tmp_path / "invented-rest.yml").write_text(
+        _HEADER + "matches:\n  call_wrappers:\n"
+        "    - { type: com.acme.Entity, payload_ctor_arg: 0 }\n",
+        encoding="utf-8",
+    )
+
+    model = YamlCatalogSource(tmp_path).value_model()
+
+    assert model == [{"owner": "com/acme/Entity#", "method": "<init>", "arg": 0}]
+
+
+def test_a_directory_with_no_value_models_and_no_hop_keys_has_an_empty_model(tmp_path: Path):
+    """A repository's own catalog set (D02 §6) declaring neither is an empty table, not an
+    error — the `bean-models/` rule, for the same reason."""
+    (tmp_path / "invented-bare.yml").write_text(_HEADER + "matches: {}\n", encoding="utf-8")
+
+    assert YamlCatalogSource(tmp_path).value_model() == []
