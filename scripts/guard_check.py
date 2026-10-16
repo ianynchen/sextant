@@ -201,8 +201,13 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if entry.get(_ROLE) is not None or not isinstance(slot, int):",
-                replace="            if not isinstance(slot, int):",
+                # Re-anchored when the matching predicate moved into `_identity_matches`
+                # so the two `arg` readers could share it. The mutation is now NARROWER
+                # and the guard is stronger for it: the old anchor bundled the role skip
+                # with the integer-slot skip, so disabling it removed both and a test
+                # could have caught either. This one removes the role skip ALONE.
+                find="            if entry.get(_ROLE) is not None:",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),

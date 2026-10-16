@@ -181,6 +181,12 @@ def _site(
 # The identity producer's two overloads, which only a descriptor or an arity separates.
 _OF_TWO = "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;"
 _OF_ONE = "(Ljava/lang/String;)Ljava/lang/Object;"
+# The VARARGS overload of the same producer, and the empty one. `all_strings` is the only
+# rule that reads either: a varargs call carries ONE `array` argument (capability 9.15,
+# never N unpacked ones), and a no-argument call is the `absent` that D00 §5 distinguishes
+# from an unreadable list.
+_OF_VARARGS = "([Ljava/lang/String;)Ljava/lang/Object;"
+_OF_NONE = "()Ljava/lang/Object;"
 # Its CONSTRUCTORS, which only a descriptor separates — `ContainerProperties(String...)`
 # beside `ContainerProperties(Pattern)` is the shipped pair arity cannot tell apart.
 _CTOR_ONE = "(Ljava/lang/String;)V"
@@ -401,6 +407,75 @@ def _facts() -> list[Fact]:
         ),
         _site(
             _symbol(_IDENTIFIED, "overload", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # The SAME producer spelled as a varargs call, which is the other half of how a
+        # topic list reaches the walk: `Subscriptions.topics("a", "b")` and
+        # `Arrays.asList("a", "b")` compile to ONE array argument, where `List.of("a", "b")`
+        # binds a fixed-arity overload and arrives as two. `all_strings` must answer both
+        # alike, and it does it by resolving the one array SLOT and letting `_elements`
+        # expand it — so this site is what proves no second expander was written.
+        _declared(_IDENTIFIED, "varargs", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "varargs", "()V"),
+            0,
+            (_NAME, "of", _OF_VARARGS),
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="string", value="first-topic"),
+                        CallArgument(kind="string", value="second-topic"),
+                    ],
+                )
+            ],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "varargs", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # The same producer HALF read, which is the one case where this walk and the
+        # engines' shipped reader are known to disagree. No corpus in the estate has one —
+        # measured, 0 of 27 — but `test_call_engines.py` pins the engine's answer, so the
+        # walk's belongs beside it in writing rather than in a reviewer's head.
+        _declared(_IDENTIFIED, "partial", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "partial", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="readable-topic"),
+                CallArgument(kind="unresolved"),
+            ],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "partial", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # The same producer called with NOTHING, which D00 §5 says is a fact rather than an
+        # ambiguity — "called with no values" is a different statement from "the list could
+        # not be read", and answering it `absent` is what keeps the two apart.
+        _declared(_IDENTIFIED, "empty", "()V"),
+        _site(
+            _symbol(_IDENTIFIED, "empty", "()V"),
+            0,
+            (_NAME, "of", _OF_NONE),
+            arguments=[],
+            result=1,
+        ),
+        _site(
+            _symbol(_IDENTIFIED, "empty", "()V"),
             1,
             _ONE_TARGET,
             kind="virtual",
@@ -1127,15 +1202,98 @@ def test_a_roled_identity_entry_is_not_what_this_value_is(walked):
     assert _reasons(bindings) == ["external"]
 
 
-def test_an_identity_entry_whose_arg_is_a_rule_rather_than_a_slot_is_passed_over(walked):
-    """`all_strings` and `last` are resolved per site — every argument of a varargs topic
-    list, the final argument of whichever overload was called — so each answers with
-    several values or with one chosen by counting. A slot is what this walk resolves, and
-    a rule it cannot turn into one is passed over rather than guessed at."""
-    for rule in ("all_strings", "last"):
-        entry = {**_OF_TWO_IDENTITY, "arg": rule}
-        bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [entry])
-        assert _reasons(bindings) == ["external"], rule
+def test_the_COUNTING_identity_rule_is_still_passed_over(walked):
+    """The negative half first (GUIDELINES §10), and it is the half that did NOT move.
+    `last` picks one argument by counting which overload was called — `record_wrappers`'
+    descriptor discrimination — and no arm of this walk reads it, so the position answers
+    exactly what an empty table leaves it at. The engines read that spelling as they
+    always have.
+
+    This test and the one below were ONE test asserting both rules were passed over, and
+    splitting them is the whole visible change: `all_strings` moved, `last` did not, and a
+    loop over the two could not say so."""
+    entry = {**_OF_TWO_IDENTITY, "arg": "last"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [entry])
+    assert _reasons(bindings) == ["external"]
+
+
+def test_the_PLURAL_identity_rule_answers_with_every_argument_of_its_producer(walked):
+    """`all_strings` says the producer's result IS the collection of its own arguments, so
+    `Name.of("a-project", "raw-notify")` answers TWICE at the position that consumes it.
+    §1c's multiplicity is PATHS, and one `element-of` step per argument is what keeps the
+    two answers two paths rather than one position carrying a list.
+
+    **Until this arm existed the position answered `external`** — and that answer was wrong
+    on its own terms rather than merely incomplete: `external` means "a producer outside
+    what was scanned", true of `List.of`'s body, but the value is not in the body. It is in
+    arguments the facts already carry at the call site, so the walk was asserting a miss it
+    could have read. MEASURED on the shipped estate: three consuming positions answered
+    `external` this way — `kafka-consumer`'s `subscribe(List.of(..))`, `kafka-streams`'
+    `stream(List.of(..))` and `pekko-connectors-kafka`'s `plainSource(.., topics(..))`.
+
+    The ORDER is the producer's own argument order, which is the order the engines publish
+    a topic list in (`_all_string_channels`: "in call order")."""
+    entry = {**_OF_TWO_IDENTITY, "arg": "all_strings"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "use", "()V"), 1, [entry])
+    assert [binding.slots[0].value for binding in bindings] == ["a-project", "raw-notify"]
+
+
+def test_the_plural_rule_reads_a_VARARGS_producer_through_the_array_arm(walked):
+    """**The two spellings of one topic list answer alike, and this is the half that could
+    have needed a second expander and does not.** `Subscriptions.topics("a", "b")` and
+    `Arrays.asList("a", "b")` are genuine varargs — ONE `array` argument in the facts
+    (capability 9.15), never two positional ones — so `all_strings` resolves that single
+    slot and `_elements` expands it, the same arm D00's array rule has always used.
+
+    So nothing in the walk learns what a varargs call is, and the PATH is what shows the
+    two arms composing: `argument 0 -> element 0`, the plural identity's step over
+    `_elements`' own."""
+    entry = {"owner": _NAME, "method": "of", "arg": "all_strings"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "varargs", "()V"), 1, [entry])
+    assert [binding.slots[0].value for binding in bindings] == ["first-topic", "second-topic"]
+    assert [binding.path for binding in bindings] == [
+        ("argument 0", "element 0"),
+        ("argument 0", "element 1"),
+    ]
+
+
+def test_a_HALF_READ_producer_is_one_reason_and_publishes_no_half_list(walked):
+    """§1c's rule, and the place this walk KNOWINGLY differs from the engines it is about
+    to replace. A list whose elements cannot all be read is ONE `non_enumerable` with no
+    element list at all — D00's partly-written array, generalised by ruling 1 — so the
+    readable half is NOT published as though the list were complete.
+
+    **The engines' shipped reader answers differently and the difference is measured, not
+    assumed.** `shapes/arguments._all_string_channels` keeps the readable arguments and
+    appends one trailing unresolved tuple, and `test_call_engines.py` pins exactly that:
+    `[string, unresolved]` -> `[("", "unresolved"), ("raw-t1", "resolved")]`. MEASURED over
+    all 27 corpora: of the 27 sites the three `all_strings` owners have, 6 are fully
+    readable, 21 carry no string argument, and **0 are this mixed case** — so no corpus can
+    tell the two rules apart and nothing moves today.
+
+    Task 8 migrates that engine, and on the day it does this difference becomes a visible
+    choice: publish a half-read topic list's readable half, or refuse the list. That is a
+    ruling, which is why this test states the walk's current answer plainly instead of
+    leaving the engine's pin as the only written one."""
+    entry = {"owner": _NAME, "method": "of", "arg": "all_strings"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "partial", "()V"), 1, [entry])
+    assert _reasons(bindings) == ["non_enumerable"]
+
+
+def test_the_plural_rule_answers_a_producer_called_with_NOTHING_absent(walked):
+    """`absent`, not a reason — the same statement `_elements` makes for an empty array and
+    for the same reason D00 §5 gives: "called with no values" is the FACT, and it is the one
+    place in this grammar where an empty value says something an absent key would not. A
+    reason here would contradict the facts it was read from.
+
+    This is also where the walk and the engines' shipped reader are known to differ —
+    `_all_string_channels` never returns zero rows and answers one unresolved tuple instead.
+    MEASURED: 21 of the estate's 27 `all_strings` sites carry no string argument, and NONE
+    of them is reached from a position a catalog asks about, so the difference is logged
+    rather than reconciled here."""
+    entry = {"owner": _NAME, "method": "of", "arg": "all_strings"}
+    bindings = _identified(walked, _symbol(_IDENTIFIED, "empty", "()V"), 1, [entry])
+    assert [binding.slots[0].kind for binding in bindings] == ["absent"]
 
 
 def test_an_identity_entrys_arity_tells_two_overloads_apart(walked):

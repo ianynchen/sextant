@@ -221,6 +221,18 @@ Identities = Sequence[Mapping[str, Any]]
 # .of(project, id)` carries one role-free entry, and argument 1 is what that object is.
 _ROLE = "role"
 
+# The PLURAL identity spelling: `arg: all_strings` says the producer's result IS the
+# collection of its own arguments, so one producer answers with SEVERAL values. That is a
+# statement of the same KIND as a role-free `arg: int` — "this argument IS the value the
+# call stands for" — only not singular, which is why it reads here and not as a sixth edge
+# kind: §1c's multiplicity is already paths, and `_all_arguments` resolves it into them.
+#
+# **Spelled in six places** (here, `shadow.py:190`, `shapes/arguments.py`, and the three
+# engines' validators), which is §0a's two-spellings disease and is logged as such rather
+# than deduplicated in passing — the engines' literals are theirs until their migration
+# reaches them, and a cleanup that touches five modules is not this fix (§3).
+_ALL_STRINGS = "all_strings"
+
 
 @dataclass(frozen=True)
 class Answer:
@@ -878,6 +890,17 @@ class _Walk:
         slot = self._identified(site)
         if slot is not None:
             return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+        # **The PLURAL identity, and the reason it belongs beside the singular one rather
+        # than in a reader of its own.** `consumer.subscribe(List.of("t1", "t2"))` reaches
+        # here exactly as `createQueue` does — a producing call whose body is a JDK method
+        # the scan never read — and answered `external` until this arm existed. That answer
+        # was wrong on its own terms: `external` means "a producer outside what was scanned"
+        # (§3a), true of `List.of`'s BODY, but the value does not come from the body. It
+        # comes from arguments sitting in the facts at the call site, and claiming we could
+        # not see them when we can is the one thing §8's anti-fabrication rule forbids in
+        # the negative direction (§8's "exclude only on proof": a miss asserted, not read).
+        if self._identified_rule(site) == _ALL_STRINGS:
+            return self._all_arguments(site, trail, frames)
         # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
@@ -885,9 +908,62 @@ class _Walk:
         # answer and not the corner case.
         return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
 
-    def _identified(self, site: tuple[str, int]) -> int | None:
-        """Which of the producing call's own arguments IS the value it handed back, or
-        None where no identity entry claims it (§2, `Identities` above).
+    def _all_arguments(
+        self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """`all_strings` at a producing call: EVERY one of its arguments, each its own path.
+
+        **The two spellings of one topic list answer alike, through machinery that already
+        exists.** `List.of("t1", "t2")` binds the FIXED-ARITY `of(Object, Object)` overload,
+        so its strings arrive as two positional arguments; `Subscriptions.topics("a", "b")`
+        and `Arrays.asList("a", "b")` are genuine varargs and arrive as ONE `array`
+        argument. Resolving every slot covers the first directly, and for the second hands
+        the single array slot to `_elements`, which has expanded an array into its elements
+        since D00. So no expander is written here, and nothing in this module learns what a
+        varargs call is.
+
+        **§1c's rule is `_elements`' rule, applied here for the same reason it applies
+        there**: one `_ELEMENT_OF` step per argument, so several answers are several PATHS
+        and the memo cannot collapse them; and any argument that does not resolve makes the
+        whole call ONE `non_enumerable`, with no element list — a half-read list is D00's
+        partly-written array, and ruling 1 says that is a reason rather than a short answer.
+
+        **This diverges from the engines' shipped reader, and the divergence is measured
+        rather than assumed.** `shapes/arguments._all_string_channels` keeps the readable
+        arguments and appends ONE trailing unresolved tuple, so a half-read list there is
+        `t1, t2, unresolved` where it is a bare `non_enumerable` here. MEASURED over all 27
+        corpora: of the 27 sites the three `all_strings` owners have, 6 are fully readable,
+        21 carry no string argument at all, and **0 are the mixed case the two rules answer
+        differently** — so nothing in this estate can tell them apart, and the walk keeps
+        the rule the design approved. The divergence is logged with that census; the day a
+        mixed site appears it is a ruling, not a silent behaviour change.
+
+        An EMPTY argument list is `absent`, the same statement `_elements` makes for an
+        empty array and for the same reason: "called with no values" is a fact the facts
+        record, and calling it ambiguous would contradict them.
+        """
+        row = self._index.sites.get(site)
+        arguments = (row["arguments"] or []) if row is not None else []
+        if not arguments:
+            return _only(trail, Answer(kind=ABSENT))
+        reached: list[_Reached] = []
+        for index in range(len(arguments)):
+            answers = self._resolve((_SLOT, site[0], site[1], index), trail, frames)
+            if any(answer.kind == UNRESOLVED for _, answer in answers):
+                return _only(trail, _unresolved(NON_ENUMERABLE))
+            step = _Step((_ELEMENT_OF, _SLOT, site[0], site[1]), f"argument {index}")
+            for path, answer in answers:
+                merged = _combine(path, (step,))
+                if merged is not None:
+                    reached.append((merged, answer))
+        return tuple(reached)
+
+    def _identity_matches(self, site: tuple[str, int]) -> tuple[Mapping[str, Any], ...]:
+        """Every identity entry that claims `site`'s result, in the table's own order.
+
+        **ONE matching predicate, read by both readers below**, because the alternative is
+        a second copy of it that answers the day the first one changes — §0a's disease, and
+        the same no-copied-fact rule this module's closing comment states.
 
         Matched on what the engines already match a call on — the method name, the `owner`
         where the entry declares one, and the `arity` or JVM `descriptor` where it declares
@@ -895,31 +971,28 @@ class _Walk:
         `nats.Connect(url)` and Python's `boto3.client("sqs")` are free functions, and
         requiring one would bake OO into a model the fact grammar does not have.
 
-        Two kinds of entry are passed over, and neither is an oversight:
+        A ROLED entry is passed over, and that is not an oversight: the reason is `_ROLE`'s.
 
-        * a ROLED entry, for the reason `_ROLE` states;
-        * an entry whose `arg` is not an integer. `all_strings` and `last` are RULES
-          resolved per site rather than positions — every argument of a varargs topic list,
-          the final argument of whichever `ProducerRecord` overload was called — and each
-          answers with several values or with one chosen by counting. A slot is what this
-          walk resolves, so a rule it cannot turn into one is passed over here rather than
-          guessed at; the consuming engines still read both spellings as they always have.
-
-        First match wins, in the table's own order — `value-models/` first, then the
-        catalogs (`yaml_source.value_model`), which is stated there to be a reading
-        convenience rather than a safety property because `arity` and `descriptor` are part
-        of what an entry matches on, so a discriminated entry and a bare one coexist and a
-        site the first turns away still meets the second.
+        Order is the table's — `value-models/` first, then the catalogs
+        (`yaml_source.value_model`), which is stated there to be a reading convenience
+        rather than a safety property because `arity` and `descriptor` are part of what an
+        entry matches on, so a discriminated entry and a bare one coexist and a site the
+        first turns away still meets the second. **Every match is returned rather than the
+        first**, so each reader can take the first entry in a form IT can resolve and leave
+        the others standing — which is what keeps that coexistence working now that two
+        `arg` forms are read: a site carrying an `all_strings` entry and an `arg: int` one
+        answers from whichever the asking reader understands, exactly as it did when the
+        single reader skipped the form it could not use.
         """
         row = self._index.sites.get(site)
         if row is None:
-            return None
+            return ()
         arguments = row["arguments"] or []
+        matched: list[Mapping[str, Any]] = []
         for entry in self._identities:
-            slot = entry.get("arg")
             owner, arity = entry.get("owner"), entry.get("arity")
             descriptor = entry.get("descriptor")
-            if entry.get(_ROLE) is not None or not isinstance(slot, int):
+            if entry.get(_ROLE) is not None:
                 continue
             if entry.get("method") != row["name"]:
                 continue
@@ -929,7 +1002,37 @@ class _Walk:
                 continue
             if descriptor is not None and row.get("descriptor") != descriptor:
                 continue
-            return slot
+            matched.append(entry)
+        return tuple(matched)
+
+    def _identified(self, site: tuple[str, int]) -> int | None:
+        """Which SINGLE one of the producing call's own arguments IS the value it handed
+        back, or None where no matching entry names one (§2, `Identities` above).
+
+        A non-integer `arg` is a RULE, and the two that exist are not alike:
+
+        * `all_strings` names SEVERAL of the producer's arguments, and `_all_arguments`
+          resolves it — §1c's multiplicity is paths, so several is a shape this walk has.
+          A slot is what THIS reader returns, which is why the plural form answers there
+          and not here.
+        * `last` picks one argument by COUNTING the overload that was called. It is
+          `record_wrappers`' descriptor discrimination, no walk arm reads it, and the
+          engines read that spelling as they always have.
+        """
+        for entry in self._identity_matches(site):
+            slot = entry.get("arg")
+            if isinstance(slot, int):
+                return slot
+        return None
+
+    def _identified_rule(self, site: tuple[str, int]) -> str | None:
+        """The RULE a matching entry names in place of a slot, or None — the plural half of
+        `_identified`'s contract, kept apart from it because the two answer different
+        questions and a caller wanting one must not silently get the other."""
+        for entry in self._identity_matches(site):
+            rule = entry.get("arg")
+            if isinstance(rule, str):
+                return rule
         return None
 
     def _parameter(
