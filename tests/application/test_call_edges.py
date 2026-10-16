@@ -20,6 +20,8 @@ which is where it differs from `return_flows`: a row for a call that produces no
 value, a row for a call that leaves the module, and an edge into a lambda body.
 """
 
+from pathlib import Path
+
 import pytest
 from fixture_module import write_fixture_module_fact
 
@@ -586,3 +588,149 @@ def test_an_interface_method_with_its_own_body_keeps_its_single_candidate(defaul
         _MODULE + method_descriptor(_TAXER, "rate", _INT_JVM)
     ]
     assert [str(row["resolution"]) for row in rows] == ["resolved"]
+
+
+# ---- a compiler-emitted `$default` bridge ---------------------------------------------
+#
+# The shape spec 2026-09-19 §3a projects away. A call the compiler wrote against
+# `send$default` is a call the AUTHOR wrote against `send`, and this table is what a walk
+# steps through — so the body it names has to be the one the author's call runs.
+
+_API = "com/acme/orders/gate/Api#"
+_SUB = "com/acme/orders/gate/SubApi#"
+_API_JVM = "(Ljava/lang/String;)Ljava/lang/String;"
+_API_BRIDGE_JVM = (
+    "(Lcom/acme/orders/gate/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
+)
+_TALKS = _CALLER + "talks(" + disambiguator_of(_API_JVM) + ")."
+
+
+def _string_method(owner: str, name: str, jvm: str, **keys: object) -> list[object]:
+    """A method returning a `String`, and the return that says its body was READ — which
+    is what makes it a candidate at all (`dispatch.bodies`). Both the bridge and its
+    sibling carry one, so the two readings differ in which body the edge reaches rather
+    than in whether it reaches one."""
+    symbol = _MODULE + method_descriptor(owner, name, jvm)
+    return [
+        SymbolFact(
+            document_id="doc_gate",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+            **keys,
+        ),
+        MethodReturnFact(document_id="doc_gate", method=symbol, ordinal=0, value=None),
+    ]
+
+
+def _bridged_edges(tmp_path: Path, *extra: object) -> list[dict[str, object]]:
+    """`Caller#talks` makes one call and the compiler wrote it against the bridge:
+    `invokestatic Api.send$default(this, "y", 0, null)`, the shape kotlinc emits for
+    `api.send("y")` when `send`'s parameter has a default. Both methods have a body this
+    workspace read, so the two readings differ in WHICH body the edge reaches.
+
+    `Api#send` is an INSTANCE method — the bridge's slot 0 is its receiver — which is
+    the reading `effective_calls._sibling` settles on, and the one that makes the site
+    `virtual` rather than `static`. `extra` is what a test adds to that world."""
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _API, construct_kind=ConstructKind.CLASS
+            ),
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _CALLER, construct_kind=ConstructKind.CLASS
+            ),
+            *_string_method(_API, "send", _API_JVM),
+            *_string_method(
+                _API,
+                "send$default",
+                _API_BRIDGE_JVM,
+                modifiers={"static": True, "synthetic": True},
+                bridge_of="send",
+            ),
+            *_string_method(_CALLER, "talks", _API_JVM),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _TALKS,
+                target=CallTarget(owner=_API, name="send$default", descriptor=_API_BRIDGE_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                result=4,
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    CallArgument(kind="string", value="y"),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="null"),
+                ],
+            ),
+            *extra,
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_call_edges(workspace)
+    rows = workspace.query("call_edges")
+    workspace.close()
+    return rows
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """Nothing overrides the sibling: one candidate, so the edge is `resolved`."""
+    return _bridged_edges(tmp_path_factory.mktemp("call_edges_bridged"))
+
+
+@pytest.fixture(scope="module")
+def bridged_overridden(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """The same call, with a subtype of `Api` that overrides `send`."""
+    return _bridged_edges(
+        tmp_path_factory.mktemp("call_edges_bridged_overridden"),
+        SymbolFact(
+            document_id="doc_gate",
+            symbol=_MODULE + _SUB,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _API,
+        ),
+        *_string_method(_SUB, "send", _API_JVM),
+    )
+
+
+def test_a_default_bridge_call_is_an_edge_into_the_sibling_it_stands_for(bridged):
+    """Read raw `call_sites` and the edge reaches the BRIDGE — a synthetic body that fills
+    in the arguments the caller omitted and then calls the real function. A walk that
+    stops there has one more hop to take than the program does and names a method no
+    author wrote; every `resolve` engine has read the sibling here since spec §3a."""
+    assert [str(row["target"]) for row in bridged] == [
+        _API + "send(" + disambiguator_of(_API_JVM) + ")."
+    ]
+    assert [str(row["callee"]) for row in bridged] == [
+        _MODULE + method_descriptor(_API, "send", _API_JVM)
+    ]
+    assert [str(row["resolution"]) for row in bridged] == [str(Resolution.RESOLVED)]
+
+
+def test_a_bridge_over_an_instance_sibling_dispatches_virtually_and_reaches_the_override(
+    bridged_overridden,
+):
+    """**The widest movement the projection can produce, and the one the raw reading hid
+    entirely.** The compiler wrote `invokestatic` against the bridge, and `invokestatic`
+    dispatches on nothing — so reading the raw site, `SubApi#send` is not a candidate and
+    the edge is one `resolved` row naming a synthetic method. The bridge's slot 0 is the
+    receiver, though, and what the author wrote is `api.send("y")`, which the JVM
+    dispatches virtually: the override IS reachable. `effective_calls` carries that in
+    `invoke_kind`, this table writes it into a shipped column, and `dispatch` then walks
+    the subtypes — one row becomes two, and `resolved` becomes `narrowed`.
+
+    Both are still the one bridge site's rows. What changes is that the graph stops
+    claiming a call has a single reachable body when the program says it has two."""
+    assert [str(row["invoke_kind"]) for row in bridged_overridden] == ["virtual"] * 2
+    assert [str(row["callee"]) for row in bridged_overridden] == [
+        _MODULE + method_descriptor(_API, "send", _API_JVM),
+        _MODULE + method_descriptor(_SUB, "send", _API_JVM),
+    ]
+    assert [str(row["resolution"]) for row in bridged_overridden] == [str(Resolution.NARROWED)] * 2

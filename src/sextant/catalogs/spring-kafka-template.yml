@@ -142,7 +142,22 @@ matches:
   # request/reply shape, not another name for this one. An alternate names one
   # library reachable under two names and derives the same row; `sendAndReceive`
   # derives a different row, so it stays a separate file (checkpoint ruling).
+  # CP-34 (`scripts/probes/cp34_producer_record_ctors.md`), measured at kafka-clients
+  # 3.6.2: `ProducerRecord` declares SIX constructors and `payload_ctor_arg: last` is the
+  # value on four of them. On the two whose final parameter is `Iterable<Header>` the last
+  # argument is the record's HEADERS, and `last` published those as the payload — a
+  # fabricated payload on ordinary input, not a miss. The two are named here by
+  # `descriptor`, first-match-wins, each with the value's own measured index; the
+  # undiscriminated `last` row below them still answers the other four, whose whole set the
+  # probe enumerates. Arity cannot tell them apart: the two five-argument overloads
+  # disagree, which is why this is a descriptor and not an `arity`.
   record_wrappers:
+    - { type: org.apache.kafka.clients.producer.ProducerRecord,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Iterable;)V",
+        channel_ctor_arg: 0, payload_ctor_arg: 4 }
+    - { type: org.apache.kafka.clients.producer.ProducerRecord,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Iterable;)V",
+        channel_ctor_arg: 0, payload_ctor_arg: 3 }
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }
 

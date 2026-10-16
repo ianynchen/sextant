@@ -228,9 +228,18 @@ class ModuleOutcome:
 class AnalyzeResult:
     """`analyze`'s own outcome: every module the walk considered, root-
     relative, in the same order `modules.json` would list them (sorted by
-    `dir`) for a reactor, or the one module `path` itself is otherwise."""
+    `dir`) for a reactor, or the one module `path` itself is otherwise.
+
+    `value_resolutions` is spec 2026-09-22 §7a's shadow row count — how many
+    candidate conversions the walk recorded. `0` on any run without `--shadow`,
+    and `None` for a REACTOR walk, where there is no single number to give: each
+    module records into its OWN workspace, and those counts go to `on_module`
+    instead, one line per module. Deliberately NOT on `ModuleOutcome`: that
+    dataclass is what `modules.json` records, and a published inventory is
+    exactly what shadow mode must not move."""
 
     modules: tuple[ModuleOutcome, ...]
+    value_resolutions: int | None = None
 
 
 @dataclass(frozen=True)
@@ -416,8 +425,9 @@ def _module_commit_of(path: Path) -> str:
 
 
 # The model subdirectories beside the catalogs, each part of the knowledge a run
-# was produced with (`yaml_source.YamlCatalogSource._models` reads the same three).
-_MODEL_DIRECTORIES = ("shape-models", "bean-models", "step-models")
+# was produced with (`yaml_source.YamlCatalogSource` reads the same four: `_models`
+# the first three, `value_model` the fourth).
+_MODEL_DIRECTORIES = ("shape-models", "bean-models", "step-models", "value-models")
 
 
 def _catalog_hash(catalogs: Path) -> str:
@@ -430,7 +440,10 @@ def _catalog_hash(catalogs: Path) -> str:
     table, which is precisely the drift the hash exists to make visible.
     `bean-models/` (D02 §1c) and `step-models/` (spec 2026-09-21 §5) are
     walked for the same reason: the bean vocabulary and the flow definition's
-    step table live there and nowhere else. The path is included, not just the
+    step table live there and nowhere else. `value-models/` (D02 §1f, spec
+    2026-09-22 §2) joins them: a producing call's identity is declared there once
+    rather than once per consuming catalog, so an edit to it is an edit to what
+    every catalog resolves through. The path is included, not just the
     filename, so a model and a catalog of the same name cannot collide.
     """
     digest = hashlib.sha256()
@@ -583,6 +596,7 @@ def _run_analyze(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     ignore_root: Path | None = None,
+    shadow: bool = False,
 ) -> _StageAnalyzeResult:
     """One module, analyzed into one workspace, and its `metadata.json`
     written — the body every `analyze` invocation shares, whether `path` is
@@ -610,6 +624,7 @@ def _run_analyze(
                 [_KnownModuleDetector(module, notes)],
                 allow_resolve=allow_resolve,
                 ignore_root=ignore_root or path,
+                shadow=shadow,
             )
         write_metadata(
             workspace_dir / "metadata.json",
@@ -637,6 +652,7 @@ def _analyzed(
     detectors: Sequence[Detector],
     allow_resolve: bool = False,
     ignore_root: Path | None = None,
+    shadow: bool = False,
 ) -> _StageAnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message
     a user reads: a malformed `.sextant.yml` is Sextant's own input written
@@ -654,6 +670,7 @@ def _analyzed(
             interpret=_JvmDescriptorInterpreter(),
             allow_resolve=allow_resolve,
             ignore_root=ignore_root,
+            shadow=shadow,
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
@@ -665,6 +682,7 @@ def _analyze_reactor(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     on_module: Callable[[str], None] | None,
+    shadow: bool = False,
 ) -> tuple[ModuleOutcome, ...]:
     """Every module a just-walked reactor named that is not KNOWN not to be
     a service, each analyzed into its own `<module-dir>/.sextant` workspace
@@ -702,6 +720,7 @@ def _analyze_reactor(
                 # THAT root" — and loading at `module.root` meant a
                 # reactor-root `.sextantignore` reached no submodule at all.
                 ignore_root=path,
+                shadow=shadow,
             )
         except Exception as failure:  # deliberately broad, see below
             # A batch run's own failure must name WHICH module failed — left
@@ -713,7 +732,15 @@ def _analyze_reactor(
             ) from failure
         endpoints = len(stage_result.report.endpoints)
         if on_module is not None:
-            on_module(f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints")
+            # A reactor walk records shadow rows PER MODULE, into each module's own
+            # workspace, so a single number on the `AnalyzeResult` could not name them —
+            # this line can, and it is the only place a reader learns a submodule recorded
+            # anything at all. Appended ONLY under `--shadow`, so the ordinary line is
+            # exactly what it has always been.
+            recorded = f", {stage_result.report.value_resolutions} shadow rows" if shadow else ""
+            on_module(
+                f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints{recorded}"
+            )
         outcomes.append(
             ModuleOutcome(relative_dir, module.module_id, module.kind, True, None, endpoints)
         )
@@ -734,6 +761,10 @@ def _analyze(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None = None,
     on_module: Callable[[str], None] | None = None,
+    # Spec 2026-09-22 §7a: the CLI's `--shadow`, carried to `resolve` and read
+    # nowhere else. It adds one pass that writes one table nothing reads, and
+    # moves no row in `endpoints`, `endpoint_metadata` or `shapes`.
+    shadow: bool = False,
 ) -> tuple[AnalyzeResult, bool]:
     """`analyze`'s own composition, shared by the public `analyze()` and
     `cli/app.py`'s `module_analyze`. Returns `(result, multi_module)` —
@@ -759,13 +790,21 @@ def _analyze(
                 f"{path} is a multi-module root — --workspace is refused there; it names "
                 "one module's workspace, and every module here gets its own"
             )
-        modules = _analyze_reactor(path, model, allow_resolve, progress_factory, on_module)
+        modules = _analyze_reactor(
+            path, model, allow_resolve, progress_factory, on_module, shadow=shadow
+        )
         return AnalyzeResult(modules=modules), True
 
     module = model.modules[0]
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
     stage_result = _run_analyze(
-        path, module, model.notes, resolved_workspace_dir, allow_resolve, progress_factory
+        path,
+        module,
+        model.notes,
+        resolved_workspace_dir,
+        allow_resolve,
+        progress_factory,
+        shadow=shadow,
     )
     outcome = ModuleOutcome(
         dir=_root_relative(path, module.root),
@@ -775,7 +814,9 @@ def _analyze(
         skip_reason=None,
         endpoints=len(stage_result.report.endpoints),
     )
-    return AnalyzeResult(modules=(outcome,)), False
+    return AnalyzeResult(
+        modules=(outcome,), value_resolutions=stage_result.report.value_resolutions
+    ), False
 
 
 def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:

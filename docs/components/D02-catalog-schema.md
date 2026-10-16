@@ -501,6 +501,121 @@ catalog naming the model declares it a terminal.
 
 ---
 
+## 1f. `value-models/` — a producing call's identity, declared once
+
+The fourth, and the one no catalog NAMES. The first three are opt-in — a catalog writes
+`shape_model: json` and takes that file's blocks. This one is a single estate-wide table,
+because the question it answers has nothing to do with which catalog is asking:
+
+> **which argument of a call carries the value its result stands for.**
+
+`java.net.URI.create("https://orders/…")` produces a `URI` whose address is argument 0.
+That is true for the JDK HTTP client, for Apache HttpClient, for a websocket client and for
+every framework not yet written. Declared per consumer it is the same sentence copied once
+per catalog that ever reads a `URI`-typed position — `A-C3`'s shape with a different
+symbol, and it had already drifted: five catalogs declared `java.net.URI`'s constructor and
+two of them declared the `arity: 1` that keeps the type's four multi-argument constructors
+(whose argument 0 is a SCHEME) out of the match.
+
+```yaml
+# value-models/jdk.yml
+identified_by:
+  - { owner: java.net.URI, method: create, arg: 0,
+      by: scripts/probes/a2t8_http_client_builders.md }
+  - { owner: java.net.URI, method: <init>, arg: 0, arity: 1,
+      by: scripts/probes/a2t8_http_client_builders.md }
+```
+
+**`owner` is OPTIONAL** (spec 2026-09-22 §5a). Go's `nats.Connect(url)` and Python's
+`boto3.client("sqs")` are free functions, and `domain/symbols.owner_of` already documents
+that an ownerless symbol is an answer here, never an exception; requiring one would bake OO
+into a model the fact grammar does not have. `method` and `arg` are required. `arity` and
+`descriptor` discriminate overloads exactly as they do in a match row. `arg` carries a
+rule as well as an index, in the spellings the hop keys already use (`all_strings`, `last`).
+
+**`by:` is required on every entry**, and it is what keeps this directory from becoming
+what spec §7b names: a dumping ground, where entries accumulate because adding one is easy
+and nobody measures whether the framework really identifies that value that way. An entry
+here is read by every catalog at once, so an unmeasured one is not one framework's mistake.
+The loader refuses an entry that cites nothing;
+`tests/architecture/test_value_model_probe_rows.py` refuses a shipped one whose citation is
+not a committed probe stating what it measured against — the rule §1a's `measured:` rows
+already take. No `artifact`/`versions` pair beside it: the first entry's producer lives in
+`java.base`, which is not a Maven coordinate, and a coordinate invented to fill the field
+would be a plausible-looking value nobody can check.
+
+**The table also HOISTS what the catalogs already say.** Every `channel_via` (§2's
+`single_call`), `url_via` (§2's `fluent`), `call_wrappers` (§2h) and `record_wrappers` (§2's
+`single_call`) entry is read as an `identified_by` entry — the same three fields, only the
+declaration site differs — so no catalog edit is forced and nothing changes behaviour (spec
+§2a step 1). The two WRAPPER keys name a type and an argument of its constructor, so they
+hoist as that type's `<init>`, one entry per `<name>_ctor_arg` the block declares: a
+`record_wrappers` block declares two, and they are two claims about two arguments of one
+constructor — and each carries its **role**, read off that key's own prefix (`channel`,
+`payload`), because two positions of one constructor are not interchangeable and a pair of
+role-free entries cannot say which is the destination and which the payload. A `_via` entry
+carries no role: it names one position, and the consuming row's own `channel_arg`/`url_arg`
+already says what that position means. Putting a role there would also put the consumer's
+meaning on the producer, which §1e forbids — one shipped producer's argument 0 is read as an
+address by two catalogs and as a destination by three.
+
+Declared entries come first in the table and hoisted ones after, deduplicated by what an
+entry MATCHES on (everything but `by`). **That ordering is a reading convenience, not a
+safety property**: `arity` and `descriptor` are part of the match, so a discriminated entry
+and a bare one coexist, and a site the discriminated one turns away still matches the bare
+one. Where a measured form and an older per-consumer spelling disagreed, what settled it was
+editing the catalogs that carried the bare spelling.
+The loader builds it once as `YamlCatalogSource.value_model()` and hands **every** `Catalog`
+it loads the same list, as `Catalog.value_model`. *This paragraph used to end "there is no
+`Catalog.value_model` field, because the table belongs to no catalog", which was true while
+nothing consumed the table and stopped being true when something did (spec §3c's first
+migration, 2026-09-23).* The field is not a per-catalog declaration and reading it as one is
+the mistake to avoid: it is the SOURCE's table, carried on the catalogs because that is the
+only thing an engine is handed, and every catalog of one source carries the identical list.
+A source that declares no `value-models/` and writes no hop declaration contributes an empty
+one, which is the state of a repository's own catalog set (§6) that declares neither.
+
+**What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
+takes the table as data and uses it where a value's producer is a call this module could not
+read through. The walk has found the call (distance); the table says which of its arguments
+is the value (meaning). Two kinds of entry are passed over there, and `values._identified`
+states both — a ROLED entry, which says something narrower than "this argument IS the value"
+and would answer one value twice, and an entry whose `arg` is a rule (`all_strings`, `last`)
+rather than a slot, which resolves per site and is not a position a slot-resolving walk can
+turn into one. Both remain the consuming engines' to read, exactly as they are today.
+
+**An entry naming a CONSTRUCTOR is reached too, and finding one is an APPROXIMATION with a
+measured edge.** **Eleven** of the shipped entries name `<init>`, and **four** of them are
+reachable by the walk at all: the seven others carry a `role` (the `call_wrappers` and
+`record_wrappers` hoists) or a rule-valued `arg`, both of which the walk passes over for the
+reasons above. Three of the four are `_via` entries whose producer happens to be a
+constructor; the fourth, `java.net.URI`'s one-string constructor, is a DECLARED
+`identified_by` entry in `value-models/jdk.yml` with a `by:` probe row behind it — this
+directory's own shape, not a hoist.
+A constructed value is recognised by three conjuncts together: it has no `produced_by` edge,
+the site is the EARLIEST one the value is the receiver of, and that site produced no value of
+its own (D00 §5's "result is null for a void one").
+
+The third is not tidiness. Without it, a value merely HELD somewhere and called here — a
+`Session` read from a field, whose first call is the `createQueue` an entry names — was read
+as having been constructed by that call, and the queue's name was answered as the identity of
+the connection. Pinned by `values.a-construction-hands-nothing-back`.
+
+**What it excludes is a call that hands something back, which is narrower than "is an
+initialiser", and the difference is an open gap** (`OI-133`). A void ordinary method also
+produces no value, so a field- or parameter-held value whose first call happens to return
+nothing is read here as a construction — measured at **395 of the 3,283** values the rule
+names, across all 27 corpora. Nothing acts on them today, and the reason is on the catalog
+side rather than in the rule: every shipped non-`<init>` entry has a non-null result at every
+site it matches. **A new entry naming a void sender or setter would reopen it.** An author adding an entry
+must therefore check that the producer it names really hands something back — and if it does
+not, that it is genuinely a constructor rather than an ordinary void call.
+
+An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
+other three directories: it is knowledge a run was produced with.
+
+---
+
 ## 2. The styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
@@ -1517,7 +1632,8 @@ destination (`peer` always NULL), and a row asking for CP-2's peer/path split as
 have one destination read two incompatible ways depending on which rung of the ladder
 answered. This same ladder — literal first, linked call as fallback — is what `fluent`
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
-too.
+too. **Every entry is also hoisted into §1f's estate-wide identity table**, where the same
+three fields are declared once per producer instead of once per consumer.
 
 **`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
 all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
@@ -1591,8 +1707,25 @@ deriving method lands in `handler`, not `caller`: it is the consumer, not the ca
 **`record_arg` names an argument whose linked constructor carries both identity and
 payload** — `send(ProducerRecord)`'s one argument names the record, not the topic or the
 value directly. It resolves through the catalog-level block `record_wrappers: [{type,
-channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
-the string `last`.
+channel_ctor_arg, payload_ctor_arg, descriptor?}]`, where `payload_ctor_arg` is an integer
+position or the string `last`.
+
+**`descriptor` names the one overload an entry is about, and a type may declare several
+entries**: the constructor is found first, then the first entry whose `descriptor` matches
+it answers, and an entry declaring none matches any — the first-match rule `channel_via`
+already uses. It exists because `last` is a claim about a type's WHOLE constructor set and
+one measured set disagrees with it: `ProducerRecord` declares six constructors and two of
+them — the ones whose final parameter is `Iterable<Header>` — put the record's headers
+last, so `last` published the headers as the payload there
+(`scripts/probes/cp34_producer_record_ctors.md`, kafka-clients 3.6.2). Arity cannot
+separate them: two five-argument overloads answer differently. A linked constructor no
+entry matches derives no channel and no payload, which is the honest answer for an overload
+nobody measured.
+
+**Every entry is also hoisted into §1f's identity table**, as the record type's `<init>`
+with each declared position, its role and its `descriptor` where it declares one — the same
+thing `call_wrappers` (§2h) does, and the three shipped blocks are byte-identical, which is
+the duplication §1f ends.
 
 **`path_from_argument_type` names the operation off the PAYLOAD rather than the address**
 (2I design §4). Some protocols address every operation at one URL and distinguish them by
@@ -2502,15 +2635,30 @@ matches:
 ```
 
 `registration` is `{owner, method, channel_arg, receiver_arg, channel_via?}` — the one
-call site that binds a receiver to a channel. **`channel_arg` reads through the same
-capture ladder `single_call`'s own `channel_via` already defines (§2, above), tried in
-that order**: a string literal at that position resolves directly first — `Subscriber.newBuilder(String,
-MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one, and a
-`channel_via`-declared row must still catch it — and only when the argument is not a
-resolved string literal does a declared `channel_via` form follow the linked call's own
-argument instead (`ProjectSubscriptionName.of`'s own `name` argument, not `newBuilder`'s);
-anything else is `path` NULL, `unresolved` — the registration was made, only its channel
-is unread.
+call site that binds a receiver to a channel. **`channel_arg` reads through the backward
+value walk** (spec 2026-09-22 §1b, §2b; this is the first style migrated to it, §3c). It
+says what it always said — *this position carries the destination* — and what changed is
+only how far the engine can see from there. *This paragraph used to describe a two-rung
+capture ladder, each rung capped at one hop: the literal at the declared position, then ONE
+`source` link back to a `channel_via`-named call. Both rungs are the walk now.*
+
+A string literal at that position still resolves directly — `Subscriber.newBuilder(String,
+MessageReceiver)` is a real overload alongside the `ProjectSubscriptionName` one — and so
+does a value that arrived from anywhere the walk can follow: a parameter of the enclosing
+method (each caller its own row, §1c), a value a local callee returned, a chain several
+calls long. Where the value came from a producing call this module never read, the identity
+table (§1f) says which of that producer's arguments IS the value —
+`ProjectSubscriptionName.of`'s own `name` argument, which is where `channel_via` used to say
+it and where the hoist reads it from today. **Only a `string` literal becomes a `path`**: a
+declaration reference arrives as a `symbol` and an assembled address as an `expression`, and
+publishing either as a destination would be a wrong address at `resolved` rather than a
+missing one. Anything else is `path` NULL, `unresolved` — the registration was made, only
+its channel is unread.
+
+**Several paths that agree about this slot are ONE destination.** A registration inside a
+helper called from two places is two bindings; if both read the same subscription — or
+neither reads any — it is one row, because a destination is what a row is keyed on and an
+unresolved wire identity never dedups downstream.
 
 **`receiver_arg` is the argument that names the handler**, read one of two ways depending
 on what the compiler resolved it to: a `lambda`-kind argument names its own synthetic body
@@ -4497,7 +4645,9 @@ call site's `result` is `null` by construction and could never carry the join.
 payload; the engine follows exactly that one hop and stops. Beyond one hop, or where no
 `call_wrappers` entry matches
 the `instance` type, the body stays `unresolved` — an envelope Sextant does not know is not
-one worth guessing through.
+one worth guessing through. Every `call_wrappers` entry is also hoisted into §1f's identity
+table, as the wrapper type's `<init>` with that argument: one spelling along, the same
+three fields.
 
 ---
 

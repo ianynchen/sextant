@@ -2631,3 +2631,357 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
         workspace.derive("_broken", rows=[{"no_such": 1}])
     assert workspace._per_value_retries == ["call_edges_insert"]
     workspace.close()
+
+
+def _value_edge_facts(root: Path) -> None:
+    """One method with three call sites.
+
+    Site 0 carries, in four slots, every argument shape the edge query reads: a
+    binding read, a type reference, a value another call produced, and a literal
+    that names nothing at all. The query's five arms come out of three tables,
+    and a fixture with one site per arm would let an arm read the wrong table
+    and still look right — one row set has to answer all five.
+
+    Site 1 is an address the code ASSEMBLES. It produces a value and reaches no
+    body, so `call_edges` holds no row for it (that pass refuses a `dynamic`
+    site whose bootstrap names none) — and D00 §5 says the hole in its template
+    is filled by following `source` -> `result` to exactly this site. Reading
+    `produced_by` off `call_edges` made every such value invisible, which is
+    what this site pins.
+
+    Site 2 is a `dynamic` site that DOES name a body, with one captured value in
+    its argument list. `bound_to_parameter` must refuse it: the capture is not
+    the body's parameter 0, and a row saying otherwise is a wrong answer rather
+    than a missing one."""
+    document = Document(
+        document_id="doc_edges",
+        relative_path="com/acme/Registrar.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:e",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    call_site = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="com/acme/Registry#",
+            name="add",
+            descriptor="(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Object;I)V",
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        result=9,
+        arguments=[
+            CallArgument(kind="field", symbol="com/acme/Registrar#name."),
+            CallArgument(kind="class", symbol="com/acme/OrderWorker#"),
+            CallArgument(kind="unresolved", source=4),
+            CallArgument(kind="int", value=7),
+        ],
+    )
+    assembled = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="java/lang/invoke/StringConcatFactory#",
+            name="makeConcatWithConstants",
+            descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+        ),
+        invoke_kind="dynamic",
+        ordinal=1,
+        result=11,
+        arguments=[CallArgument(kind="parameter", value=0)],
+    )
+    captured = CallSiteFact(
+        document_id="doc_edges",
+        caller="s maven p 1 com/acme/Registrar#register(sig_1).",
+        target=CallTarget(
+            owner="java/util/function/Supplier#",
+            name="get",
+            descriptor="()Ljava/lang/Object;",
+        ),
+        invoke_kind="dynamic",
+        ordinal=2,
+        result=13,
+        implementation="com/acme/Registrar#lambda$register$0(sig_3).",
+        arguments=[CallArgument(kind="unresolved", source=12)],
+    )
+    write_fact_file(root / "Registrar.jsonl", document, [call_site, assembled, captured])
+
+
+def _workspace_with_value_edges(tmp_path: Path) -> DuckDbWorkspace:
+    _value_edge_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    workspace.derive(
+        "call_edges_insert",
+        rows=[
+            {
+                "caller": caller,
+                "ordinal": 0,
+                "invoke_kind": "virtual",
+                "target": "com/acme/Registry#add(sig_2).",
+                "callee": "s maven p 1 com/acme/Registry#add(sig_2).",
+                "result": 9,
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "terminal_kind": None,
+                "target_kind": None,
+            },
+            # The `dynamic` site that names a body — `call_edges` takes this hop
+            # and `value_edges` must not turn its capture into a parameter.
+            {
+                "caller": caller,
+                "ordinal": 2,
+                "invoke_kind": "dynamic",
+                "target": "com/acme/Registrar#lambda$register$0(sig_3).",
+                "callee": "s maven p 1 com/acme/Registrar#lambda$register$0(sig_3).",
+                "result": 13,
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "terminal_kind": None,
+                "target_kind": None,
+            },
+        ],
+    )
+    workspace.derive(
+        "return_flows_insert",
+        rows=[
+            {
+                "caller": caller,
+                "ordinal": 0,
+                "result": 9,
+                "callee": "s maven p 1 com/acme/Registry#add(sig_2).",
+                "return_ordinal": 0,
+                "value": '{"kind":"string","value":"ok"}',
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+        ],
+    )
+    return workspace
+
+
+def test_the_edge_query_normalises_five_kinds_from_three_tables(tmp_path: Path):
+    """Spec 2026-09-22 §1a, over `value_edges.sql`. One shape out of three
+    sources — and `written_by` is ABSENT until capability 9.19 gives it a fact,
+    which is itself the answer: a workspace with no binding-write facts yields
+    no such edge rather than an empty-but-present one a reader would take for
+    "we looked and found nothing"."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    kinds = {row["kind"] for row in workspace.query("value_edges")}
+    assert kinds == {
+        "produced_by",
+        "returned_by",
+        "read_from_binding",
+        "bound_to_parameter",
+        "names_declaration",
+    }
+    workspace.close()
+
+
+def test_the_edge_query_fills_the_columns_its_own_header_says_each_kind_fills(
+    tmp_path: Path,
+):
+    """The columns are nullable PER KIND, so "nullable" on its own says nothing a
+    reader can act on — this pins which kind fills which, against the table in
+    `value_edges.sql`'s header. `to_index` is the one that matters most: it is a
+    parameter index, and an edge that is not `bound_to_parameter` lands on no
+    parameter, so a non-NULL there would be a number with no meaning."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    callee = "s maven p 1 com/acme/Registry#add(sig_2)."
+    rows = workspace.query("value_edges")
+    by_kind: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        by_kind.setdefault(str(row["kind"]), []).append(row)
+
+    # Three sites, three produced values — including the assembled address at
+    # ordinal 1, which reaches no body and so has no `call_edges` row at all.
+    assert by_kind["produced_by"] == [
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 9,
+            "to_symbol": None,
+            "to_ordinal": 0,
+            "to_index": None,
+        },
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 11,
+            "to_symbol": None,
+            "to_ordinal": 1,
+            "to_index": None,
+        },
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 13,
+            "to_symbol": None,
+            "to_ordinal": 2,
+            "to_index": None,
+        },
+    ]
+    assert by_kind["returned_by"] == [
+        {
+            "kind": "returned_by",
+            "from_method": caller,
+            "from_value": 9,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    # A binding read is no call's result, so it carries no value id at all.
+    assert by_kind["read_from_binding"] == [
+        {
+            "kind": "read_from_binding",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": "com/acme/Registrar#name.",
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    assert by_kind["names_declaration"] == [
+        {
+            "kind": "names_declaration",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": "com/acme/OrderWorker#",
+            "to_ordinal": 0,
+            "to_index": None,
+        }
+    ]
+    # One edge per SLOT, including the two slots whose value the facts cannot
+    # name: the index is what the walk needs, and a slot left out because its
+    # value is unreadable is a parameter the walk would never ask about.
+    assert by_kind["bound_to_parameter"] == [
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 0,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 1,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": 4,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 2,
+        },
+        {
+            "kind": "bound_to_parameter",
+            "from_method": caller,
+            "from_value": None,
+            "to_symbol": callee,
+            "to_ordinal": 0,
+            "to_index": 3,
+        },
+    ]
+    assert all(row["to_index"] is None for row in rows if row["kind"] != "bound_to_parameter")
+    workspace.close()
+
+
+def test_the_edge_query_adds_no_database_object_and_moves_no_row(tmp_path: Path):
+    """§3b taken the whole way: `value_edges` is the TEXT of a named query and
+    nothing else. Three tables already hold these rows, and §3b's list of what a
+    copy would cost includes schema growth — which a `CREATE VIEW` is, whatever
+    it stores. It shipped as a view for one commit and the consequence was
+    immediate and unarguable: `schema_objects()` found it, the export ratchet
+    demanded a query for it (correctly — there is no exclusion class), and every
+    bundle then carried 420 KB of derived rows beside the three tables they came
+    from. So the assertion is the absence of the object, not its type."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    before = (workspace.query("call_sites"), workspace.query("call_edges"))
+    assert workspace.query("value_edges")
+    assert (workspace.query("call_sites"), workspace.query("call_edges")) == before
+    assert workspace._connection.execute(
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema = 'main' AND table_name = 'value_edges'"
+    ).fetchone() == (0,)
+    # The two ratchets that would have to be argued with if it were an object,
+    # asserted rather than left to the export test's own sorted comparison.
+    assert "value_edges" not in workspace.schema_objects()
+    assert "value_edges" not in workspace_module._EXPORT_QUERIES
+    workspace.close()
+
+
+def test_the_edge_query_is_empty_on_a_workspace_that_loaded_no_calls(tmp_path: Path):
+    """Pre-declared like every table in `schema.sql`: a module with nothing to
+    walk answers with an empty result rather than an error, which is what lets
+    Task 3 call it unconditionally."""
+    workspace = _loaded_workspace(tmp_path)
+    assert workspace.query("value_edges") == []
+    workspace.close()
+
+
+def test_the_edge_query_sees_a_value_the_code_assembles(tmp_path: Path):
+    """A `produced_by` edge is about a SITE producing a value, never about a body
+    being reached — and reading it off `call_edges` conflated the two. That table
+    writes no row for a `dynamic` site whose bootstrap names no body, which is
+    right there and fatal here: an assembled address is exactly such a site, and
+    D00 §5's grammar says the hole in its template is filled by following
+    `source` -> `result` to it. Measured when the arm read `call_edges`: 7 of 7
+    such sites on `fixtures/orders-service` and 224 of 224 on `mall-admin` had no
+    edge at all, a URL built from a path and an id among them."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    caller = "s maven p 1 com/acme/Registrar#register(sig_1)."
+    assert [row["ordinal"] for row in workspace.query("call_edges")] == [0, 2]
+    produced = [
+        row
+        for row in workspace.query("value_edges")
+        if row["kind"] == "produced_by" and row["to_ordinal"] == 1
+    ]
+    assert produced == [
+        {
+            "kind": "produced_by",
+            "from_method": caller,
+            "from_value": 11,
+            "to_symbol": None,
+            "to_ordinal": 1,
+            "to_index": None,
+        }
+    ], "the site that reaches no body still produced a value, and this edge is that hop"
+    workspace.close()
+
+
+def test_the_edge_query_binds_no_parameter_where_a_site_only_captures(tmp_path: Path):
+    """`return_flow` refuses a `dynamic` site outright; `bound_to_parameter` makes
+    the same refusal one step along. At such a site `call_edges.callee` is the
+    lambda BODY while the arguments are the metafactory's CAPTURES — two
+    different lists — and the facts do not record which parameter a capture
+    lands on. At an instance body it provably is not slot *i* (the captured
+    receiver is slot 0, and D00 §5 says a receiver is not a parameter); at a
+    static one it usually is, but only by an unrecorded compiler convention.
+    Measured on `fixtures/orders-service`, of 43 refused rows: 26 were wrong
+    answers at `resolved` — the cardinal sin, and what this test pins — and 17
+    were honest captures into a static body, a named gap for §3a to size.
+    The fixture's site 2 is the instance case. See `value_edges.sql`'s own arm
+    for the three reasons the wide refusal is the right trade."""
+    workspace = _workspace_with_value_edges(tmp_path)
+    rows = workspace.query("value_edges")
+    # The site is reached and its body is named — `call_edges` took that hop.
+    assert any(row["ordinal"] == 2 and row["callee"] for row in workspace.query("call_edges"))
+    # And it still binds nothing, while the ordinary call beside it binds four.
+    assert [row["to_ordinal"] for row in rows if row["kind"] == "bound_to_parameter"] == [0] * 4
+    workspace.close()

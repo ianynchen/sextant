@@ -1,0 +1,17 @@
+-- Clears spec 2026-09-22 §3d's shadow review list for one resolve.
+--
+-- Runs from the PASS rather than from the pipeline, the reset_roots.sql
+-- precedent and for the same reason: `value_resolutions` has exactly one
+-- writer, `resolve/shadow.py`, so reset and insert belong together there.
+--
+-- **UNCONDITIONAL, including on a run with shadow mode OFF**, which is the
+-- whole point of it. A workspace analysed once with `--shadow` and again
+-- without it would otherwise keep the first run's rows — a review list
+-- describing a walk this analysis did not run, against sites this analysis may
+-- have moved. `reset_reachability.sql` records what the missing reset cost
+-- there; this one exists so it cannot happen here.
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the
+-- "value_resolutions" query and the export both answer with an empty result on
+-- every ordinary analysis, which is what they should answer.
+DELETE FROM value_resolutions;

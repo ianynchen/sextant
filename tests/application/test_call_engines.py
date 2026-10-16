@@ -8,6 +8,7 @@ bytecode, so each behaviour is isolated and fast."""
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,7 @@ from sextant.domain.facts import (
     TypeRef,
 )
 from sextant.domain.redaction import REDACTED
-from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource, _hoisted
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
@@ -1003,12 +1004,59 @@ PRODUCER = "com/acme/messaging/Producer#"
 CONSUMER = "com/acme/messaging/Consumer#"
 
 
+_HOP_KEYS_HERE = ("channel_via", "url_via", "call_wrappers", "record_wrappers")
+
+
+def _listified(node: Any) -> Any:
+    """`matches`, with every hop-key value a list — a COPY, never a mutation, because the
+    `_MATCHES` constants below are shared between tests and one run must not edit what the
+    next one reads."""
+    if isinstance(node, list):
+        return [_listified(entry) for entry in node]
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: ([value] if key in _HOP_KEYS_HERE and isinstance(value, dict) else _listified(value))
+        for key, value in node.items()
+    }
+
+
 def _single_call_catalog(
     matches: dict,
     catalog_id: str = "invented-single-call",
     direction: str = "outbound",
     protocol: str = "kafka",
 ) -> Catalog:
+    # **The hoisted identity table, because the engine now resolves through it** (Task 8).
+    # `YamlCatalogSource.load` hands every real catalog the table its hop declarations
+    # hoist into (spec §2a step 1), and `Catalog.value_model` defaults to empty — so a
+    # hand-built catalog carrying `channel_via` in `matches` and nothing in `value_model`
+    # would resolve NOTHING here while resolving in production, and the tests would be
+    # measuring the absence of the table rather than the engine. Built by PRODUCTION's own
+    # `_hoisted` rather than a test-local copy of it, so the two spellings cannot drift
+    # (§0a) and Task 10's narrowing of the hoist reaches these tests automatically.
+    #
+    # Two normalisations happen first, and both record something real:
+    #
+    # 1. **A hop key is listified.** `_channel_via_entries` documents the engine's grammar
+    #    as `{owner, method, arg}` OR `[{...}]` and accepts both, while the loader's
+    #    `_hoisted` refuses a bare mapping outright. MEASURED: all 75 `channel_via`/
+    #    `url_via` declarations in the 101 shipped catalogs use the LIST form and none uses
+    #    the bare one — so the engine's grammar is wider than anything that can actually be
+    #    loaded, and these tests had been exercising the unreachable half. Listifying here
+    #    puts them on the shape production has; the divergence itself is logged rather than
+    #    fixed in passing, because narrowing the engine's grammar is not Task 8's business.
+    # 2. **A catalog the hoist REFUSES keeps an empty table.** Several tests below hand the
+    #    engine deliberately malformed hop declarations to prove its own validators fire.
+    #    In production the loader refuses such a catalog and no engine ever sees it, so
+    #    those tests exercise a second line of defence that is reached only here — and an
+    #    empty `value_model` is the honest table for a catalog that would never load.
+    source = Path(f"tests/{catalog_id}.yml")
+    model: list[dict[str, Any]] = []
+    try:
+        _hoisted(_listified(matches), source, model)
+    except CatalogError:
+        model = []
     return Catalog(
         id=catalog_id,
         style="single_call",
@@ -1016,7 +1064,8 @@ def _single_call_catalog(
         direction=direction,
         requires=("call_site", "string_constants"),
         matches=matches,
-        source=Path(f"tests/{catalog_id}.yml"),
+        source=source,
+        value_model=model,
     )
 
 
@@ -1527,22 +1576,42 @@ def _record_wrappers_catalog(catalog_id: str = "invented-record-wrappers") -> Ca
     matches = {
         "owner": "com.acme.messaging.Producer",
         "methods": [{"name": "send", "record_arg": 0}],
+        # The shipped shape since CP-34: two overloads named by `descriptor` with the
+        # value's own measured index, then the undiscriminated `last` row for the rest.
         "record_wrappers": [
+            {
+                "type": "org.apache.kafka.clients.producer.ProducerRecord",
+                "descriptor": HEADERS_CTOR,
+                "channel_ctor_arg": 0,
+                "payload_ctor_arg": 3,
+            },
             {
                 "type": "org.apache.kafka.clients.producer.ProducerRecord",
                 "channel_ctor_arg": 0,
                 "payload_ctor_arg": "last",
-            }
+            },
         ],
     }
     return _single_call_catalog(matches, catalog_id)
 
 
-def _record_ctor(caller: str, ordinal: int, receiver: int, arguments: list) -> CallSiteFact:
+# `ProducerRecord(String, Integer, K, V, Iterable<Header>)` as the JVM spells it — the
+# five-argument overload whose LAST argument is the record's headers, measured in
+# `scripts/probes/cp34_producer_record_ctors.md`.
+HEADERS_CTOR = (
+    "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;"
+    "Ljava/lang/Object;Ljava/lang/Iterable;)V"
+)
+RECORD_HEADERS = "org/apache/kafka/common/header/internals/RecordHeaders#"
+
+
+def _record_ctor(
+    caller: str, ordinal: int, receiver: int, arguments: list, descriptor: str = "()V"
+) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(owner=PRODUCER_RECORD, name="<init>", descriptor="()V"),
+        target=CallTarget(owner=PRODUCER_RECORD, name="<init>", descriptor=descriptor),
         invoke_kind="special",
         ordinal=ordinal,
         receiver=receiver,
@@ -1589,8 +1658,15 @@ def test_a_two_arg_producer_record_derives_the_topic_and_the_payload(tmp_path: P
 def test_a_three_arg_producer_record_still_lands_the_payload_on_last(tmp_path: Path):
     """The 3-arg overload (`topic, key, value`) proves `payload_ctor_arg:
     "last"` is a rule about the constructor's own shape, not a fixed index —
-    it holds across every `ProducerRecord` overload (design doc), landing on
-    the value even though the value has moved from position 1 to position 2."""
+    landing on the value even though the value has moved from position 1 to
+    position 2.
+
+    *This docstring used to add "it holds across every `ProducerRecord` overload (design
+    doc)". It does not, and nothing had measured it: CP-34 reads all six constructors and
+    two of them put `Iterable<Header>` last. The overloads it DOES hold for are the four
+    that probe enumerates, this one among them; the two it does not are discriminated by
+    `descriptor` in the catalog and pinned in
+    `test_a_record_built_with_headers_reads_the_value_and_not_the_headers`.*"""
     caller = "com/acme/orders/messaging/EventProducers#publishRaw()."
     facts = [
         _record_ctor(
@@ -1612,6 +1688,84 @@ def test_a_three_arg_producer_record_still_lands_the_payload_on_last(tmp_path: P
     assert endpoint["path"] == "order-raw"
     assert endpoint["resolution"] == "resolved"
     assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_EVENT
+
+
+def test_a_record_built_with_headers_reads_the_value_and_not_the_headers(tmp_path: Path):
+    """CP-34, measured at kafka-clients 3.6.2. `new ProducerRecord<>(topic, partition,
+    key, value, headers)` puts the record's HEADERS last, so `payload_ctor_arg: "last"`
+    published a `RecordHeaders` as the request payload — a fabricated payload on ordinary
+    input, the documented way to send a record with headers.
+
+    The catalog now names that overload by `descriptor` with the value's own measured
+    index (3), and the undiscriminated `last` row behind it still answers the four
+    overloads where `last` IS the value. Arity cannot separate them: `(String, Integer,
+    Long, K, V)` and `(String, Integer, K, V, Iterable)` both take five arguments and
+    disagree, which is why the discriminator is the descriptor."""
+    caller = "com/acme/orders/messaging/EventProducers#publishWithHeaders()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            14,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="string", value="order-42"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+                CallArgument(kind="instance", symbol=RECORD_HEADERS),
+            ],
+            descriptor=HEADERS_CTOR,
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=14, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order-audit"
+    assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_EVENT
+
+
+def test_a_record_ctor_no_declared_overload_reaches_derives_no_payload(tmp_path: Path):
+    """An entry is chosen by descriptor AFTER the constructor is found, and a catalog may
+    declare only discriminated entries. A linked constructor none of them matches derives
+    the honest `(None, None)` a type naming no entry at all derives — an overload nobody
+    measured is not read through a rule written for a different one (§8.1)."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "record_arg": 0}],
+        "record_wrappers": [
+            {
+                "type": "org.apache.kafka.clients.producer.ProducerRecord",
+                "descriptor": HEADERS_CTOR,
+                "channel_ctor_arg": 0,
+                "payload_ctor_arg": 3,
+            }
+        ],
+    }
+    caller = "com/acme/orders/messaging/EventProducers#publishUnmeasured()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            15,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+            ],
+            descriptor="(Ljava/lang/String;Ljava/lang/Object;)V",
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=15, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(
+        tmp_path, facts, _single_call_catalog(matches, "invented-record-descriptors")
+    )
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
 
 
 def test_an_unlinked_record_argument_derives_unresolved_with_a_null_path(tmp_path: Path):
@@ -9976,8 +10130,39 @@ def _create_receiver_call(
         ordinal=ordinal,
         receiver=5,
         result=None,
-        arguments=[CallArgument(kind="instance", source=source, symbol="jakarta/jms/Queue#")]
+        # **`unresolved`, not `instance`, and the probe above says why**: a factory
+        # RESULT reaches its consumer as the compiler's `unresolved` kind carrying a
+        # `source`. Only a `NEW` names a concrete type, and `createTopic` is a method
+        # result rather than a constructor. Measured on the real scanner —
+        # `orders-service`'s own `createConsumer` site carries
+        # `{"kind":"unresolved","source":7}`. This fixture said `instance` with a
+        # `jakarta/jms/Queue#` symbol, which the scanner never emits here, and the
+        # mismatch hid behind a ladder that read `source` and ignored the symbol.
+        arguments=[CallArgument(kind="unresolved", source=source)]
         + [CallArgument(kind="string", value="orderType = 'RUSH'")] * (arity - 1),
+    )
+
+
+def _create_topic_call(caller: str, ordinal: int, result: int, topic: str) -> CallSiteFact:
+    """`createTopic`, for the rows whose declared parameter type is `Topic`.
+
+    `jakarta.jms.Queue` and `jakarta.jms.Topic` are SIBLINGS under `Destination` —
+    measured, `javap -cp jakarta.jms-api-3.1.0.jar` — so neither stands where the other
+    is declared, and a durable or shared TOPIC subscription fed by `createQueue` is a
+    call that cannot compile. This fixture used `createQueue`, which is why the type gate
+    refused it; the catalogs declared `createQueue` on those rows too, and both were
+    corrected together."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION, name="createTopic", descriptor="(Ljava/lang/String;)Ljakarta/jms/Topic;"
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=5,
+        result=result,
+        arguments=[CallArgument(kind="string", value=topic)],
     )
 
 
@@ -9995,7 +10180,8 @@ def test_a_durable_jms_subscription_derives_the_destination_it_subscribes_to(tmp
     merely a row."""
     caller = "com/acme/orders/messaging/JmsRoutes#durable()."
     facts = [
-        _create_queue_call(caller, 0, 11, "orders.audit"),
+        # `createTopic`, not `createQueue`: this row's declared parameter type IS `Topic`.
+        _create_topic_call(caller, 0, 11, "orders.audit"),
         _create_receiver_call(
             caller,
             "createDurableConsumer",

@@ -184,7 +184,14 @@ def _graphql_universe(
             elif isinstance(node, TypeDefinitionNode):
                 owners.setdefault(node.name.value, []).append(fact.symbol)
                 if isinstance(node, EnumTypeDefinitionNode):
-                    enums[node.name.value] = tuple(value.name.value for value in node.values)
+                    # `or ()` because `values` is OPTIONAL from graphql-core 3.3.0 on, and
+                    # this project's floor is `>=3.2.6`: 3.2.x annotates it
+                    # `Tuple[EnumValueDefinitionNode, ...]` and 3.3.0 annotates it
+                    # `tuple[EnumValueDefinitionNode, ...] | None`, so one spelling of this
+                    # line cannot type-check against both. An enum with no values is also
+                    # a real document — `enum Status { }` parses — and it reads the same
+                    # here either way: no members, so no closed set to project.
+                    enums[node.name.value] = tuple(value.name.value for value in node.values or ())
                 elif isinstance(node, ScalarTypeDefinitionNode):
                     scalars.add(node.name.value)
             elif isinstance(node, TypeExtensionNode):

@@ -90,7 +90,10 @@ the column that separates a genuine third-party boundary from a body we simply d
 open.
 
 **`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class` and
-`reason` — one row per distinct triple a CALL SITE names, not per method declared. The
+`reason` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
+declared and not per triple the bytecode wrote: a compiler-emitted `$default` bridge is
+re-targeted to the sibling it stands for before this is asked, so the triple here is the
+one the author's call resolves through (spec 2026-09-22 §1a). The
 reason is always present and comes from D00 §4's `method_resolution` set. Read
 `declaring_class IS NULL` with the reason beside it: three different kinds of "no body
 here" used to be one word, and one of the three was false.
@@ -924,6 +927,40 @@ would have to be reopened the first time something else started work, and every 
 the walk asks — which method, how deep, where it stops — is identical for a request and for
 a clock. So the walk takes a row from here and branches on the kind nowhere at all, which
 is also what makes the third kind free the day it gains a producer.
+
+### Value resolutions — a review list, and the only table nothing derives from
+
+Spec [2026-09-22](../superpowers/specs/2026-09-22-value-resolution-design.md) §3d and §7a.
+
+| Table | Holds |
+|---|---|
+| `value_resolutions` | One row per (catalog, position, path): what the backward value walk WOULD resolve at a position a catalog asked about, or the §1d reason it could not |
+
+**Written by `application/resolve/shadow.py`, and only when the analysis asked for it**
+(`sextant module analyze --shadow`). Every other analysis empties the table and leaves it
+empty — rows describing a walk this run did not perform would be a review list about
+another workspace.
+
+**Its whole purpose is that nothing reads it.** This project's standing rule is *misses are
+acceptable, fabrications are not*, and the value-resolution work inverts the usual risk: it
+converts misses into ANSWERS, so every conversion is a new assertion, across fourteen
+shipped catalogs at once. A before/after diff of `endpoints` catches MOVEMENT and not
+WRONGNESS — a wrong address looks exactly like a right one in a diff — so the walk runs in
+shadow first, writes its candidate conversions here, and publishes none of them. Each
+engine is then migrated with its diff already read.
+
+**Bounded by what catalogs ASK, never by the facts**, which is what makes it a list a person
+can read rather than a second copy of the argument grammar. How narrow that bound is —
+positions asked, against the ceiling of every argument and receiver of every call site — was
+measured across twenty-seven corpora including the 48 MB one, and is reported in
+[the value-walk measurement](../research/2026-09-23-value-walk-measurement.md) §2. It is
+cited here rather than restated: that figure has moved once already, and the copies of it
+did not move with it.
+
+**`value` masks by the ADDRESS map on export**, not by the argument-grammar one: a
+`would_resolve` row carries the string an engine WOULD publish as `endpoints.path`, so it is
+the same value one table along, and a bundle that masked the two by different rules would
+spell one address two ways.
 
 ---
 

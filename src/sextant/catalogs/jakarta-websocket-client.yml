@@ -56,27 +56,37 @@ matches:
   # `invokestatic java/net/URI.create`, and `new URI("ws://…")` emits `ldc` then
   # `invokespecial java/net/URI.<init>`. `channel_via` joins by owner and method
   # NAME rather than always `<init>`, so both forms are one entry each.
+  #
+  # `arity: 1` ON THE CONSTRUCTOR FORM, added 2026-09-23 with the rest of the
+  # value model. `java.net.URI` declares FIVE constructors, four of them
+  # multi-argument with the SCHEME at argument 0
+  # (`scripts/probes/a2t8_http_client_builders.md`, its `java.net.URI` table).
+  # Without the arity this form matched all five and `new URI("ws", host, path)`
+  # published `ws` as the address — a fabricated answer, not a miss. The two
+  # HTTP-client catalogs already declared the arity for exactly this reason; the
+  # three websocket/STOMP ones did not. The identity is stated once, with the
+  # measurement behind it, in `value-models/jdk.yml`.
   methods:
     - { name: connectToServer, arity: 2,
         descriptor: "(Ljava/lang/Object;Ljava/net/URI;)Ljakarta/websocket/Session;",
         channel_arg: 1,
         channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
-                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+                      { owner: java.net.URI, method: "<init>", arg: 0, arity: 1 }] }
     - { name: connectToServer, arity: 2,
         descriptor: "(Ljava/lang/Class;Ljava/net/URI;)Ljakarta/websocket/Session;",
         channel_arg: 1,
         channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
-                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+                      { owner: java.net.URI, method: "<init>", arg: 0, arity: 1 }] }
     - { name: connectToServer, arity: 3,
         descriptor: "(Ljakarta/websocket/Endpoint;Ljakarta/websocket/ClientEndpointConfig;Ljava/net/URI;)Ljakarta/websocket/Session;",
         channel_arg: 2,
         channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
-                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+                      { owner: java.net.URI, method: "<init>", arg: 0, arity: 1 }] }
     - { name: connectToServer, arity: 3,
         descriptor: "(Ljava/lang/Class;Ljakarta/websocket/ClientEndpointConfig;Ljava/net/URI;)Ljakarta/websocket/Session;",
         channel_arg: 2,
         channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
-                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+                      { owner: java.net.URI, method: "<init>", arg: 0, arity: 1 }] }
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }

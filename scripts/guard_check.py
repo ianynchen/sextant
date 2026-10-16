@@ -160,9 +160,74 @@ _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
 _DOCUMENT = "sextant/egress/render/document.py"
+_VALUES = "sextant/application/resolve/values.py"
 
 
 GUARDS: dict[str, Guard] = {
+    # --- the backward value walk and what it is allowed to answer ----------
+    "values.a-construction-hands-nothing-back": Guard(
+        what="a call site is read as the CONSTRUCTION of a value only when it produced no "
+        "value of its own — a call that hands something back is `produced_by`'s business "
+        "and is never read as what the receiver is",
+        why='`session.createProducer(session.createQueue("raw-audit"))` holds its '
+        "`Session` in a field, so that value has no producer edge and the first call it is "
+        "the receiver of is `createQueue` — which an `identified_by` entry names. Without "
+        "this conjunct the walk read that as the session's construction and answered "
+        "`raw-audit` as what the SESSION is: a queue name published as the identity of a "
+        "connection, at `resolved`, where nothing downstream can tell it from an "
+        "observation. MEASURED on `orders-service`, which is where it was found. **It "
+        'excludes a call that hands something back, which is narrower than "is an '
+        'initialiser"** — a VOID ordinary method still passes, and `OI-133` carries that '
+        "gap with its own measurement; this guard is the half that is closed",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        site = self._index.sites.get((method, min(ordinals)))\n"
+                '        return None if site is None or site.get("result") is not None '
+                "else min(ordinals)",
+                replace="        return min(ordinals)",
+            ),
+        ),
+    ),
+    "values.an-identity-entry-with-a-role-is-not-an-identity": Guard(
+        what="only a ROLE-FREE `identified_by` entry answers what a produced value IS; an "
+        "entry carrying a `role` is passed over",
+        why="a role says something narrower — argument 0 of `new ProducerRecord(topic, …, "
+        "payload)` is the CHANNEL and the last is the PAYLOAD, and the consuming row is "
+        "what selects between them. Read as identities, those two entries answer ONE value "
+        "twice, and the second answer is a payload slot published as the address of a "
+        "destination: a wrong row at `resolved`, which spec §7 names as the one failure this "
+        "whole work risks and which a migration diff cannot tell from a right one",
+        edits=(
+            Edit(
+                path=_VALUES,
+                # Re-anchored when the matching predicate moved into `_identity_matches`
+                # so the two `arg` readers could share it. The mutation is now NARROWER
+                # and the guard is stronger for it: the old anchor bundled the role skip
+                # with the integer-slot skip, so disabling it removed both and a test
+                # could have caught either. This one removes the role skip ALONE.
+                find="            if entry.get(_ROLE) is not None:",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "arguments.only-a-string-literal-is-a-destination": Guard(
+        what="a walk answer becomes a channel only when it is a `string` literal — a "
+        "`symbol`, an `expression` and an `absent` each read as unresolved",
+        why="the walk carries a declaration reference as a `symbol` literal (spec ruling "
+        "T-3) precisely so a consumer can tell it from text. A channel reader that tested "
+        "the answer KIND alone would write `com/acme/OrderWorker#` into `path` and publish a "
+        "symbol as an address at `resolved`/`compiler`, where nothing downstream can tell it "
+        "from an observation. The same one-word weakening admits an `int` and a `bool` "
+        "literal as destinations, which `channel_of` has refused since it was written",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    if answer is None or answer.kind != LITERAL or answer.literal_kind != STRING:",
+                replace="    if answer is None or answer.kind != LITERAL:",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "

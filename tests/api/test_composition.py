@@ -104,14 +104,14 @@ def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
 
 def test_the_catalog_hash_changes_when_any_model_beside_the_catalogs_changes(tmp_path: Path):
     """`_catalog_hash` is the identity of the framework knowledge a run was produced
-    with, and the shape, bean and step models are that knowledge as much as the
-    catalogs are (D02 §1b, §1c; spec 2026-09-21 §5): an edit to any of the three
-    directories must move it, or two runs would claim one knowledge while reading
-    different tables."""
+    with, and the shape, bean, step and value models are that knowledge as much as the
+    catalogs are (D02 §1b, §1c, §1f; spec 2026-09-21 §5; spec 2026-09-22 §2): an edit to
+    any of the four directories must move it, or two runs would claim one knowledge while
+    reading different tables."""
     (tmp_path / "invented.yml").write_text("id: invented\n", encoding="utf-8")
     baseline = api._catalog_hash(tmp_path)
     hashes = [baseline]
-    for subdirectory in ("shape-models", "bean-models", "step-models"):
+    for subdirectory in ("shape-models", "bean-models", "step-models", "value-models"):
         (tmp_path / subdirectory).mkdir()
         (tmp_path / subdirectory / "model.yml").write_text(
             f"id: {subdirectory}\n", encoding="utf-8"

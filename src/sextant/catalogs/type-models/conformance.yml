@@ -1,0 +1,74 @@
+id: conformance
+displayName: Type conformance a repository cannot read for itself
+
+# WHAT THIS FILE IS, and why it has to exist.
+#
+# A `single_call` row declares the type it accepts at its destination position — its
+# own `descriptor` says so. A producing call declares the type it returns. Java tells
+# two overloads apart by exactly that: name and parameter types in order (GUIDELINES
+# §8.1, "a language's rules bind exactly as a framework's do"). So a producer whose
+# return type cannot be the declared parameter type did not produce that value, and a
+# destination read through it would be a wrong row at `resolved`.
+#
+# Deciding that needs one fact per pair: does the producer's return type CONFORM to the
+# declared parameter type. Where both types are the module's own, `type_hierarchy`
+# answers it. Here they never are — MEASURED over every corpus: ZERO rows describe
+# `java/util/List#`, `jakarta/jms/Queue#` or `AutoSubscription#`, and two fixtures have
+# an EMPTY `type_hierarchy`, because that table records what a class in THIS module
+# extends and these classes are in the JDK and in dependency jars.
+#
+# A dependency's bytecode becomes readable only if the user opts into
+# `extract_libraries`; the JDK's never does, being nobody's declared dependency. And
+# reading conformance from the scan would make a topic resolve or not depending on a
+# SCAN OPTION — one source tree, two different endpoint sets — which is the shape §8.2
+# refuses. Declared here, the answer is the same either way.
+#
+# CONFORMANCE, NOT `extends`. `java.util.List extends java.util.SequencedCollection` on
+# JDK 21 (JEP 431) and `java.util.Collection` on 17, so a direct edge is version-scoped
+# and would be false on one of them. The relation recorded is "this type may be used
+# where that type is declared", which is true on every version this repo targets.
+#
+# Each entry carries `by`: the measurement behind it, never a recollection. §8.1 —
+# a rule taken from memory is a prediction, and this repository has shipped a wrong one
+# that way before.
+
+conformance:
+  # MEASURED with `javap` on the JDK this repo builds with:
+  #   java.util.List extends java.util.SequencedCollection
+  #   java.util.SequencedCollection extends java.util.Collection
+  # Read by `kafka-consumer` and `kafka-streams`, whose `subscribe(Collection)` and
+  # `stream(Collection)` rows are fed by `List.of`, `Arrays.asList` and
+  # `Collections.singletonList` — all three return `java.util.List`.
+  - subtype: java.util.List
+    supertype: java.util.Collection
+    by: javap java.util.List, java.util.SequencedCollection (Temurin 21.0.12.1+1)
+
+  # MEASURED with `javap -cp jakarta.jms-api-3.1.0.jar`:
+  #   jakarta.jms.Queue extends jakarta.jms.Destination
+  #   jakarta.jms.Topic extends jakarta.jms.Destination
+  # The two are SIBLINGS, and that is load-bearing: neither conforms to the other, so a
+  # `Topic`-typed row fed by `createQueue` is refused rather than published.
+  - subtype: jakarta.jms.Queue
+    supertype: jakarta.jms.Destination
+    by: javap -cp jakarta.jms-api-3.1.0.jar jakarta.jms.Queue
+  - subtype: jakarta.jms.Topic
+    supertype: jakarta.jms.Destination
+    by: javap -cp jakarta.jms-api-3.1.0.jar jakarta.jms.Topic
+
+  # MEASURED with `javap -cp javax.jms-api-2.0.jar`: the same two statements under the
+  # pre-Jakarta spelling, which `javax-jms.yml` reads.
+  - subtype: javax.jms.Queue
+    supertype: javax.jms.Destination
+    by: javap -cp javax.jms-api-2.0.jar javax.jms.Queue
+  - subtype: javax.jms.Topic
+    supertype: javax.jms.Destination
+    by: javap -cp javax.jms-api-2.0.jar javax.jms.Topic
+
+  # MEASURED with `javap -cp pekko-connectors-kafka_2.13-1.1.0.jar`:
+  #   org.apache.pekko.kafka.AutoSubscription extends org.apache.pekko.kafka.Subscription
+  # `Subscriptions.topics` and `Subscriptions.topicPattern` both return
+  # `AutoSubscription`, and `Consumer.plainSource` and its four siblings declare
+  # `Subscription`.
+  - subtype: org.apache.pekko.kafka.AutoSubscription
+    supertype: org.apache.pekko.kafka.Subscription
+    by: javap -cp pekko-connectors-kafka_2.13-1.1.0.jar org.apache.pekko.kafka.AutoSubscription

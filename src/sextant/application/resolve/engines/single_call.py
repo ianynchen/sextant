@@ -33,10 +33,10 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     call_site_index,
     channel_of,
+    channel_of_answer,
     channels_of,
     declared_parameters_of,
     field_facts,
-    linked_channels,
     parameter_index,
     peer_of,
     supertypes_of,
@@ -50,9 +50,17 @@ from sextant.application.resolve.shapes.rooting import (
     catalog_symbols,
     names_a_type,
 )
+from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of, parameter_types
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_parameter_types,
+    member_name,
+    owner_of,
+    parameter_types,
+    returned_type,
+)
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -317,24 +325,18 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # address its address-less calls use. Catalog-level rather than per-row
     # because it describes the owner, not one of its methods.
     default_address = _default_address(matches, catalog)
-    record_wrappers = list(matches.get("record_wrappers", []))
-    _validate_record_wrappers(record_wrappers, catalog)
+    # **Validated on the RAW key, read from the HOISTED table** (Task 8 step 2b, user
+    # ruling 2026-10-16). The engine's own validator is a second line of defence that only
+    # a hand-built catalog ever reaches — the loader refuses a malformed wrapper block on
+    # hoist — so it keeps reading the declaration, and Task 10 retires the two together.
+    _validate_record_wrappers(list(matches.get("record_wrappers", [])), catalog)
+    call_wrappers, record_wrapper_args = _wrappers_of(catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
         type_carriers=tuple(_catalog_symbol(t) for t in matches.get("type_carriers", [])),
-        call_wrappers={
-            _catalog_symbol(wrapper["type"]): wrapper["payload_ctor_arg"]
-            for wrapper in matches.get("call_wrappers", [])
-        },
+        call_wrappers=call_wrappers,
     )
-    # `record_arg`'s own lookup (D02 §2, Task 7): the record's type keys a
-    # `(channel_ctor_arg, payload_ctor_arg)` pair, converted once here rather
-    # than per call site, exactly as `call_wrappers` above is.
-    record_wrapper_args = {
-        _catalog_symbol(wrapper["type"]): (wrapper["channel_ctor_arg"], wrapper["payload_ctor_arg"])
-        for wrapper in record_wrappers
-    }
     supertypes = supertypes_of(workspace)
     # Read once per run, the same `_rules_of`/`_enum_symbols` precedent (2F
     # design §4) — None for a catalog declaring no `field_sources` block, in
@@ -394,6 +396,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             index.positions_by_owner.get(owner, []) for owner in dict.fromkeys(owners)
         )
     )
+    # The walk's index, built on the FIRST `channel_via` row that reaches it and not
+    # before (Task 7's own measurement): building it eagerly charges every module that
+    # declares none of the framework — 0.16s on `mall-admin` — and most catalogs on most
+    # modules never take that branch. Named `values` because `index` here is already the
+    # call-site index this engine has always had.
+    values: ValueIndex | None = None
     for position in positions:
         site = call_sites[position]
         arguments = site["arguments"]
@@ -577,12 +585,78 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 )
             ]
         elif "channel_via" in method:
+            # **The backward walk, in place of this engine's own `channel_of`-then-
+            # `linked_channels`** (spec §2b, Task 8). The ladder it replaces was two rungs,
+            # each capped at one hop: the literal at the declared position, then ONE
+            # `source` link back to a `channel_via`-named call. `resolve_site` answers the
+            # same position with no cap and no direction named per catalog, and where the
+            # value came from a producer whose result is opaque, the identity table the
+            # loader hoisted (`catalog.value_model`, §2) says which of that producer's
+            # arguments IS the value — the same two statements `channel_via` welded
+            # together (§0b), with the distance half now the walk's and the meaning half
+            # still catalog data.
+            #
+            # **THE LADDER STAYS A LADDER.** The literal read runs FIRST, through the same
+            # reader every other branch uses, and the walk answers only where it did not
+            # resolve — which is also what preserves the 2F field ladder above: where
+            # `address_argument` replaced this argument with a configuration expression,
+            # that expression resolves HERE and the walk is never consulted, exactly as
+            # before. Fixture-neutral for every catalog shipped so far, for the reason the
+            # ladder comment gives: these `channel_arg` positions are never themselves
+            # string literals.
+            #
+            # **One tuple per distinct destination, not one per path** (§1c, and Task 7's
+            # own wording). Several paths are several bindings by design — several callers,
+            # several returns of a callee read through — and they routinely AGREE about
+            # this one slot while differing elsewhere. Two paths that both read `raw-t1`
+            # are one destination; keeping them apart would mint a second row for a
+            # subscription declared once, and two paths that both read NOTHING would mint
+            # two unresolved rows where this ladder minted one. Order is the walk's own,
+            # which is deterministic (NFR-1), and `dict.fromkeys` keeps it.
+            #
+            # `channel_of_answer` and not `read_destination`: `_validate_methods` already
+            # refuses `channel_via` beside `url_arg`, so a `channel_via` row is
+            # channel-only by construction and the url reader can never be the right one
+            # here. There is deliberately no `url_of_answer` to reach for.
+            # **The type gate, and it is what makes the SHARED identity table safe.**
+            # `channel_via` used to be read per ROW, so a row could only follow producers
+            # it declared. The hoisted table is per SOURCE, so without a gate
+            # `subscribe(Pattern)` — which declares only `Pattern.compile` — would reach
+            # the sibling row's `List.of` entry and publish two topic names it cannot
+            # carry. That is a wrong address at `resolved`, the one failure spec §7 says
+            # this work risks.
+            #
+            # The gate is the discriminator the LANGUAGE ITSELF uses rather than one invented
+            # here (§8.1 rule 5): this row's `descriptor` declares the type it accepts at
+            # the destination position, the producing call declares what it returns, and a
+            # producer whose return type cannot stand there did not produce this value.
+            # `catalog.type_model` carries the conformance facts a repository cannot read
+            # for itself, each measured by `javap`.
+            #
+            # Checked BEFORE the walk and not inside it: `resolve/values.py` names no
+            # language by architecture test, and type conformance is language knowledge. The
+            # immediate producer is the only one that matters — it is what hands the value
+            # to the declared slot — so one look at the argument's own `source` settles it
+            # and the walk needs no new parameter.
             literal = read_destination(url_argument)
-            forms = method["channel_via"]
-            if literal[2] != "resolved" and forms:
-                destinations = linked_channels(url_argument, facts, forms)
-            else:
+            # `_validate_methods` already refuses `channel_via` on a row declaring neither
+            # position, so the slot is always there; narrowed rather than cast so the
+            # guarantee stays checkable if that validator ever changes.
+            declared_slot = method.get("url_arg", method.get("channel_arg"))
+            channel_slot: int | str = declared_slot if isinstance(declared_slot, int | str) else 0
+            if literal[2] == "resolved" or not method["channel_via"]:
                 destinations = [literal]
+            elif not _producer_conforms(url_argument, method, facts.caller_call_sites, catalog):
+                destinations = [(None, None, "unresolved")]
+            else:
+                if values is None:
+                    values = value_index(workspace)
+                destinations = list(
+                    dict.fromkeys(
+                        channel_of_answer(binding.slots.get(channel_slot))
+                        for binding in resolve_site(workspace, site, values, catalog.value_model)
+                    )
+                ) or [(None, None, "unresolved")]
         else:
             # A `channel_arg` slot may hold a whole ARRAY of destinations —
             # `addHandler(handler, String... paths)` registers one handler at
@@ -1412,6 +1486,133 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
         )
 
 
+def _wrappers_of(
+    catalog: Catalog,
+) -> tuple[dict[str, int], dict[str, list[tuple[str | None, int, int | str]]]]:
+    """The two wrapper lookups, read from the HOISTED identity table rather than from the
+    raw `call_wrappers` / `record_wrappers` keys (Task 8 step 2b).
+
+    **Why it has to move before Task 10 and not with it.** Task 10 deletes those keys and
+    makes the loader refuse them, and its own Step 4 asserts that no row moves — which
+    only holds if the reader already gets the same answer from somewhere else. Read from
+    `matches`, both lookups would come back empty the moment the keys went, and every row
+    the wrapper path publishes would vanish: movement in the direction §8 says a reader
+    cannot detect. MEASURED by disabling this function: 8 endpoint rows and 1 shape row on
+    `orders-service` depend on it.
+
+    **The ROLES are what tell the two kinds apart**, so nothing has to remember which key
+    an entry came from. `_constructor_identities` hoists one entry per declared
+    `<name>_ctor_arg`, each carrying its role, so a constructor with BOTH a `channel` and
+    a `payload` role is what `record_wrappers` declared, and one carrying `payload` alone
+    is what `call_wrappers` did. That is the same distinction the two keys drew, recovered
+    from the data rather than from its declaration site.
+
+    Grouped by `(owner, descriptor)` in the table's own order, because the consuming rule
+    is first-match-wins on the descriptor (CP-34): one type declares several constructors
+    that disagree about where the payload is, and an entry declaring no descriptor matches
+    any. `dict` preserves insertion order and the hoist preserves declaration order, so
+    two runs over one catalog build one list (NFR-1).
+    """
+    grouped: dict[tuple[str, str | None], dict[str, int | str]] = {}
+    for entry in catalog.value_model:
+        role = entry.get("role")  # the key `_constructor_identities` hoists it under
+        owner = entry.get("owner")
+        if role is None or owner is None or entry.get("method") != "<init>":
+            continue
+        grouped.setdefault((str(owner), entry.get("descriptor")), {})[str(role)] = entry["arg"]
+    call_wrappers: dict[str, int] = {}
+    records: dict[str, list[tuple[str | None, int, int | str]]] = {}
+    for (owner, descriptor), roles in grouped.items():
+        channel, payload = roles.get("channel"), roles.get("payload")
+        if payload is None:
+            continue
+        if channel is None:
+            # A payload with no channel beside it is `call_wrappers`' shape, keyed by type
+            # alone as that lookup always has been — it declares no descriptor. An INT
+            # only: `call_wrappers`' own grammar is a position, and the `last` rule belongs
+            # to `record_wrappers`' descriptor discrimination, which always declares a
+            # channel beside it and so cannot reach this arm.
+            if isinstance(payload, int):
+                call_wrappers.setdefault(owner, payload)
+        elif isinstance(channel, int):
+            records.setdefault(owner, []).append((descriptor, channel, payload))
+    return call_wrappers, records
+
+
+def _conforms(got: str, want: str, conformance: list[dict[str, Any]]) -> bool:
+    """Whether a value of type `got` may stand where `want` is declared.
+
+    Equality first, then the declared conformance table, walked TRANSITIVELY so a chain
+    (`List` -> `Collection` via whatever the platform puts between them) is one fact per
+    link rather than one per pair. Nothing is inferred: a pair neither equal nor reachable
+    through declared links is refused, and `tests/architecture` fails on any pair the
+    table cannot decide, so a refusal here is a table that needs an entry and never a
+    silent miss.
+    """
+    if got == want:
+        return True
+    # The table declares dotted names (a catalog author's spelling); both sides here are
+    # SCIP symbols. Converted at the edge, once per call, so the comparison never
+    # straddles two spellings (§0a).
+    links = [
+        (_catalog_symbol(entry["subtype"]), _catalog_symbol(entry["supertype"]))
+        for entry in conformance
+    ]
+    reach = {got}
+    frontier = [got]
+    while frontier:
+        current = frontier.pop()
+        for subtype, supertype in links:
+            if subtype == current and supertype not in reach:
+                if supertype == want:
+                    return True
+                reach.add(supertype)
+                frontier.append(supertype)
+    return False
+
+
+def _producer_conforms(
+    argument: dict[str, Any] | None,
+    method: dict[str, Any],
+    caller_sites: "Sequence[dict[str, Any]]",
+    catalog: Catalog,
+) -> bool:
+    """Whether the call that produced this argument could have produced a value of the
+    type the row declares at its destination position (§8.1's language rule).
+
+    Both types are compared as SCIP symbols: `descriptor_parameter_types` answers in
+    dotted form and `returned_type` in symbol form, so the declared type and the table's
+    own entries are converted once rather than compared across two spellings.
+
+    True wherever the question does not arise — no argument, no `source` naming a
+    producing call, no declared `descriptor` to read a parameter type from, no producing
+    site in this caller, or a producer whose descriptor returns nothing readable.
+    **That default is deliberate and it is §8's direction**: refusing on absent evidence
+    would exclude a destination on inference and leave no row for a reader to notice,
+    where allowing it leaves the walk to answer exactly as it did before this gate.
+    """
+    if not isinstance(argument, dict):
+        return True
+    source = argument.get("source")
+    descriptor = method.get("descriptor")
+    slot = method.get("url_arg", method.get("channel_arg"))
+    if source is None or not descriptor or slot is None:
+        return True
+    declared = descriptor_parameter_types(str(descriptor))
+    if not isinstance(slot, int) or slot >= len(declared):
+        return True
+    producer = next(
+        (site for site in caller_sites if site.get("result") == source),
+        None,
+    )
+    if producer is None or not producer.get(_DESCRIPTOR):
+        return True
+    returned = returned_type(str(producer[_DESCRIPTOR]))
+    if returned is None:
+        return True
+    return _conforms(returned, _catalog_symbol(declared[slot]), catalog.type_model)
+
+
 def _channel_via_entries(method: dict[str, Any]) -> list[Any]:
     """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
     normalized to a list without touching the entries themselves — shared by
@@ -1443,29 +1644,39 @@ def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> N
     """Refuses a broken `record_wrappers` block before any call site is
     matched — the same `_validate_methods` discipline, applied to the
     catalog-level block a `record_arg` row's lookup depends on. Each entry
-    must be `{type, channel_ctor_arg, payload_ctor_arg}`: `type` a string,
-    `channel_ctor_arg` an int, and `payload_ctor_arg` either an int or the
-    literal string `"last"` (the constructor's own final argument) —
-    anything else is a broken catalog, never a silent no-op once a call site
-    reaches it."""
+    must be `{type, channel_ctor_arg, payload_ctor_arg, descriptor?}`: `type` a
+    string, `channel_ctor_arg` an int, `payload_ctor_arg` either an int or the
+    literal string `"last"` (the constructor's own final argument), and
+    `descriptor` — optional — the JVM descriptor of the one overload this entry
+    is about — anything else is a broken catalog, never a silent no-op once a
+    call site reaches it.
+
+    `descriptor` exists because `"last"` is a claim about a type's WHOLE
+    constructor set and one measured set disagrees with it (CP-34): two of
+    `ProducerRecord`'s six put `Iterable<Header>` last, so `"last"` read the
+    headers as the payload there. Arity cannot separate those two from the
+    correct ones — two five-argument overloads answer differently — so the
+    discriminator is the descriptor."""
     for wrapper in rows:
         payload_ctor_arg = wrapper.get("payload_ctor_arg")
+        descriptor = wrapper.get("descriptor")
         valid = (
             isinstance(wrapper.get("type"), str)
             and isinstance(wrapper.get("channel_ctor_arg"), int)
             and (isinstance(payload_ctor_arg, int) or payload_ctor_arg == "last")
+            and (descriptor is None or (isinstance(descriptor, str) and ")" in descriptor))
         )
         if not valid:
             raise CatalogError(
                 f"loading catalog {catalog.source}: a `record_wrappers` entry must be "
-                f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last"}}`, got '
-                f"{wrapper!r}"
+                f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last", '
+                f"descriptor?: str}}`, got {wrapper!r}"
             )
 
 
 def _record_arguments(
     record: dict[str, Any] | None,
-    record_wrapper_args: dict[str, tuple[int, int | str]],
+    record_wrapper_args: dict[str, list[tuple[str | None, int, int | str]]],
     facts: CallFacts,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """A `record_arg` row's channel and payload arguments (D02 §2's
@@ -1492,17 +1703,35 @@ def _record_arguments(
     the payload would be silently wrong rather than an honest capture
     failure; the channel argument itself is untouched by this guard, so
     `path` still carries whatever it read (I1: only the declared payload
-    capture failed)."""
+    capture failed).
+
+    **The entry is chosen AFTER the constructor is found, by descriptor** (CP-34): a type
+    declares several constructors and they need not agree about where the payload is, so
+    the catalog may declare one entry per overload. First match wins, and an entry
+    declaring no `descriptor` matches any — the rule `_matching_row` and `linked_channels`
+    already use. A linked constructor no entry matches is the same honest `(None, None)`
+    as a type naming no entry at all: an overload nobody measured derives nothing rather
+    than being read through a rule written for a different one."""
     if record is None or record.get("kind") != "instance" or record.get("symbol") is None:
         return None, None
     symbol = str(record["symbol"])
-    wrapper = record_wrapper_args.get(symbol)
-    if wrapper is None:
+    entries = record_wrapper_args.get(symbol)
+    if not entries:
         return None, None
-    channel_ctor_arg, payload_ctor_arg = wrapper
     constructor = _linked_constructor(symbol, record.get("source"), facts)
     if constructor is None:
         return None, None
+    wrapper = next(
+        (
+            entry
+            for entry in entries
+            if entry[0] is None or entry[0] == str(constructor.get("descriptor"))
+        ),
+        None,
+    )
+    if wrapper is None:
+        return None, None
+    _, channel_ctor_arg, payload_ctor_arg = wrapper
     ctor_arguments = constructor.get("arguments") or []
     channel_argument = _arg_at(ctor_arguments, channel_ctor_arg)
     if isinstance(payload_ctor_arg, int):

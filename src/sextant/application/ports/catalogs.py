@@ -244,6 +244,40 @@ class Catalog:
     # annotation, the channel types), so no container's spellings reach this
     # port or the resolve layer as anything but data.
     bean_model: dict[str, Any] = field(default_factory=dict)
+    # D02 §1f (spec 2026-09-22 §2): every PRODUCING call this source knows the identity
+    # of — which of its arguments carries the value its result stands for. The walk that
+    # answers *what is this value* finds the producing call on its own and is then stuck
+    # (§0b: a `Queue` object, and nothing in the facts says what string identifies one);
+    # this table is the framework half, and §1e is the line it draws — the walk answers
+    # what a value is, the catalog still says what it means.
+    #
+    # **The same table on every catalog, and that is what it means rather than a
+    # duplication** (§2): an identity is declared ONCE PER PRODUCER, not once per
+    # consuming catalog, which is the whole point of hoisting it — so it is a property of
+    # the source a catalog came from, not of the file. The loader builds it once and hands
+    # every catalog the same list. A source that declares none contributes none, which is
+    # the state of a repository's own catalog set (D02 §6) that ships no `value-models/`
+    # and writes no hop declaration.
+    #
+    # Carried whole and unread here, like every block above: the entries are interpreted
+    # by the walk (`resolve/values.py`), which is where a non-integer `arg` and a roled
+    # entry are passed over and where the reason for each is stated.
+    value_model: list[dict[str, Any]] = field(default_factory=list)
+
+    # Which types may stand where another is declared (`type-models/*.yml`), as
+    # `{subtype, supertype, by}`. The source reads it once and hands every catalog the
+    # same list, exactly as `value_model` above.
+    #
+    # It is what lets an engine refuse a producer whose return type cannot be the type
+    # its row declares at that position — the LANGUAGE separates two overloads by their
+    # parameter types, and §8.1 says mirroring a language's own rule is not optional. Declared rather than
+    # scanned because `type_hierarchy` only ever describes the module's own classes, and
+    # these types live in the JDK and in dependency jars; `yaml_source.type_model` carries
+    # the measurement.
+    #
+    # Carried whole and unread here. The relation is CONFORMANCE, not `extends`, so a
+    # reader must not treat an entry as a direct supertype edge.
+    type_model: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CatalogError(ValueError):

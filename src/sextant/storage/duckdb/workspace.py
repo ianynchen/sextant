@@ -692,6 +692,21 @@ _NAMED_QUERIES = {
         FROM reachability
         ORDER BY root, depth, symbol
     """,
+    # Spec 2026-09-22 §3d/§7a's shadow review list. Empty on every analysis that
+    # did not ask for shadow mode, which is what an ordinary run should answer.
+    #
+    # The ordering is what a REVIEWER reads it in: one catalog's questions
+    # together, then position, then path — because the review is per catalog
+    # (Tasks 7-9 migrate one engine at a time and read their own rows first),
+    # and because a position answered on several paths is several rows that
+    # belong beside one another. Total by construction: (catalog, caller,
+    # ordinal, slot, path) is the row's identity, so no tie survives it.
+    "value_resolutions": """
+        SELECT catalog, caller, ordinal, slot, path, outcome,
+               answer_kind, literal_kind, value, reason
+        FROM value_resolutions
+        ORDER BY catalog, caller, ordinal, slot, path
+    """,
     # `G-74`'s own join: every `invoke_kind: throw` call site whose CALLER is a symbol a
     # root reaches (`reachability`, the root's own body at depth 0 included) — a throw
     # site reachable from a handler, at whatever depth. `cs.owner` is the thrown TYPE,
@@ -814,6 +829,30 @@ _NAMED_QUERIES = {
     # D00 §5's `constant` (W4), which had no producer until `ConstantValue` was
     # read. Ordered on the symbol, which is unique per field.
     "constants": "SELECT * FROM constants ORDER BY symbol",
+    # Spec 2026-09-22 §1a's five value edges, normalised out of `call_sites`,
+    # `return_flows` and `call_edges`. The ONE named query whose text is read
+    # from a file rather than written here, and the file's header says why: five
+    # arms, each naming the fact and the projection behind it, would read badly
+    # wedged between one-line neighbours.
+    #
+    # **Read, never executed as DDL.** §3b refuses a materialised copy of rows
+    # three tables already hold, and a `CREATE VIEW` is still an object in the
+    # catalog — `schema_objects()` finds it, the export ratchet below quite
+    # correctly demands a query for it, and every bundle then carries a derived
+    # copy beside the three tables it derives from. Measured while it was a
+    # view: 420 KB on `mall-admin`, the second-largest file in the bundle.
+    # Schema growth is one of the costs §3b names, so there is no database
+    # object at all; `query("value_edges")` runs this text against the three
+    # tables as they stand.
+    #
+    # **Nothing calls it yet, deliberately.** The walk that reads it is the next
+    # task and the measurement that gates the walk is the one after; an engine
+    # reading a value edge before that measurement lands is exactly what §3a
+    # forbids ("Build the edge view and the walk. No engine calls it.").
+    #
+    # Its ordering is the file's last statement, over the whole union and on
+    # every column (NFR-1) — stated there, beside the arms whose ties it breaks.
+    "value_edges": (_SQL_DIR / "value_edges.sql").read_text(encoding="utf-8"),
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -1019,6 +1058,27 @@ _EXPORT_QUERIES = {
         FROM roots r
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
         ORDER BY r.handler, r.root_kind, r.protocol, r.method, r.path
+    """,
+    # Spec 2026-09-22 §3d/§7a's shadow review list, and its `value` column is masked by
+    # the ADDRESS map rather than by the grammar one. That is the map's own rule applied
+    # rather than a choice per table: a `would_resolve` row carries the string an engine
+    # WOULD publish as `endpoints.path`, so it is the same value the address map already
+    # masks one table along, and masking it by a different rule would spell one address
+    # two ways in one bundle. `value_resolutions.value` is staged INTO that map beside
+    # the four address columns (`_stage_redactions`), for the reason the map's own
+    # comment gives about `roots.path`: a map built from the columns that existed when it
+    # was written leaves any later address unmasked with nothing saying so.
+    #
+    # Empty in every ordinary bundle — the table is filled only by `--shadow` — and
+    # exported anyway, because there is no exclusion class (the ratchet above), and
+    # because a shadow bundle is exactly the artefact a reviewer would hand to someone
+    # else to read.
+    "value_resolutions": f"""
+        SELECT v.catalog, v.caller, v.ordinal, v.slot, v.path, v.outcome,
+               v.answer_kind, v.literal_kind, coalesce(m.masked, v.value) AS value, v.reason
+        FROM value_resolutions v
+        LEFT JOIN {_REDACTED_ADDRESSES} m ON m.address = v.value
+        ORDER BY v.catalog, v.caller, v.ordinal, v.slot, v.path
     """,
     # No masked column, and stated rather than left to inference (the
     # `scheduled_work`/`error_handlers` precedent above): every column here is
@@ -1244,6 +1304,13 @@ _NAMED_DERIVATIONS = {
     # per engine run that learned an end of a channel.
     "channel_bindings_reset": "reset_channel_bindings.sql",
     "channel_bindings_insert": "insert_channel_bindings.sql",
+    # Spec 2026-09-22 §3d/§7a. A reset/insert pair owned by its one writing pass
+    # (`resolve/shadow.py`), the `roots`/`reachability` discipline — but with the RESET
+    # run on every resolve and the insert only in shadow mode, so an ordinary analysis
+    # empties a table it never fills rather than leaving a previous shadow run's review
+    # list behind. The file itself says why that is not merely tidy.
+    "value_resolutions_reset": "reset_value_resolutions.sql",
+    "value_resolutions_insert": "insert_value_resolutions.sql",
 }
 
 # The fact "tables" `schema.sql` defines as VIEWS over `raw_facts`, in dependency
@@ -1684,11 +1751,18 @@ class DuckDbWorkspace:
         # `path` is CARRIED from the endpoint that named the handler, so the
         # values overlap today, but a map built from endpoints alone would
         # leave any future root address unmasked with nothing saying so.
+        # `value_resolutions.value` joins the same map (spec 2026-09-22 §7a): a
+        # `would_resolve` row carries the string an engine WOULD publish as an
+        # endpoint's `path`, so it is the same value by a different name and one
+        # map is what keeps a shadow row and the row it anticipates spelled alike.
+        # Empty on every analysis but a `--shadow` one, which costs this UNION a
+        # scan of an empty table.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
-            "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL"
+            "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,

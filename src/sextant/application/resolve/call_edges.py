@@ -82,6 +82,7 @@ from collections.abc import Sequence
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, THROW, Dispatch, dispatch_of
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
@@ -104,7 +105,20 @@ def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) ->
     """
     workspace.derive("call_edges_reset")
     dispatch = dispatch_of(workspace)
-    sites = list(workspace.query("call_sites"))
+    # The PROJECTION, not the raw fact stream (spec 2026-09-22 §1a, I-3). An edge is a
+    # step a walk takes, and a compiler-emitted `$default` bridge is a step the program
+    # does not have: the bridge's body fills in the omitted arguments and then calls the
+    # sibling, so an edge stopping at it names a method no author wrote and puts a
+    # synthetic hop in every trace through a call that left a parameter to its default.
+    # `effective_call_sites` re-targets it, and reads a class-compiled lambda argument
+    # as the lambda it is — what every engine has seen since spec 2026-09-19 §3.
+    #
+    # Where the sibling is an INSTANCE method the projection also hands back
+    # `invoke_kind: virtual`, which this pass writes into the row and `dispatch` then
+    # walks subtypes for. That is the point: the compiler wrote `invokestatic` against
+    # the bridge, which dispatches on nothing, so on the raw site an override is not a
+    # candidate at all — one `resolved` edge hiding a call the JVM may send elsewhere.
+    sites = list(effective_call_sites(workspace))
     # Built once, outside the loop: two of its three routes are workspace-wide questions,
     # and asking them per site would repeat two queries for each of mall-admin's 24,591
     # edges.
@@ -142,8 +156,14 @@ def _record_hierarchy(workspace: Workspace, dispatch: Dispatch) -> None:
 def _record_resolution(
     workspace: Workspace, dispatch: Dispatch, sites: list[dict[str, object]]
 ) -> None:
-    """`method_resolution` — one row per distinct (class, name, descriptor) a call site
-    names, with the declaring type and always a reason.
+    """`method_resolution` — one row per distinct (class, name, descriptor) an EFFECTIVE
+    call site names, with the declaring type and always a reason.
+
+    **Effective, not raw** (spec 2026-09-22 §1a): `sites` is the projection, so a
+    compiler-emitted `$default` bridge is named by nothing here and gets no row — the
+    triple a reader sees is the one the author's call resolves through. MEASURED on
+    `fixtures/orders-ktor`: the `mount$default` row goes and `mount`'s own row was
+    already there, so no resolution a reader could ask for is lost.
 
     Distinct rather than per site: the same method called nine times resolves the same
     way nine times, and nine identical rows would say nothing a reader could use. The

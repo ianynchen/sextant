@@ -4613,4 +4613,8 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_roots",
         "resolve_format",
         "record_reachability",
+        # Spec 2026-09-22 §7a's shadow recorder, LAST. It runs on every resolve — with
+        # shadow mode off it empties its own table and reads nothing else — so it is a
+        # pass the profile must see, exactly like the fifteen above it.
+        "record_value_resolutions",
     ]

@@ -30,6 +30,7 @@ answer different questions:
 """
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -424,3 +425,138 @@ def test_every_hand_built_symbol_is_module_prefixed():
         symbol = getattr(fact, "symbol", None) or getattr(fact, "method", None) or fact.caller
         assert str(symbol).startswith(_MODULE)
         assert bare_descriptor(str(symbol)) != str(symbol)
+
+
+# ---- a compiler-emitted `$default` bridge ----------------------------------
+#
+# The same hand-built discipline, on the shape spec 2026-09-19 §3a projects
+# away: a call the compiler wrote against `send$default` is a call the AUTHOR
+# wrote against `send`, and this pass records the hop between the two methods.
+
+_API = "com/acme/orders/gate/Api#"
+_SUB = "com/acme/orders/gate/SubApi#"
+_API_JVM = "(Ljava/lang/String;)Ljava/lang/String;"
+_API_BRIDGE_JVM = (
+    "(Lcom/acme/orders/gate/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
+)
+_SIBLING = _MODULE + method_descriptor(_API, "send", _API_JVM)
+_BRIDGE = _MODULE + method_descriptor(_API, "send$default", _API_BRIDGE_JVM)
+
+
+def _bridge_declaration() -> SymbolFact:
+    """The bridge's own symbol fact as the extractor writes one: synthetic, static, and
+    carrying `bridge_of` — which is the ONLY thing that identifies a bridge, the `$default`
+    suffix being a name anyone may write."""
+    return SymbolFact(
+        document_id="doc_gate",
+        symbol=_BRIDGE,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + _API,
+        modifiers={"static": True, "synthetic": True},
+        bridge_of="send",
+        signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+    )
+
+
+def _bridge_call() -> CallSiteFact:
+    """`invokestatic Api.send$default(this, "y", 0, null)` — the shape kotlinc emits for
+    `api.send("y")` when `send`'s parameter has a default. Mask 0: nothing defaulted, so
+    the projection's only effect on this row is which method it names."""
+    return CallSiteFact(
+        document_id="doc_gate",
+        caller=_MODULE + _RUN,
+        target=CallTarget(owner=_API, name="send$default", descriptor=_API_BRIDGE_JVM),
+        invoke_kind="static",
+        ordinal=0,
+        result=4,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="string", value="y"),
+            CallArgument(kind="int", value=0),
+            CallArgument(kind="null"),
+        ],
+    )
+
+
+def _bridged_flows(tmp_path: Path, *extra: object) -> list[dict[str, object]]:
+    """`Caller#run` makes one call, and the compiler wrote it against the bridge. Both
+    methods have a body this workspace read and both return, so the two readings differ
+    in which callee the row names rather than in whether there is a row at all.
+
+    `Api#send` is an INSTANCE method — the bridge's slot 0 is its receiver — which is
+    the reading `effective_calls._sibling` settles on. `extra` is what a test adds."""
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            _type(_API, ConstructKind.CLASS),
+            _type(_CALLER, ConstructKind.CLASS),
+            _declared(_API, "send", _API_JVM),
+            _bridge_declaration(),
+            _declared(_CALLER, "run", _SEND_JVM),
+            _returns(_API, "send", _API_JVM, CallArgument(kind="string", value="sent")),
+            MethodReturnFact(
+                document_id="doc_gate",
+                method=_BRIDGE,
+                ordinal=0,
+                value=CallArgument(kind="string", value="bridged"),
+            ),
+            _bridge_call(),
+            *extra,
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    rows = workspace.query("return_flows")
+    workspace.close()
+    return rows
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """Nothing overrides the sibling: one candidate, so the flow is `resolved`."""
+    return _bridged_flows(tmp_path_factory.mktemp("return_flow_bridged"))
+
+
+@pytest.fixture(scope="module")
+def bridged_overridden(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """The same call, with a subtype of `Api` that overrides `send` and returns its own
+    value — which is what makes the two rows tell a reader something different."""
+    return _bridged_flows(
+        tmp_path_factory.mktemp("return_flow_bridged_overridden"),
+        _type(_SUB, ConstructKind.CLASS, superclass=_MODULE + _API),
+        _declared(_SUB, "send", _API_JVM),
+        _returns(_SUB, "send", _API_JVM, CallArgument(kind="string", value="sub")),
+    )
+
+
+def test_a_default_bridge_call_flows_from_the_sibling_it_stands_for(bridged):
+    """A `$default` bridge is re-targeted by `effective_call_sites` to the sibling it
+    stands for. Reading raw `call_sites` files the flow against the BRIDGE, whose own
+    body returns nothing a caller wants — so the round trip breaks at exactly the hop
+    this pass exists to record: a reader following the callee lands in a synthetic
+    argument-filling body instead of the function the author wrote."""
+    assert [(str(row["callee"]), row["return_ordinal"]) for row in bridged] == [(_SIBLING, 0)]
+    assert [value["value"] for value in _values(bridged)] == ["sent"]
+
+
+def test_a_bridge_over_an_instance_sibling_flows_from_the_override_too(bridged_overridden):
+    """**The widest movement the projection can produce here.** The compiler wrote
+    `invokestatic` against the bridge, and `invokestatic` dispatches on nothing — so on
+    the raw site `SubApi#send` is not a candidate and the value is claimed to have come
+    from one place. What the author wrote is `api.send("y")`, which the JVM dispatches
+    virtually, and `effective_calls` carries that in `invoke_kind`: the override is
+    reachable, so the value may be EITHER method's, and one `resolved` row becomes two
+    `narrowed` ones carrying different values.
+
+    Both descend from the one bridge site. What changes is that the value chain stops
+    naming a single origin for a call that has two."""
+    assert [str(row["callee"]) for row in bridged_overridden] == [
+        _SIBLING,
+        _MODULE + method_descriptor(_SUB, "send", _API_JVM),
+    ]
+    assert [value["value"] for value in _values(bridged_overridden)] == ["sent", "sub"]
+    assert [str(row["resolution"]) for row in bridged_overridden] == [str(Resolution.NARROWED)] * 2

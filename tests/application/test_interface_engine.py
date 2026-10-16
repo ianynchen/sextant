@@ -32,6 +32,7 @@ import pytest
 
 from fixture_build import compile_fixture
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -40,11 +41,13 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    MethodReturnFact,
     Parameter,
     Signature,
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.symbols import method_descriptor, type_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "implemented_interfaces"}
@@ -149,6 +152,32 @@ def _receiver_symbol_fact(interfaces: list[str] | None = None) -> list[SymbolFac
     return [_symbol_fact(RECEIVER_TYPE, interfaces), _method_symbol_fact(RECEIVER_HANDLER)]
 
 
+def _hoisted(registration: dict[str, object]) -> list[dict[str, object]]:
+    """A registration's `channel_via` entries as the identity table the loader hands every
+    catalog (`Catalog.value_model`, spec 2026-09-22 §2a step 1) — the same three fields,
+    with `owner` in the SCIP form the facts carry.
+
+    Written out here rather than imported because the hoist is the loader's and a test of
+    this engine must not depend on how it is spelled; that the SHIPPED catalog really
+    hoists this entry is pinned where the loader is tested
+    (`tests/ingress/test_yaml_source.py`). An entry missing one of the three fields is
+    skipped rather than converted, which costs those cases nothing: they exist to watch
+    `_validate_matches` refuse the FILE, and it refuses it before a single call site is
+    matched — so no identity table of any shape is ever read on that path.
+    """
+    entries = registration.get("channel_via") or []
+    return [
+        {
+            "owner": type_descriptor(str(entry["owner"])),
+            "method": entry["method"],
+            "arg": entry["arg"],
+            **({"arity": entry["arity"]} if "arity" in entry else {}),
+        }
+        for entry in (entries if isinstance(entries, list) else [entries])
+        if isinstance(entry, dict) and {"owner", "method", "arg"} <= set(entry)
+    ]
+
+
 def _catalog(
     *, matches: dict[str, object] | None = None, source: str = "test-pubsub-subscriber.yml"
 ) -> Catalog:
@@ -167,6 +196,7 @@ def _catalog(
             "handler_method": "receiveMessage",
             "registration": registration,
         }
+    declared = matches.get("registration")
     return Catalog(
         id="test-pubsub-subscriber",
         style="interface_implementation",
@@ -175,6 +205,7 @@ def _catalog(
         requires=("call_site", "string_constants", "implemented_interfaces"),
         matches=matches,
         source=Path(source),
+        value_model=_hoisted(declared) if isinstance(declared, dict) else [],
     )
 
 
@@ -202,10 +233,22 @@ def _catalog_with_channel_via(entry: object) -> Catalog:
     )
 
 
-def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> DuckDbWorkspace:
+def _resolve(
+    tmp_path: Path,
+    facts: list,
+    catalog: Catalog | None = None,
+    *,
+    edges: bool = False,
+) -> DuckDbWorkspace:
     write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
+    # `edges` builds the one derived table the walk's CROSSING edge is read from
+    # (`bound_to_parameter`, spec §1a) — the pipeline runs this pass above
+    # `derive_endpoints` for its own reasons, and only the two cases below cross a method
+    # boundary, so it stays off by default rather than slowing every case here.
+    if edges:
+        record_call_edges(workspace)
     skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
     assert skipped == []
     return workspace
@@ -487,6 +530,126 @@ def test_a_channel_via_registration_still_resolves_a_plain_string_literal(tmp_pa
     assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
 
 
+# --- Task 7: what the walk answers that the one-hop ladder could not --------
+# The ladder this engine used to carry read the literal at the declared position, then
+# followed ONE `source` link. A registration inside a HELPER was invisible to both: the
+# argument is the helper's parameter, and its value is one method away.
+
+_STARTERS = "com/acme/messaging/raw/Starters#"
+_HELPER = "com/acme/messaging/raw/Registrations#"
+_TAKES_STRING = "(Ljava/lang/String;)V"
+# Spelled through `method_descriptor` rather than written out: a method symbol's
+# signature part is a hash of the JVM descriptor, and the call target the crossing edge
+# joins back to carries that same descriptor (D00 §5a, OI-4's two-spellings rule).
+_REGISTER = method_descriptor(_HELPER, "register", _TAKES_STRING)
+
+
+def _helper_facts(first: CallArgument, second: CallArgument) -> list:
+    """A `register(String subscription)` helper holding the registration, called twice —
+    the M-1 shape (spec §0c) at this engine's own door."""
+    return [
+        _symbol_fact(_HELPER),
+        # The `method_return` fact a void method still carries, one per return
+        # instruction (D00 §5): `dispatch` reads this table to answer "did we read a
+        # body", so a callee without one is indistinguishable from a third-party call
+        # and binds no parameter at all (`test_values.py::_void` states the same).
+        MethodReturnFact(document_id="doc_1", method=_MODULE + _REGISTER, ordinal=0, value=None),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + _REGISTER,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _HELPER,
+            signature=Signature(
+                parameters=[
+                    Parameter(name="subscription", type=TypeRef(symbol="java/lang/String#"))
+                ]
+            ),
+        ),
+        _registration_site(
+            _MODULE + _REGISTER,
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        *[
+            CallSiteFact(
+                document_id="doc_1",
+                caller=_MODULE + caller,
+                target=CallTarget(owner=_HELPER, name="register", descriptor=_TAKES_STRING),
+                invoke_kind="static",
+                ordinal=0,
+                arguments=[argument],
+            )
+            for caller, argument in (
+                (method_descriptor(_STARTERS, "first", "()V"), first),
+                (method_descriptor(_STARTERS, "second", "()V"), second),
+            )
+        ],
+    ]
+
+
+def test_two_callers_of_one_registering_helper_are_two_rows_and_not_four(tmp_path: Path):
+    """**The conversion this migration exists for, and the M-1 rule holding at the same
+    time.** The registration's own argument is a PARAMETER, which the one-hop ladder could
+    only answer `unresolved` — one row, no address. The walk crosses to each caller, so
+    the two subscriptions are two rows; and because the unit of resolution is the PATH,
+    they are two and never the four a per-position reading would mint (there is one other
+    slot on this call, and it is resolved out of the same binding)."""
+    facts = _helper_facts(
+        CallArgument(kind="string", value="first-sub"),
+        CallArgument(kind="string", value="second-sub"),
+    )
+    workspace = _resolve(tmp_path, facts, edges=True)
+    rows = {(row["path"], str(row["resolution"])) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert rows == {("first-sub", "resolved"), ("second-sub", "resolved")}
+
+
+def test_two_paths_that_both_read_nothing_are_one_unresolved_row(tmp_path: Path):
+    """**A miss is one honest fact, however many ways the walk reached it.** Several paths
+    are several bindings by design (§1c), and two of them agreeing that the subscription
+    is unreadable is still ONE thing nobody could read — D02 §2's unresolved-is-an-answer.
+    A row per path would multiply one registration into as many unresolved rows as it has
+    callers, and an unresolved wire identity never dedups downstream, so nothing else in
+    the pipeline would collapse them."""
+    facts = _helper_facts(
+        CallArgument(kind="unresolved"),
+        CallArgument(kind="unresolved"),
+    )
+    workspace = _resolve(tmp_path, facts, edges=True)
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert [(row["path"], str(row["resolution"])) for row in rows] == [(None, "unresolved")]
+
+
+@pytest.mark.pins("arguments.only-a-string-literal-is-a-destination")
+def test_a_declaration_reference_in_the_channel_slot_is_never_published_as_an_address(
+    tmp_path: Path,
+):
+    """**Spec §7's one failure, guarded where it would happen.** The walk carries a
+    declaration reference as a `symbol` literal (ruling T-3) precisely so a consumer can
+    tell it from text; a channel reader that did not would write
+    `com/acme/messaging/raw/RawPubSubReceiver#` into `path` — a wrong ADDRESS at
+    `resolved`, which in a diff looks exactly like a right one. The row still derives,
+    with no address, which is the answer this style has always given an unreadable one."""
+    facts = [
+        _registration_site(
+            CALLER,
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        *_receiver_symbol_fact([_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
 # --- (g) malformed matches: CatalogError, naming the file -------------------
 
 
@@ -610,6 +773,11 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
             },
         },
         source=Path("probe-pubsub-subscriber.yml"),
+        # What the loader hoists from the `channel_via` above (spec §2a step 1) — the
+        # engine resolves the destination through it since Task 7.
+        value_model=[
+            {"owner": "com/google/pubsub/v1/ProjectSubscriptionName#", "method": "of", "arg": 1}
+        ],
     )
     skipped = derive_endpoints(workspace, [real_catalog], capabilities=CAPABILITIES)
     assert skipped == []

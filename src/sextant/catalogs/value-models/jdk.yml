@@ -1,0 +1,52 @@
+id: jdk
+displayName: The platform's own identifying calls (java.net.URI)
+
+# WHAT THIS FILE IS, and why it is not a catalog.
+#
+# D02 §1f. The identity of a PRODUCING call: which of its arguments carries the
+# value its result stands for. `java.net.URI.create("https://…")` produces a
+# `URI` whose address is argument 0, and a consuming catalog that reads an
+# address off a `URI`-typed position needs that one sentence and nothing more.
+#
+# It is knowledge of the FRAMEWORK (here, the platform), so it is declared once
+# per producer rather than once per consumer — the reasoning the shipped
+# `bean-models/` and `step-models/` already carry, and spec 2026-09-22 §2 states
+# for this table. Each entry is `{owner?, method, arg}`: `owner` is OPTIONAL,
+# because a free function is a producer too (§5a — Go's `nats.Connect(url)`,
+# Python's `boto3.client("sqs")`), and `arity`/`descriptor` discriminate
+# overloads exactly as they do in a catalog's own match rows.
+#
+# This file is NOT a catalog and lives outside the `*.yml` glob that loads them:
+# it declares no `style`, no `matches` and no boundary.
+#
+# `by:` IS REQUIRED ON EVERY ENTRY, and it is the whole reason this directory is
+# safe to add to (spec §7b). An entry read by every catalog at once is not one
+# framework's mistake when it is wrong; it is the estate's. The loader refuses an
+# entry that cites nothing, and `tests/architecture/test_value_model_probe_rows.py`
+# refuses one whose citation is not a committed probe that states what it was
+# measured against — the rule `measured:` rows already take (GUIDELINES §5.4).
+# No `artifact`/`versions` pair beside it, deliberately: `java.net.URI` lives in
+# `java.base`, which is not a Maven coordinate, and the probe records the JDK the
+# way a JDK states itself. A coordinate invented to fill the field would be a
+# plausible-looking value nobody can check, which is `A-Mi8`'s own defect.
+
+identified_by:
+  # Measured on the JDK the probe's own version-scope paragraph names, which
+  # reads `$JAVA_HOME/release` and `javap -version` rather than a build
+  # parameter. Its `java.net.URI` table lists every member the type declares and
+  # marks each encoded or a stated boundary.
+  #
+  # `create(String)` is the only `create` the type declares, so it needs no
+  # discriminator.
+  - { owner: java.net.URI, method: create, arg: 0,
+      by: scripts/probes/a2t8_http_client_builders.md }
+  # `arity: 1` IS LOAD-BEARING AND IS THE REASON THIS ENTRY IS WRITTEN HERE.
+  # `java.net.URI` declares five constructors, four of them multi-argument with
+  # the SCHEME at argument 0 (the probe's table, rows 2-5). A form matched by
+  # owner and method alone reads `https` as an address — a fabricated answer, not
+  # a miss. Two catalogs already declared the arity and three did not; once every
+  # declaration is hoisted into one table those five become one entry, and the
+  # widest spelling would have won estate-wide. Declaring it once, with the
+  # measurement behind it, is what the once-per-producer model is for.
+  - { owner: java.net.URI, method: <init>, arg: 0, arity: 1,
+      by: scripts/probes/a2t8_http_client_builders.md }

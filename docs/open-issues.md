@@ -2521,6 +2521,82 @@ fourth origin cannot be written without meeting it.
 **Verify:** `grep -rn "endpoint_metadata_insert" src/sextant | grep -v workspace.py` names
 the three origins; each holds a `Redactor`.
 
+### OI-133 — a VOID ordinary method is read as a construction, so an identity entry naming one would answer what the receiver is
+**Major · found and LOGGED 2026-09-23 by the Task 7 round-2 review ·
+`src/sextant/application/resolve/values.py` (`_Walk._construction`)**
+
+The backward value walk resolves a produced value through §2's `identified_by` table. A
+CONSTRUCTED value has no `produced_by` edge — `call_sites.result` is null for an initialiser
+— so `_construction` finds the site another way: the value has no producer edge, the site is
+the earliest one the value is the receiver of, and **that site produced no value of its own**.
+
+The third conjunct is what stopped the fabrication the same review round found
+(`session.createProducer(session.createQueue("raw-audit"))` reading `createQueue` as the
+SESSION's construction, and answering `raw-audit` as what the session is — closed, and
+pinned by `values.a-construction-hands-nothing-back`). **But "produced no value of its own"
+is narrower than "is an initialiser".** A void ORDINARY method also produces nothing, so a
+field- or parameter-held value whose first call happens to return nothing is read here as
+having been constructed by that call.
+
+**MEASURED, over all 27 corpora**: of the **3,283** values this rule names as constructed,
+**395 are not initialisers**. By callee name: `clear` 159, `debug` 65, `info` 22, `remove`
+11, `error` 10, `warn` 9, `delete` 9, `persist` 7, `save` 7, `convertAndSend` 5, `increment`
+4, `deleteById` 4, `set` 4, and a tail.
+
+**Demonstrated, not argued**, on `examples/mall/mall-portal`'s
+`CancelOrderSender#sendMessage`, whose ordinal 4 is `LOGGER.info("send orderId:{}", orderId)`
+— void, receiver value id 17, a field-held logger:
+
+```
+the void call: org/slf4j/Logger#info  result=None  receiver=17  arg0={'kind': 'string', 'value': 'send orderId:{}'}
+`_construction` says the logger was CONSTRUCTED at ordinal 4
+one synthetic identity entry, exactly a hoisted `channel_via` shape:
+    {'owner': 'org/slf4j/Logger#', 'method': 'info', 'arg': 0}
+asking what the LOGGER is  ->  kind=literal literal_kind=string value='send orderId:{}'
+```
+
+A log format string answered as the identity of a logger, at `resolved`, where nothing
+downstream can tell it from an observation. That is `raw-audit`-as-the-Session one shape
+along, and the existing guard does not notice it.
+
+**Real triggering input: none today, and the reason is on the CATALOG side rather than in
+the rule.** Checked exhaustively — all **fourteen** shipped non-`<init>` `identified_by`
+entries, against every site each matches in every corpus. **Eight match at least one site,
+and every one of the eight has a non-null result at every site it matches**: `URI.create`
+(14 sites), `List.of` (23), `ProjectSubscriptionName.of` (3), `Session.createQueue` (2),
+`Arrays.asList` (2), `Pattern.compile` (2), `Subscriptions.topics` (2), `TopicName.of` (1).
+**The other six match no site in any corpus**, so nothing about them is measured here and
+nothing can be: `Session.createTopic` and both `javax.jms` siblings,
+`Collections.singletonList`, `Subscriptions.topicPattern`, and
+`MessageConsumerOptions.setAddress` — the one that names a SETTER, and the shape this issue
+is about. That it matches nothing is what makes the conclusion hold today; it is not a
+property anyone chose. The synthetic entry above is the only way to reach the gap now.
+
+**MEASURED both ways, so the exposure is sized rather than asserted:** replacing the rule
+with one that accepts only an initialiser changes **0 of 98,454** ceiling positions across
+all 27 corpora. Neither an identity answer nor the `escapes` window (whose start moved to the
+construction in the same change) moves for any of the 395.
+
+**LOGGED rather than fixed**, by this repository's own criterion — the test is whether real
+input triggers it, and no shipped catalog entry does. **What reopens it** is the next
+`channel_via` or `url_via` hoisted onto a producer that hands nothing back: a void sender
+(`convertAndSend` is already in the 395) or a void setter is exactly the shape a messaging
+catalog would write. Three places now state what the conjunct really excludes rather than
+implying it settles the question: `_construction`'s docstring, the guard's `why`, and D02
+§1f, which warns a catalog author to check that the producer an entry names hands something
+back.
+
+**Closes** by giving the walk a fact that says a site is an initialiser rather than inferring
+it. The candidates, in preference order: a `construct` invoke kind or an `initialiser` flag
+on `call_sites` (a scanner capability, the D00 9.19 pattern — the JVM backend already knows,
+since `MethodInsnNode.INVOKESPECIAL` on `<init>` is what it reads); or, failing a fact, the
+identity entry's own declared `method` deciding, which works because an entry naming an
+initialiser spells it and one naming a void setter does not — but that makes the rule depend
+on a catalog spelling rather than on the facts, which is the coupling §5a exists to avoid.
+
+**Verify:** the demonstration above, and
+`grep -n "A VOID ORDINARY METHOD is not excluded" src/sextant/application/resolve/values.py`.
+
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none
 **Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·
 `scripts/probes/cp17_containers_and_class_level.md`,
