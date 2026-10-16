@@ -329,9 +329,14 @@ The three rows at the head of the block (`pubsub-channel-adapter`, `dsl-media-ro
 `<pending PR CI>` until their pipeline was green; run `35663682722` (PR #34) is the green
 run that closed them.
 
+`temporal-cadence` and `vertx-eventbus` (2026-09-22, spec
+`docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`, branch
+`spec/group-d-temporal-eventbus`) carried the same placeholder for the same reason; run
+`35800079998` (PR #36) is the green run that closed them.
+
 ```closed
-temporal-cadence | tests/e2e/test_async_delivered.py::test_temporal_shapes_nine_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
-vertx-eventbus | tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
+temporal-cadence | tests/e2e/test_async_delivered.py::test_temporal_shapes_nine_rows | https://github.com/ianynchen/sextant/actions/runs/35800079998
+vertx-eventbus | tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows | https://github.com/ianynchen/sextant/actions/runs/35800079998
 pubsub-channel-adapter | tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows | https://github.com/ianynchen/sextant/actions/runs/35663682722
 dsl-media-route | tests/e2e/test_rest_inbound_delivered.py::test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row | https://github.com/ianynchen/sextant/actions/runs/35663682722
 gateway-properties-routes | tests/e2e/test_rest_inbound_delivered.py::test_gateway_property_routes_derive_their_inbound_and_outbound_rows | https://github.com/ianynchen/sextant/actions/runs/35663682722
