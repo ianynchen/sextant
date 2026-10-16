@@ -325,35 +325,18 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # address its address-less calls use. Catalog-level rather than per-row
     # because it describes the owner, not one of its methods.
     default_address = _default_address(matches, catalog)
-    record_wrappers = list(matches.get("record_wrappers", []))
-    _validate_record_wrappers(record_wrappers, catalog)
+    # **Validated on the RAW key, read from the HOISTED table** (Task 8 step 2b, user
+    # ruling 2026-10-16). The engine's own validator is a second line of defence that only
+    # a hand-built catalog ever reaches — the loader refuses a malformed wrapper block on
+    # hoist — so it keeps reading the declaration, and Task 10 retires the two together.
+    _validate_record_wrappers(list(matches.get("record_wrappers", [])), catalog)
+    call_wrappers, record_wrapper_args = _wrappers_of(catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
         type_carriers=tuple(_catalog_symbol(t) for t in matches.get("type_carriers", [])),
-        call_wrappers={
-            _catalog_symbol(wrapper["type"]): wrapper["payload_ctor_arg"]
-            for wrapper in matches.get("call_wrappers", [])
-        },
+        call_wrappers=call_wrappers,
     )
-    # `record_arg`'s own lookup (D02 §2, Task 7): the record's type keys its
-    # `(descriptor, channel_ctor_arg, payload_ctor_arg)` entries, converted once here
-    # rather than per call site, exactly as `call_wrappers` above is.
-    #
-    # A LIST per type, not one pair (CP-34, 2026-09-23). One type declares several
-    # constructors and they do not agree about where the payload is: the entry that
-    # answers is the first whose `descriptor` matches the linked constructor's own, and an
-    # entry declaring none matches any — the first-match-wins rule `_matching_row` and
-    # `linked_channels` already use for a declared overload discriminator.
-    record_wrapper_args: dict[str, list[tuple[str | None, int, int | str]]] = {}
-    for wrapper in record_wrappers:
-        record_wrapper_args.setdefault(_catalog_symbol(wrapper["type"]), []).append(
-            (
-                wrapper.get("descriptor"),
-                wrapper["channel_ctor_arg"],
-                wrapper["payload_ctor_arg"],
-            )
-        )
     supertypes = supertypes_of(workspace)
     # Read once per run, the same `_rules_of`/`_enum_symbols` precedent (2F
     # design §4) — None for a catalog declaring no `field_sources` block, in
@@ -1501,6 +1484,59 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
             f"`{_IDENTITY}.format: {fmt}`, which is not one of "
             f"{', '.join(sorted(_IDENTITY_FORMATS))} (2I design §4)"
         )
+
+
+def _wrappers_of(
+    catalog: Catalog,
+) -> tuple[dict[str, int], dict[str, list[tuple[str | None, int, int | str]]]]:
+    """The two wrapper lookups, read from the HOISTED identity table rather than from the
+    raw `call_wrappers` / `record_wrappers` keys (Task 8 step 2b).
+
+    **Why it has to move before Task 10 and not with it.** Task 10 deletes those keys and
+    makes the loader refuse them, and its own Step 4 asserts that no row moves — which
+    only holds if the reader already gets the same answer from somewhere else. Read from
+    `matches`, both lookups would come back empty the moment the keys went, and every row
+    the wrapper path publishes would vanish: movement in the direction §8 says a reader
+    cannot detect. MEASURED by disabling this function: 8 endpoint rows and 1 shape row on
+    `orders-service` depend on it.
+
+    **The ROLES are what tell the two kinds apart**, so nothing has to remember which key
+    an entry came from. `_constructor_identities` hoists one entry per declared
+    `<name>_ctor_arg`, each carrying its role, so a constructor with BOTH a `channel` and
+    a `payload` role is what `record_wrappers` declared, and one carrying `payload` alone
+    is what `call_wrappers` did. That is the same distinction the two keys drew, recovered
+    from the data rather than from its declaration site.
+
+    Grouped by `(owner, descriptor)` in the table's own order, because the consuming rule
+    is first-match-wins on the descriptor (CP-34): one type declares several constructors
+    that disagree about where the payload is, and an entry declaring no descriptor matches
+    any. `dict` preserves insertion order and the hoist preserves declaration order, so
+    two runs over one catalog build one list (NFR-1).
+    """
+    grouped: dict[tuple[str, str | None], dict[str, int | str]] = {}
+    for entry in catalog.value_model:
+        role = entry.get("role")  # the key `_constructor_identities` hoists it under
+        owner = entry.get("owner")
+        if role is None or owner is None or entry.get("method") != "<init>":
+            continue
+        grouped.setdefault((str(owner), entry.get("descriptor")), {})[str(role)] = entry["arg"]
+    call_wrappers: dict[str, int] = {}
+    records: dict[str, list[tuple[str | None, int, int | str]]] = {}
+    for (owner, descriptor), roles in grouped.items():
+        channel, payload = roles.get("channel"), roles.get("payload")
+        if payload is None:
+            continue
+        if channel is None:
+            # A payload with no channel beside it is `call_wrappers`' shape, keyed by type
+            # alone as that lookup always has been — it declares no descriptor. An INT
+            # only: `call_wrappers`' own grammar is a position, and the `last` rule belongs
+            # to `record_wrappers`' descriptor discrimination, which always declares a
+            # channel beside it and so cannot reach this arm.
+            if isinstance(payload, int):
+                call_wrappers.setdefault(owner, payload)
+        elif isinstance(channel, int):
+            records.setdefault(owner, []).append((descriptor, channel, payload))
+    return call_wrappers, records
 
 
 def _conforms(got: str, want: str, conformance: list[dict[str, Any]]) -> bool:
