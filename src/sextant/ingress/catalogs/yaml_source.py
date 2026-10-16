@@ -63,6 +63,54 @@ class YamlCatalogSource:
             models[str(_required(raw, "id", path))] = raw
         return models
 
+    def type_model(self) -> list[dict[str, Any]]:
+        """Which types may stand where another is declared (`type-models/*.yml`).
+
+        A `single_call` row's own `descriptor` says what type it accepts at its
+        destination position, and a producing call says what it returns. The LANGUAGE
+        separates two overloads by exactly that — name and parameter types in order — so a
+        producer
+        whose return type cannot be the declared type did not produce that value, and a
+        destination read through it is a wrong row at `resolved`.
+
+        **It is declared rather than scanned, and that is measured rather than
+        preferred.** `type_hierarchy` records what a class in the module under analysis
+        extends; the types here are in the JDK and in dependency jars, so it carries no
+        row for any of them — zero across every corpus, with two fixtures holding an
+        empty table. A dependency becomes readable only under `extract_libraries` and the
+        JDK never does, so reading conformance from the scan would make a destination
+        resolve or not depending on a scan option: one source tree, two answers. §8.2
+        refuses that shape, and a declared table answers the same either way.
+
+        Entries are `{subtype, supertype, by}` and the relation is CONFORMANCE, not
+        `extends`: one shipped collection interface reaches its supertype through an
+        intermediate interface on the platform version this repo builds with, and directly
+        on an older one, so an edge is version-scoped where the relation is not. `by` carries the `javap` that measured it (§8.1, §7b).
+        """
+        model: list[dict[str, Any]] = []
+        for path in sorted((self._directory / "type-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise CatalogError(f"loading type model {path}: not a YAML mapping")
+            entries = raw.get("conformance")
+            if not isinstance(entries, list):
+                raise CatalogError(f"loading type model {path}: `conformance` must be a list")
+            for entry in entries:
+                if not isinstance(entry, dict) or not {"subtype", "supertype", "by"} <= set(entry):
+                    raise CatalogError(
+                        f"loading type model {path}: each entry is a mapping with "
+                        f"`subtype`, `supertype` and `by` — the measurement behind it, "
+                        f"never a recollection (§8.1) — got {entry!r}"
+                    )
+                model.append(
+                    {
+                        "subtype": str(entry["subtype"]),
+                        "supertype": str(entry["supertype"]),
+                        "by": str(entry["by"]),
+                    }
+                )
+        return model
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -148,6 +196,12 @@ class YamlCatalogSource:
         # 0.8 s — and that buys the two readings staying independent, which is what lets
         # Task 10 delete the hop keys from the catalogs without touching this loop.
         identities = self.value_model()
+        # The conformance table, read once per source for the same reason: it is
+        # knowledge about TYPES rather than about any one catalog, and the engines need
+        # it to refuse a producer whose return type cannot be the declared parameter
+        # type (GUIDELINES §8.1 — the language tells two overloads apart by their parameter
+        # types, and mirroring a language's own rule is not optional).
+        conformance = self.type_model()
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
@@ -223,6 +277,8 @@ class YamlCatalogSource:
                     bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
+                    # The source's own type-conformance table, built above.
+                    type_model=conformance,
                 )
             )
         return catalogs

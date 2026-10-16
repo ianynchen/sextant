@@ -250,19 +250,32 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # `<init>` arm already read this shape. The rows exist because `payload_ctor_arg: "last"`
 # read the record's HEADERS on the two overloads whose final parameter is
 # `Iterable<Header>` (`scripts/probes/cp34_producer_record_ctors.md`, kafka-clients 3.6.2).
+# **Two entries moved on 2026-10-16, and this alarm is what said so.** `jakarta-jms`
+# (36, 36) -> (28, 28) and `javax-jms` the same: eight `channel_via` entries came off each
+# catalog's `Topic`-typed rows, where they declared `createQueue` as the source of the
+# destination. MEASURED, `javap -cp jakarta.jms-api-3.1.0.jar`: `jakarta.jms.Queue` and
+# `jakarta.jms.Topic` both `extends jakarta.jms.Destination` and NEITHER extends the other,
+# so a `Queue` cannot stand where a `Topic` is declared and
+# `createDurableConsumer`/`createDurableSubscriber`/`createSharedConsumer`/
+# `createSharedDurableConsumer` could never have been fed by `createQueue` in code that
+# compiles. The entries were dead weight that no real call could reach, and Task 8's type
+# gate is what surfaced them: the gate refuses a producer whose return type cannot be the
+# declared parameter type, which made these sixteen rows visible as refusals rather than
+# as rows nobody had looked at. No published row moves — a call that cannot compile
+# produced none.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
-    "jakarta-jms": (36, 36),
+    "jakarta-jms": (28, 28),
     "jakarta-servlet": (2, 2),
     "jakarta-websocket-client": (12, 12),
     "jakarta-websocket-programmatic": (1, 1),
     "javalin": (19, 19),
     "javalin-apibuilder": (26, 39),
-    "javax-jms": (36, 36),
+    "javax-jms": (28, 28),
     "javax-servlet": (2, 2),
     "jdk-httpclient": (9, 10),
     "kafka-clients": (5, 8),
@@ -320,8 +333,10 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     }
     assert counted == _ASKS_PER_CATALOG
     # 807 until 2026-09-23; +6 for the six `record_wrappers` rows the comment above
-    # accounts for, three catalogs at two rows each.
-    assert sum(asks for asks, _ in counted.values()) == 813
+    # accounts for, three catalogs at two rows each. **-16 on 2026-10-16**: eight
+    # `createQueue` entries off each JMS catalog's `Topic`-typed rows, for the reason the
+    # comment above `_ASKS_PER_CATALOG` measures.
+    assert sum(asks for asks, _ in counted.values()) == 797
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

@@ -8,6 +8,7 @@ bytecode, so each behaviour is isolated and fast."""
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,7 @@ from sextant.domain.facts import (
     TypeRef,
 )
 from sextant.domain.redaction import REDACTED
-from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource, _hoisted
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
@@ -1003,12 +1004,59 @@ PRODUCER = "com/acme/messaging/Producer#"
 CONSUMER = "com/acme/messaging/Consumer#"
 
 
+_HOP_KEYS_HERE = ("channel_via", "url_via", "call_wrappers", "record_wrappers")
+
+
+def _listified(node: Any) -> Any:
+    """`matches`, with every hop-key value a list — a COPY, never a mutation, because the
+    `_MATCHES` constants below are shared between tests and one run must not edit what the
+    next one reads."""
+    if isinstance(node, list):
+        return [_listified(entry) for entry in node]
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: ([value] if key in _HOP_KEYS_HERE and isinstance(value, dict) else _listified(value))
+        for key, value in node.items()
+    }
+
+
 def _single_call_catalog(
     matches: dict,
     catalog_id: str = "invented-single-call",
     direction: str = "outbound",
     protocol: str = "kafka",
 ) -> Catalog:
+    # **The hoisted identity table, because the engine now resolves through it** (Task 8).
+    # `YamlCatalogSource.load` hands every real catalog the table its hop declarations
+    # hoist into (spec §2a step 1), and `Catalog.value_model` defaults to empty — so a
+    # hand-built catalog carrying `channel_via` in `matches` and nothing in `value_model`
+    # would resolve NOTHING here while resolving in production, and the tests would be
+    # measuring the absence of the table rather than the engine. Built by PRODUCTION's own
+    # `_hoisted` rather than a test-local copy of it, so the two spellings cannot drift
+    # (§0a) and Task 10's narrowing of the hoist reaches these tests automatically.
+    #
+    # Two normalisations happen first, and both record something real:
+    #
+    # 1. **A hop key is listified.** `_channel_via_entries` documents the engine's grammar
+    #    as `{owner, method, arg}` OR `[{...}]` and accepts both, while the loader's
+    #    `_hoisted` refuses a bare mapping outright. MEASURED: all 75 `channel_via`/
+    #    `url_via` declarations in the 101 shipped catalogs use the LIST form and none uses
+    #    the bare one — so the engine's grammar is wider than anything that can actually be
+    #    loaded, and these tests had been exercising the unreachable half. Listifying here
+    #    puts them on the shape production has; the divergence itself is logged rather than
+    #    fixed in passing, because narrowing the engine's grammar is not Task 8's business.
+    # 2. **A catalog the hoist REFUSES keeps an empty table.** Several tests below hand the
+    #    engine deliberately malformed hop declarations to prove its own validators fire.
+    #    In production the loader refuses such a catalog and no engine ever sees it, so
+    #    those tests exercise a second line of defence that is reached only here — and an
+    #    empty `value_model` is the honest table for a catalog that would never load.
+    source = Path(f"tests/{catalog_id}.yml")
+    model: list[dict[str, Any]] = []
+    try:
+        _hoisted(_listified(matches), source, model)
+    except CatalogError:
+        model = []
     return Catalog(
         id=catalog_id,
         style="single_call",
@@ -1016,7 +1064,8 @@ def _single_call_catalog(
         direction=direction,
         requires=("call_site", "string_constants"),
         matches=matches,
-        source=Path(f"tests/{catalog_id}.yml"),
+        source=source,
+        value_model=model,
     )
 
 
@@ -10081,8 +10130,39 @@ def _create_receiver_call(
         ordinal=ordinal,
         receiver=5,
         result=None,
-        arguments=[CallArgument(kind="instance", source=source, symbol="jakarta/jms/Queue#")]
+        # **`unresolved`, not `instance`, and the probe above says why**: a factory
+        # RESULT reaches its consumer as the compiler's `unresolved` kind carrying a
+        # `source`. Only a `NEW` names a concrete type, and `createTopic` is a method
+        # result rather than a constructor. Measured on the real scanner —
+        # `orders-service`'s own `createConsumer` site carries
+        # `{"kind":"unresolved","source":7}`. This fixture said `instance` with a
+        # `jakarta/jms/Queue#` symbol, which the scanner never emits here, and the
+        # mismatch hid behind a ladder that read `source` and ignored the symbol.
+        arguments=[CallArgument(kind="unresolved", source=source)]
         + [CallArgument(kind="string", value="orderType = 'RUSH'")] * (arity - 1),
+    )
+
+
+def _create_topic_call(caller: str, ordinal: int, result: int, topic: str) -> CallSiteFact:
+    """`createTopic`, for the rows whose declared parameter type is `Topic`.
+
+    `jakarta.jms.Queue` and `jakarta.jms.Topic` are SIBLINGS under `Destination` —
+    measured, `javap -cp jakarta.jms-api-3.1.0.jar` — so neither stands where the other
+    is declared, and a durable or shared TOPIC subscription fed by `createQueue` is a
+    call that cannot compile. This fixture used `createQueue`, which is why the type gate
+    refused it; the catalogs declared `createQueue` on those rows too, and both were
+    corrected together."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=SESSION, name="createTopic", descriptor="(Ljava/lang/String;)Ljakarta/jms/Topic;"
+        ),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=5,
+        result=result,
+        arguments=[CallArgument(kind="string", value=topic)],
     )
 
 
@@ -10100,7 +10180,8 @@ def test_a_durable_jms_subscription_derives_the_destination_it_subscribes_to(tmp
     merely a row."""
     caller = "com/acme/orders/messaging/JmsRoutes#durable()."
     facts = [
-        _create_queue_call(caller, 0, 11, "orders.audit"),
+        # `createTopic`, not `createQueue`: this row's declared parameter type IS `Topic`.
+        _create_topic_call(caller, 0, 11, "orders.audit"),
         _create_receiver_call(
             caller,
             "createDurableConsumer",

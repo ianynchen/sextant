@@ -117,7 +117,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createSharedConsumer
       arity: 3
@@ -125,7 +124,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createDurableSubscriber
       arity: 2
@@ -133,7 +131,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createDurableSubscriber
       arity: 4
@@ -141,7 +138,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createDurableConsumer
       arity: 2
@@ -149,7 +145,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createDurableConsumer
       arity: 4
@@ -157,7 +152,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createSharedDurableConsumer
       arity: 2
@@ -165,7 +159,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
     - name: createSharedDurableConsumer
       arity: 3
@@ -173,7 +166,6 @@ matches:
       direction: inbound
       channel_arg: 0
       channel_via:
-        - { owner: jakarta.jms.Session, method: createQueue, arg: 0 }
         - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same

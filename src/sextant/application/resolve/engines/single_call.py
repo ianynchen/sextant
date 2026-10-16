@@ -33,10 +33,10 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     call_site_index,
     channel_of,
+    channel_of_answer,
     channels_of,
     declared_parameters_of,
     field_facts,
-    linked_channels,
     parameter_index,
     peer_of,
     supertypes_of,
@@ -50,9 +50,17 @@ from sextant.application.resolve.shapes.rooting import (
     catalog_symbols,
     names_a_type,
 )
+from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of, parameter_types
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_parameter_types,
+    member_name,
+    owner_of,
+    parameter_types,
+    returned_type,
+)
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -405,6 +413,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             index.positions_by_owner.get(owner, []) for owner in dict.fromkeys(owners)
         )
     )
+    # The walk's index, built on the FIRST `channel_via` row that reaches it and not
+    # before (Task 7's own measurement): building it eagerly charges every module that
+    # declares none of the framework — 0.16s on `mall-admin` — and most catalogs on most
+    # modules never take that branch. Named `values` because `index` here is already the
+    # call-site index this engine has always had.
+    values: ValueIndex | None = None
     for position in positions:
         site = call_sites[position]
         arguments = site["arguments"]
@@ -588,12 +602,78 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 )
             ]
         elif "channel_via" in method:
+            # **The backward walk, in place of this engine's own `channel_of`-then-
+            # `linked_channels`** (spec §2b, Task 8). The ladder it replaces was two rungs,
+            # each capped at one hop: the literal at the declared position, then ONE
+            # `source` link back to a `channel_via`-named call. `resolve_site` answers the
+            # same position with no cap and no direction named per catalog, and where the
+            # value came from a producer whose result is opaque, the identity table the
+            # loader hoisted (`catalog.value_model`, §2) says which of that producer's
+            # arguments IS the value — the same two statements `channel_via` welded
+            # together (§0b), with the distance half now the walk's and the meaning half
+            # still catalog data.
+            #
+            # **THE LADDER STAYS A LADDER.** The literal read runs FIRST, through the same
+            # reader every other branch uses, and the walk answers only where it did not
+            # resolve — which is also what preserves the 2F field ladder above: where
+            # `address_argument` replaced this argument with a configuration expression,
+            # that expression resolves HERE and the walk is never consulted, exactly as
+            # before. Fixture-neutral for every catalog shipped so far, for the reason the
+            # ladder comment gives: these `channel_arg` positions are never themselves
+            # string literals.
+            #
+            # **One tuple per distinct destination, not one per path** (§1c, and Task 7's
+            # own wording). Several paths are several bindings by design — several callers,
+            # several returns of a callee read through — and they routinely AGREE about
+            # this one slot while differing elsewhere. Two paths that both read `raw-t1`
+            # are one destination; keeping them apart would mint a second row for a
+            # subscription declared once, and two paths that both read NOTHING would mint
+            # two unresolved rows where this ladder minted one. Order is the walk's own,
+            # which is deterministic (NFR-1), and `dict.fromkeys` keeps it.
+            #
+            # `channel_of_answer` and not `read_destination`: `_validate_methods` already
+            # refuses `channel_via` beside `url_arg`, so a `channel_via` row is
+            # channel-only by construction and the url reader can never be the right one
+            # here. There is deliberately no `url_of_answer` to reach for.
+            # **The type gate, and it is what makes the SHARED identity table safe.**
+            # `channel_via` used to be read per ROW, so a row could only follow producers
+            # it declared. The hoisted table is per SOURCE, so without a gate
+            # `subscribe(Pattern)` — which declares only `Pattern.compile` — would reach
+            # the sibling row's `List.of` entry and publish two topic names it cannot
+            # carry. That is a wrong address at `resolved`, the one failure spec §7 says
+            # this work risks.
+            #
+            # The gate is the discriminator the LANGUAGE ITSELF uses rather than one invented
+            # here (§8.1 rule 5): this row's `descriptor` declares the type it accepts at
+            # the destination position, the producing call declares what it returns, and a
+            # producer whose return type cannot stand there did not produce this value.
+            # `catalog.type_model` carries the conformance facts a repository cannot read
+            # for itself, each measured by `javap`.
+            #
+            # Checked BEFORE the walk and not inside it: `resolve/values.py` names no
+            # language by architecture test, and type conformance is language knowledge. The
+            # immediate producer is the only one that matters — it is what hands the value
+            # to the declared slot — so one look at the argument's own `source` settles it
+            # and the walk needs no new parameter.
             literal = read_destination(url_argument)
-            forms = method["channel_via"]
-            if literal[2] != "resolved" and forms:
-                destinations = linked_channels(url_argument, facts, forms)
-            else:
+            # `_validate_methods` already refuses `channel_via` on a row declaring neither
+            # position, so the slot is always there; narrowed rather than cast so the
+            # guarantee stays checkable if that validator ever changes.
+            declared_slot = method.get("url_arg", method.get("channel_arg"))
+            channel_slot: int | str = declared_slot if isinstance(declared_slot, int | str) else 0
+            if literal[2] == "resolved" or not method["channel_via"]:
                 destinations = [literal]
+            elif not _producer_conforms(url_argument, method, facts.caller_call_sites, catalog):
+                destinations = [(None, None, "unresolved")]
+            else:
+                if values is None:
+                    values = value_index(workspace)
+                destinations = list(
+                    dict.fromkeys(
+                        channel_of_answer(binding.slots.get(channel_slot))
+                        for binding in resolve_site(workspace, site, values, catalog.value_model)
+                    )
+                ) or [(None, None, "unresolved")]
         else:
             # A `channel_arg` slot may hold a whole ARRAY of destinations —
             # `addHandler(handler, String... paths)` registers one handler at
@@ -1421,6 +1501,80 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
             f"`{_IDENTITY}.format: {fmt}`, which is not one of "
             f"{', '.join(sorted(_IDENTITY_FORMATS))} (2I design §4)"
         )
+
+
+def _conforms(got: str, want: str, conformance: list[dict[str, Any]]) -> bool:
+    """Whether a value of type `got` may stand where `want` is declared.
+
+    Equality first, then the declared conformance table, walked TRANSITIVELY so a chain
+    (`List` -> `Collection` via whatever the platform puts between them) is one fact per
+    link rather than one per pair. Nothing is inferred: a pair neither equal nor reachable
+    through declared links is refused, and `tests/architecture` fails on any pair the
+    table cannot decide, so a refusal here is a table that needs an entry and never a
+    silent miss.
+    """
+    if got == want:
+        return True
+    # The table declares dotted names (a catalog author's spelling); both sides here are
+    # SCIP symbols. Converted at the edge, once per call, so the comparison never
+    # straddles two spellings (§0a).
+    links = [
+        (_catalog_symbol(entry["subtype"]), _catalog_symbol(entry["supertype"]))
+        for entry in conformance
+    ]
+    reach = {got}
+    frontier = [got]
+    while frontier:
+        current = frontier.pop()
+        for subtype, supertype in links:
+            if subtype == current and supertype not in reach:
+                if supertype == want:
+                    return True
+                reach.add(supertype)
+                frontier.append(supertype)
+    return False
+
+
+def _producer_conforms(
+    argument: dict[str, Any] | None,
+    method: dict[str, Any],
+    caller_sites: "Sequence[dict[str, Any]]",
+    catalog: Catalog,
+) -> bool:
+    """Whether the call that produced this argument could have produced a value of the
+    type the row declares at its destination position (§8.1's language rule).
+
+    Both types are compared as SCIP symbols: `descriptor_parameter_types` answers in
+    dotted form and `returned_type` in symbol form, so the declared type and the table's
+    own entries are converted once rather than compared across two spellings.
+
+    True wherever the question does not arise — no argument, no `source` naming a
+    producing call, no declared `descriptor` to read a parameter type from, no producing
+    site in this caller, or a producer whose descriptor returns nothing readable.
+    **That default is deliberate and it is §8's direction**: refusing on absent evidence
+    would exclude a destination on inference and leave no row for a reader to notice,
+    where allowing it leaves the walk to answer exactly as it did before this gate.
+    """
+    if not isinstance(argument, dict):
+        return True
+    source = argument.get("source")
+    descriptor = method.get("descriptor")
+    slot = method.get("url_arg", method.get("channel_arg"))
+    if source is None or not descriptor or slot is None:
+        return True
+    declared = descriptor_parameter_types(str(descriptor))
+    if not isinstance(slot, int) or slot >= len(declared):
+        return True
+    producer = next(
+        (site for site in caller_sites if site.get("result") == source),
+        None,
+    )
+    if producer is None or not producer.get(_DESCRIPTOR):
+        return True
+    returned = returned_type(str(producer[_DESCRIPTOR]))
+    if returned is None:
+        return True
+    return _conforms(returned, _catalog_symbol(declared[slot]), catalog.type_model)
 
 
 def _channel_via_entries(method: dict[str, Any]) -> list[Any]:
