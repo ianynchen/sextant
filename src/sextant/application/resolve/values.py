@@ -707,16 +707,68 @@ class _Walk:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         if not elements:
             return _only(trail, Answer(kind=ABSENT))
+        return self._enumerated(
+            [
+                (index, self._entry(element, method, origin, trail, frames))
+                for index, element in enumerate(elements)
+            ],
+            origin,
+            trail,
+            "element",
+        )
+
+    def _enumerated(
+        self,
+        members: list[tuple[int, tuple[_Reached, ...]]],
+        origin: _Position,
+        trail: _Trail,
+        label: str,
+    ) -> tuple[_Reached, ...]:
+        """§1c's enumeration over an aggregate whose MEMBERSHIP is known, shared by the two
+        that have it — an array the scanner read, and a producing call's argument list.
+
+        **One `_ELEMENT_OF` step per member**, so several answers are several PATHS and the
+        memo cannot collapse them (§1c, ruling M-1).
+
+        **A member the walk cannot name costs ONE trailing unresolved, not the whole
+        aggregate** (ruled 2026-10-16). The line `non_enumerable` draws is about MEMBERSHIP,
+        not readability: where the scanner could not read an array's construction at all it
+        reports no `elements` and the caller above answers `non_enumerable`, and a
+        loop-built or branch-merged value never arrives as an aggregate in the first place —
+        the facts carry no "this was a loop" claim, so it is an unread argument and answers
+        `not_readable`. What reaches here is a known membership with a member that has no
+        name, and discarding its readable siblings would exclude destinations on inference,
+        which §8 forbids ("exclude only on proof") in the direction it says is hardest to
+        notice: an omission leaves no wrong row and a reader cannot tell it was ever there.
+
+        This is also what the consuming engines already do, so it makes the migration SAFER
+        rather than riskier: `shapes/arguments.channels_of` reads an array through
+        `_all_string_channels`, whose own contract is "one tuple per readable element, plus
+        one trailing unresolved tuple where any element could not be read, never one per
+        failure". The walk now says the same thing in the same cases.
+
+        The trailing answer carries the FIRST failing member's own reason in member order —
+        `no_writer` for a binding no writer edge reaches, `external` for an unscanned
+        producer — because `value_resolutions` has a reason column and "one more member,
+        and here is why it has no name" is the §8.1 rule 3 escape a reader can act on.
+        Taking the first in order keeps the answer stable rather than dependent on which
+        member the walk finished last.
+        """
         reached: list[_Reached] = []
-        for index, element in enumerate(elements):
-            answers = self._entry(element, method, origin, trail, frames)
-            if any(answer.kind == UNRESOLVED for _, answer in answers):
-                return _only(trail, _unresolved(NON_ENUMERABLE))
-            step = _Step((_ELEMENT_OF, *origin), f"element {index}")
+        unread: str | None = None
+        for index, answers in members:
+            step = _Step((_ELEMENT_OF, *origin), f"{label} {index}")
             for path, answer in answers:
+                if answer.kind == UNRESOLVED:
+                    unread = unread or answer.reason or NOT_READABLE
+                    continue
                 merged = _combine(path, (step,))
                 if merged is not None:
                     reached.append((merged, answer))
+        if unread is not None:
+            trailing = _Step((_ELEMENT_OF, *origin), f"unread {label}")
+            merged = _combine(trail, (trailing,))
+            reached.append((merged if merged is not None else trail, _unresolved(unread)))
         return tuple(reached)
 
     def _through(
@@ -922,41 +974,32 @@ class _Walk:
         since D00. So no expander is written here, and nothing in this module learns what a
         varargs call is.
 
-        **§1c's rule is `_elements`' rule, applied here for the same reason it applies
-        there**: one `_ELEMENT_OF` step per argument, so several answers are several PATHS
-        and the memo cannot collapse them; and any argument that does not resolve makes the
-        whole call ONE `non_enumerable`, with no element list — a half-read list is D00's
-        partly-written array, and ruling 1 says that is a reason rather than a short answer.
-
-        **This diverges from the engines' shipped reader, and the divergence is measured
-        rather than assumed.** `shapes/arguments._all_string_channels` keeps the readable
-        arguments and appends ONE trailing unresolved tuple, so a half-read list there is
-        `t1, t2, unresolved` where it is a bare `non_enumerable` here. MEASURED over all 27
-        corpora: of the 27 sites the three `all_strings` owners have, 6 are fully readable,
-        21 carry no string argument at all, and **0 are the mixed case the two rules answer
-        differently** — so nothing in this estate can tell them apart, and the walk keeps
-        the rule the design approved. The divergence is logged with that census; the day a
-        mixed site appears it is a ruling, not a silent behaviour change.
+        **Multiplicity and the half-read rule are `_enumerated`'s**, stated there once for
+        both aggregates that have known membership rather than twice here (§0a's disease).
+        A producing call's argument list is the clearer of the two: fixed, positional and
+        complete at the call site, so `List.of("orders.placed", field)` is a COMPLETE list
+        of two with one unnameable member, and `orders.placed` survives.
 
         An EMPTY argument list is `absent`, the same statement `_elements` makes for an
         empty array and for the same reason: "called with no values" is a fact the facts
-        record, and calling it ambiguous would contradict them.
+        record, and calling it ambiguous would contradict them. This one DOES still diverge
+        from the engines' reader, which never returns zero rows and answers one unresolved
+        tuple instead; `absent` is a resolved answer in this walk's vocabulary and stays
+        distinguishable, which is the ruling of 2026-09-23.
         """
         row = self._index.sites.get(site)
         arguments = (row["arguments"] or []) if row is not None else []
         if not arguments:
             return _only(trail, Answer(kind=ABSENT))
-        reached: list[_Reached] = []
-        for index in range(len(arguments)):
-            answers = self._resolve((_SLOT, site[0], site[1], index), trail, frames)
-            if any(answer.kind == UNRESOLVED for _, answer in answers):
-                return _only(trail, _unresolved(NON_ENUMERABLE))
-            step = _Step((_ELEMENT_OF, _SLOT, site[0], site[1]), f"argument {index}")
-            for path, answer in answers:
-                merged = _combine(path, (step,))
-                if merged is not None:
-                    reached.append((merged, answer))
-        return tuple(reached)
+        return self._enumerated(
+            [
+                (index, self._resolve((_SLOT, site[0], site[1], index), trail, frames))
+                for index in range(len(arguments))
+            ],
+            (_SLOT, site[0], site[1]),
+            trail,
+            "argument",
+        )
 
     def _identity_matches(self, site: tuple[str, int]) -> tuple[Mapping[str, Any], ...]:
         """Every identity entry that claims `site`'s result, in the table's own order.

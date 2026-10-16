@@ -1031,17 +1031,29 @@ def test_an_array_whose_every_element_is_written_branches_into_elements(walked):
     assert [b.slots[0].value for b in bindings] == ["alpha", "beta"]
 
 
-def test_a_value_that_cannot_be_enumerated_is_one_unresolved_not_several_answers(walked):
-    """The distinction §1c draws: several PATHS are several answers; one path whose value
-    cannot be enumerated is ONE `unresolved`, with no element list at all.
+def test_an_array_with_one_unnameable_element_keeps_the_others(walked):
+    """**An element with no name costs one trailing unresolved, not the whole array**
+    (ruled 2026-10-16). The shape here is the one the facts can state — an array the
+    extractor READ whose second element it could not name — so membership is known and
+    only the name is missing. `alpha` is read from bytecode, and dropping it would exclude
+    a destination on inference (§8, "exclude only on proof").
 
-    The shape here is the one the facts can state — an array the extractor read whose
-    second element it could not name. A loop-built or branch-merged value arrives as an
-    unread argument instead (the facts carry no "this was a loop" claim), and the walk
-    answers `not_readable` there; `values.py` says so where it decides."""
+    `non_enumerable` is about MEMBERSHIP, and the case that still earns it has its own test
+    below: an array the extractor could not read at all reports no `elements` and answers
+    `non_enumerable`. A loop-built or branch-merged value never arrives as an array either
+    — the facts carry no "this was a loop" claim — so it is an unread argument answering
+    `not_readable`.
+
+    This pin asserted one bare `non_enumerable` until the ruling. It moved together with
+    `_all_arguments`' equivalent, which is what keeps the two spellings of one topic list
+    answering alike — and what makes the walk agree with `shapes/arguments.channels_of`,
+    whose contract has always been "one tuple per readable element, plus one trailing
+    unresolved, never one per failure"."""
     bindings = _bindings(walked, _symbol(_ARRAYS, "partly", "()V"), 0)
-    assert _reasons(bindings) == ["non_enumerable"]
-    assert [b.slots[0].value for b in bindings] == [None]
+    assert [(b.slots[0].value, b.slots[0].reason) for b in bindings] == [
+        ("alpha", None),
+        (None, "not_readable"),
+    ]
 
 
 def test_a_value_mutated_inside_the_callee_before_its_return_is_unresolved_escapes(walked):
@@ -1257,27 +1269,30 @@ def test_the_plural_rule_reads_a_VARARGS_producer_through_the_array_arm(walked):
     ]
 
 
-def test_a_HALF_READ_producer_is_one_reason_and_publishes_no_half_list(walked):
-    """§1c's rule, and the place this walk KNOWINGLY differs from the engines it is about
-    to replace. A list whose elements cannot all be read is ONE `non_enumerable` with no
-    element list at all — D00's partly-written array, generalised by ruling 1 — so the
-    readable half is NOT published as though the list were complete.
+def test_a_HALF_READ_producer_keeps_what_it_read_plus_one_reason(walked):
+    """**The readable member survives, and the user ruled it so on 2026-10-16.** A call's
+    argument list is fixed, positional and complete at the call site, so
+    `of("readable-topic", variable)` is a COMPLETE list of two with one unreadable member —
+    not D00's partly-written array, where the MEMBERSHIP itself is uncertain. The readable
+    topic is read from bytecode, not inferred, and dropping it would exclude a destination
+    on inference (§8, "exclude only on proof") in the direction §8 says is hardest to
+    notice: no wrong row is left behind and the reader cannot tell it was ever there.
 
-    **The engines' shipped reader answers differently and the difference is measured, not
-    assumed.** `shapes/arguments._all_string_channels` keeps the readable arguments and
-    appends one trailing unresolved tuple, and `test_call_engines.py` pins exactly that:
-    `[string, unresolved]` -> `[("", "unresolved"), ("raw-t1", "resolved")]`. MEASURED over
-    all 27 corpora: of the 27 sites the three `all_strings` owners have, 6 are fully
-    readable, 21 carry no string argument, and **0 are this mixed case** — so no corpus can
-    tell the two rules apart and nothing moves today.
+    ONE trailing unresolved, never one per failed member, matching
+    `shapes/arguments._all_string_channels` — and it carries the failing member's OWN
+    reason, which is what makes the row actionable. This test asserted
+    `["non_enumerable"]` when the arm first landed; both pins moved together with the
+    ruling, which is why `test_call_engines.py`'s equivalent still passes untouched.
 
-    Task 8 migrates that engine, and on the day it does this difference becomes a visible
-    choice: publish a half-read topic list's readable half, or refuse the list. That is a
-    ruling, which is why this test states the walk's current answer plainly instead of
-    leaving the engine's pin as the only written one."""
+    The array arm is NOT changed by this: `Arrays.asList(arr)` reaches `_elements` through
+    a reference, membership there really is uncertain, and `non_enumerable` still answers.
+    """
     entry = {"owner": _NAME, "method": "of", "arg": "all_strings"}
     bindings = _identified(walked, _symbol(_IDENTIFIED, "partial", "()V"), 1, [entry])
-    assert _reasons(bindings) == ["non_enumerable"]
+    assert [(b.slots[0].value, b.slots[0].reason) for b in bindings] == [
+        ("readable-topic", None),
+        (None, "not_readable"),
+    ]
 
 
 def test_the_plural_rule_answers_a_producer_called_with_NOTHING_absent(walked):
