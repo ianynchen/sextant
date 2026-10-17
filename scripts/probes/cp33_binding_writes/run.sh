@@ -65,6 +65,7 @@ emit_row "a computed assignment"                   "public void setComputed(java
 emit_row "write then read the same field"          "public void writeThenRead(java.lang.String);"
 emit_row "a second parameter after a \`long\`"     "public void setSecond(long, java.lang.String);"
 emit_row "a static initialiser"                    "static {};"
+emit_row "a field assigned a CALL's result"          "public void setFromCall(java.util.List<java.lang.String>);"
 echo
 echo "Full \`javap\` output follows, so a reader can check the extraction above."
 echo

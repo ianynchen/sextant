@@ -1144,6 +1144,26 @@ resolution that would have followed it degrades honestly rather than guessing a 
 Setter injection is deliberately out of this fact's reach — a named gap, not an
 omission.
 
+**The widening is specified as capability 9.19 and is DEFERRED, not built** (spec
+`docs/superpowers/specs/2026-09-22-value-resolution-design.md` §4; ruled 2026-10-17,
+`OI-136`). The backward value walk ships with five of its six edge kinds, and `no_writer`
+is the honest answer where a binding is written outside an initialiser — 16 of the 756
+positions shipped catalogs ask about, which is the yield that decided the deferral.
+
+**What the probe measured, so the capability is not re-scoped from scratch**
+(`scripts/probes/cp33_binding_writes.md`, javac 21.0.12.1 — and these are statements about
+one compiler version, as every bytecode shape here is):
+
+| shape | reaches the fact? |
+|---|---|
+| a non-constructor method assigning a bare parameter (a setter) | **yes** — the triple presents verbatim, so the capability is lifting the `<init>` guard plus a per-method `firstSlot` (a static method's parameters start at slot 0) |
+| `@PostConstruct` assigning a literal, and a static initialiser | **no** — both assign CONSTANTS, and `{field, from_parameter}` has no parameter to name. A static initialiser also has no receiver load and emits `putstatic` |
+| a computed assignment, and a field assigned another CALL'S RESULT | **no, and correctly so** — something that is not an `xLOAD` intervenes, so *"direct traces only"* holds outside `<init>` with no extra work |
+
+The last row is the one with a consequence elsewhere: it is the `ActorRef ref =
+system.actorOf(...)` shape, which is why this capability would not close
+`akka-pekko-actors` as the spec first claimed (corrected there, and in COVERAGE §5.12).
+
 Every entry additionally carries an optional **`source`** value id when the argument is
 itself another call's result — the join that makes OkHttp's `build()` → `newCall(request)`
 split reconstructable, and the `HttpEntity` one-hop follow possible. One grammar, three

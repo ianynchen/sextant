@@ -5,10 +5,28 @@ branch (PR #36) closed and its post-merge audit found the cause behind six of it
 boundaries. **Rewritten after an adversarial self-review** whose two Major findings the user ruled
 on (§0c). Not yet planned.
 
-**What it closes:** `OI-124` (a Temporal module that registers its workers in code derives nothing),
-`OI-126` (a consumer handed across methods), `OI-110` (a container built two beans away), the
-Vert.x 5 builder tail, Quartz's two-chain join, and — with the fifth edge — `akka-pekko-actors`,
-which COVERAGE tiers **C, possibly permanent** for exactly this reason.
+**What it closes:** the Vert.x 5 builder tail and Quartz's two-chain join.
+
+> **This list was longer, and four of its claims are WITHDRAWN — measured at Task 13,
+> 2026-10-17, after Tasks 1-10 shipped.** It read: *"`OI-124` (a Temporal module that
+> registers its workers in code derives nothing), `OI-126` (a consumer handed across
+> methods), `OI-110` (a container built two beans away) … and — with the fifth edge —
+> `akka-pekko-actors`, which COVERAGE tiers **C, possibly permanent** for exactly this
+> reason."* All four are still open, each for a reason this design does not address:
+>
+> * **`OI-124`** needs one engine to attach a value read at a CALL SITE to a row another
+>   engine derived from a DECLARATION. That entry said *"No such cross-engine attachment
+>   exists"* before this spec was written, and this spec does not build one.
+> * **`OI-126`** loses a chain's ROOT, not a value. A backward value walk cannot supply a
+>   root; `engines/fluent.py` still keys every chain on one method body.
+> * **`OI-110`** fails on a bean-graph hop, not a value edge: a `@Bean` method's parameter
+>   is bound reflectively by the container, so there is no call site and no
+>   `bound_to_parameter` edge to cross. Measured — the queue literal one bean away answers
+>   `would_resolve` while the parameter that needs it answers `external`.
+> * **`akka-pekko-actors`** is falsified by probe row 7 — see §4, corrected in place.
+>
+> The three OI entries carry the measurement. Recorded here rather than silently shortened,
+> because this line is the one a reader checks the work against.
 
 **What it is not:** a new subsystem. Five of the six edges it walks are already emitted as facts,
 and one of them, `return_flows`, is already computed into a table that **no engine reads**.
@@ -349,9 +367,23 @@ implementation is one consumer of that capability, with its own probe and fixtur
 and be measured before the edge it feeds is wired** — a wrong binding-write fact fabricates silently
 everywhere, which is why it runs on its own track.
 
-It is what closes `akka-pekko-actors`: a reference obtained in one method and used in another is the
-shape, and COVERAGE's *"possibly permanent"* tier is a statement about this missing capability rather
-than about actors.
+~~It is what closes `akka-pekko-actors`: a reference obtained in one method and used in another is
+the shape, and COVERAGE's *"possibly permanent"* tier is a statement about this missing capability
+rather than about actors.~~
+
+**CORRECTED 2026-10-17, measured.** The first half is false. `ActorRef ref = system.actorOf(props,
+"worker")` assigns a CALL'S RESULT, and `scripts/probes/cp33_binding_writes.md` row 7 measures what
+javac emits for that shape: `aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield`. A
+call sits between the receiver load and the `putfield`, so the `ALOAD 0; xLOAD k; PUTFIELD` triple
+`field_write` matches never presents — for the same reason it does not present for
+`@PostConstruct`'s `ldc`. A parameter-sourced capability 9.19 would read a setter-injected
+`ActorRef` and would NOT read the factory form the framework's own documentation uses, so that
+framework's tier does not move on this edge.
+
+The second half stands and is now sharper: the *"possibly permanent"* tier is a statement about a
+**value-sourced** binding write, which is a larger fact than `{field, from_parameter}` can carry and
+a larger one than Task 11 was scoped to build. The capability itself is deferred — `OI-136`, 16 of
+756 asked positions.
 
 ---
 

@@ -419,13 +419,37 @@ There is no fact to wire until 9.19 exists, so this defers with it rather than o
 
 ---
 
-## Task 13: Docs, register, COVERAGE, open issues
+## Task 13: Docs, register, COVERAGE, open issues · **DONE 2026-10-17**
 
-- [ ] `OI-124`, `OI-126`, `OI-110` close, each citing the test that proves it.
-- [ ] COVERAGE's boundary statements for the affected rows are **generated from `value_resolutions`** rather than hand-written (spec §3d).
-- [ ] D02 documents `value-models/`; D00 documents capability 9.19.
-- [ ] The register records what closed and what did not — including, honestly, whether `akka-pekko-actors` moved off "possibly permanent" or merely became tier B.
-- [ ] `scripts/coverage_matrix.py --check` passes.
+> **The first bullet was WRONG and the task's main finding is that it was wrong.** It said
+> three issues close. None of them does, and the spec's own "What it closes" line named all
+> three. Each was measured rather than re-asserted, each entry now carries the measurement,
+> and the spec is corrected in place. A task that had ticked this bullet by closing them on
+> the plan's authority would have published three false closures.
+
+- [x] `OI-124`, `OI-126`, `OI-110` **stay open, each with the measurement that says why** — not
+  the test that proves closure, because there is none. `OI-110`: measured on
+  `spring-integration-probe`, the queue literal one bean away answers `would_resolve` while
+  the `@Bean` parameter that needs it answers `external`, because a container-bound parameter
+  has no call site and so no `bound_to_parameter` edge — a bean-graph hop, not a value edge.
+  `OI-126`: what is lost is the chain's ROOT, not a value, and a value walk cannot supply one.
+  `OI-124`: needs the cross-engine attachment its own entry already said does not exist.
+- [x] COVERAGE §3c is **generated from `value_resolutions`** (`scripts/value_boundaries.py`,
+  gated by `tests/architecture/test_value_boundaries.py`): 481 answered and 474 unresolved
+  positions over 18 built fixtures, per catalog and per reason. The prose half of a boundary
+  statement — which FORMS a catalog does not read — stays prose, and §3c says so.
+- [x] D02 §1f documents `value-models/` (Task 6). D00 records capability **9.19 as deferred**
+  with the probe's three-row scoping table, rather than documenting a capability nobody built.
+- [x] The register records what closed and what did not, and **`akka-pekko-actors` moved
+  neither way**: still C, possibly permanent — but now measured instead of assumed. Probe
+  row 7, added here, shows an `ActorRef` from `system.actorOf(...)` is a field assigned a
+  CALL'S RESULT, so the triple `field_write` matches never presents and capability 9.19 would
+  not have closed that row. Spec §4's claim that it would is withdrawn in place.
+- [x] `OI-137` entered — CI installs with `pip install -e ".[dev]"` and ignores `uv.lock`,
+  which is how a `graphql-core` release broke an untouched file on #38. **Major, and still
+  unfixed**: it is CI configuration, GUIDELINES §7.
+- [x] `scripts/coverage_matrix.py --check`, `coverage_versions.py --check` and
+  `value_boundaries.py --check` all pass.
 
 ---
 

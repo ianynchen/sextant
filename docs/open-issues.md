@@ -309,6 +309,40 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-137 — CI does not read `uv.lock`, so an upstream release breaks a file the branch never touched
+**Major · entered 2026-10-17, measured on PR #38 on 2026-10-16 · `.github/workflows/pr.yml:43`, `pyproject.toml:17`, `:40`**
+
+CI installs with `pip install -e ".[dev]"`. That **ignores `uv.lock`** and resolves the
+newest release satisfying each floor in `pyproject.toml`, and the floors are loose:
+`graphql-core>=3.2.6`, `mypy>=1.10`, `ruff>=0.5`, `import-linter>=2.0`. The local `.venv`
+resolves from the lock. **They are therefore not the same environment**, and a green local
+gate is not evidence about CI.
+
+**It has already happened once, and the symptom is misleading.** `graphql-core` 3.3.0 made
+`EnumTypeDefinitionNode.values` `tuple[...] | None`. CI resolved 3.3.0, this machine had
+3.2.12, and mypy failed in `ingress/interpret/graphql_sdl.py` — a file the branch had not
+touched, and broken on `main` too, whose last green run was three weeks earlier. The full
+local gate had passed: 4088 tests, mypy on 133 files, guards 161/0. The fix that landed
+(`de6c3a2b`) corrected the one call site; the cause is untouched.
+
+**On the grade.** Major, because the failure is a wrong RESULT rather than a miss: the gate
+reports a branch as broken on the strength of a file it did not change, and the honest signal
+— does this branch pass? — is unavailable until someone diagnoses it. It also degrades with
+time rather than staying put: every loose floor is a future failure on an unrelated file,
+arriving whenever an upstream release lands.
+
+**What happens today:** every PR's gate result depends on what PyPI published that week.
+
+**Real triggering input:** ordinary — an upstream minor release.
+
+**Verify:** `grep -n "pip install" .github/workflows/pr.yml` beside
+`grep -n "graphql-core" pyproject.toml`, then compare against the lock's pin.
+**Closes** by CI installing the resolved set (`uv sync --frozen`, with the lock as the
+single source of truth for both environments). **It is CI configuration, which GUIDELINES
+§7 puts out of scope without the user's explicit instruction** — raised 2026-10-16, raised
+again here, and entered in the register so it stops living in commit messages. Falsified by
+a CI run whose installed `graphql-core` matches `uv.lock`.
+
 ### OI-136 — the sixth edge is deferred: 16 of 756 asked positions, and the endpoints publish either way
 **Minor · entered 2026-10-17 · plan `2026-09-22-value-resolution.md` Tasks 11-12, spec §4 · probe `scripts/probes/cp33_binding_writes.md`**
 
@@ -361,6 +395,18 @@ PUTFIELD` triple verbatim (so the capability is a guard removal plus a per-metho
 static initialisers assign CONSTANTS, which `{field, from_parameter}` cannot express; and
 that a computed assignment never presents the triple, so "direct traces only" holds outside
 `<init>` for free.
+
+**One claim the spec made for this capability is WITHDRAWN, measured 2026-10-17** (probe
+row 7, added at Task 13). Spec §4 says the sixth edge *"is what closes
+`akka-pekko-actors`"*. It does not. `ActorRef ref = system.actorOf(props, "worker")`
+assigns a CALL'S RESULT, and `javap` shows `aload_0; aload_1; iconst_0; invokeinterface;
+checkcast; putfield` — a call between the receiver load and the `putfield`, so the
+`ALOAD 0; xLOAD k; PUTFIELD` triple never presents, exactly as it does not for
+`@PostConstruct`'s `ldc`. A setter-injected `ActorRef` would be reached; one from the
+factory the framework's own documentation uses would not. **So that framework's tier does
+not move on this capability**, and the spec is corrected rather than left to be read as a
+promise (`docs/COVERAGE.md` §5.12, `docs/java-kotlin-delivery-list.md`'s
+`akka-pekko-actors` row).
 
 **Closes when** someone wants those 16 addresses enough to add an extractor capability, or
 when a corpus arrives where the count is materially larger. The yield is what makes this
@@ -1909,7 +1955,27 @@ unresolved, as pinned; nothing references it.
 **Real triggering input:** the Spring AMQP style that declares `Queue` beans for auto-declaration
 and injects them into the container.
 
-**Verify:** `grep -n "second_hop\|bean_second_hop" src/sextant/application/resolve/engines/fluent.py`.
+**STILL OPEN after the value walk, and the measurement says why** (Task 13, 2026-10-17).
+The walk named in spec 2026-09-22 was expected to close this and does not. Measured on
+`fixtures/spring-integration-probe` with `--shadow`:
+
+| position | answer |
+|---|---|
+| `AmqpTopologyBeans#topologyContainer`@1 slot 0 — the `setQueues(topologyOrdersQueue)` argument | `unresolved(external)` |
+| `AmqpTopologyBeans#topologyOrdersQueue`@0 slot 0 — the `new Queue("topology.orders.queue")` literal | `would_resolve` → `topology.orders.queue` |
+
+**The value is one bean away and readable; the walk cannot get to it, and the reason is
+structural rather than a missing edge.** A `@Bean` method's parameter is bound by the
+CONTAINER, reflectively — there is no call site in the module's bytecode, so no
+`bound_to_parameter` edge exists to cross and `external` is the correct answer. The
+remaining hop is a bean-graph join (by type, name, qualifier or `@Primary`), which is
+`bean_via`'s own mechanism and not a value edge. So the walk made this issue no easier and
+no harder, and the fix is still the one below.
+
+**Verify:** `grep -n "One hop only" src/sextant/application/resolve/engines/fluent.py` — the
+docstring of `_fold_bean_captures`, which still reads *"a container built in a third bean is
+unresolved"*. (This line cited `second_hop` until 2026-10-17; the reason string is built as
+`f"bean_{reason}"`, so the grep matched nothing and looked like a closed issue.)
 **Closes** with a bounded multi-hop fold (the depth guard the combinator's helper walk already
 has), each hop in its own bean method's context.
 
@@ -2245,7 +2311,17 @@ derives everything; a plain-SDK module derives nothing.
 the criterion that makes this worth logging at all, and it is why the magnitude is stated in words
 above rather than left to be inferred from the grade.
 
-**Verify:** `grep -n "PROGRAMMATIC WORKER" -A 8 src/sextant/catalogs/temporal-workflow.yml`.
+**STILL OPEN after the value walk** (Task 13, 2026-10-17), and this entry already said why
+before the work started: *"No such cross-engine attachment exists."* The walk answers *what
+is this value?* at a position a catalog asks about. It does not attach a value read at a
+CALL SITE to a row another engine derived from a DECLARATION, which is the whole of this
+issue. `resolve/endpoint_attributes.py` is unchanged and still writes
+`endpoint_metadata` from annotation attributes only (`_from_annotation_attributes`,
+`effective_annotation_uses`). Spec 2026-09-22's header listed this among the issues it
+closes; that claim is withdrawn, and nothing about the capability it would need has changed.
+
+**Verify:** `grep -n "PROGRAMMATIC WORKER" -A 8 src/sextant/catalogs/temporal-workflow.yml`,
+and `grep -n "_from_annotation_attributes" -A 20 src/sextant/application/resolve/endpoint_attributes.py`.
 **Closes** with the cross-engine attachment above, which is a spec of its own.
 
 ### OI-125 — `request(...)` derives no reply shape, because the reply type is the call's RETURN type
@@ -2296,7 +2372,18 @@ body, so every row derives. The cross-method form derives nothing and is not exe
 from several places — which is a real idiom in Vert.x verticles, though the one-body form is the
 common one.
 
-**Verify:** `grep -n "HANDED TO ANOTHER METHOD" -A 6 src/sextant/catalogs/vertx-eventbus-chain.yml`.
+**STILL OPEN after the value walk** (Task 13, 2026-10-17). Spec 2026-09-22's header named
+this as one of the three issues it closes, and it does not. **What was lost here was never a
+VALUE; it was the chain's root.** The walk resolves a value to its source across method
+boundaries — 77 such crossings in this estate (`OI-136`) — so it could tell you what address
+`bus.consumer("a")` named. What no mechanism does is join a `handler` terminal in one body
+to a root in another, and `engines/fluent.py` still keys every chain on `context.caller`
+(`_fold_bean_captures` answers `bean_across_bodies` for exactly this shape). A value walk
+cannot supply a root, so this issue was mis-scoped against that spec rather than left
+undone by it.
+
+**Verify:** `grep -n "HANDED TO ANOTHER METHOD" -A 6 src/sextant/catalogs/vertx-eventbus-chain.yml`,
+and `grep -n "across_bodies" src/sextant/application/resolve/engines/fluent.py`.
 **Closes** with `OI-110`, by whatever cross-method value tracking that issue settles on — one
 mechanism answers both, and answering them separately would be two.
 

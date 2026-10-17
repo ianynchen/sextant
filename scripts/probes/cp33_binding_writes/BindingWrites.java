@@ -9,6 +9,7 @@ public class BindingWrites {
     private String viaPostConstruct;
     private String viaComputed;
     private String readAfterWrite;
+    private String viaCallResult;
     private static String viaStaticInit;
 
     static { viaStaticInit = "static-init-value"; }
@@ -31,4 +32,9 @@ public class BindingWrites {
 
     /** 5. Two parameters, the SECOND assigned — does the slot mapping hold outside `<init>`? */
     public void setSecond(long wide, String value) { this.viaSetter = value; }
+
+    /** 7. A field assigned another CALL'S RESULT, not a parameter and not a constant.
+     *  This is the `ActorRef ref = system.actorOf(props, "worker")` shape, and it is
+     *  what decides whether capability 9.19 would reach `akka-pekko-actors` at all. */
+    public void setFromCall(java.util.List<String> source) { this.viaCallResult = source.get(0); }
 }

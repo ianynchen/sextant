@@ -1,0 +1,302 @@
+{
+  "measured_at_commit": "3ab0c8f8",
+  "fixtures": [
+    "grpc-probe",
+    "orders-eventbus",
+    "orders-gateway",
+    "orders-javalin",
+    "orders-ktor",
+    "orders-ktor-classlambdas",
+    "orders-micronaut",
+    "orders-pekko",
+    "orders-quarkus",
+    "orders-receivers",
+    "orders-service",
+    "orders-servlet",
+    "orders-soap-client",
+    "orders-soap-final",
+    "orders-spring7",
+    "orders-streams",
+    "spring-integration-probe",
+    "temporal-probe"
+  ],
+  "not_built": [
+    "gradle-orders",
+    "orders-reactor"
+  ],
+  "catalogs": {
+    "apache-httpclient": {
+      "would_resolve": 11,
+      "unresolved": {}
+    },
+    "aws-sqs-sdk": {
+      "would_resolve": 4,
+      "unresolved": {
+        "external": 3
+      }
+    },
+    "google-pubsub-client": {
+      "would_resolve": 0,
+      "unresolved": {
+        "external": 2
+      }
+    },
+    "google-pubsub-publisher": {
+      "would_resolve": 2,
+      "unresolved": {}
+    },
+    "google-pubsub-subscriber": {
+      "would_resolve": 8,
+      "unresolved": {
+        "not_readable": 1
+      }
+    },
+    "jakarta-jms": {
+      "would_resolve": 4,
+      "unresolved": {}
+    },
+    "jakarta-servlet": {
+      "would_resolve": 2,
+      "unresolved": {}
+    },
+    "jakarta-websocket-client": {
+      "would_resolve": 10,
+      "unresolved": {}
+    },
+    "jakarta-websocket-programmatic": {
+      "would_resolve": 1,
+      "unresolved": {}
+    },
+    "javalin": {
+      "would_resolve": 10,
+      "unresolved": {}
+    },
+    "javalin-apibuilder": {
+      "would_resolve": 9,
+      "unresolved": {
+        "not_readable": 12
+      }
+    },
+    "jdk-httpclient": {
+      "would_resolve": 46,
+      "unresolved": {
+        "external": 10,
+        "not_readable": 2
+      }
+    },
+    "kafka-clients": {
+      "would_resolve": 4,
+      "unresolved": {
+        "external": 3
+      }
+    },
+    "kafka-consumer": {
+      "would_resolve": 9,
+      "unresolved": {
+        "external": 1
+      }
+    },
+    "kafka-streams": {
+      "would_resolve": 11,
+      "unresolved": {
+        "external": 1
+      }
+    },
+    "kafka-streams-sink": {
+      "would_resolve": 3,
+      "unresolved": {}
+    },
+    "kafka-streams-topology": {
+      "would_resolve": 3,
+      "unresolved": {}
+    },
+    "ktor-routing": {
+      "would_resolve": 82,
+      "unresolved": {
+        "external": 99,
+        "no_writer": 1,
+        "not_readable": 93
+      }
+    },
+    "okhttp": {
+      "would_resolve": 8,
+      "unresolved": {
+        "external": 16,
+        "not_readable": 1
+      }
+    },
+    "pekko-connectors-kafka": {
+      "would_resolve": 6,
+      "unresolved": {}
+    },
+    "spring-cloud-gateway": {
+      "would_resolve": 13,
+      "unresolved": {
+        "not_readable": 8
+      }
+    },
+    "spring-cloud-gateway-outbound": {
+      "would_resolve": 8,
+      "unresolved": {
+        "not_readable": 8
+      }
+    },
+    "spring-integration-amqp": {
+      "would_resolve": 17,
+      "unresolved": {
+        "external": 3,
+        "no_writer": 3,
+        "not_readable": 16
+      }
+    },
+    "spring-integration-kafka": {
+      "would_resolve": 8,
+      "unresolved": {
+        "not_readable": 16
+      }
+    },
+    "spring-integration-pubsub": {
+      "would_resolve": 6,
+      "unresolved": {
+        "external": 3,
+        "not_readable": 16
+      }
+    },
+    "spring-jms-template": {
+      "would_resolve": 5,
+      "unresolved": {
+        "external": 2
+      }
+    },
+    "spring-kafka-message": {
+      "would_resolve": 3,
+      "unresolved": {
+        "external": 1,
+        "not_readable": 1
+      }
+    },
+    "spring-kafka-replying": {
+      "would_resolve": 4,
+      "unresolved": {
+        "external": 3
+      }
+    },
+    "spring-kafka-template": {
+      "would_resolve": 7,
+      "unresolved": {
+        "external": 6
+      }
+    },
+    "spring-mvc-router": {
+      "would_resolve": 21,
+      "unresolved": {
+        "external": 7,
+        "not_readable": 20
+      }
+    },
+    "spring-pubsub": {
+      "would_resolve": 3,
+      "unresolved": {
+        "external": 1
+      }
+    },
+    "spring-rabbit-template": {
+      "would_resolve": 5,
+      "unresolved": {}
+    },
+    "spring-restclient": {
+      "would_resolve": 23,
+      "unresolved": {
+        "external": 1,
+        "not_readable": 2
+      }
+    },
+    "spring-resttemplate": {
+      "would_resolve": 14,
+      "unresolved": {
+        "external": 2
+      }
+    },
+    "spring-sqs-template": {
+      "would_resolve": 2,
+      "unresolved": {
+        "external": 2,
+        "not_readable": 1
+      }
+    },
+    "spring-sqs-template-receive": {
+      "would_resolve": 4,
+      "unresolved": {
+        "not_readable": 4
+      }
+    },
+    "spring-stomp-client": {
+      "would_resolve": 9,
+      "unresolved": {}
+    },
+    "spring-stomp-endpoint": {
+      "would_resolve": 3,
+      "unresolved": {}
+    },
+    "spring-stomp-template": {
+      "would_resolve": 1,
+      "unresolved": {
+        "external": 2
+      }
+    },
+    "spring-web": {
+      "would_resolve": 1,
+      "unresolved": {
+        "external": 46
+      }
+    },
+    "spring-webclient": {
+      "would_resolve": 38,
+      "unresolved": {
+        "external": 3,
+        "no_writer": 3,
+        "not_readable": 2
+      }
+    },
+    "spring-webflux-router": {
+      "would_resolve": 30,
+      "unresolved": {
+        "external": 7,
+        "not_readable": 28
+      }
+    },
+    "spring-websocket-client": {
+      "would_resolve": 8,
+      "unresolved": {}
+    },
+    "spring-ws-template": {
+      "would_resolve": 1,
+      "unresolved": {
+        "external": 3
+      }
+    },
+    "temporal-untyped": {
+      "would_resolve": 1,
+      "unresolved": {}
+    },
+    "vertx-eventbus": {
+      "would_resolve": 6,
+      "unresolved": {
+        "external": 4
+      }
+    },
+    "vertx-eventbus-chain": {
+      "would_resolve": 3,
+      "unresolved": {
+        "external": 1,
+        "not_readable": 1
+      }
+    },
+    "vertx-eventbus-mutiny": {
+      "would_resolve": 4,
+      "unresolved": {
+        "external": 3
+      }
+    }
+  }
+}

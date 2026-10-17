@@ -35,6 +35,7 @@ present that triple, and which do not?**
 | 4 | a method that writes then reads the field | ? | **the triple stands**; the `getfield` is separate instructions after it |
 | 5 | a second parameter after a `long` | slot mapping holds | **confirmed** — `aload_3`, and `parameterSlotsOf` computes `[1, 3]` |
 | 6 | a static initialiser | ? | **`ldc; putstatic`** — no receiver load, and `PUTSTATIC` not `PUTFIELD` |
+| 7 | a field assigned a CALL's result | ? | **an `invokeinterface` and a `checkcast` intervene** — no triple |
 
 ## Observations
 
@@ -50,6 +51,7 @@ version `javac -version` reported, not the parameter passed in as `JAVA_HOME`;
 | write then read the same field | `aload_0; aload_1; putfield; getstatic; aload_0; getfield; invokevirtual; return` |
 | a second parameter after a `long` | `aload_0; aload_3; putfield; return` |
 | a static initialiser | `ldc; putstatic; return` |
+| a field assigned a CALL's result | `aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield; return` |
 
 **1. A setter is the triple verbatim.** `aload_0; aload_1; putfield` — identical in shape to
 what a constructor presents. For this case capability 9.19 is *literally* lifting the
@@ -93,6 +95,18 @@ the value is a constant, so even a `putstatic` variant would have no parameter t
 a compile-time constant at every use site, so it reaches a call site as a literal and never
 as a field read (`shapes/identity_calls.py` records that).
 
+**7. A field assigned another CALL'S RESULT presents no triple — and this is the row that
+decides `akka-pekko-actors`.** The sequence is `aload_0; aload_1; iconst_0;
+invokeinterface; checkcast; putfield`: the receiver load is there and the `putfield` is
+there, but what sits between them is a CALL, not an `xLOAD`, so `isLoad()` refuses it for
+the same reason it refuses `@PostConstruct`'s `ldc`. **`ActorRef ref = system.actorOf(props,
+"worker")` is exactly this shape**, which means a parameter-sourced capability 9.19 would
+not reach an actor reference at all. Measured here rather than inferred from the matcher,
+because the inference was the thing that needed checking: spec §4 states the sixth edge
+"is what closes `akka-pekko-actors`", and on the characteristic actor shape that is false.
+A setter-injected `ActorRef` (row 1) would be reached; one obtained from the factory the
+framework's own documentation uses would not.
+
 ## What this means for capability 9.19
 
 **Lifting the `<init>` guard covers exactly one of the three shapes the plan named.** A
@@ -106,3 +120,12 @@ That is a scoping question rather than an obstacle, and it belongs to whoever ru
 new fact.** This probe does not decide it, and the plan's Step 2 ("emit the fact only where
 the assignment is directly traceable") is satisfied either way, since a constant assignment
 is as directly traceable as a parameter one — the question is only what the fact can say.
+
+**And row 7 withdraws one of the spec's claims for the capability.** §4 says the sixth edge
+"is what closes `akka-pekko-actors`" and that COVERAGE's *"possibly permanent"* tier "is a
+statement about this missing capability rather than about actors". The first half does not
+hold: an `ActorRef` from `actorOf` is a call result, which no `{field, from_parameter}` fact
+can carry, so 9.19 at the scope this probe measured would leave that framework exactly where
+it is. The second half still stands, and is now sharper — the tier is a statement about a
+value-sourced binding write, which is a bigger fact than the one Task 11 was scoped to
+build.
