@@ -63,6 +63,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     call_site_index,
     carries_expression,
+    channel_of_answer,
     channels_of,
     declared_parameters_of,
     field_facts,
@@ -74,6 +75,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
@@ -116,6 +118,11 @@ _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
 # each against exactly these two shapes.
 _HANDLER_NONE = "none"
 _BEAN_VIA = "bean_via"
+# Where a capture was read — `(caller, ordinal, slot)`, stamped by `_captured_at`, which
+# says why the walk needs all three. Spelled with no `\x00` prefix because unlike
+# `_CONTINUE` below it is not a pseudo-field of `captures`: it rides on one ARGUMENT, in
+# the same namespace as the scanner's own keys, which is why the name is unmistakable.
+_CAPTURED_AT = "captured_at"
 
 # The `read_by` end of the channel edge (spec 2026-09-21 §3b), read here for the
 # names the channel index knows — the bean fold's name rung for a channel
@@ -383,6 +390,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
     referenced: list[str] = []
+    # The walk's index, built ONCE PER RUN and only where this catalog declares a hop at
+    # all (Task 9). `_ChainContext` is frozen and is rebuilt per caller, so a lazily-built
+    # index would either have to mutate a frozen dataclass or pay `value_index`'s fold once
+    # per METHOD rather than once per module. A catalog declaring no `channel_via`/`url_via`
+    # anywhere never builds it — the same not-charging-the-innocent rule Task 7 measured at
+    # 0.16s on `mall-admin`, applied at the only granularity this engine's shape allows.
+    walk_index = value_index(workspace) if _declares_a_hop(matches) else None
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -417,6 +431,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             caller_parameters=caller_parameters.get(caller, ()),
         )
         context = _ChainContext(
+            workspace=workspace,
+            values=walk_index,
             caller=caller,
             sites=sites,
             by_receiver=by_receiver,
@@ -628,6 +644,14 @@ class _ChainContext:
     # — the collecting context `_bean_chain_capture` builds. None on the
     # deriving walk.
     collect: list[dict[str, Any]] | None = None
+    # The workspace and the walk's index, for the hop ladders (Task 9). The index is built
+    # ONCE PER RUN and only where this catalog declares a hop at all — not lazily per
+    # caller, because this dataclass is frozen and a per-caller rebuild would pay
+    # `value_index`'s fold for every method rather than for every module. A catalog
+    # declaring no `channel_via`/`url_via` anywhere gets `None` and never builds it, which
+    # is the same not-charging-the-innocent rule Task 7 measured at 0.16s on `mall-admin`.
+    workspace: "Workspace | None" = None
+    values: "ValueIndex | None" = None
 
 
 def _prefix_captures(
@@ -1042,7 +1066,22 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         literal = channels_of(channel_argument)
         channel_via_forms = captures.get("channel_via") or []
         if literal[0][2] != "resolved" and channel_via_forms:
-            destinations = linked_channels(channel_argument, context.facts, channel_via_forms)
+            # **The backward walk, in place of this engine's own one-hop follow** (spec
+            # §2b, Task 9). `linked_channels` followed ONE `source` to a call whose owner
+            # and method a declared form named; `resolve_site` answers the same position
+            # with no cap, and the hoisted identity table says which argument of the
+            # producer IS the value. The ladder's order is untouched: the literal read runs
+            # first and this answers only where it did not resolve, which is also what
+            # keeps `_address_read`'s field rung above working — a field-fed address is
+            # already a string by the time it gets here, so this never runs for one.
+            #
+            # **The position comes from `_captured_at`**, because a capture folds up out of
+            # a chain and loses its site, and the walk names a position by
+            # `(caller, ordinal, slot)` — the ordinal being what bounds the `escapes`
+            # window (`values._used_at`). Resolving in the wrong method would read a
+            # same-numbered value of another method and fabricate; `test_fluent_
+            # registrations.py`'s negative half pins exactly that.
+            destinations = _walked_channels(channel_argument, context) or literal
         else:
             destinations = literal
     else:
@@ -1334,6 +1373,65 @@ def _address_read(argument: dict[str, Any] | None, context: _ChainContext) -> di
         }
     caller = argument.get("caller") if isinstance(argument, dict) else None
     return address_argument(argument, context.field_sources, context.facts, caller)
+
+
+def _declares_a_hop(matches: dict[str, Any]) -> bool:
+    """Whether this catalog names a `channel_via` or `url_via` anywhere in `matches`.
+
+    Anywhere, because the keys are not at one depth — `url_via` sits on a root, a step and
+    a terminal, `channel_via` on those and on a bean entry — and this is a precondition on
+    building an index rather than a reader of the entries themselves, so it must not learn
+    any style's shape to answer it. The same walk `yaml_source._hoisted` makes, for the
+    same reason.
+    """
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, dict):
+            if "channel_via" in node or "url_via" in node:
+                return True
+            return any(walk(value) for value in node.values())
+        if isinstance(node, list):
+            return any(walk(entry) for entry in node)
+        return False
+
+    return walk(matches)
+
+
+def _walked_channels(
+    argument: dict[str, Any] | None, context: _ChainContext
+) -> Sequence[tuple[str | None, str | None, str]] | None:
+    """One channel capture's destinations, resolved by the backward walk (Task 9).
+
+    `None` where the walk cannot be asked rather than where it answers nothing, and the
+    difference is the whole contract: a caller must be able to fall back to the literal
+    read it already has. So `None` means this catalog declares no hop (no index was built),
+    or the capture carries no `_captured_at` provenance, or the site it names is not one
+    this workspace holds. An empty answer from the walk itself is NOT `None` — it is an
+    answer, and `resolve_site` returning no binding means no path answered, which the
+    caller publishes as one unresolved tuple exactly as the old ladder did.
+
+    **One tuple per distinct destination, not one per path** (§1c), the same reasoning
+    `single_call` and `interface_implementation` state: several paths routinely agree about
+    this one slot, and keeping them apart would mint a second row for one registration.
+    """
+    if context.values is None or context.workspace is None or not isinstance(argument, dict):
+        return None
+    captured = argument.get(_CAPTURED_AT)
+    if captured is None:
+        return None
+    caller, ordinal, slot = captured
+    site = context.values.sites.get((str(caller), int(str(ordinal))))
+    if site is None:
+        return None
+    walked = list(
+        dict.fromkeys(
+            channel_of_answer(binding.slots.get(slot))
+            for binding in resolve_site(
+                context.workspace, site, context.values, context.catalog.value_model
+            )
+        )
+    )
+    return walked or [(None, None, "unresolved")]
 
 
 def _composed_address(
@@ -2564,10 +2662,42 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
                 "caller": site["caller"],
             }
         elif _reads_an_argument(field, value):
-            resolved[field] = _own_parameter(_arg_at(site["arguments"], _arg_index(value)), site)
+            slot = _arg_index(value)
+            read = _own_parameter(_arg_at(site["arguments"], slot), site)
+            # No slot, nothing to name: `_arg_index` answers None for a capture that is
+            # not a positional read, and a position the walk cannot be told is one it must
+            # not be asked about.
+            resolved[field] = read if slot is None else _captured_at(read, site, slot)
         else:
             resolved[field] = value
     return resolved
+
+
+def _captured_at(
+    argument: dict[str, Any] | None, site: dict[str, Any], slot: int
+) -> dict[str, Any] | None:
+    """The site and slot a capture was READ AT, carried with the capture (Task 9).
+
+    **The walk names a position by `(caller, ordinal, slot)`** — `values._of_site` builds
+    exactly that origin — and the ordinal is not decoration: `values._used_at` reads it as
+    "where a value is USED", which is what bounds the `escapes` window. A capture folds up
+    out of a chain and loses the site it came from, so without this a hop could only be
+    resolved with no ordinal at all, and `_through` reads that as the whole tail of the
+    method: every value's escape window widens and destinations that resolve today answer
+    `escapes` instead.
+
+    Carried ON the argument rather than beside it because a capture travels through
+    `_fold`, `_fold_lambda_captures` and `_fold_bean_captures` as a single value; anything
+    kept alongside would have to be folded in step with it, in four places, and the first
+    one missed would be silent.
+
+    Every reader of these arguments selects the keys it wants (`kind`, `value`, `source`,
+    `elements`), so an extra key travels harmlessly — the same way `_own_parameter`'s
+    `caller` already does.
+    """
+    if argument is None:
+        return None
+    return {**argument, _CAPTURED_AT: (site["caller"], site["ordinal"], slot)}
 
 
 def _own_parameter(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:

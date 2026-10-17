@@ -14,6 +14,7 @@ symbol (D00 §5a).
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -45,7 +46,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.facts import Parameter as DeclaredParameter
 from sextant.domain.symbols import method_descriptor
-from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource, _hoisted
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -90,6 +91,23 @@ def _catalog(
     catalog_id: str = "invented-adapters",
     bean_model: dict | None = None,
 ) -> Catalog:
+    # **The hoisted identity table, because the engine now resolves through it** (Task 9,
+    # the same correction Task 8 made to `test_call_engines`). `YamlCatalogSource.load`
+    # hands every real catalog the table its hop declarations hoist into (spec §2a step 1)
+    # and `Catalog.value_model` defaults to EMPTY — so a hand-built catalog carrying
+    # `channel_via` in `matches` and nothing in `value_model` resolves nothing here while
+    # resolving in production, and these tests would be measuring the absence of the table
+    # rather than the engine. Built by PRODUCTION's own `_hoisted` rather than a copy of
+    # it, so the two spellings cannot drift (§0a) and Task 10's narrowing reaches the tests
+    # automatically. A catalog the hoist REFUSES keeps an empty table: the loader rejects
+    # such a catalog in production, so a test handing one to the engine is exercising the
+    # engine's own validators, which is reached only here.
+    source = Path(f"tests/{catalog_id}.yml")
+    model: list[dict[str, Any]] = []
+    try:
+        _hoisted(matches, source, model)
+    except CatalogError:
+        model = []
     return Catalog(
         id=catalog_id,
         style="fluent",
@@ -97,8 +115,9 @@ def _catalog(
         direction=direction,
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
-        source=Path(f"tests/{catalog_id}.yml"),
+        source=source,
         bean_model=_SPRING if bean_model is None else bean_model,
+        value_model=model,
     )
 
 
