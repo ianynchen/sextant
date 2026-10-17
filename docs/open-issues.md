@@ -309,6 +309,54 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-140 — a resolved gateway route renders as three kinds of "unresolved"
+**Major · entered 2026-10-17, found at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 1 · `src/sextant/egress/render/`**
+
+With `OI-139` fixed, `spring-petclinic-api-gateway`'s four routes derive correctly — and the
+document renders them like this:
+
+```
+| Endpoint                             | Peer       | Caller | Format     | Resolution |
+| `(unresolved) lb://vets-service`     | unresolved | `None` | unresolved | resolved   |
+```
+
+**Every cell on that row is literally correct and the row as a whole is unreadable.** Three
+separate NULLs are printed with the word `unresolved`, and the last column says `resolved`:
+
+* **the method** is NULL because a gateway route with no `Method=` predicate forwards every
+  verb — the framework's own catch-all, recorded as resolved on purpose (COVERAGE §5.1);
+* **the peer** is NULL because D02 §3 keeps a routing destination whole: the target
+  `lb://vets-service` is the `path`, and splitting it would publish an empty path;
+* **the format** is NULL because a forwarded request has no declared body;
+* **the caller** is NULL because a route declared in configuration has no handler method —
+  and that one prints as the bare string `None`, a Python value reaching a published
+  document.
+
+A reader concludes the target is unknown. It is the one thing on the row that IS known.
+
+**Pre-existing, not introduced by `OI-139`.** Measured: `fixtures/orders-gateway` renders
+`(unresolved) http://ab-service | unresolved | … | unresolved | resolved` and has since
+gateway support shipped. `OI-139` only made it visible on a real system, where four of the
+module's six outgoing rows are gateway routes.
+
+**On the grade.** Major on the deliverable's own terms (user ruling 2026-10-17: *"the table
+isn't the result. it's intermediary"*). No row is wrong, but the document communicates the
+opposite of what it derived, which is a worse outcome than a blank — a blank invites a
+question, a contradiction invites a wrong conclusion. And `None` in a published cell is a
+defect on any reading.
+
+**What happens today:** every Spring Cloud Gateway module's route table reads as unresolved.
+
+**Real triggering input:** ordinary — every gateway module, in either the DSL or the
+properties form.
+
+**Verify:** `sed -n '/## Outbound endpoints/,/^---/p'` on any rendered gateway module.
+**Closes** by rendering a deliberate NULL differently from a failed read — the data already
+distinguishes them, since `resolution` is `resolved` on these rows — and by never printing
+`None`. **Moves existing pinned output** (`orders-gateway`'s e2e rows and the
+`petclinic-api-gateway` field pin both record today's text verbatim), so it is a task of its
+own rather than a fix in passing.
+
 ### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` · `src/sextant/ingress/detect/` Maven version resolution, `src/sextant/catalogs/spring-cloud-gateway-properties.yml` `detect.coordinates`**
 

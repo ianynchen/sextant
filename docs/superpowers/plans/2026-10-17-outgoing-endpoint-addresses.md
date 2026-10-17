@@ -63,7 +63,7 @@ poms for the probes.
 
 ---
 
-## Task 1: Versions through the BOM chain, and the gateway's route table
+## Task 1: Versions through the BOM chain, and the gateway's route table · **DONE 2026-10-17**
 
 **8 rows — the largest single win, and it needs no ruling.** Both causes are already proven end
 to end (spec §5a): a throwaway patch took `api-gateway` from 6 endpoints to 14, every missing
@@ -81,7 +81,7 @@ row `resolved`. This task re-does that properly, with the reporting fix the sile
 - Produces: `dependency_versions` entries that were previously dropped, and a
   `dependencies_not_resolved` message where one still cannot be settled.
 
-- [ ] **Step 1: The probe first, because the claim is about other people's poms**
+- [x] **Step 1: The probe first, because the claim is about other people's poms**
 
 `scripts/probes/cp35_bom_chain/run.sh` GENERATES its table — walking from
 `spring-cloud-dependencies` and reporting, per dependency, the BOM that manages it, the hop
@@ -92,7 +92,7 @@ refuses a hand-written table; do not write one.
 Expected content, measured 2026-10-17: all four of `api-gateway`'s unresolved dependencies at
 **2 hops**, each via a different component BOM, each `version: ${project.version}`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 In `tests/ingress/test_maven_detector.py`, using that file's existing pom-building harness:
 
@@ -112,31 +112,31 @@ def test_project_version_resolves_in_the_declaring_poms_scope_not_the_modules():
     yield a coordinate that does not exist, which is worse than an honest unresolved."""
 ```
 
-- [ ] **Step 3: Run them to verify they fail**
+- [x] **Step 3: Run them to verify they fail**
 
 ```bash
 .venv/bin/python -m pytest tests/ingress/test_maven_detector.py -q
 ```
 Expected: FAIL — the entry is dropped and nothing is reported.
 
-- [ ] **Step 4: Define the built-ins per pom, scoped to that pom**
+- [x] **Step 4: Define the built-ins per pom, scoped to that pom**
 
 In `_managed_versions`, the imported BOM's property map gains `project.version` (the version the
 import names), `project.groupId` and `project.artifactId`. Scoped to that BOM, beside the
 existing comment that says the importing module's properties *"must not answer it"*.
 
-- [ ] **Step 5: Report a managed entry that cannot be interpolated**
+- [x] **Step 5: Report a managed entry that cannot be interpolated**
 
 The `if settled is not None:` branch gains an `else` appending to `unreadable`, which the
 surrounding code already threads into `dependencies_not_resolved`.
 
-- [ ] **Step 6: List the 5.0.0 starter in both gateway catalogs**
+- [x] **Step 6: List the 5.0.0 starter in both gateway catalogs**
 
 `org.springframework.cloud:spring-cloud-starter-gateway-server-webflux`, with a comment citing
 CP-35 and naming `spring-cloud-starter-gateway` as the pre-5.0 spelling it does not replace.
 Closes the `gateway-detect-4x-coordinate` half of `OI-139`.
 
-- [ ] **Step 7: Prove it on the real module, and move the pin**
+- [x] **Step 7: Prove it on the real module, and move the pin**
 
 ```bash
 .venv/bin/sextant module analyze examples/spring-petclinic-microservices/spring-petclinic-api-gateway
@@ -150,7 +150,20 @@ Expected: **14 endpoints** — 8 inbound (4 new: `/api/vet/**`, `/api/visit/**`,
 .venv/bin/python scripts/field_check.py petclinic-api-gateway petclinic-genai-service
 ```
 
-- [ ] **Step 8: Gate, guards, commit**
+- [x] **Step 8: Gate, guards, commit**
+
+**Result: 14 endpoints (was 6) — 8 inbound, 6 outbound, `dependencies_not_resolved` empty.**
+The four routes derive in both directions, all `resolved`. Three catalogs gained the
+coordinate, not two: `spring-cloud-gateway-outbound.yml` carries the same stale list.
+Field pins: both `ok`. Gate 4098 passed (+4), guards 161/0.
+
+**`OI-140` found and logged, NOT fixed here.** The four new rows render as
+`` `(unresolved) lb://vets-service` | unresolved | `None` | unresolved | resolved `` — three
+deliberate NULLs printed as the word "unresolved" on a row whose Resolution says resolved,
+plus a Python `None` in a published cell. Pre-existing (measured: `fixtures/orders-gateway`
+has rendered this way since gateway support shipped), real-input-triggered, and Major on the
+deliverable's own terms. Left out of this task because fixing it MOVES PINNED OUTPUT, which
+this plan's own constraint reserves to a task that says so.
 
 **A `peer` is NOT set on the four new outbound rows** — they carry `lb://…` whole as `path`,
 which is the shipped shape and already tells a reader where the route goes. Splitting it is

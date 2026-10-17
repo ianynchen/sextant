@@ -5,20 +5,28 @@
   "module": "spring-petclinic-api-gateway",
   "endpoints": {
     "inbound": {
-      "http": 4
+      "http": 8
     },
     "outbound": {
-      "http": 2
+      "http": 6
     }
   },
   "routes": {
     "inbound": [
+      "(unresolved) /api/customer/**",
+      "(unresolved) /api/genai/**",
+      "(unresolved) /api/vet/**",
+      "(unresolved) /api/visit/**",
       "GET /",
       "GET /**",
       "GET /api/gateway/owners/{ownerId}",
       "POST /fallback"
     ],
     "outbound": [
+      "(unresolved) lb://customers-service",
+      "(unresolved) lb://genai-service",
+      "(unresolved) lb://vets-service",
+      "(unresolved) lb://visits-service",
       "GET (unresolved)",
       "GET /owners/{ownerId}"
     ]
