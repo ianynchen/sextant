@@ -286,7 +286,22 @@ def test_kafka_shapes_rows(derived: tuple[set[str], list[dict]]):
         ("outbound", "kafka.shipments.topic", None, "lambda$kafkaOutboundFlow$1", "resolved"),
         ("inbound", "kafka.routed.topic", None, "kafkaRoutedFlow", "resolved"),
         ("inbound", "kafka.channelled.topic", "handleKafkaOrder", "kafkaToChannelFlow", "resolved"),
-        ("inbound", None, "lambda$kafkaPatternFlow$4", "kafkaPatternFlow", "unresolved"),
+        # **Converted 2026-10-17** (Task 9, carry-forward (b)): was
+        # `(None, "unresolved")`. `spring-integration-kafka.yml` had stated `Pattern`
+        # subscriptions as a boundary while `kafka-consumer.yml` and `spring-kafka.yml`
+        # both read the same shape — "a topic pattern lands on `path` verbatim, never
+        # expanded into real topic names" — so the two rows were aligned with that rule.
+        # READ AGAINST SOURCE, which is what §3c demands of a conversion:
+        # `Shape5Flows.java:80` subscribes with `Pattern.compile("kafka\\.pattern\\..*")`,
+        # and this is that string character for character. Nothing claims a topic of that
+        # literal name exists; the row says what the module subscribes with.
+        (
+            "inbound",
+            "kafka\\.pattern\\..*",
+            "lambda$kafkaPatternFlow$4",
+            "kafkaPatternFlow",
+            "resolved",
+        ),
     }
 
 

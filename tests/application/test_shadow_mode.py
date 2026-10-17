@@ -263,6 +263,14 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # declared parameter type, which made these sixteen rows visible as refusals rather than
 # as rows nobody had looked at. No published row moves — a call that cannot compile
 # produced none.
+# **`spring-integration-kafka` moved 41 -> 43 on 2026-10-17** (Task 9, carry-forward (b)):
+# its two `messageDrivenChannelAdapter` rows whose descriptor takes a `Pattern` gained a
+# `channel_via` naming `Pattern.compile`, one ask each. The catalog had stated `Pattern`
+# subscriptions as a BOUNDARY while `kafka-consumer.yml` and `spring-kafka.yml` both read
+# the same shape verbatim — "a topic pattern lands on `path` verbatim, never expanded into
+# real topic names" — so the two rows were aligned with the rule rather than the rule bent
+# to them. One fixture row converts, `unresolved` -> `resolved`; the other row's overload
+# no fixture exercises.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -289,7 +297,7 @@ _ASKS_PER_CATALOG = {
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
     "spring-integration-amqp": (38, 38),
-    "spring-integration-kafka": (41, 41),
+    "spring-integration-kafka": (43, 43),
     "spring-integration-pubsub": (25, 25),
     "spring-jms-template": (8, 11),
     "spring-kafka-message": (3, 3),
@@ -335,8 +343,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # 807 until 2026-09-23; +6 for the six `record_wrappers` rows the comment above
     # accounts for, three catalogs at two rows each. **-16 on 2026-10-16**: eight
     # `createQueue` entries off each JMS catalog's `Topic`-typed rows, for the reason the
-    # comment above `_ASKS_PER_CATALOG` measures.
-    assert sum(asks for asks, _ in counted.values()) == 797
+    # comment above `_ASKS_PER_CATALOG` measures. **+2 on 2026-10-17**: the two
+    # `spring-integration-kafka` `Pattern` rows, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 799
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
