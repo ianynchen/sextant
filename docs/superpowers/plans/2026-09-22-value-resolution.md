@@ -455,6 +455,15 @@ There is no fact to wire until 9.19 exists, so this defers with it rather than o
 
 ## Task 14: Finish
 
+- [ ] **Re-run `python scripts/value_boundaries.py --measure` after #39 merges, before #40.**
+  Task 13's §3c block was measured on `spec/binding-writes`, which is branched off `main`
+  and does NOT contain Tasks 9-10. #39 takes `spring-integration-kafka` from 41 asks to 43
+  (the two `Pattern` rows gained a `channel_via`), so §3c's figures move when it lands.
+  **`test_value_boundaries.py` will not catch this** — it compares the document against the
+  snapshot, and both would be consistently stale. The alarm that does fire is
+  `test_shadow_mode.py::test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell`,
+  whose `_ASKS_PER_CATALOG` baseline #39 already updated. Written down here because the two
+  branches are independent and nothing else in either one says it.
 - [ ] Full gate and `--guards`.
 - [ ] Amend the spec with anything implementation forced, in the voice §0c uses.
 - [ ] Use superpowers:finishing-a-development-branch. **Do not merge without the user.**
