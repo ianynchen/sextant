@@ -3685,6 +3685,15 @@ _OKHTTP_MATCHES = {
 
 
 def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catalog:
+    # The hoisted identity table, for the reason `_single_call_catalog` above states and
+    # now for `fluent` too (Task 9): the engine resolves its `channel_via`/`url_via` hop
+    # through `Catalog.value_model`, which defaults to empty on a hand-built catalog.
+    source = Path(f"tests/{catalog_id}.yml")
+    model: list[dict[str, Any]] = []
+    try:
+        _hoisted(_listified(matches), source, model)
+    except CatalogError:
+        model = []
     return Catalog(
         id=catalog_id,
         style="fluent",
@@ -3692,7 +3701,8 @@ def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catal
         direction="outbound",
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
-        source=Path(f"tests/{catalog_id}.yml"),
+        source=source,
+        value_model=model,
     )
 
 
