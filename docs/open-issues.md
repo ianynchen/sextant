@@ -309,6 +309,68 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing
+**Major · entered 2026-10-17, measured on `spring-petclinic-microservices` · `src/sextant/ingress/detect/` Maven version resolution, `src/sextant/catalogs/spring-cloud-gateway-properties.yml` `detect.coordinates`**
+
+**Measured on Spring's own reference microservice app.** `spring-petclinic-api-gateway`
+declares four routes in `application.yml`, and all 24 config entries are read into
+`config_entries` — every `uri: lb://…` and every `Path=…` predicate is present in the
+workspace:
+
+```
+spring.cloud.gateway.server.webflux.routes[0].uri          lb://vets-service
+spring.cloud.gateway.server.webflux.routes[0].predicates[0] Path=/api/vet/**
+…routes[1] visits-service · routes[2] customers-service · routes[3] genai-service
+```
+
+**Nothing derives from any of them, in either direction.** Not the four inbound paths the
+gateway serves, not the four outbound targets it forwards to. That is the entire
+service-to-service topology of the application — eight rows — and the document shows none of
+it. (In the pinned corpus the four `lb://` routes appear only in an LLM *enrichment*
+paragraph, which is evidence of the gap rather than cover for it.)
+
+**The cause is dependency-version resolution, not the catalog.** `metadata.json` reports it
+honestly:
+
+> `org.springframework.cloud:spring-cloud-starter-gateway-server-webflux: no version on the
+> declaration and none managed by any pom this analysis could read`
+
+The module declares the starter with no version. The chain that supplies one is:
+
+```
+petclinic parent pom
+  └─ imports spring-cloud-dependencies:2025.1.0          (<scope>import</scope>)
+       └─ imports spring-cloud-gateway-dependencies:…    (<scope>import</scope>)
+            └─ manages spring-cloud-starter-gateway-server-webflux
+```
+
+**One level of BOM import is followed; a chain of them is not.** Verified: the top BOM is
+present in `~/.m2` at the exact version the parent asks for, and `grep -c
+spring-cloud-starter-gateway-server-webflux` against it is **0** — it manages nothing
+directly, only imports nine further BOMs. So this is NOT `OI-9`'s machine-dependence (the
+pom is there) and NOT a stale coordinate list (`spring-cloud-gateway-server-webflux` IS in
+`detect.coordinates`). With no version, the dependency is unresolved, the gate never admits
+the catalog, and a correct catalog sits inert over data that is already loaded.
+
+**On the grade.** Major. The under-report is silent in the document and total for the
+component — a gateway module's reason for existing is its route table — and the input is
+ordinary: a Spring Cloud BOM chain is how essentially every Spring Cloud project pins
+versions. `OI-8` and `OI-9` both state that imported BOMs *are* resolved, so the register
+currently reads as though this works.
+
+**What happens today:** any Spring Cloud module whose versions come through
+`spring-cloud-dependencies` (the documented way) fails the dependency gate for every gated
+catalog, not only the gateway's.
+
+**Verify:**
+```
+.venv/bin/sextant module analyze examples/spring-petclinic-microservices
+grep dependencies_not_resolved -A6 examples/spring-petclinic-microservices/spring-petclinic-api-gateway/.sextant/metadata.json
+```
+**Closes** by following `<scope>import</scope>` transitively, with a depth guard and a test
+for a two-level chain. **Falsified by** that module deriving four inbound and four outbound
+rows for its declared routes.
+
 ### OI-138 — outbound addresses are 1 of 6 on a real multi-service Spring Boot system
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` at `c649978a` · `src/sextant/application/resolve/shapes/arguments.py::channel_of_answer`, spec `2026-09-22-value-resolution-design.md` §6, `docs/components/D00-fact-schema.md` §5's `field_write`**
 
