@@ -14,6 +14,7 @@ symbol (D00 §5a).
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -45,7 +46,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.facts import Parameter as DeclaredParameter
 from sextant.domain.symbols import method_descriptor
-from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource, _hoisted
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -90,6 +91,23 @@ def _catalog(
     catalog_id: str = "invented-adapters",
     bean_model: dict | None = None,
 ) -> Catalog:
+    # **The hoisted identity table, because the engine now resolves through it** (Task 9,
+    # the same correction Task 8 made to `test_call_engines`). `YamlCatalogSource.load`
+    # hands every real catalog the table its hop declarations hoist into (spec §2a step 1)
+    # and `Catalog.value_model` defaults to EMPTY — so a hand-built catalog carrying
+    # `channel_via` in `matches` and nothing in `value_model` resolves nothing here while
+    # resolving in production, and these tests would be measuring the absence of the table
+    # rather than the engine. Built by PRODUCTION's own `_hoisted` rather than a copy of
+    # it, so the two spellings cannot drift (§0a) and Task 10's narrowing reaches the tests
+    # automatically. A catalog the hoist REFUSES keeps an empty table: the loader rejects
+    # such a catalog in production, so a test handing one to the engine is exercising the
+    # engine's own validators, which is reached only here.
+    source = Path(f"tests/{catalog_id}.yml")
+    model: list[dict[str, Any]] = []
+    try:
+        _hoisted(matches, source, model)
+    except CatalogError:
+        model = []
     return Catalog(
         id=catalog_id,
         style="fluent",
@@ -97,8 +115,9 @@ def _catalog(
         direction=direction,
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
-        source=Path(f"tests/{catalog_id}.yml"),
+        source=source,
         bean_model=_SPRING if bean_model is None else bean_model,
+        value_model=model,
     )
 
 
@@ -1150,6 +1169,80 @@ def test_a_queue_built_in_the_containers_own_method_reaches_the_row_through_the_
     workspace.close()
 
     assert (row["path"], row["resolution"]) == ("q", "resolved")
+
+
+def test_a_same_numbered_value_in_the_ADAPTERS_method_is_not_the_containers_queue(
+    tmp_path: Path,
+):
+    """**The negative half of the test above** (GUIDELINES §10), and the one that can fail.
+
+    `_literal_of` exists for a single reason, which its own docstring states: value ids
+    are PER METHOD (D00 §5), so a `source` the container's chain captured must never be
+    resolved against the ADAPTER method's sites — *"a same-numbered value there is
+    unrelated, and reading it fabricates."*
+
+    The test above proves the container's `q` is read. It cannot prove the adapter's
+    method was not read, because its facts give the adapter method no value numbered 8 to
+    be read INSTEAD. So it passes either way, and the fabrication it describes is
+    unguarded.
+
+    Here both methods carry a value 8. The container's is `new Queue("q")`, the one the
+    chain actually captured; the adapter's is `new Queue("read-the-wrong-method")`, which
+    no chain captured and exists only to be wrong.
+
+    **The decoy is reachable, checked directly rather than assumed**: handing
+    `linked_channels` the captured `{kind: unresolved, source: 8}` together with the
+    ADAPTER method's sites and `Queue.<init>`'s form answers
+    `[(None, "read-the-wrong-method", "resolved")]`. So a reader that resolves this hop in
+    the wrong method's context does not merely miss — it publishes a fabricated
+    destination at `resolved`, which is spec §7's one failure.
+
+    **This is the guard Task 9 needs before `_literal_of`'s `linked_channels` call becomes
+    `resolve_site`.** `resolve_site` is handed a SITE, so resolving in the right method is
+    expressible — and silently passing the consuming site instead of the collecting one is
+    exactly the mistake that publishes a confident wrong address."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        # The decoy, in the ADAPTER's own method, numbered exactly as the container's is.
+        _call(
+            CALLER,
+            QUEUE,
+            "<init>",
+            1,
+            receiver=8,
+            result=None,
+            arguments=[CallArgument(kind="string", value="read-the-wrong-method")],
+            invoke_kind="special",
+        ),
+        *_container_bean(),
+        _call(
+            container,
+            QUEUE,
+            "<init>",
+            1,
+            receiver=8,
+            result=None,
+            arguments=[CallArgument(kind="string", value="q")],
+            invoke_kind="special",
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "setQueues",
+            2,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=8)],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == ("q", "resolved")
+    assert row["path"] != "read-the-wrong-method"
 
 
 def _queue(container: str, ordinal: int, receiver: int, name: str) -> CallSiteFact:

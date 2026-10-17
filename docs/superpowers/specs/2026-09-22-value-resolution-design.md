@@ -278,15 +278,42 @@ and a consuming catalog says only `channel_arg: 0`.
    "declared once per producer" exists to end. A wrapper entry hoists as the type's `<init>`, one
    entry per `<name>_ctor_arg` it declares — `record_wrappers` declares two, and they are two
    claims about two arguments of one constructor.*
-2. **Delete.** Once the walk is proven on a catalog (§3c), its now-redundant hop declarations go.
-3. **Refuse.** The loader rejects the removed keys — all four — outright, the way every closed
-   vocabulary here is enforced.
+2. **Relocate what is duplicated.** Where one identity is declared once per CONSUMER, the `arg`
+   moves to `value-models/` and is declared once per PRODUCER. Twelve rows of one shipped catalog
+   carry the same pair of entries between them, and twelve copies of one identity is what this table
+   exists to end.
+3. **Close the key vocabulary.** The loader rejects any key a style does not declare, so no eighth
+   hop word can be written at all.
 
-**Step 3 is the one that makes the design hold.** A design that merely *recommends* the new way
-decays: a new catalog author copies the nearest example, and the nearest example is whatever thirteen
-other catalogs do. That is the exact mechanism that produced §0a's seven words — `bean_via` already
-existed as a general-ish hop when `contract` and `argument_chain` were proposed. One way, enforced by
-the loader, is the only version that survives the tenth framework.
+*Steps 2 and 3 replaced a **Delete** and a **Refuse** on 2026-10-17, after Tasks 8 and 9 shipped.
+Both of the old steps rested on the hop keys being redundant once the walk runs, and they are not.*
+
+**What the keys MEAN after a migration, which is why deleting them was wrong.** `channel_via` was
+`{owner, method, arg}` welding "it is over there" to "argument N identifies it" (§0b). The walk
+replaces the first half and nothing replaces the second: what remains on the row is *these are the
+producers that may identify this position, and argument N of them is the value* — both halves
+MEANING, which §1e keeps as catalog data. So the key is REDEFINED rather than removed, and a reader
+must not take a `channel_via` on a migrated catalog for a one-hop follow.
+
+It is load-bearing, not vestigial, and two shipped guards measured that. Handed the whole hoisted
+table instead of the row's own producers, `fluent` published a destination the row's form never
+reached: `fluent.url-via-follows-only-a-declared-call` SURVIVED its mutation and
+`test_an_element_no_declared_form_reaches_is_unresolved_on_its_own` FAILED. `single_call` is safe from
+that only because Task 8 gave it a TYPE GATE keyed on its rows' declared parameter type, and 22 of
+`fluent`'s 29 hop rows declare no descriptor, so that gate cannot govern them. Even in `single_call`
+the row's declaration is still read, as the flag deciding whether the walk is consulted at all.
+
+**Step 3 is the one that makes the design hold, and it is now the step that actually enforces
+anything.** A design that merely *recommends* the new way decays: a new catalog author copies the
+nearest example, and the nearest example is whatever thirteen other catalogs do. That is the exact
+mechanism that produced §0a's seven words — `bean_via` already existed as a general-ish hop when
+`contract` and `argument_chain` were proposed.
+
+*And the old step 3 would not have stopped it.* MEASURED 2026-10-17: a catalog carrying an invented
+`invented_hop_via` block loads clean — all 101 catalogs parse and the key is silently ignored, because
+nothing refuses a key no style declares. Refusing four keys BY NAME removes the examples, which is a
+deterrent; it is not the enforcement the sentence above claims. A closed key set is, and it bars the
+eighth word rather than the four that already exist.
 
 ### 2b. What each engine keeps
 
@@ -414,8 +441,12 @@ A new framework needs **no new word**. It declares which slot carries its addres
 as today), and — only if its producer is novel — one `identified_by` entry with a probe row behind it.
 Distance is never described again.
 
-The enforcement is §2a step 3: the old keys are invalid, so the cheap wrong path is closed rather
-than merely discouraged.
+The enforcement is §2a step 3, and what it enforces changed on 2026-10-17: the old keys are not
+invalid — they are REDEFINED, and still carry which producers may identify a position (§2a says why,
+and two guards measured it). What is closed is the key VOCABULARY, so a novel framework cannot answer
+"the value is one hop over there" with a word of its own. That bars the eighth word rather than the
+four that already exist, which is the version that is enforcement rather than discouragement: a
+catalog carrying an invented hop key loaded clean before this step existed.
 
 ---
 

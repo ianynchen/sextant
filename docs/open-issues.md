@@ -411,6 +411,98 @@ promise (`docs/COVERAGE.md` §5.12, `docs/java-kotlin-delivery-list.md`'s
 **Closes when** someone wants those 16 addresses enough to add an extractor capability, or
 when a corpus arrives where the count is materially larger. The yield is what makes this
 Minor; the work is understood and the probe is done.
+### OI-135 — an invented hop key loads silently, and neither cheap way of closing that works
+**Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a step 3, §5b**
+
+**The gap, measured.** A catalog carrying an invented `invented_hop_via` block loads clean:
+all 101 catalogs parse, the key is silently ignored, and nothing refuses a key no style
+declares. So §2a step 3's "one way, enforced by the loader" is not enforced by anything
+today — and the old plan of refusing the four known keys BY NAME would not have enforced it
+either, since it says nothing about an eighth word. §2a and §5b were corrected on 2026-10-17
+to say the vocabulary is what must close; this entry records that closing it is harder than
+it looks.
+
+**Both cheap designs were tried on paper and both fail. Measured, not argued.**
+
+*A per-style key allowlist, generated from the shipped catalogs* — 295 distinct keys across 13
+styles. It fails because a flat walk of `matches` CANNOT TELL GRAMMAR FROM DATA. Among those
+295 are `io.confluent.kafka.serializers.KafkaAvroDeserializer`,
+`io.ktor.http.HttpMethod$Companion#getGet`,
+`org.springframework.data.repository.CrudRepository`, and `0`, `1`, `Cookie`, `kafka`,
+`rabbit` — map keys inside catalog mappings, not vocabulary. An allowlist of those would
+carry framework class names and would need an edit every time a catalog maps a new
+serializer. No style shares a single key with every other, so there is not even a universal
+core to anchor on: 253 of the 295 appear in exactly one style.
+
+*A naming check refusing an unknown `*_via` / `*_wrappers` key* — the shipped grammar uses
+exactly five such words (`bean_via`, `channel_via`, `url_via`, `call_wrappers`,
+`record_wrappers`), so the convention looks real. It fails against the very history it would
+protect: the seven words §0a names are `channel_via`, `url_via`, `type_carriers`,
+`call_wrappers`, `getters`, `indexed`, `compose`, and **four of the seven follow no such
+convention**. A check keyed on the suffix would have missed `type_carriers`, `getters`,
+`indexed` and `compose` — which is an invented discriminator of exactly the kind §8.1 rule 5
+forbids, with the counter-evidence sitting in the spec's own sentence.
+
+**What closing it actually needs.** A declared per-style SCHEMA — which keys are grammar,
+at which depth, and which nested objects are data — so a validator can refuse an unknown
+grammar key without choking on a mapping whose keys are class names. That is real design
+work on 13 styles, not a step inside another task, and it is what this entry is for.
+
+**Severity is Minor because the failure is inert, and that is worth stating.** An invented
+hop key does nothing: no engine reads it, so a catalog carrying one derives exactly what it
+would without it. The cost is an author believing a declaration works when it is ignored —
+a wasted afternoon and a silent miss — not a wrong row. §0a's seven words grew because
+there was no generic operation to reach for; after this work there is one, which lowers the
+pressure that produced them even while the loader stays silent.
+
+**Closes when** a per-style schema exists and the loader refuses an unknown grammar key,
+with a test that an invented hop word is rejected and that a REDEFINED `channel_via` still
+loads.
+
+### OI-134 — one identity is written on up to 26 rows, and 10 of the 18 cannot move without a measurement
+**Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a, `value-models/`**
+
+**Not a defect, and nothing is broken.** The loader already folds every row-level hop
+declaration into one identity table, so the engines see the same 18 identities whichever way
+they are written. This is a maintenance hazard, logged rather than fixed because no input
+triggers it.
+
+**The duplication, measured.** 124 row-level `channel_via`/`url_via` declarations across the
+shipped catalogs carry only **18 distinct identities** between them. `java.net.URI.create`
+and `java.net.URI.<init>` are each written out on **26 rows across 5 files**;
+`jakarta.jms.Session.createTopic` on 12 rows of one file. Only 3 of the 18 are declared by a
+single row. The hazard is ordinary drift: edit one of the 26 `URI` rows and not the others
+and they disagree, with nothing to catch it.
+
+**The proposed fix.** `value-models/` exists to hold each identity once, and 2 of the 18 are
+already there. Move the rest in, and drop `arg` from the rows. **The rows keep naming their
+producers** — `{owner, method}` stays, because that is the restriction `fluent` depends on
+(spec §2a, and D02's note at `channel_via` carries the two guards that measured it). So this
+deduplicates ONE FIELD out of 124 rows; all 124 rows remain.
+
+**Why it is not done yet, which is the substance of this entry.** Every `value-models/` entry
+must carry `by:` — the measurement behind the claim — and that requirement is stated there as
+the whole reason the directory exists. All 18 were checked by reading the probe files:
+
+| | count | state |
+|---|---|---|
+| real evidence stating the claim | **8** | `URI.create`/`<init>` (`a2t8` expectation 3, and already relocated); `Subscriptions.topics`/`topicPattern` (`w62` row 2); `MessageConsumerOptions.setAddress` (`cp31` 5a/5b, two vertx versions); `ConsumerProperties`/`ContainerProperties`/`amqp.core.Queue` constructors (`cp27` row 13 + §§162,167) |
+| signature measured, claim not | **4** | both `jakarta.jms` and both `javax.jms` `createQueue`/`createTopic`. `w11` measured the descriptor `(String) -> Queue`; no probe states the PRODUCING claim. **CP-12 row 9 is a near-miss and must not be cited for it** — "`jakarta.jms.Session`'s receiver factories, every one taking its destination at argument 0" is about `createConsumer` taking a `Destination`, not about `createQueue` taking a name |
+| no evidence at all | **6** | `List.of`, `Arrays.asList`, `Collections.singletonList`, `Pattern.compile` (JDK API contracts, currently folk knowledge); `TopicName.of`, `ProjectSubscriptionName.of` |
+
+So **10 of 18 need a measurement first**, and citing an existing probe that does not state the
+claim is the one thing `by` exists to prevent — a reader trusts an entry *because* of its
+citation, so a wrong one stops the checking rather than merely failing to help.
+
+**Riskiest of the ten**: `TopicName.of(project, topic)` and
+`ProjectSubscriptionName.of(project, subscription)` take their identity at argument **1**. An
+off-by-one there publishes a PROJECT ID as a topic name — a wrong address at `resolved`.
+`ProjectSubscriptionName.of` has no probe line mentioning it at all.
+
+**Closes when** the 10 are measured and all 18 sit in `value-models/` with honest citations.
+Best taken by whoever is next working on one of those frameworks with the jar already open,
+which is when the measurement is cheap and sound; written now, by someone not otherwise
+touching them, is the circumstance an asserted-from-memory claim slips in.
 
 ### OI-42 — a class file above the ceiling is refused, and the refusal kills the whole scan
 **Critical · pre-existing, entered here 2026-09-06 · `docs/java-kotlin-delivery-list.md`

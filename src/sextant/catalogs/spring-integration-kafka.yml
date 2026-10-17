@@ -27,9 +27,11 @@ direction: inbound
 # `ContainerProperties` at slot 1 whose own `(String...)` constructor carries the
 # topics — one producing-site hop, `channel_via` BY DESCRIPTOR because its
 # `(Pattern)` and `(TopicPartitionOffset...)` constructors share the arity (row
-# 13); a `Pattern` or a `TopicPartitionOffset[]` at the destination slot is NOT
-# a topic name — the capture reads the slot and finds no literal, so the row
-# derives with `path` unresolved, never a guess; a whole listener container at
+# 13); a `TopicPartitionOffset[]` at the destination slot is not a destination
+# NAME — the capture reads the slot and finds no literal, so the row derives
+# with `path` unresolved, never a guess. A `Pattern` IS read, verbatim, through
+# `Pattern.compile`'s own argument (aligned 2026-10-17 — the rows below carry the
+# reasoning and the two catalogs whose rule it is); a whole listener container at
 # slot 0 is a bean hop this catalog does not take — read as the slot it is, it
 # resolves to nothing, and the row is unresolved likewise. Four polled
 # `inboundChannelAdapter` forms carry a `ConsumerProperties` at slot 1, read
@@ -52,8 +54,9 @@ direction: inbound
 # the `fed_by` edge instead of a row. Destinations go through the field ladder
 # (`field_sources` below). `get()` and the builder return end the flow.
 #
-# BOUNDARIES STATED (spec §5, §8): `Pattern` and `TopicPartitionOffset`
-# subscriptions and container-built sources (unresolved rows, above);
+# BOUNDARIES STATED (spec §5, §8): `TopicPartitionOffset` subscriptions and
+# container-built sources (unresolved rows, above) — `Pattern` subscriptions are
+# NO LONGER among them and the rows say why;
 # `inboundGateway`, `outboundGateway`, `channel`, `publishSubscribeChannel`,
 # `pollableChannel` (row 6 — request-reply and Kafka-backed channels); the
 # lambda flow form's implicit `<beanName>.input`; `from(Supplier)`,
@@ -136,15 +139,33 @@ matches:
         captures: { channel: arg2 },
         via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
         continue: true }
-    # `Pattern` at slot 1 / 2: a subscription pattern, not a topic name.
+    # `Pattern` at slot 1 / 2: a SUBSCRIPTION PATTERN, and it lands on `path` verbatim.
+    #
+    # **Aligned 2026-10-17 (Task 9, carry-forward (b)), and this file used to say the
+    # opposite.** The prose above read "a `Pattern` ... at the destination slot is NOT a
+    # topic name ... the row derives with `path` unresolved, never a guess", and listed
+    # `Pattern` under BOUNDARIES STATED. That is not the estate's rule. `kafka-consumer.yml`
+    # states it: "`Pattern.compile` take exactly one string argument, so `arg: 0` alone
+    # reads it — a topic pattern lands on `path` verbatim, never expanded into real topic
+    # names, the same rule `spring-kafka.yml`'s own `topicPattern` listener row already
+    # keeps." TWO shipped catalogs kept that rule and this one contradicted it for the same
+    # shape, which is the inconsistency carry-forward (b) names.
+    #
+    # It is not a fabrication: nothing claims a topic of that literal name exists. The row
+    # publishes the pattern the code subscribes with, which is what the module declares,
+    # and the pattern is never expanded into the topics it might match.
+    # `TopicPartitionOffset` stays a stated boundary — a partition offset is not a
+    # destination name and no rule reads one.
     - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
         descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Ljava/util/regex/Pattern;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
         captures: { channel: arg1 },
+        channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }],
         via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
         continue: true }
     - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
         descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;Ljava/util/regex/Pattern;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
         captures: { channel: arg2 },
+        channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }],
         via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
         continue: true }
     # --- the polled sources: four `inboundChannelAdapter` overloads (row 6) ----
