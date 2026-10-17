@@ -320,17 +320,27 @@ document renders them like this:
 | `(unresolved) lb://vets-service`     | unresolved | `None` | unresolved | resolved   |
 ```
 
-**Every cell on that row is literally correct and the row as a whole is unreadable.** Three
-separate NULLs are printed with the word `unresolved`, and the last column says `resolved`:
+**Every cell on that row is literally correct and the row as a whole is unreadable.** The
+stored row is `{method: None, path: 'lb://vets-service', peer: None, caller: None,
+format: None, format_resolution: 'unresolved', resolution: 'resolved'}` — **three deliberate
+blanks, one genuine unknown, and one "yes, we worked it out", with the first four printed
+using the same word**:
 
-* **the method** is NULL because a gateway route with no `Method=` predicate forwards every
-  verb — the framework's own catch-all, recorded as resolved on purpose (COVERAGE §5.1);
-* **the peer** is NULL because D02 §3 keeps a routing destination whole: the target
-  `lb://vets-service` is the `path`, and splitting it would publish an empty path;
-* **the format** is NULL because a forwarded request has no declared body;
-* **the caller** is NULL because a route declared in configuration has no handler method —
-  and that one prints as the bare string `None`, a Python value reaching a published
-  document.
+* **the method** is blank BY DESIGN — a gateway route with no `Method=` predicate forwards
+  every verb, which is the framework's own catch-all and is recorded as resolved on purpose
+  (COVERAGE §5.1). The renderer prints `(unresolved)` in the verb's position, so the
+  Endpoint cell reads as a failure while carrying a perfectly good address;
+* **the peer** is blank BY DESIGN — D02 §3 keeps a routing destination whole, so
+  `lb://vets-service` is the `path` and splitting it would publish an empty path;
+* **the caller** is blank BY DESIGN — a route declared in configuration has no handler
+  method — and it prints as the bare string `None`, a Python value reaching a published
+  document, which is a defect on any reading;
+* **the format** is the one HONEST unknown: a gateway forwards whatever body arrives and
+  nothing declares a format, so `format_resolution` really is `unresolved`.
+
+*(Corrected 2026-10-17: this paragraph first said "three NULLs" and then listed four cells,
+without separating the deliberate blanks from the genuine unknown. The distinction is the
+whole fix, so conflating them in the entry that asks for it was worth putting right.)*
 
 A reader concludes the target is unknown. It is the one thing on the row that IS known.
 
@@ -351,9 +361,10 @@ defect on any reading.
 properties form.
 
 **Verify:** `sed -n '/## Outbound endpoints/,/^---/p'` on any rendered gateway module.
-**Closes** by rendering a deliberate NULL differently from a failed read — the data already
-distinguishes them, since `resolution` is `resolved` on these rows — and by never printing
-`None`. **Moves existing pinned output** (`orders-gateway`'s e2e rows and the
+**Closes** by rendering a deliberate blank differently from a failed read — the data already
+distinguishes them, since `resolution` is `resolved` while `format_resolution` is
+`unresolved` on the very same row — and by never printing `None`. "Not applicable" and
+"could not read it" must not share a word. **Moves existing pinned output** (`orders-gateway`'s e2e rows and the
 `petclinic-api-gateway` field pin both record today's text verbatim), so it is a task of its
 own rather than a fix in passing.
 
