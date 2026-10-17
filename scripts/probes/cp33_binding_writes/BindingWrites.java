@@ -10,6 +10,7 @@ public class BindingWrites {
     private String viaComputed;
     private String readAfterWrite;
     private String viaCallResult;
+    private String viaFieldInit = "field-init-value";
     private static String viaStaticInit;
 
     static { viaStaticInit = "static-init-value"; }

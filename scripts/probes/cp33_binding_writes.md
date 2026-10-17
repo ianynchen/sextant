@@ -36,6 +36,7 @@ present that triple, and which do not?**
 | 5 | a second parameter after a `long` | slot mapping holds | **confirmed** — `aload_3`, and `parameterSlotsOf` computes `[1, 3]` |
 | 6 | a static initialiser | ? | **`ldc; putstatic`** — no receiver load, and `PUTSTATIC` not `PUTFIELD` |
 | 7 | a field assigned a CALL's result | ? | **an `invokeinterface` and a `checkcast` intervene** — no triple |
+| 8 | an instance field INITIALISER | ? | **inside `<init>`, and `ldc` where a load must be** — the guard already passes; the FACT GRAMMAR is what refuses it |
 
 ## Observations
 
@@ -52,6 +53,7 @@ version `javac -version` reported, not the parameter passed in as `JAVA_HOME`;
 | a second parameter after a `long` | `aload_0; aload_3; putfield; return` |
 | a static initialiser | `ldc; putstatic; return` |
 | a field assigned a CALL's result | `aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield; return` |
+| an instance field INITIALISER | `aload_0; invokespecial; aload_0; ldc; putfield; return` |
 
 **1. A setter is the triple verbatim.** `aload_0; aload_1; putfield` — identical in shape to
 what a constructor presents. For this case capability 9.19 is *literally* lifting the
@@ -106,6 +108,22 @@ because the inference was the thing that needed checking: spec §4 states the si
 "is what closes `akka-pekko-actors`", and on the characteristic actor shape that is false.
 A setter-injected `ActorRef` (row 1) would be reached; one obtained from the factory the
 framework's own documentation uses would not.
+
+**8. An instance field INITIALISER is inside `<init>`, so this one is NOT capability 9.19 —
+and it is the shape real code uses for a service base URL.** `private String hostname =
+"http://visits-service/"` compiles to `aload_0; invokespecial; aload_0; ldc; putfield` — the
+super() call, then the assignment, all within the constructor. **The `<init>` guard
+therefore already passes.** What refuses it is the same thing that refuses `@PostConstruct`:
+the value load is `ldc`, and the fact is `{field, from_parameter}` with nowhere to put a
+constant.
+
+That distinction matters because it is the difference between a deferred capability and a
+smaller one nobody has scoped. Capability 9.19 is *"a binding assigned OUTSIDE an
+initialiser"* — lifting the method filter. This shape needs no filter change at all; it
+needs `field_write` to be able to say *the value is this constant* beside *the value is
+parameter N*. Measured on real code: `spring-petclinic-api-gateway`'s `VisitsServiceClient`
+holds its target this way, and it is one of the five outbound addresses of six that publish
+NULL on that system (`OI-138`).
 
 ## What this means for capability 9.19
 

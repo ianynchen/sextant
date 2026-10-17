@@ -309,6 +309,83 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-138 — outbound addresses are 1 of 6 on a real multi-service Spring Boot system
+**Major · entered 2026-10-17, measured on `spring-petclinic-microservices` at `c649978a` · `src/sextant/application/resolve/shapes/arguments.py::channel_of_answer`, spec `2026-09-22-value-resolution-design.md` §6, `docs/components/D00-fact-schema.md` §5's `field_write`**
+
+**Measured, on eight built modules of a real Spring Boot microservice system:**
+
+| | derived | resolved |
+|---|---|---|
+| inbound | 17 | **17 — 100%** |
+| outbound | 6 | **1 — 17%** |
+
+The inbound half is complete. The one outbound that resolved,
+`GET /owners/{ownerId}` from `spring-petclinic-api-gateway`, matches
+`spring-petclinic-customers-service`'s own inbound row — **so the service-to-service link
+mechanism works**; five of six addresses are simply unreadable. And the one that worked is
+the only one written as a plain literal: `.uri("http://customers-service/owners/{ownerId}",
+ownerId)`.
+
+**Why this was not visible before.** No field pin exercised an outbound address. The three
+pinned upstreams are inbound-only *because the upstreams are* — `jhipster-sample-app` and
+`spring-petclinic-rest` contain no `RestTemplate`/`WebClient`/`@FeignClient`, and `mall`'s
+eleven are in `mall-demo` rather than the pinned `mall-admin`. So every "what would this
+buy" figure measured over fixtures plus these corpora was weighted toward inbound, which is
+how `OI-136` priced a capability at 2% that is a third of this system's outbound column.
+**Closed as of this entry**: `petclinic-api-gateway` and `petclinic-genai-service` are now
+pinned, so a change here moves a field number.
+
+**Four distinct causes, each with its own closure. They interlock — the second fills the
+first's hole — which is why they are one entry.**
+
+**1. A concatenation is never evaluated, even when every operand resolves.** Affects **5 of
+6**. The walk already does the hard part: on `VisitsServiceClient#getVisitsForPets` the
+shadow table holds `answer_kind: expression`, `value: {}pets/visits?petId={petId}`,
+`outcome: would_resolve`. `channel_of_answer` then refuses it — *"a template is not [a
+destination], and filling a hole is what §8.2 forbids"* — and `path` publishes NULL rather
+than the template. **Closes** by a ruling on spec §6: §8.2 bounds CONFIGURATION a deployment
+overrides, and a field initialiser's literal is a code fact, so evaluating a concatenation
+all of whose operands resolved to code literals fills no deployment hole. The narrow version
+publishes the template; the full version evaluates it.
+
+**2. `field_write` cannot carry a constant, only `from_parameter`.** Affects **1 of 6** — the
+hole in cause 1's template. `private String hostname = "http://visits-service/"`. **This is
+NOT capability 9.19 and not what `OI-136` deferred**: measured at `cp33_binding_writes.md`
+row 8, a field initialiser compiles to `aload_0; invokespecial; aload_0; ldc; putfield` —
+inside `<init>`, so the existing constructor filter already passes it. The fact grammar is
+the whole obstacle. **Closes** by `field_write` carrying a constant value beside the
+parameter ordinal — strictly smaller than lifting the `<init>` guard. With cause 1, this
+yields `http://visits-service/pets/visits?petId={petId}` from code facts alone, which
+matches `spring-petclinic-visits-service`'s own inbound rows.
+
+**3. `DiscoveryClient` is catalogued nowhere.** Affects **4 of 6**.
+`discoveryClient.getInstances("customers-service").get(0).getUri()` answers `external` —
+correctly, the URL is assigned at runtime. But **the service NAME is a literal argument we
+already read**, and a peer of `customers-service` with path `/owners` is exactly what an
+architecture document wants. Only Spring Cloud Gateway's `lb://` form is modelled
+(`spring-cloud-gateway-outbound.yml`). **Closes** with one catalog reading
+`getInstances(String)`/`DiscoveryClient` into `peer` — tier A, one YAML and a probe.
+
+**4. The field corpus could not see any of this.** **Closed by this entry** (two pins above).
+
+**What happens today:** a Spring Boot service that holds a peer's base URL in a field or
+builds a URL by concatenation exports an outbound row with `path` NULL. The call is
+reported; where it goes is not.
+
+**Real triggering input:** ordinary, and arguably the common case — `spring-petclinic-microservices`
+is Spring's own reference microservice sample, and 5 of its 6 outbound calls are written
+this way.
+
+**On the grade.** Major: no row is WRONG, but the outbound column is the half of the document
+that answers *what does this service call*, and it is 17% resolved on the only real system we
+measure it against. Under-reporting at this magnitude on the product's central question is
+not a stated boundary.
+
+**Verify:** `.venv/bin/python scripts/field_check.py petclinic-api-gateway petclinic-genai-service`,
+then `grep -n "an \`expression\` is" -A 3 src/sextant/application/resolve/shapes/arguments.py`.
+**Falsified by** an outbound row on that system carrying a resolved path for
+`VisitsServiceClient` or `AIDataProvider`.
+
 ### OI-137 — CI does not read `uv.lock`, so an upstream release breaks a file the branch never touched
 **Major · entered 2026-10-17, measured on PR #38 on 2026-10-16 · `.github/workflows/pr.yml:43`, `pyproject.toml:17`, `:40`**
 
@@ -407,6 +484,17 @@ factory the framework's own documentation uses would not. **So that framework's 
 not move on this capability**, and the spec is corrected rather than left to be read as a
 promise (`docs/COVERAGE.md` §5.12, `docs/java-kotlin-delivery-list.md`'s
 `akka-pekko-actors` row).
+
+**THE YIELD FIGURE ABOVE IS CORPUS-BIASED, measured 2026-10-17 — read `OI-138` beside
+it.** "16 of 756" was computed over the fixtures and the three field pins, and **not one of
+those pins contains a single outbound call** (the upstreams genuinely make none). On
+`spring-petclinic-microservices`, Spring's own reference microservice sample, the outbound
+column is 1 of 6 resolved and field-held or concatenated addresses are what cost the other
+five. The deferral still stands — this entry's capability (a write OUTSIDE an initialiser)
+is not what that system needs; `OI-138` cause 2 is, and that one is INSIDE `<init>` and
+strictly smaller. But the 2% was measured on a corpus that could not see the half of the
+product the question was about, and that is recorded here rather than left for the next
+person to re-derive.
 
 **Closes when** someone wants those 16 addresses enough to add an extractor capability, or
 when a corpus arrives where the count is materially larger. The yield is what makes this

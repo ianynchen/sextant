@@ -1,0 +1,25 @@
+{
+  "repo": "spring-petclinic-microservices",
+  "remote": "https://github.com/spring-petclinic/spring-petclinic-microservices.git",
+  "commit": "3858f9c630cf989bb6809a86edf47c2be78dc9f1",
+  "module": "spring-petclinic-genai-service",
+  "endpoints": {
+    "inbound": {
+      "http": 1
+    },
+    "outbound": {
+      "http": 4
+    }
+  },
+  "routes": {
+    "inbound": [
+      "POST /chatclient"
+    ],
+    "outbound": [
+      "GET (unresolved)",
+      "GET (unresolved)",
+      "POST (unresolved)",
+      "POST (unresolved)"
+    ]
+  }
+}

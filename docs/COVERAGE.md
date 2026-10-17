@@ -1941,7 +1941,16 @@ the field corpus) live in
 
 - **A measured version means the RULES were read at it, not that a project on it was
   analysed end to end.** The field corpus (`scripts/field_check.py`) is where that is
-  proved, and it currently holds three projects, all inbound HTTP.
+  proved, and it holds **five pins over four repositories** — three of them inbound-only,
+  and two added 2026-10-17 that are the first to measure the OUTBOUND half at all
+  (`petclinic-api-gateway`, `petclinic-genai-service`, from
+  `spring-petclinic-microservices`). *The three inbound-only pins are inbound-only because
+  the upstreams are: measured, `jhipster-sample-app` and `spring-petclinic-rest` contain no
+  `RestTemplate`/`WebClient`/`@FeignClient` at all, and `mall`'s eleven `RestTemplate`
+  occurrences are in `mall-demo` rather than the pinned `mall-admin`. So `outbound: {}` on
+  those three is the truth and not a gap — but it also meant **no field pin exercised an
+  outbound address until now**, and any "what would this capability buy" figure measured
+  over this corpus was weighted toward inbound (`OI-138`).*
 - **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
   The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything
   else Spring is 6.1.6 and later.
