@@ -1872,7 +1872,7 @@ that was scanned.
 
 <!-- BEGIN GENERATED: value_boundaries -->
 
-Measured over **18 built fixtures** at `3ab0c8f8`
+Measured over **18 built fixtures** at `c649978a`
 by `python scripts/value_boundaries.py --measure`. Not built, so not measured: `gradle-orders`, `orders-reactor`.
 
 | catalog | answered | `external` | `not_readable` | `no_writer` | `escapes` | `non_enumerable` | `cycle` |
@@ -1900,7 +1900,7 @@ by `python scripts/value_boundaries.py --measure`. Not built, so not measured: `
 | `spring-cloud-gateway` | 13 | — | 8 | — | — | — | — |
 | `spring-cloud-gateway-outbound` | 8 | — | 8 | — | — | — | — |
 | `spring-integration-amqp` | 17 | 3 | 16 | 3 | — | — | — |
-| `spring-integration-kafka` | 8 | — | 16 | — | — | — | — |
+| `spring-integration-kafka` | 10 | — | 16 | — | — | — | — |
 | `spring-integration-pubsub` | 6 | 3 | 16 | — | — | — | — |
 | `spring-jms-template` | 5 | 2 | — | — | — | — | — |
 | `spring-kafka-message` | 3 | 1 | 1 | — | — | — | — |
@@ -1925,7 +1925,7 @@ by `python scripts/value_boundaries.py --measure`. Not built, so not measured: `
 | `vertx-eventbus` | 6 | 4 | — | — | — | — | — |
 | `vertx-eventbus-chain` | 3 | 1 | 1 | — | — | — | — |
 | `vertx-eventbus-mutiny` | 4 | 3 | — | — | — | — | — |
-| **total** | **481** | **235** | **232** | **7** | **—** | **—** | **—** |
+| **total** | **483** | **235** | **232** | **7** | **—** | **—** | **—** |
 
 **A dash is a reason that did not fire for that catalog, never a reason that cannot.** Across the whole fixture corpus `escapes`, `non_enumerable`, `cycle` fire nowhere — which is a statement about these fixtures, not about the vocabulary; `docs/research/2026-09-23-value-walk-measurement.md` §4 has the estate-wide counts and the six real recursions `cycle` answers.
 

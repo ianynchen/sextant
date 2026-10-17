@@ -486,7 +486,10 @@ There is no fact to wire until 9.19 exists, so this defers with it rather than o
 
 ## Task 14: Finish
 
-- [ ] **Re-run `python scripts/value_boundaries.py --measure` after #39 merges, before #40.**
+- [x] **Re-run `python scripts/value_boundaries.py --measure` after #39 merges, before #40.**
+  DONE 2026-10-17 at `c649978a`, and the prediction held exactly: `spring-integration-kafka`
+  moved 8 -> 10 answered, the +2 from its two `Pattern` rows, and §3c's total 481 -> 483.
+  `--check` passed BEFORE the re-measure, which is the blind spot this step exists for.
   Task 13's §3c block was measured on `spec/binding-writes`, which is branched off `main`
   and does NOT contain Tasks 9-10. #39 takes `spring-integration-kafka` from 41 asks to 43
   (the two `Pattern` rows gained a `channel_via`), so §3c's figures move when it lands.

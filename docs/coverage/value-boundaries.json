@@ -1,5 +1,5 @@
 {
-  "measured_at_commit": "3ab0c8f8",
+  "measured_at_commit": "c649978a",
   "fixtures": [
     "grpc-probe",
     "orders-eventbus",
@@ -150,7 +150,7 @@
       }
     },
     "spring-integration-kafka": {
-      "would_resolve": 8,
+      "would_resolve": 10,
       "unresolved": {
         "not_readable": 16
       }
