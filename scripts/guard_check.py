@@ -406,9 +406,19 @@ GUARDS: dict[str, Guard] = {
         "is named for the capture whose near-miss pins it",
         edits=(
             Edit(
-                path=_ARGUMENTS,
-                find='            and site.get("owner") == owner_symbol\n',
-                replace="            and True  # guard disabled by scripts/guard_check.py\n",
+                # **Re-anchored in Task 9, because the rule moved rather than
+                # weakened.** It used to live in `_linked_constructor`'s owner
+                # comparison, which every consuming engine reached through
+                # `linked_channels`. All four call sites now resolve through the walk
+                # — `single_call`'s channel ladder (Task 8) and `fluent`'s three
+                # (Task 9) — so that comparison has no caller outside its own module
+                # and the mutation became unobservable: the guard SURVIVED, which is
+                # how this was noticed. What refuses `Urls.create` for a form naming
+                # `java.net.URI` now is `_identity_matches`' own owner check, so the
+                # guard follows the enforcement.
+                path=_VALUES,
+                find='            if owner is not None and row["owner"] != owner:\n',
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -67,7 +67,6 @@ from sextant.application.resolve.shapes.arguments import (
     channels_of,
     declared_parameters_of,
     field_facts,
-    linked_channels,
     split_url,
     supertypes_of,
     url_of,
@@ -1081,7 +1080,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             # window (`values._used_at`). Resolving in the wrong method would read a
             # same-numbered value of another method and fabricate; `test_fluent_
             # registrations.py`'s negative half pins exactly that.
-            destinations = _walked_channels(channel_argument, context) or literal
+            destinations = _walked_channels(channel_argument, context, channel_via_forms) or literal
         else:
             destinations = literal
     else:
@@ -1398,7 +1397,9 @@ def _declares_a_hop(matches: dict[str, Any]) -> bool:
 
 
 def _walked_channels(
-    argument: dict[str, Any] | None, context: _ChainContext
+    argument: dict[str, Any] | None,
+    context: _ChainContext,
+    forms: Sequence[dict[str, Any]] = (),
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """One channel capture's destinations, resolved by the backward walk (Task 9).
 
@@ -1423,12 +1424,42 @@ def _walked_channels(
     site = context.values.sites.get((str(caller), int(str(ordinal))))
     if site is None:
         return None
+    # **The identities are THIS ROW's declared producers, not the whole table**, and that
+    # is load-bearing rather than cautious. `linked_channels` followed a `source` only to a
+    # call whose owner AND method a declared form named; handed `catalog.value_model`
+    # instead, the walk follows any producer ANY catalog declared, and a row then publishes
+    # a destination its own form never reached. Two shipped guards say so —
+    # `fluent.url-via-follows-only-a-declared-call` SURVIVED its mutation, and
+    # `test_an_element_no_declared_form_reaches_is_unresolved_on_its_own` failed — so this
+    # is measured rather than argued.
+    #
+    # `single_call` could take the shared table because Task 8 gave it a TYPE GATE: its
+    # rows declare a descriptor, so a producer whose return type cannot be the declared
+    # parameter type is refused. `fluent`'s rows here carry no descriptor (22 of its 29 hop
+    # rows do not), so that gate cannot govern them and the row's own declaration is what
+    # remains. §1e is the reading: the walk answers what a value is, the catalog says which
+    # producer means the destination.
+    # `descriptor` and `arity` travel too, and dropping them was a real regression caught
+    # by `test_a_sibling_constructor_with_a_string_at_the_same_position_is_not_the_topic`:
+    # a form's descriptor is what tells one overload from its siblings, so an entry without
+    # it matches an overload whose argument 0 is something else entirely.
+    identities = [
+        {
+            "owner": form["owner"],
+            "method": form["method"],
+            "arg": form["arg"],
+            **({"descriptor": form["descriptor"]} if "descriptor" in form else {}),
+            **({"arity": form["arity"]} if "arity" in form else {}),
+        }
+        for form in forms
+        if isinstance(form, dict) and {"owner", "method", "arg"} <= set(form)
+    ]
+    if not identities:
+        return None
     walked = list(
         dict.fromkeys(
             channel_of_answer(binding.slots.get(slot))
-            for binding in resolve_site(
-                context.workspace, site, context.values, context.catalog.value_model
-            )
+            for binding in resolve_site(context.workspace, site, context.values, identities)
         )
     )
     return walked or [(None, None, "unresolved")]
@@ -1495,10 +1526,27 @@ def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str,
     forms = captures.get("url_via") or []
     if _string_value(argument) is not None or not forms:
         return argument
-    [(_, literal, resolution)] = linked_channels(argument, context.facts, forms)
-    if resolution != "resolved" or literal is None:
+    # **The backward walk, in place of the one-hop follow** (spec §2b, Task 9), reached
+    # through the same `_captured_at` provenance the channel half uses. The order above is
+    # untouched: a literal at the capture answers first, and a field-fed address is already
+    # a string by the time it arrives (`_address_read`), so neither ever reaches here.
+    walked = _walked_channels(argument, context, forms)
+    if walked is None:
         return argument
-    return {"kind": "string", "value": literal}
+    # **A URL is ONE string**, which is why `_validate_channel_via_entries` refuses
+    # `all_strings` on `url_via` where `channel_via` allows it. The walk can legitimately
+    # find SEVERAL — two callers handing different addresses into one chain is several
+    # bindings by design (§1c) — where `linked_channels` could only ever answer one. Those
+    # are not an address between them, and choosing one would fabricate the row's identity,
+    # so the capture travels on unchanged and the row derives `path` NULL at `unresolved`.
+    # That is the ladder's own rule stated in this function's docstring: it may ADD an
+    # answer and never take one away.
+    resolved = [
+        literal for _, literal, resolution in walked if resolution == "resolved" and literal
+    ]
+    if len(resolved) != 1:
+        return argument
+    return {"kind": "string", "value": resolved[0]}
 
 
 def _address_of(composed: str) -> tuple[str | None, str | None, str]:
@@ -2115,10 +2163,18 @@ def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
     if field != "channel":
         text = _string_value(argument)
         return {"kind": "string", "value": text} if text is not None else _unresolved_bean("unread")
-    found = channels_of(argument)
+    found: Sequence[tuple[str | None, str | None, str]] = channels_of(argument)
     forms = end.get("channel_via") or []
     if found[0][2] != "resolved" and forms:
-        found = linked_channels(argument, context.facts, forms)
+        # **The backward walk, in the COLLECTING context** (spec §2b, Task 9) — and the
+        # context is the whole point of this function. `_captured_at` stamped the capture
+        # with the site it was read at, which is a site of the method that COLLECTED it, so
+        # the position resolved here is that method's and never the adapter's. Resolving it
+        # in the adapter's context would read a same-numbered value of an unrelated method
+        # and publish it as a destination; `test_a_same_numbered_value_in_the_ADAPTERS_
+        # method_is_not_the_containers_queue` is the guard, and it was written before this
+        # line changed for exactly that reason.
+        found = _walked_channels(argument, context, forms) or found
     elements = [
         {"kind": "string", "value": path}
         if resolution == "resolved" and path is not None
