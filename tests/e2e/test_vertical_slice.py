@@ -237,7 +237,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # block), rendered `websocket (unresolved)` exactly as every other
     # path-NULL outbound row already is.
     assert (
-        "`websocket /topic/order-placed` | unresolved | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | json (assumed) | resolved |"
+        # `none recorded`, not `unresolved`, since 2026-10-17: a WebSocket destination
+        # names no peer and never could, so reporting a failed read there was wrong
+        # (`OI-140`; the discriminator is `_peer_cell` — a NULL peer beside a path that
+        # WAS read is an address with no peer in it).
+        "`websocket /topic/order-placed` | none recorded | `com/example/orders/ws/OrderStompController#place(sig_961974f8).` | json (assumed) | resolved |"
         in document
     )
     assert (
@@ -403,7 +407,7 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # the caller's signature. It answered `unresolved` while the payload column was NULL,
     # which was then the only place that fact could be stated.
     assert (
-        "`websocket /topic/order-announced` | unresolved | "
+        "`websocket /topic/order-announced` | none recorded | "
         "`com/example/orders/ws/OrderStompPublisher#announce(sig_7cebbae5).` | "
         "json (assumed) | resolved |"
     ) in document
@@ -1691,7 +1695,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # The row itself: verbless, address-less peer, and its caller a symbol
     # whose identity carries the LIBRARY's coordinates rather than this
     # module's — the operation `wsimport` would have generated a stub for.
-    assert "| `soap {http://billing.example.com/ws}stubCharge` | unresolved |" in document
+    # `none recorded` since 2026-10-17 — the whole SOAP address is the path and carries
+    # no separable peer, so `unresolved` reported a read that was never attempted
+    # (`OI-140`).
+    assert "| `soap {http://billing.example.com/ws}stubCharge` | none recorded |" in document
     assert "`com/example/billing/BillingPort#charge(sig_7b622a99).`" in document
     # And the attribution, which is what tells a reader that no file in this
     # repository declares the operation above.

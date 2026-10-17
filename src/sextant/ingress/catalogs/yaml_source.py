@@ -260,6 +260,7 @@ class YamlCatalogSource:
                     default_produces=tuple(raw.get("default_produces", [])),
                     format_fixed=raw.get("format_fixed", {}),
                     media_formats=raw.get("media_formats", {}),
+                    format_any=bool(raw.get("format_any", False)),
                     json_default_markers=raw.get("json_default_markers", []),
                     parse_calls=raw.get("parse_calls", {}),
                     # 2H design §6 — optional, checked where the pass reads it

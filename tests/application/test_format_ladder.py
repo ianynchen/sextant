@@ -223,6 +223,7 @@ def _catalog(
     json_default_markers: list[str | dict[str, str]] | None = None,
     format_from: dict[str, str] | None = None,
     rules: list[dict] | None = None,
+    format_any: bool = False,
 ) -> Catalog:
     """A catalog carrying whichever of 2G design §7's four vocabularies the
     test needs. `matches` holds the `media_from_config` block only when a
@@ -254,6 +255,7 @@ def _catalog(
         format_fixed=format_fixed or {},
         media_formats=media_formats or {},
         json_default_markers=json_default_markers or [],
+        format_any=format_any,
     )
 
 
@@ -294,6 +296,68 @@ def test_a_protocol_with_a_fixed_format_answers_before_anything_else(tmp_path: P
     workspace.close()
 
     assert _formats(rows)["a"] == ("protobuf", "resolved")
+
+
+def test_a_pass_through_catalogs_rows_carry_any_at_resolved(tmp_path: Path):
+    """Rung 0. A proxy forwards a body it never parses, so no format constraint exists —
+    and that is a KNOWN property of the channel, not a rung the ladder failed to reach.
+
+    Before `Format.ANY` these rows read `(None, "unresolved")`, which told a reader the
+    analysis had failed where it had succeeded: every Spring Cloud Gateway route in a
+    rendered document said its format was unresolved (`OI-140`). `any` ruled by the user
+    2026-10-17."""
+    workspace = _workspace(tmp_path)
+    _seed(workspace, {"path": "a", "catalog_id": "invented-formats"})
+    rows = _run(workspace, _catalog(format_any=True))
+    workspace.close()
+
+    assert _formats(rows)["a"] == ("any", "resolved")
+
+
+def test_a_pass_through_beats_a_media_declaration_on_the_same_row(tmp_path: Path):
+    """Rung 0 ABOVE rung 2, which is the precedence that matters and the reason this is a
+    rung rather than a fallback. A media type on a forwarded request describes what the
+    CALLER sent; it is not a constraint the proxy imposes. Letting rung 2 answer first
+    would publish one caller's format as the endpoint's own."""
+    workspace = _workspace(tmp_path)
+    _seed(
+        workspace,
+        {"path": "a", "catalog_id": "invented-formats", "produces": json.dumps([SCROLL_MIME])},
+    )
+    rows = _run(workspace, _catalog(format_any=True, media_formats={SCROLL_MIME: "xml"}))
+    workspace.close()
+
+    assert _formats(rows)["a"] == ("any", "resolved")
+
+
+def test_a_row_from_another_catalog_is_untouched_by_the_pass_through_flag(tmp_path: Path):
+    """The flag is keyed on the row's OWN `catalog_id`, not on its protocol — which is
+    why it is not an entry in `format_fixed`. `{http: any}` there would claim it of every
+    HTTP endpoint in the estate, while a gateway's rows are the exception. Two rows, one
+    catalog declaring the flag, and only its own row moves."""
+    workspace = _workspace(tmp_path)
+    _seed(
+        workspace,
+        {"path": "mine", "catalog_id": "invented-formats"},
+        {"path": "theirs", "catalog_id": "invented-other"},
+    )
+    rows = _run(workspace, _catalog(format_any=True))
+    workspace.close()
+
+    assert _formats(rows)["mine"] == ("any", "resolved")
+    assert _formats(rows)["theirs"] == (None, "unresolved")
+
+
+def test_any_is_not_how_an_unreadable_format_reads(tmp_path: Path):
+    """The distinction `Format.ANY` exists to make, asserted so it cannot quietly collapse.
+    A row nothing could be said about still carries NULL and `unresolved` — "the ladder
+    reached no rung" — and must never borrow the word for "no constraint exists"."""
+    workspace = _workspace(tmp_path)
+    _seed(workspace, {"path": "a", "catalog_id": "invented-formats"})
+    rows = _run(workspace, _catalog(format_any=False))
+    workspace.close()
+
+    assert _formats(rows)["a"] == (None, "unresolved")
 
 
 def test_declared_media_beats_payload_hierarchy(tmp_path: Path):

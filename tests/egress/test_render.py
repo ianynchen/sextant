@@ -346,7 +346,7 @@ def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column()
     )
     text = render_module_document(MODULE, report, "a3f91c")
     assert (
-        "| `(unresolved) /billing/passed-verb` | unresolved | "
+        "| `(unresolved) /billing/passed-verb` | none recorded | "
         "`com/acme/orders/clients/BillingRestTemplate#relay(String).` | "
         "unresolved | unresolved |"
     ) in text

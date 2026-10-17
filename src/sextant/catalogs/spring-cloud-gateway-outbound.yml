@@ -15,6 +15,12 @@ detect:
 # starter has to be listed in its own right rather than relied on to pull the server artifact in.
   coordinates: ["org.springframework.cloud:spring-cloud-gateway-server-webflux", "org.springframework.cloud:spring-cloud-starter-gateway-server-webflux", "org.springframework.cloud:spring-cloud-starter-gateway", "org.springframework.cloud:spring-cloud-gateway-server"]
 
+# A gateway FORWARDS a body it never parses, so no format constraint exists on these rows.
+# `format: any` at `resolved` — a known property of the channel, not a rung the ladder failed
+# to reach. Before this, every route read `format_resolution: unresolved`, which told a reader
+# the analysis had failed where it had succeeded (`OI-140`; `any` ruled by the user 2026-10-17).
+format_any: true
+
 measured:
   # The two `route` descriptors below, checked against the jar's own bytecode by the
   # CP-10 harness at 5.0.0 (`tests/architecture/test_catalog_descriptors.py` pins them).

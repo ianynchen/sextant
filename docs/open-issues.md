@@ -309,7 +309,22 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
-### OI-140 — a resolved gateway route renders as three kinds of "unresolved"
+### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **PARTLY CLOSED 2026-10-17**
+
+> **Closed: the format and the two symbol columns.** `Format.ANY` now carries "no format
+> constraint exists" as a resolved answer (user ruling), and `_peer_cell` /
+> `_handler_fallback` carry "this evidence held no such symbol" instead of printing
+> `unresolved` or the literal `None`. **Still open: the VERB.** It renders
+> `(unresolved)` and the choice between fanning the route out over `all_methods` and
+> rendering one row's absent verb as `any` is unmade — see the bottom of this entry.
+>
+> **The peer half was far wider than this entry's title.** Measured: EVERY messaging
+> outbound row in the estate printed `Peer: unresolved` — `kafka order-events`,
+> `jms audit.queue`, `websocket /topic/order-placed`, `soap {…}stubCharge` — while D02 §3
+> keeps messaging peers NULL *deliberately*. Nothing in the codebase ever tries and fails
+> to read a peer: one appears only when the address was absolute and `split_url` had an
+> authority to separate off. So `unresolved` reported a failure that never happened, on
+> every such row, and the gateway rows were how it was noticed rather than its extent.
 **Major · entered 2026-10-17, found at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 1 · `src/sextant/egress/render/`**
 
 With `OI-139` fixed, `spring-petclinic-api-gateway`'s four routes derive correctly — and the
