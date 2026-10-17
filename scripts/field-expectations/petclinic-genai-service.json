@@ -17,7 +17,7 @@
     ],
     "outbound": [
       "GET (unresolved)",
-      "GET (unresolved)",
+      "GET /vets",
       "POST (unresolved)",
       "POST (unresolved)"
     ]

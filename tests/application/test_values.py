@@ -87,6 +87,10 @@ _IDENTIFIED = _PKG + "Identified#"
 _UNREAD = _PKG + "Unread#"
 _LOOP = _PKG + "Loop#"
 _ASSEMBLER = _PKG + "Assembler#"
+_JOINER = _PKG + "Joiner#"
+_HALF_JOINER = _PKG + "HalfJoiner#"
+_CONFIG_JOINER = _PKG + "ConfigJoiner#"
+_TWO_HOLES = _PKG + "TwoHoles#"
 _RECEIVING = _PKG + "Receiving#"
 _FACTORY = _PKG + "Factory#"
 _DEEP = _PKG + "Deep#"
@@ -223,6 +227,10 @@ def _facts() -> list[Fact]:
             _UNREAD,
             _LOOP,
             _ASSEMBLER,
+            _JOINER,
+            _HALF_JOINER,
+            _CONFIG_JOINER,
+            _TWO_HOLES,
             _RECEIVING,
             _FACTORY,
             _DEEP,
@@ -725,6 +733,66 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="concat", value="/orders/{}", source=4)],
+        ),
+        # An assembled address whose every operand IS a source literal — the shape
+        # ruling 1 (2026-10-17) joins. The producing site is the concat itself, and its
+        # own arguments are the operands.
+        _declared(_JOINER, "call", "()V"),
+        _site(
+            _symbol(_JOINER, "call", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=40,
+            arguments=[CallArgument(kind="string", value="http://host/")],
+        ),
+        _site(
+            _symbol(_JOINER, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}orders", source=40)],
+        ),
+        # Two holes, both literals: the template is filled in ORDER, not by chance.
+        _declared(_TWO_HOLES, "call", "()V"),
+        _site(
+            _symbol(_TWO_HOLES, "call", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=41,
+            arguments=[
+                CallArgument(kind="string", value="alpha"),
+                CallArgument(kind="string", value="omega"),
+            ],
+        ),
+        _site(
+            _symbol(_TWO_HOLES, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="/{}/middle/{}", source=41)],
+        ),
+        # One operand a literal, the other a PARAMETER — "anything that changes at
+        # runtime" in the ruling's own words, so nothing joins.
+        _declared(_HALF_JOINER, "call", _TAKES_STRING),
+        _site(
+            _symbol(_HALF_JOINER, "call", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=42,
+            arguments=[
+                CallArgument(kind="string", value="http://host/"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+        _site(
+            _symbol(_HALF_JOINER, "call", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}orders/{}", source=42)],
         ),
         # A receiver produced by a call, which is a slot like any other.
         _declared(_FACTORY, "make", _MAKES_OBJECT),
@@ -1462,6 +1530,46 @@ def test_an_assembled_address_is_carried_verbatim_and_never_evaluated(walked):
     bindings = _bindings(walked, _symbol(_ASSEMBLER, "call", "()V"), 0)
     assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("expression", "/orders/{}")]
     assert _reasons(bindings) == [None]
+
+
+def test_a_concat_of_source_literals_joins_into_one_literal(walked):
+    """Ruling 1, granted by the user 2026-10-17: *"join them when every single piece is a
+    fixed string typed into the source code."*
+
+    Nothing is reverse-engineered. javac emits one `invokedynamic` plus a recipe, the
+    extractor already turns that recipe into a template with `{}` per runtime operand
+    (and already substitutes the bootstrap's own constants, `\u0002`), and the operands
+    are the concat site's OWN arguments — `domain/facts.py`: *"What FILLS the hole is the
+    concat site's own call-site fact, reached by `source` -> `result`."* This joins what
+    the facts already hold.
+
+    It answers `literal`, not `expression`, because the result IS a fixed string the code
+    states — the thing a catalog reading a destination can use."""
+    bindings = _bindings(walked, _symbol(_JOINER, "call", "()V"), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [
+        ("literal", "http://host/orders")
+    ]
+    assert [b.slots[0].literal_kind for b in bindings] == ["string"]
+
+
+def test_two_holes_are_filled_in_order(walked):
+    """The template is split on its holes and interleaved, never substituted one hole at a
+    time: a resolved operand that itself contains `{}` would otherwise be re-scanned and
+    the second hole filled from the first operand's text."""
+    bindings = _bindings(walked, _symbol(_TWO_HOLES, "call", "()V"), 1)
+    assert [b.slots[0].value for b in bindings] == ["/alpha/middle/omega"]
+
+
+def test_a_concat_with_one_runtime_operand_carries_the_template_unchanged(walked):
+    """The ruling's second half, and the half that keeps §6: *"If any piece comes from a
+    config file, a method parameter, or anything that changes at runtime — don't join,
+    behave exactly as today."* One operand is a parameter, so the row answers the
+    template with its holes unfilled — including the hole whose operand DID resolve,
+    because a half-filled address is a claim about a string nobody wrote."""
+    bindings = _bindings(walked, _symbol(_HALF_JOINER, "call", _TAKES_STRING), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [
+        ("expression", "{}orders/{}")
+    ]
 
 
 def test_a_receiver_is_a_slot_like_any_other(walked):

@@ -171,7 +171,7 @@ scoped out (spec §4) and must not be done here.
 
 ---
 
-## Task 2: Join a concatenation whose holes are all source literals — locals only
+## Task 2: Join a concatenation whose holes are all source literals — locals only · **DONE 2026-10-17**
 
 **1 row, and it proves the join end to end with no new fact.** `VectorStoreController` writes
 `vetsHostname + "vets"` where `vetsHostname` is a LOCAL holding a literal in the same method
@@ -195,7 +195,7 @@ at runtime — don't join, behave exactly as today."*
 - Produces: a `literal` of `literal_kind: string` where every hole answered one; today's
   `expression` otherwise, template unchanged.
 
-- [ ] **Step 1: Write the failing tests** — the negative cases first, because they are the ruling
+- [x] **Step 1: Write the failing tests** — the negative cases first, because they are the ruling
 
 ```python
 def test_a_concat_of_two_source_literals_joins():
@@ -210,10 +210,10 @@ def test_a_concat_reached_on_two_paths_with_different_operands_is_two_answers():
     """Memoisation stays keyed on (position, path) — spec §1c, ruling M-1."""
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
-- [ ] **Step 3: Resolve each hole through the ordinary walk; join only if all answered string literals**
+- [x] **Step 2: Run them to verify they fail**
+- [x] **Step 3: Resolve each hole through the ordinary walk; join only if all answered string literals**
 - [ ] **Step 4: Amend spec §6 in place**, marking what the ruling narrowed and what it did not
-- [ ] **Step 5: Re-run the cost measurement — the no-cap ruling was measured with this arm as a terminal**
+- [x] **Step 5: Re-run the cost measurement — the no-cap ruling was measured with this arm as a terminal**
 
 ```bash
 .venv/bin/python scripts/measure_value_walk.py
@@ -222,10 +222,26 @@ This arm turns one terminal answer into N sub-walks. §3a of the previous spec r
 measure first*; that measurement predates this change and must be redone before Task 4 widens it
 further.
 
-- [ ] **Step 6: Prove on the real module, move the pin, gate, guards, commit**
+- [x] **Step 6: Prove on the real module, move the pin, gate, guards, commit**
 
-Expected: `VectorStoreController` publishes peer `vets-service`, path `/vets` — matching
-`vets-service`'s own inbound `GET /vets`.
+**Result: exactly that** — `('outbound', 'GET', 'vets-service', '/vets', 'resolved')`,
+matching `vets-service`'s own inbound `GET /vets`.
+
+**Two things the plan did not foresee, both measured:**
+
+1. **The walk joined it and the ENGINE never asked.** `fluent` built the walk's index only
+   where the catalog declared a `channel_via`/`url_via`, and an assembled address is not a
+   hop, so `spring-webclient` could never reach it. Removing that gate alone cost **+1.3s
+   on `mall-admin`** (6.22s -> 7.50s), which is why the gate existed — the index was built
+   once PER CATALOG, five times over on that module. Sharing one index per resolve
+   (`values.cached_value_index`) made the gate unnecessary instead of merely cheaper, and
+   left the module **faster than baseline**: resolve 4.65s -> 3.9s, end to end 6.22s ->
+   5.45s.
+2. **The first cache was keyed on `id(workspace)` and leaked between tests.** The argument
+   for it — "the pipeline clears it before anything can ask" — is true of a pipeline run
+   and false of every test that calls an engine directly. Two tests in other files failed
+   while passing in isolation. A `WeakKeyDictionary` removes the hazard rather than
+   managing it.
 
 ---
 

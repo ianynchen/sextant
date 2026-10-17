@@ -125,6 +125,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
@@ -233,6 +234,11 @@ _ROLE = "role"
 # reaches them, and a cleanup that touches five modules is not this fix (§3).
 _ALL_STRINGS = "all_strings"
 
+# The marker `MethodFlow.concatTemplate` writes for a runtime operand it could not fold —
+# one per `\u0001` in the bootstrap's recipe. Spelled once here because `_joined` both
+# COUNTS them (to check the template against the operand list) and SPLITS on them.
+_HOLE = "{}"
+
 
 @dataclass(frozen=True)
 class Answer:
@@ -307,6 +313,55 @@ class ValueIndex:
     # `external` (we cannot see the producer) from `not_readable` (we can, and it names
     # no value) — a distinction §1d exists to make and the edge query cannot.
     reached: frozenset[tuple[str, int]]
+
+
+# The index, built once per RESOLVE instead of once per catalog that asks for it.
+#
+# **This is a correctness enabler as much as a saving.** `fluent.run` built its own index
+# only where the catalog declared a `channel_via`/`url_via`, because building it per
+# catalog was measured as real: removing that gate cost **+1.3s on `mall-admin`** (6.22s
+# -> 7.50s end to end, resolve 4.65s -> 6.05s). But the gate also kept the walk away from
+# catalogs that need it for an ASSEMBLED address, which is not a hop and declares no key.
+# Sharing one index makes the gate unnecessary rather than merely cheaper: `mall-admin`
+# built the same index FIVE times before this.
+#
+# **A WeakKeyDictionary, not `id(workspace)`** — and the difference is a defect this
+# cache shipped with for one gate run. Keyed on `id()`, the argument for safety was "the
+# pipeline clears it before anything can ask", which is true of a pipeline run and FALSE
+# of every test that calls an engine directly: a workspace was freed, a new one landed at
+# the same address, and the previous test's index answered for it. Two tests in other
+# files failed while passing in isolation, which is how it was found.
+#
+# A weak key cannot do that. The entry disappears with the workspace it belongs to, so a
+# new object at the same address is simply a different key, and no clearing discipline has
+# to be remembered by anybody.
+_INDEX_BY_WORKSPACE: "WeakKeyDictionary[Workspace, ValueIndex]" = WeakKeyDictionary()
+
+
+def reset_value_index() -> None:
+    """Drops every cached index, so a resolve never answers from facts a previous one
+    loaded.
+
+    The weak keys above make this unnecessary for CORRECTNESS across objects — an entry
+    dies with its workspace — but a single workspace REUSED for two resolves, with facts
+    reloaded in between, is the same object and would keep the first resolve's index.
+    `pipeline.resolve` calls this before `load_facts` for that case.
+    """
+    _INDEX_BY_WORKSPACE.clear()
+
+
+def cached_value_index(workspace: Workspace) -> "ValueIndex":
+    """`value_index`, built at most once per workspace per resolve.
+
+    Every engine that resolves values should ask for this rather than `value_index`
+    directly: the fold is the same, and three engines times N catalogs each paid for it
+    separately before.
+    """
+    index = _INDEX_BY_WORKSPACE.get(workspace)
+    if index is None:
+        index = value_index(workspace)
+        _INDEX_BY_WORKSPACE[workspace] = index
+    return index
 
 
 def value_index(workspace: Workspace) -> ValueIndex:
@@ -605,16 +660,32 @@ class _Walk:
             return _only(trail, Answer(kind=LITERAL, value=value, literal_kind=literal_kind))
         if kind == "concat":
             # W4: an address the code ASSEMBLES, whose `value` is the TEMPLATE with a hole
-            # per runtime value. Carried verbatim — §1b's `expression` — and never
-            # evaluated: §6 as amended 2026-09-23 refuses the EVALUATION, not the template,
-            # and no hole is ever filled in (§8.2: this repository does not guess deployed
-            # values). It is never a `literal`, so a consumer reading literals is
-            # unaffected by it existing — and discarding it would make `produced_by`'s
-            # whole reason for reading `call_sites` rather than `call_edges` pointless,
-            # since reaching the concat site is exactly what that arm was fixed to do.
+            # per runtime value.
+            #
+            # **Joined where every hole's operand is a literal the SOURCE states, and
+            # carried verbatim otherwise** — ruling 1, granted by the user 2026-10-17 in
+            # these words: *"join them when every single piece is a fixed string typed
+            # into the source code. If any piece comes from a config file, a method
+            # parameter, or anything that changes at runtime — don't join, behave exactly
+            # as today."* That amends §6, which forbade evaluating a concatenation at all;
+            # the default is unchanged and the exception is exactly the sentence above.
+            #
+            # Nothing is reverse-engineered. javac emits one `invokedynamic` plus a recipe
+            # of literal text, `MethodFlow.concatTemplate` already turns that into this
+            # template — already SUBSTITUTING the bootstrap's own constants, because
+            # "that constant IS known" — and the operands are the concat site's own
+            # arguments, reached exactly as `domain/facts.py` says: "What FILLS the hole is
+            # the concat site's own call-site fact, reached by `source` -> `result`."
+            #
+            # §8.2 is untouched: a `${...}` operand answers `expression`, not `literal`, so
+            # it fails the all-literals test by construction and no deployment hole is ever
+            # filled in.
             template = argument.get("value")
             if not isinstance(template, str):
                 return _only(trail, _unresolved(NOT_READABLE))
+            joined = self._joined(template, argument, method, origin, trail, frames)
+            if joined is not None:
+                return joined
             return _only(trail, Answer(kind=EXPRESSION, value=template))
         if kind in _DECLARATION_KINDS:
             # **An identified CONSTRUCTION is answered before the type symbol, and the
@@ -770,6 +841,75 @@ class _Walk:
             merged = _combine(trail, (trailing,))
             reached.append((merged if merged is not None else trail, _unresolved(unread)))
         return tuple(reached)
+
+    def _joined(
+        self,
+        template: str,
+        argument: Mapping[str, Any],
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """The template with every hole filled from a source literal, or None to leave the
+        caller carrying it verbatim.
+
+        **Every refusal below returns None rather than an `unresolved`**, and that is the
+        shape of ruling 1: not joining is not a failure, it is the behaviour §6 already
+        had, so a template this cannot fill reads exactly as it did before.
+
+        The refusals, each because the alternative is a string nobody wrote:
+
+        * **no producing site for `source`** — the concat's own arguments are where the
+          operands live, and without that site there is nothing to fill from;
+        * **a hole count that disagrees with the operand count** — the template's `{}`
+          come from the recipe's `\u0001` markers, one per runtime argument, so a
+          mismatch means one of the two was misread and guessing an alignment would
+          publish operands in the wrong places;
+        * **an operand that is not exactly one answer** — several enumerable answers are
+          several possible addresses, and one row per combination is ruling 1's
+          multiplicity rule applied across operands. That product is deliberately NOT
+          built here: it needs a path-merge across operands that disagree, nothing in the
+          27 measured corpora reaches it, and carrying the template under-reports rather
+          than inventing. Recorded rather than silently narrowed;
+        * **an operand that is not a `string` literal** — a parameter, a `${...}`
+          expression, a symbol, an `absent`, an `unresolved`. The ruling's own boundary;
+        * **operand paths that do not cohere** — `_combine`'s rule, unchanged: two
+          operands that crossed the same context differently did not happen together.
+        """
+        source = argument.get("source")
+        if source is None:
+            return None
+        producers = self._index.producers.get((method, int(str(source))), ())
+        if not producers:
+            return None
+        site = self._index.sites.get((method, min(producers)))
+        if site is None:
+            return None
+        operands = site["arguments"] or []
+        pieces = template.split(_HOLE)
+        if len(pieces) != len(operands) + 1:
+            return None
+
+        path = trail
+        values: list[str] = []
+        for operand in operands:
+            reached = self._entry(operand, method, origin, trail, frames)
+            if len(reached) != 1:
+                return None
+            (reached_path, answer) = reached[0]
+            if answer.kind != LITERAL or answer.literal_kind != STRING:
+                return None
+            merged = _combine(path, reached_path)
+            if merged is None:
+                return None
+            path = merged
+            values.append(str(answer.value))
+
+        filled = pieces[0] + "".join(
+            value + piece for value, piece in zip(values, pieces[1:], strict=True)
+        )
+        return _only(path, Answer(kind=LITERAL, value=filled, literal_kind=STRING))
 
     def _through(
         self, method: str, value: int, used_at: int | None, trail: _Trail, frames: "_Frames"
