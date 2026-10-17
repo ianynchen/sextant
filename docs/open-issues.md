@@ -329,58 +329,69 @@ service-to-service topology of the application — eight rows — and the docume
 it. (In the pinned corpus the four `lb://` routes appear only in an LLM *enrichment*
 paragraph, which is evidence of the gap rather than cover for it.)
 
-**The cause is dependency-version resolution, not the catalog.** `metadata.json` reports it
-honestly:
+**TWO causes, both small, both PROVEN end to end 2026-10-17 by a throwaway patch that was
+measured and reverted: 6 endpoints → 14, every one of the eight missing rows appearing as
+`resolved`.** *(This entry first named "one level of BOM import is followed, a chain is not".
+That was wrong — inferred from the symptom instead of read from the code. Nested imports,
+BOM-scoped properties and a depth cap of 16 are all already implemented and correct.)*
 
-> `org.springframework.cloud:spring-cloud-starter-gateway-server-webflux: no version on the
-> declaration and none managed by any pom this analysis could read`
+**Cause 1 — `${project.version}` is a Maven BUILT-IN that `_interpolated` does not define.**
+`detect/maven.py::_interpolated` substitutes only from a pom's `<properties>` block, so
+`${project.version}` never resolves and returns `None`. `_managed_versions` then does this:
 
-The module declares the starter with no version. The chain that supplies one is:
-
+```python
+settled = _interpolated(managed_raw, bom_properties)
+if settled is not None:
+    imported.setdefault(managed_coordinate, settled)
 ```
-petclinic parent pom
-  └─ imports spring-cloud-dependencies:2025.1.0          (<scope>import</scope>)
-       └─ imports spring-cloud-gateway-dependencies:…    (<scope>import</scope>)
-            └─ manages spring-cloud-starter-gateway-server-webflux
-```
 
-**One level of BOM import is followed; a chain of them is not.** Verified: the top BOM is
-present in `~/.m2` at the exact version the parent asks for, and `grep -c
-spring-cloud-starter-gateway-server-webflux` against it is **0** — it manages nothing
-directly, only imports nine further BOMs. So this is NOT `OI-9`'s machine-dependence (the
-pom is there) and NOT a stale coordinate list (`spring-cloud-gateway-server-webflux` IS in
-`detect.coordinates`). With no version, the dependency is unresolved, the gate never admits
-the catalog, and a correct catalog sits inert over data that is already loaded.
+No `else`. **The managed entry is dropped with no message**, which is why the symptom read as
+"the BOM was never opened". Measured: every one of the four dependencies this module reports
+unresolved is managed as `version: ${project.version}` — 6 of 8 entries in
+`spring-cloud-gateway-dependencies`, 4 of 29 in `spring-cloud-netflix-dependencies`, 4 of 13 in
+`spring-cloud-config-dependencies`, 5 of 8 in `spring-cloud-circuitbreaker-dependencies`.
+It is the standard way a Spring Cloud component BOM versions its own artifacts.
 
-**On the grade.** Major. The under-report is silent in the document and total for the
-component — a gateway module's reason for existing is its route table — and the input is
-ordinary: a Spring Cloud BOM chain is how essentially every Spring Cloud project pins
-versions. `OI-8` and `OI-9` both state that imported BOMs *are* resolved, so the register
-currently reads as though this works.
+Injecting `project.version` into the BOM's own property scope (the version the import names)
+took `dependencies_not_resolved` from **4 to 0**.
 
-**What happens today:** any Spring Cloud module whose versions come through
-`spring-cloud-dependencies` (the documented way) fails the dependency gate for every gated
-catalog, not only the gateway's.
+**Cause 2 — the catalog's `detect.coordinates` omits the new starter name.** With the versions
+resolved the catalog was still skipped, and `metadata.json` named the reason exactly:
+
+> a build declaration of one of `spring-cloud-gateway-server-webflux`,
+> `spring-cloud-starter-gateway`, `spring-cloud-gateway-server` — this module's build declares
+> and inherits none of them
+
+The module declares **`spring-cloud-starter-gateway-server-webflux`**, the 5.0.0 starter, which
+is none of those three (`spring-cloud-starter-gateway` is the pre-5.0 name). A transitive-only
+arrival is deliberately not counted, so the starter must be listed. COVERAGE already carries
+this half as `gateway-detect-4x-coordinate`, Minor — the register read it as cosmetic because
+nobody had measured what it costs.
+
+Adding the coordinate, on top of cause 1, produced all eight rows:
+
+| direction | derived |
+|---|---|
+| inbound | `/api/customer/**`, `/api/genai/**`, `/api/vet/**`, `/api/visit/**` |
+| outbound | `lb://customers-service`, `lb://genai-service`, `lb://vets-service`, `lb://visits-service` |
+
+**On the grade.** Major, and the grade is about cause 1: a silently dropped managed version makes
+every gated catalog miss on any Spring Cloud module that versions through the documented BOM, not
+only this one. Cause 2 is one line in one catalog.
+
+**What happens today:** a Spring Cloud module pinning versions the documented way reports four
+dependencies unresolved and derives nothing from any catalog gated on them.
 
 **Verify:**
 ```
-.venv/bin/sextant module analyze examples/spring-petclinic-microservices
-grep dependencies_not_resolved -A6 examples/spring-petclinic-microservices/spring-petclinic-api-gateway/.sextant/metadata.json
+.venv/bin/sextant module analyze examples/spring-petclinic-microservices/spring-petclinic-api-gateway
+.venv/bin/python -c "import json;print(json.load(open('…/.sextant/metadata.json'))['skipped_catalogs'])"
 ```
-**Closes** by walking the chain to EXHAUSTION — both `<parent>` links and
-`<scope>import</scope>` entries — guarded by a visited set of `groupId:artifactId:version` and
-**not by a hop count** (ruled by the user 2026-10-17: *"track versions down the BOM chain, not
-just a few levels"*; a depth cap fails silently at a different number). Measured: all four of
-this module's unresolved dependencies are managed at depth 2, each by a different component BOM
-that `spring-cloud-dependencies` imports — it imports nine and manages no starter itself.
-
-**And each is managed as `version: ${project.version}`**, which must expand against the pom
-DECLARING the managed dependency (`spring-cloud-gateway-dependencies:5.0.0` → `5.0.0`, which
-exists in the repository), never against the analysed module. Expanded in the wrong scope it
-yields that module's own version and a coordinate that does not exist — a silent wrong answer
-where today there is an honest `dependencies_not_resolved` entry, so property scope is part of
-the fix rather than a detail of it. Spec
-`docs/superpowers/specs/2026-10-17-outgoing-endpoint-addresses-design.md` §5a.
+**Closes** by defining Maven's built-in `project.*` properties per pom as the inheritance walk
+visits it, by REPORTING a managed entry whose version cannot be interpolated instead of dropping
+it, and by listing the 5.0.0 starter in the catalog. The walk itself needs no change: it already
+follows `<parent>` links and `<scope>import</scope>` entries to a depth of 16, and this chain is
+2. Spec `docs/superpowers/specs/2026-10-17-outgoing-endpoint-addresses-design.md` §5a.
 
 **Falsified by** that module deriving four inbound and four outbound rows for its declared
 routes.

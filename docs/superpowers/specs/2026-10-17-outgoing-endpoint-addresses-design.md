@@ -200,54 +200,57 @@ Ordered by cost, and the first needs no ruling at all:
 Each step is a document the field pins can check, which is the point of the ordering.
 
 
-### 5a. The BOM walk runs to exhaustion, not to a depth limit
+### 5a. Versions down the whole BOM chain — and the chain is not what was broken
 
 **Ruled by the user 2026-10-17:** *"make sure that you track versions down the BOM chain, not
-just a few levels."* An earlier draft of this spec said "transitively with a depth guard", which
-is wrong in the same way the current one-level behaviour is wrong — it just fails at a different
-number, and it fails SILENTLY, reporting a dependency as unresolved when the version was three
-hops further down.
+just a few levels."* The requirement stands. **Measuring it showed the walk already satisfies
+it, and that an earlier draft of this section named the wrong cause twice.**
 
-**Terminate on cycles and on exhaustion. Never on a hop count.** The guard is a visited set of
-`groupId:artifactId:version`, which is what makes an exhaustive walk safe: a BOM graph can
-revisit a pom (several BOMs import a common parent) but cannot grow without bound, because every
-hop names a concrete coordinate and the set of coordinates in a repository is finite. A hop
-counter is a guess about other people's packaging, and it goes stale with any upstream release.
+`detect/maven.py` already follows both `<parent>` links and `<scope>import</scope>` entries;
+already resolves each imported BOM's versions **in that BOM's own property scope** (with a
+comment saying why the importing module's properties *"must not answer it"*); and caps at
+`_MAX_INHERITANCE_DEPTH = 16`, while this chain is **2**. So there is no depth to raise and no
+scope to fix.
 
-**The walk covers two kinds of edge, because Maven's own resolution does:** `<parent>` links and
-`<scope>import</scope>` entries in `<dependencyManagement>`. A BOM inherits properties from its
-parent, so following imports alone resolves the artifact and then fails to expand its version.
+**What is broken, proven end to end — a throwaway patch, measured and reverted, took
+`api-gateway` from 6 endpoints to 14, with all eight missing rows `resolved`:**
 
-**Measured, 2026-10-17, on the real chain.** All four dependencies `api-gateway` reports as
-unresolved are managed at the same place — **depth 2** from the module's parent pom
-(one hop to `spring-cloud-dependencies`, one more to the component BOM):
+**1. `${project.version}` is a Maven BUILT-IN and `_interpolated` only reads a pom's
+`<properties>` block.** It therefore returns `None`, and `_managed_versions` drops the managed
+entry with **no message and no `else` branch** — which is why the symptom read as "the BOM was
+never opened". It is how a Spring Cloud component BOM versions its own artifacts: 6 of 8 entries
+in `spring-cloud-gateway-dependencies`, and every one of the four dependencies this module
+reports unresolved. Defining `project.version` in the BOM's own scope took
+`dependencies_not_resolved` from 4 to 0.
 
-| dependency | managed by | hops |
-|---|---|---|
-| `spring-cloud-starter-gateway-server-webflux` | `spring-cloud-gateway-dependencies:5.0.0` | 2 |
-| `spring-cloud-starter-netflix-eureka-client` | `spring-cloud-netflix-dependencies:5.0.0` | 2 |
-| `spring-cloud-starter-config` | `spring-cloud-config-dependencies:5.0.0` | 2 |
-| `spring-cloud-starter-circuitbreaker-reactor-resilience4j` | `spring-cloud-circuitbreaker-dependencies:5.0.0` | 2 |
+**2. The catalog's `detect.coordinates` omits the 5.0.0 starter.** With versions resolved the
+catalog was still skipped, and `metadata.json` said so: it looks for
+`spring-cloud-gateway-server-webflux`, `spring-cloud-starter-gateway` (the pre-5.0 name) and
+`spring-cloud-gateway-server`, while the module declares
+**`spring-cloud-starter-gateway-server-webflux`**. A transitive-only arrival is deliberately not
+counted, so the starter has to be listed. Already half-logged as
+`gateway-detect-4x-coordinate`, Minor — read as cosmetic because nobody had measured the cost.
 
-Two is what this project needs today. Nothing about Maven bounds it at two, which is the whole
-argument for exhaustion: `spring-cloud-dependencies` imports **nine** component BOMs and manages
-no starter directly, and whether a future release adds another aggregation layer is not ours to
-predict.
+### What this step must do
 
-**And a trap found only by measuring: every one of those four is managed as
-`version: ${project.version}`.** That property must be expanded against **the pom that declares
-the managed dependency**, not the module being analysed. Here it resolves to `5.0.0`, the version
-of `spring-cloud-gateway-dependencies` — and the starter does exist in the repository at 5.0.0.
-Expanded in the analysed module's scope it would yield that module's own version (`4.0.1`) and a
-coordinate that does not exist. **That is worse than today's behaviour**, because today reports
-the dependency as unresolved and names it in `metadata.json`, while a wrongly-expanded property
-would resolve to a pom that is simply absent — or, worse, to a real pom at the wrong version.
-So property scope is part of this step's correctness, not a detail of it.
+- **Define Maven's built-in `project.*` properties per pom**, as the inheritance walk visits it,
+  scoped to that pom. `project.version` is what this chain needs; `project.groupId` and
+  `project.artifactId` belong with it rather than waiting for a second instance.
+- **Report, never drop.** A managed entry whose version cannot be interpolated goes into the
+  `unreadable` list the surrounding code already threads to `dependencies_not_resolved`. The
+  silent drop is the reason this took four wrong guesses to find, and that is the defect worth
+  fixing beyond this one property.
+- **List the 5.0.0 starter** in `spring-cloud-gateway-properties.yml` and its DSL sibling, each
+  with a measured note.
+- **Change nothing about the walk's shape.** It is correct. Exhaustion is satisfied by what is
+  there, and the visited-set guard it already carries is why a 16 cap is never reached in
+  practice — a point worth leaving in place rather than relitigating.
 
-**This step ships with a generated probe (CP-35)** recording the chain above and the
-`${project.version}` scope, on the same rule §7 states for every framework claim. The walk above
-was measured with a throwaway script; a probe that regenerates its own table is what the register
-can cite.
+*Method note, recorded because it cost four wrong answers in one sitting: the symptom
+("the gateway derives nothing") was consistent with a stale coordinate list, a one-level BOM
+walk, a machine-dependent repository and a property-scope bug. Three of those were wrong and
+`metadata.json` named the real one in plain words at the first attempt. Read the honest output
+before theorising about the cause.*
 
 ---
 
