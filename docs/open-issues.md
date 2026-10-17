@@ -309,6 +309,54 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-135 — an invented hop key loads silently, and neither cheap way of closing that works
+**Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a step 3, §5b**
+
+**The gap, measured.** A catalog carrying an invented `invented_hop_via` block loads clean:
+all 101 catalogs parse, the key is silently ignored, and nothing refuses a key no style
+declares. So §2a step 3's "one way, enforced by the loader" is not enforced by anything
+today — and the old plan of refusing the four known keys BY NAME would not have enforced it
+either, since it says nothing about an eighth word. §2a and §5b were corrected on 2026-10-17
+to say the vocabulary is what must close; this entry records that closing it is harder than
+it looks.
+
+**Both cheap designs were tried on paper and both fail. Measured, not argued.**
+
+*A per-style key allowlist, generated from the shipped catalogs* — 295 distinct keys across 13
+styles. It fails because a flat walk of `matches` CANNOT TELL GRAMMAR FROM DATA. Among those
+295 are `io.confluent.kafka.serializers.KafkaAvroDeserializer`,
+`io.ktor.http.HttpMethod$Companion#getGet`,
+`org.springframework.data.repository.CrudRepository`, and `0`, `1`, `Cookie`, `kafka`,
+`rabbit` — map keys inside catalog mappings, not vocabulary. An allowlist of those would
+carry framework class names and would need an edit every time a catalog maps a new
+serializer. No style shares a single key with every other, so there is not even a universal
+core to anchor on: 253 of the 295 appear in exactly one style.
+
+*A naming check refusing an unknown `*_via` / `*_wrappers` key* — the shipped grammar uses
+exactly five such words (`bean_via`, `channel_via`, `url_via`, `call_wrappers`,
+`record_wrappers`), so the convention looks real. It fails against the very history it would
+protect: the seven words §0a names are `channel_via`, `url_via`, `type_carriers`,
+`call_wrappers`, `getters`, `indexed`, `compose`, and **four of the seven follow no such
+convention**. A check keyed on the suffix would have missed `type_carriers`, `getters`,
+`indexed` and `compose` — which is an invented discriminator of exactly the kind §8.1 rule 5
+forbids, with the counter-evidence sitting in the spec's own sentence.
+
+**What closing it actually needs.** A declared per-style SCHEMA — which keys are grammar,
+at which depth, and which nested objects are data — so a validator can refuse an unknown
+grammar key without choking on a mapping whose keys are class names. That is real design
+work on 13 styles, not a step inside another task, and it is what this entry is for.
+
+**Severity is Minor because the failure is inert, and that is worth stating.** An invented
+hop key does nothing: no engine reads it, so a catalog carrying one derives exactly what it
+would without it. The cost is an author believing a declaration works when it is ignored —
+a wasted afternoon and a silent miss — not a wrong row. §0a's seven words grew because
+there was no generic operation to reach for; after this work there is one, which lowers the
+pressure that produced them even while the loader stays silent.
+
+**Closes when** a per-style schema exists and the loader refuses an unknown grammar key,
+with a test that an invented hop word is rejected and that a REDEFINED `channel_via` still
+loads.
+
 ### OI-134 — one identity is written on up to 26 rows, and 10 of the 18 cannot move without a measurement
 **Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a, `value-models/`**
 

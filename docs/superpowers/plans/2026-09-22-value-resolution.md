@@ -394,9 +394,14 @@ four keys by name never barred an eighth word. A closed key set does.
       to prevent. Nothing is broken meanwhile — the loader already folds all 124 into one table — and
       this deduplicates ONE FIELD, since the rows must keep naming their producers either way.
       `OI-134` carries the tally, the near-miss citation to avoid, and the two riskiest entries.
-- [ ] **Step 2:** make the loader refuse any key a style does not declare, with a `CatalogError`
-      naming the file, the key and the style's own vocabulary. This is the step that makes the design
-      hold, and unlike its predecessor it enforces rather than deters.
+- [x] ~~make the loader refuse any key a style does not declare~~ — **SPLIT OUT 2026-10-17 as
+      `OI-135`, not done here.** Both cheap designs were measured and both fail: a generated per-style
+      allowlist cannot tell grammar from data (295 keys include `KafkaAvroDeserializer`,
+      `HttpMethod$Companion#getGet`, `CrudRepository`, `0`, `Cookie`), and a `*_via`/`*_wrappers`
+      naming check would have missed four of §0a's own seven words (`type_carriers`, `getters`,
+      `indexed`, `compose`). Closing it properly needs a declared per-style schema, which is its own
+      design work. The gap is inert meanwhile — an invented hop key is ignored, so it costs an author
+      a wasted afternoon rather than producing a wrong row.
 - [ ] **Step 3:** a test that the refusal fires on an invented key, and one that a REDEFINED
       `channel_via`/`url_via` still loads — the second is what keeps a future reader from "tidying"
       the keys away again.
