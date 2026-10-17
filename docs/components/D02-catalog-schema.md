@@ -548,7 +548,13 @@ would be a plausible-looking value nobody can check.
 `single_call`), `url_via` (§2's `fluent`), `call_wrappers` (§2h) and `record_wrappers` (§2's
 `single_call`) entry is read as an `identified_by` entry — the same three fields, only the
 declaration site differs — so no catalog edit is forced and nothing changes behaviour (spec
-§2a step 1). The two WRAPPER keys name a type and an argument of its constructor, so they
+§2a step 1).
+*And the hoist is not a prelude to deleting those keys, which §2a step 2 originally was:
+the row's declaration keeps restricting which producers may identify its position, and
+`fluent` depends on that (the note at `channel_via` below carries the two guards that
+measured it). What the hoist deduplicates is the `arg` — one identity written on 124 rows
+is 18 identities, and `java.net.URI.create` alone is written out 26 times across five
+catalogs.* The two WRAPPER keys name a type and an argument of its constructor, so they
 hoist as that type's `<init>`, one entry per `<name>_ctor_arg` the block declares: a
 `record_wrappers` block declares two, and they are two claims about two arguments of one
 constructor — and each carries its **role**, read off that key's own prefix (`channel`,
@@ -1611,7 +1617,36 @@ record a destination nothing could send to plus a peer no messaging fact ever ca
 
 **`channel_via` reads a destination the consuming call's own argument position never names
 directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
-`createQueue`'s own argument, not `createProducer`'s. A row declaring it is `[{owner,
+`createQueue`'s own argument, not `createProducer`'s.
+
+> **WHAT THIS KEY MEANS SINCE 2026-10-17, and it is no longer a one-hop follow.** The
+> paragraphs below describe the mechanism as it shipped: one `source` link, to a call whose
+> `owner`+`method` a form names. Tasks 8 and 9 of the value-resolution work replaced that
+> follow with the backward value walk (`resolve/values.py`), which crosses as many links as
+> the code does and has no cap. **The ladder's ORDER is unchanged** — the literal argument
+> is still read first and the declaration is consulted only when that read did not resolve —
+> and so is the syntax, which is why this note exists rather than a rewrite.
+>
+> What the declaration now does is **restrict** rather than direct: it names the producers
+> that may identify this position, and still says which argument of them is the value. The
+> distance is the walk's; both of those are MEANING, which stays catalog data (spec §1e).
+> **So do not read a `channel_via` on a migrated catalog as "follow one hop".** It cannot
+> be deleted on the grounds that the walk replaced it, and spec §2a carries that correction.
+>
+> The restriction is load-bearing, and two shipped guards measured it. Given the whole
+> hoisted identity table instead of a row's own producers, `fluent` published a destination
+> the row's form never reached: `fluent.url-via-follows-only-a-declared-call` survived its
+> mutation and `test_an_element_no_declared_form_reaches_is_unresolved_on_its_own` failed.
+> `single_call` can safely read the shared table because Task 8 gave it a TYPE GATE keyed on
+> its rows' declared parameter type (`type-models/conformance.yml`); 22 of `fluent`'s 29 hop
+> rows declare no descriptor, so that gate cannot govern them and the row's own forms are
+> what remain. Even in `single_call` the row's declaration is still read, as the flag
+> deciding whether the walk is consulted at all.
+>
+> `arity`, `descriptor` and the first-match-wins order below all still hold, and they matter
+> MORE than before: an identity entry without the descriptor its form declares matches an
+> overload whose argument 0 is something else entirely, which is a wrong address at
+> `resolved`. A row declaring it is `[{owner,
 method, arg: int | "all_strings", arity?: int}]`, each form tried in the order written until
 one's `owner`+`method` (and `arity`, where the form names one — the linked call's argument
 count, which tells two overloads apart; §4's `url_via` is where it was first needed) reach
