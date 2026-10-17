@@ -192,12 +192,62 @@ those rows visible.
 Ordered by cost, and the first needs no ruling at all:
 
 1. **`OI-139`, the BOM chain** — 8 rows, the largest single win, and independent of everything
-   else here. Follow `<scope>import</scope>` transitively with a depth guard.
+   else here. See §5a: walk the chain to EXHAUSTION, never to a depth limit.
 2. **Ruling 1, locals only** — 1 row, and it proves the join end to end with no new fact.
 3. **§3, a binding's literal value** — 1 row, and the first extractor change.
 4. **Rulings 1+2 plus §4, discovery** — 3 rows, and the only part needing both rulings.
 
 Each step is a document the field pins can check, which is the point of the ordering.
+
+
+### 5a. The BOM walk runs to exhaustion, not to a depth limit
+
+**Ruled by the user 2026-10-17:** *"make sure that you track versions down the BOM chain, not
+just a few levels."* An earlier draft of this spec said "transitively with a depth guard", which
+is wrong in the same way the current one-level behaviour is wrong — it just fails at a different
+number, and it fails SILENTLY, reporting a dependency as unresolved when the version was three
+hops further down.
+
+**Terminate on cycles and on exhaustion. Never on a hop count.** The guard is a visited set of
+`groupId:artifactId:version`, which is what makes an exhaustive walk safe: a BOM graph can
+revisit a pom (several BOMs import a common parent) but cannot grow without bound, because every
+hop names a concrete coordinate and the set of coordinates in a repository is finite. A hop
+counter is a guess about other people's packaging, and it goes stale with any upstream release.
+
+**The walk covers two kinds of edge, because Maven's own resolution does:** `<parent>` links and
+`<scope>import</scope>` entries in `<dependencyManagement>`. A BOM inherits properties from its
+parent, so following imports alone resolves the artifact and then fails to expand its version.
+
+**Measured, 2026-10-17, on the real chain.** All four dependencies `api-gateway` reports as
+unresolved are managed at the same place — **depth 2** from the module's parent pom
+(one hop to `spring-cloud-dependencies`, one more to the component BOM):
+
+| dependency | managed by | hops |
+|---|---|---|
+| `spring-cloud-starter-gateway-server-webflux` | `spring-cloud-gateway-dependencies:5.0.0` | 2 |
+| `spring-cloud-starter-netflix-eureka-client` | `spring-cloud-netflix-dependencies:5.0.0` | 2 |
+| `spring-cloud-starter-config` | `spring-cloud-config-dependencies:5.0.0` | 2 |
+| `spring-cloud-starter-circuitbreaker-reactor-resilience4j` | `spring-cloud-circuitbreaker-dependencies:5.0.0` | 2 |
+
+Two is what this project needs today. Nothing about Maven bounds it at two, which is the whole
+argument for exhaustion: `spring-cloud-dependencies` imports **nine** component BOMs and manages
+no starter directly, and whether a future release adds another aggregation layer is not ours to
+predict.
+
+**And a trap found only by measuring: every one of those four is managed as
+`version: ${project.version}`.** That property must be expanded against **the pom that declares
+the managed dependency**, not the module being analysed. Here it resolves to `5.0.0`, the version
+of `spring-cloud-gateway-dependencies` — and the starter does exist in the repository at 5.0.0.
+Expanded in the analysed module's scope it would yield that module's own version (`4.0.1`) and a
+coordinate that does not exist. **That is worse than today's behaviour**, because today reports
+the dependency as unresolved and names it in `metadata.json`, while a wrongly-expanded property
+would resolve to a pom that is simply absent — or, worse, to a real pom at the wrong version.
+So property scope is part of this step's correctness, not a detail of it.
+
+**This step ships with a generated probe (CP-35)** recording the chain above and the
+`${project.version}` scope, on the same rule §7 states for every framework claim. The walk above
+was measured with a throwaway script; a probe that regenerates its own table is what the register
+can cite.
 
 ---
 

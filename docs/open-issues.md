@@ -367,9 +367,23 @@ catalog, not only the gateway's.
 .venv/bin/sextant module analyze examples/spring-petclinic-microservices
 grep dependencies_not_resolved -A6 examples/spring-petclinic-microservices/spring-petclinic-api-gateway/.sextant/metadata.json
 ```
-**Closes** by following `<scope>import</scope>` transitively, with a depth guard and a test
-for a two-level chain. **Falsified by** that module deriving four inbound and four outbound
-rows for its declared routes.
+**Closes** by walking the chain to EXHAUSTION — both `<parent>` links and
+`<scope>import</scope>` entries — guarded by a visited set of `groupId:artifactId:version` and
+**not by a hop count** (ruled by the user 2026-10-17: *"track versions down the BOM chain, not
+just a few levels"*; a depth cap fails silently at a different number). Measured: all four of
+this module's unresolved dependencies are managed at depth 2, each by a different component BOM
+that `spring-cloud-dependencies` imports — it imports nine and manages no starter itself.
+
+**And each is managed as `version: ${project.version}`**, which must expand against the pom
+DECLARING the managed dependency (`spring-cloud-gateway-dependencies:5.0.0` → `5.0.0`, which
+exists in the repository), never against the analysed module. Expanded in the wrong scope it
+yields that module's own version and a coordinate that does not exist — a silent wrong answer
+where today there is an honest `dependencies_not_resolved` entry, so property scope is part of
+the fix rather than a detail of it. Spec
+`docs/superpowers/specs/2026-10-17-outgoing-endpoint-addresses-design.md` §5a.
+
+**Falsified by** that module deriving four inbound and four outbound rows for its declared
+routes.
 
 ### OI-138 — outbound addresses are 1 of 6 on a real multi-service Spring Boot system
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` at `c649978a` · `src/sextant/application/resolve/shapes/arguments.py::channel_of_answer`, spec `2026-09-22-value-resolution-design.md` §6, `docs/components/D00-fact-schema.md` §5's `field_write`**
