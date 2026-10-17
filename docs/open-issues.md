@@ -309,6 +309,63 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-136 — the sixth edge is deferred: 16 of 756 asked positions, and the endpoints publish either way
+**Minor · entered 2026-10-17 · plan `2026-09-22-value-resolution.md` Tasks 11-12, spec §4 · probe `scripts/probes/cp33_binding_writes.md`**
+
+Capability 9.19 (`written_by` — a binding assigned outside an initialiser) and the task that
+wires it into `value_edges` are **deferred by ruling, not blocked**. The walk ships with five
+of its six edge kinds and `no_writer` is the honest answer at the sixth.
+
+**The yield, measured across all 27 corpora.** At positions a shipped catalog asks about:
+
+| | count |
+|---|---|
+| resolve as a literal at the call site | 537 |
+| resolve by crossing at least one edge | 203 |
+| …of which cross a caller or return boundary | 77 |
+| answer `no_writer` — what 9.19 would address | **16** |
+
+So the capability addresses **16 of 756** asked positions, about 2%.
+
+**And it costs no endpoint.** `call_sites`, `call_edges` and `return_flows` are read from
+bytecode, and endpoint rows come from annotations and matched call sites; value resolution
+fills in the ADDRESS column of a row that already exists. A field-held destination costs the
+address, never the endpoint — the row publishes with `path` NULL at `unresolved`, which is
+D02 §2's unresolved-is-an-answer working as designed.
+
+**What is NOT the gap, because it reads like it is.** "A value passed as a parameter" and "a
+compile-time constant" both resolve today. The walk follows a value out of one method into
+another — 77 crossings in this estate, e.g. `'pet'` reached through `Owner#getPet`'s return —
+and javac INLINES a `static final String TOPIC = "orders"` at every use site, so it arrives
+as a literal with no field read at all (`shapes/identity_calls.py`). The gap is narrower:
+**a value stored into a mutable field in one method and read in another.**
+
+**Two things settled while deferring it, both recorded so they are not re-litigated.**
+
+*A field with several writers is not a hazard.* It is several POSSIBLE values, and ruling 1
+(multiplicity) already says several enumerable answers yield one row per answer — so the
+rows publish each possibility rather than picking one. This was raised as a fabrication risk
+and it is not one; the design answers it.
+
+*A literal assigned in a method body is a code fact, not configuration.* An argument was
+made that resolving `this.topic = "default"` in `@PostConstruct` would assert a property of
+the running system under §8.2. That is wrong: §8.2 bounds CONFIGURATION a deployment
+overrides, and a literal in a method body is a code fact like any literal at a call site.
+Applied consistently that argument would forbid reading call-site literals, which is most of
+what the system does.
+
+**The probe is already written and committed**, so whoever picks this up does not re-measure:
+`cp33_binding_writes.md` records that a setter presents the existing `ALOAD 0; xLOAD k;
+PUTFIELD` triple verbatim (so the capability is a guard removal plus a per-method
+`firstSlot`, since a static method's parameters start at slot 0); that `@PostConstruct` and
+static initialisers assign CONSTANTS, which `{field, from_parameter}` cannot express; and
+that a computed assignment never presents the triple, so "direct traces only" holds outside
+`<init>` for free.
+
+**Closes when** someone wants those 16 addresses enough to add an extractor capability, or
+when a corpus arrives where the count is materially larger. The yield is what makes this
+Minor; the work is understood and the probe is done.
+
 ### OI-42 — a class file above the ceiling is refused, and the refusal kills the whole scan
 **Critical · pre-existing, entered here 2026-09-06 · `docs/java-kotlin-delivery-list.md`
 `G-3` (audit 4 `F1`), root cause `RC-6`**

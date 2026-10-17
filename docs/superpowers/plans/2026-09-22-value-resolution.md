@@ -384,9 +384,19 @@ Every `would_resolve` row is a candidate new claim. **Read them all before chang
 
 ---
 
-## Task 11: Capability 9.19 — binding writes outside an initialiser
+## Task 11: Capability 9.19 — binding writes outside an initialiser · **DEFERRED, `OI-136`**
 
-**A separate track.** It is the only edge with no fact, and a wrong binding-write fact fabricates silently everywhere.
+**Deferred by ruling on 2026-10-17, after its probe.** Step 1 was run and is committed
+(`scripts/probes/cp33_binding_writes.md`); the rest is not. MEASURED: the capability addresses
+**16 of 756** asked positions, about 2%, and costs no endpoint — endpoint rows come from annotations
+and matched call sites, so a field-held destination loses its ADDRESS, not its row. "A value passed as
+a parameter" and "a compile-time constant" both already resolve (77 caller/return crossings in the
+estate; javac inlines compile-time constants at the use site). The gap is only a value stored into a
+mutable field in one method and read in another. `OI-136` carries the yield, the probe's findings, and
+two questions settled while deferring: several writers are several POSSIBLE values rather than a
+hazard (ruling 1 answers it), and a literal in a method body is a code fact rather than configuration.
+
+**Was: a separate track.** It is the only edge with no fact, and a wrong binding-write fact fabricates silently everywhere.
 
 **Files:**
 - Modify: `extractor-jvm/…`
@@ -400,7 +410,9 @@ Every `would_resolve` row is a candidate new claim. **Read them all before chang
 
 ---
 
-## Task 12: Wire the sixth edge
+## Task 12: Wire the sixth edge · **DEFERRED with Task 11, `OI-136`**
+
+There is no fact to wire until 9.19 exists, so this defers with it rather than on its own merits.
 
 - [ ] Add the `written_by` arm to the view, resolve through it, and pin the cross-method case — a reference obtained in one method and used in another, which is `akka-pekko-actors`' shape.
 - [ ] Measure and report what newly resolves; the same read-every-conversion discipline as Tasks 7–9.
