@@ -372,15 +372,36 @@ Every `would_resolve` row is a candidate new claim. **Read them all before chang
 
 ---
 
-## Task 10: Delete the hop declarations, then refuse the keys
+## Task 10: Refine the keys, relocate what duplicates, close the vocabulary
 
-**This is the step that makes the design hold** (spec §2a step 3, §5b). A design that merely recommends the new way decays: a new catalog author copies the nearest example.
+**Rewritten 2026-10-17, after Tasks 8 and 9 shipped** (user ruling: "add a refinement to keys rather
+than delete"). It read *"Delete the hop declarations, then refuse the keys"*, and both halves rested
+on those keys being redundant once the walk runs. They are not — spec §2a now carries the reasoning
+and the two guards that measured it, and the short version is that the walk replaced the DISTANCE half
+of `channel_via` while the MEANING half stayed on the row, load-bearing, as the restriction on which
+producers may identify a position.
 
-- [ ] **Step 1:** delete the now-redundant `channel_via` / `url_via` / `call_wrappers` / `record_wrappers` declarations from the migrated catalogs. **Four keys, not three, and 19 catalogs, not 14** — spec §0's table carries the correction and why (ruled 2026-09-23, Task 6: the original enumeration omitted `record_wrappers`, which three `single_call` catalogs declare and which Task 8's own "13 catalogs" already counted).
-- [ ] **Step 2:** make the loader **refuse** those keys with a `CatalogError` naming the file and pointing at `value-models/`, the way every closed vocabulary here is enforced.
-- [ ] **Step 3:** a test that the refusal fires, and that the error names the replacement.
-- [ ] **Step 4:** confirm **no row moves** — the hoist already made these declarations redundant, so deleting them is cosmetic. Any movement means a migration was incomplete.
-- [ ] **Step 5: Commit.**
+**And the old plan would not have protected what it claimed.** MEASURED: a catalog carrying an
+invented `invented_hop_via` block loads clean — all 101 parse, the key silently ignored — so refusing
+four keys by name never barred an eighth word. A closed key set does.
+
+- [ ] **Step 1:** relocate the `arg` of every identity declared once per CONSUMER into
+      `value-models/`, declared once per PRODUCER with its probe. That is the duplication §2a step 1
+      exists to end — twelve rows of one shipped catalog carry the same pair between them — and it is
+      the only part of the old Step 1 that survives. The ROW keeps naming its producers.
+- [ ] **Step 2:** make the loader refuse any key a style does not declare, with a `CatalogError`
+      naming the file, the key and the style's own vocabulary. This is the step that makes the design
+      hold, and unlike its predecessor it enforces rather than deters.
+- [ ] **Step 3:** a test that the refusal fires on an invented key, and one that a REDEFINED
+      `channel_via`/`url_via` still loads — the second is what keeps a future reader from "tidying"
+      the keys away again.
+- [ ] **Step 4:** document the keys' changed meaning where a catalog author will read it (D02), since
+      the syntax is unchanged and only the semantics moved. A `channel_via` on a migrated catalog is
+      not a one-hop follow and nothing in the file says so today.
+- [ ] **Step 5:** confirm **no row moves**. Unlike the old Step 4 this is a real check rather than a
+      restatement: relocating an `arg` must leave every destination where it was, and any movement
+      means an identity was declared differently in its new home.
+- [ ] **Step 6: Commit.**
 
 ---
 
