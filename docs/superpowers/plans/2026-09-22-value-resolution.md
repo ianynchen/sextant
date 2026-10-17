@@ -385,10 +385,15 @@ producers may identify a position.
 invented `invented_hop_via` block loads clean — all 101 parse, the key silently ignored — so refusing
 four keys by name never barred an eighth word. A closed key set does.
 
-- [ ] **Step 1:** relocate the `arg` of every identity declared once per CONSUMER into
-      `value-models/`, declared once per PRODUCER with its probe. That is the duplication §2a step 1
-      exists to end — twelve rows of one shipped catalog carry the same pair between them — and it is
-      the only part of the old Step 1 that survives. The ROW keeps naming its producers.
+- [x] ~~relocate the `arg` of every identity into `value-models/`~~ — **SPLIT OUT 2026-10-17 as
+      `OI-134`, not done here.** Measured first: 124 row-level declarations carry 18 distinct
+      identities, and every `value-models/` entry must carry `by:`, the measurement behind its claim.
+      Reading all 18 against the probe files, only **8** have evidence stating the claim; 4 have the
+      signature measured and not the claim; **6 have none**. So 10 need a measurement before they can
+      be moved honestly, and citing a probe that does not state the claim is the one thing `by` exists
+      to prevent. Nothing is broken meanwhile — the loader already folds all 124 into one table — and
+      this deduplicates ONE FIELD, since the rows must keep naming their producers either way.
+      `OI-134` carries the tally, the near-miss citation to avoid, and the two riskiest entries.
 - [ ] **Step 2:** make the loader refuse any key a style does not declare, with a `CatalogError`
       naming the file, the key and the style's own vocabulary. This is the step that makes the design
       hold, and unlike its predecessor it enforces rather than deters.

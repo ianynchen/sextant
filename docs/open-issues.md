@@ -309,6 +309,51 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-134 — one identity is written on up to 26 rows, and 10 of the 18 cannot move without a measurement
+**Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a, `value-models/`**
+
+**Not a defect, and nothing is broken.** The loader already folds every row-level hop
+declaration into one identity table, so the engines see the same 18 identities whichever way
+they are written. This is a maintenance hazard, logged rather than fixed because no input
+triggers it.
+
+**The duplication, measured.** 124 row-level `channel_via`/`url_via` declarations across the
+shipped catalogs carry only **18 distinct identities** between them. `java.net.URI.create`
+and `java.net.URI.<init>` are each written out on **26 rows across 5 files**;
+`jakarta.jms.Session.createTopic` on 12 rows of one file. Only 3 of the 18 are declared by a
+single row. The hazard is ordinary drift: edit one of the 26 `URI` rows and not the others
+and they disagree, with nothing to catch it.
+
+**The proposed fix.** `value-models/` exists to hold each identity once, and 2 of the 18 are
+already there. Move the rest in, and drop `arg` from the rows. **The rows keep naming their
+producers** — `{owner, method}` stays, because that is the restriction `fluent` depends on
+(spec §2a, and D02's note at `channel_via` carries the two guards that measured it). So this
+deduplicates ONE FIELD out of 124 rows; all 124 rows remain.
+
+**Why it is not done yet, which is the substance of this entry.** Every `value-models/` entry
+must carry `by:` — the measurement behind the claim — and that requirement is stated there as
+the whole reason the directory exists. All 18 were checked by reading the probe files:
+
+| | count | state |
+|---|---|---|
+| real evidence stating the claim | **8** | `URI.create`/`<init>` (`a2t8` expectation 3, and already relocated); `Subscriptions.topics`/`topicPattern` (`w62` row 2); `MessageConsumerOptions.setAddress` (`cp31` 5a/5b, two vertx versions); `ConsumerProperties`/`ContainerProperties`/`amqp.core.Queue` constructors (`cp27` row 13 + §§162,167) |
+| signature measured, claim not | **4** | both `jakarta.jms` and both `javax.jms` `createQueue`/`createTopic`. `w11` measured the descriptor `(String) -> Queue`; no probe states the PRODUCING claim. **CP-12 row 9 is a near-miss and must not be cited for it** — "`jakarta.jms.Session`'s receiver factories, every one taking its destination at argument 0" is about `createConsumer` taking a `Destination`, not about `createQueue` taking a name |
+| no evidence at all | **6** | `List.of`, `Arrays.asList`, `Collections.singletonList`, `Pattern.compile` (JDK API contracts, currently folk knowledge); `TopicName.of`, `ProjectSubscriptionName.of` |
+
+So **10 of 18 need a measurement first**, and citing an existing probe that does not state the
+claim is the one thing `by` exists to prevent — a reader trusts an entry *because* of its
+citation, so a wrong one stops the checking rather than merely failing to help.
+
+**Riskiest of the ten**: `TopicName.of(project, topic)` and
+`ProjectSubscriptionName.of(project, subscription)` take their identity at argument **1**. An
+off-by-one there publishes a PROJECT ID as a topic name — a wrong address at `resolved`.
+`ProjectSubscriptionName.of` has no probe line mentioning it at all.
+
+**Closes when** the 10 are measured and all 18 sit in `value-models/` with honest citations.
+Best taken by whoever is next working on one of those frameworks with the jar already open,
+which is when the measurement is cheap and sound; written now, by someone not otherwise
+touching them, is the circumstance an asserted-from-memory claim slips in.
+
 ### OI-42 — a class file above the ceiling is refused, and the refusal kills the whole scan
 **Critical · pre-existing, entered here 2026-09-06 · `docs/java-kotlin-delivery-list.md`
 `G-3` (audit 4 `F1`), root cause `RC-6`**
