@@ -415,9 +415,19 @@ four keys by name never barred an eighth word. A closed key set does.
 
 ---
 
-## Task 11: Capability 9.19 — binding writes outside an initialiser
+## Task 11: Capability 9.19 — binding writes outside an initialiser · **DEFERRED, `OI-136`**
 
-**A separate track.** It is the only edge with no fact, and a wrong binding-write fact fabricates silently everywhere.
+**Deferred by ruling on 2026-10-17, after its probe.** Step 1 was run and is committed
+(`scripts/probes/cp33_binding_writes.md`); the rest is not. MEASURED: the capability addresses
+**16 of 756** asked positions, about 2%, and costs no endpoint — endpoint rows come from annotations
+and matched call sites, so a field-held destination loses its ADDRESS, not its row. "A value passed as
+a parameter" and "a compile-time constant" both already resolve (77 caller/return crossings in the
+estate; javac inlines compile-time constants at the use site). The gap is only a value stored into a
+mutable field in one method and read in another. `OI-136` carries the yield, the probe's findings, and
+two questions settled while deferring: several writers are several POSSIBLE values rather than a
+hazard (ruling 1 answers it), and a literal in a method body is a code fact rather than configuration.
+
+**Was: a separate track.** It is the only edge with no fact, and a wrong binding-write fact fabricates silently everywhere.
 
 **Files:**
 - Modify: `extractor-jvm/…`
@@ -431,25 +441,63 @@ four keys by name never barred an eighth word. A closed key set does.
 
 ---
 
-## Task 12: Wire the sixth edge
+## Task 12: Wire the sixth edge · **DEFERRED with Task 11, `OI-136`**
+
+There is no fact to wire until 9.19 exists, so this defers with it rather than on its own merits.
 
 - [ ] Add the `written_by` arm to the view, resolve through it, and pin the cross-method case — a reference obtained in one method and used in another, which is `akka-pekko-actors`' shape.
 - [ ] Measure and report what newly resolves; the same read-every-conversion discipline as Tasks 7–9.
 
 ---
 
-## Task 13: Docs, register, COVERAGE, open issues
+## Task 13: Docs, register, COVERAGE, open issues · **DONE 2026-10-17**
 
-- [ ] `OI-124`, `OI-126`, `OI-110` close, each citing the test that proves it.
-- [ ] COVERAGE's boundary statements for the affected rows are **generated from `value_resolutions`** rather than hand-written (spec §3d).
-- [ ] D02 documents `value-models/`; D00 documents capability 9.19.
-- [ ] The register records what closed and what did not — including, honestly, whether `akka-pekko-actors` moved off "possibly permanent" or merely became tier B.
-- [ ] `scripts/coverage_matrix.py --check` passes.
+> **The first bullet was WRONG and the task's main finding is that it was wrong.** It said
+> three issues close. None of them does, and the spec's own "What it closes" line named all
+> three. Each was measured rather than re-asserted, each entry now carries the measurement,
+> and the spec is corrected in place. A task that had ticked this bullet by closing them on
+> the plan's authority would have published three false closures.
+
+- [x] `OI-124`, `OI-126`, `OI-110` **stay open, each with the measurement that says why** — not
+  the test that proves closure, because there is none. `OI-110`: measured on
+  `spring-integration-probe`, the queue literal one bean away answers `would_resolve` while
+  the `@Bean` parameter that needs it answers `external`, because a container-bound parameter
+  has no call site and so no `bound_to_parameter` edge — a bean-graph hop, not a value edge.
+  `OI-126`: what is lost is the chain's ROOT, not a value, and a value walk cannot supply one.
+  `OI-124`: needs the cross-engine attachment its own entry already said does not exist.
+- [x] COVERAGE §3c is **generated from `value_resolutions`** (`scripts/value_boundaries.py`,
+  gated by `tests/architecture/test_value_boundaries.py`): 481 answered and 474 unresolved
+  positions over 18 built fixtures, per catalog and per reason. The prose half of a boundary
+  statement — which FORMS a catalog does not read — stays prose, and §3c says so.
+- [x] D02 §1f documents `value-models/` (Task 6). D00 records capability **9.19 as deferred**
+  with the probe's three-row scoping table, rather than documenting a capability nobody built.
+- [x] The register records what closed and what did not, and **`akka-pekko-actors` moved
+  neither way**: still C, possibly permanent — but now measured instead of assumed. Probe
+  row 7, added here, shows an `ActorRef` from `system.actorOf(...)` is a field assigned a
+  CALL'S RESULT, so the triple `field_write` matches never presents and capability 9.19 would
+  not have closed that row. Spec §4's claim that it would is withdrawn in place.
+- [x] `OI-137` entered — CI installs with `pip install -e ".[dev]"` and ignores `uv.lock`,
+  which is how a `graphql-core` release broke an untouched file on #38. **Major, and still
+  unfixed**: it is CI configuration, GUIDELINES §7.
+- [x] `scripts/coverage_matrix.py --check`, `coverage_versions.py --check` and
+  `value_boundaries.py --check` all pass.
 
 ---
 
 ## Task 14: Finish
 
+- [x] **Re-run `python scripts/value_boundaries.py --measure` after #39 merges, before #40.**
+  DONE 2026-10-17 at `c649978a`, and the prediction held exactly: `spring-integration-kafka`
+  moved 8 -> 10 answered, the +2 from its two `Pattern` rows, and §3c's total 481 -> 483.
+  `--check` passed BEFORE the re-measure, which is the blind spot this step exists for.
+  Task 13's §3c block was measured on `spec/binding-writes`, which is branched off `main`
+  and does NOT contain Tasks 9-10. #39 takes `spring-integration-kafka` from 41 asks to 43
+  (the two `Pattern` rows gained a `channel_via`), so §3c's figures move when it lands.
+  **`test_value_boundaries.py` will not catch this** — it compares the document against the
+  snapshot, and both would be consistently stale. The alarm that does fire is
+  `test_shadow_mode.py::test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell`,
+  whose `_ASKS_PER_CATALOG` baseline #39 already updated. Written down here because the two
+  branches are independent and nothing else in either one says it.
 - [ ] Full gate and `--guards`.
 - [ ] Amend the spec with anything implementation forced, in the voice §0c uses.
 - [ ] Use superpowers:finishing-a-development-branch. **Do not merge without the user.**

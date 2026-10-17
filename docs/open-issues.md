@@ -309,6 +309,283 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing
+**Major · entered 2026-10-17, measured on `spring-petclinic-microservices` · `src/sextant/ingress/detect/` Maven version resolution, `src/sextant/catalogs/spring-cloud-gateway-properties.yml` `detect.coordinates`**
+
+**Measured on Spring's own reference microservice app.** `spring-petclinic-api-gateway`
+declares four routes in `application.yml`, and all 24 config entries are read into
+`config_entries` — every `uri: lb://…` and every `Path=…` predicate is present in the
+workspace:
+
+```
+spring.cloud.gateway.server.webflux.routes[0].uri          lb://vets-service
+spring.cloud.gateway.server.webflux.routes[0].predicates[0] Path=/api/vet/**
+…routes[1] visits-service · routes[2] customers-service · routes[3] genai-service
+```
+
+**Nothing derives from any of them, in either direction.** Not the four inbound paths the
+gateway serves, not the four outbound targets it forwards to. That is the entire
+service-to-service topology of the application — eight rows — and the document shows none of
+it. (In the pinned corpus the four `lb://` routes appear only in an LLM *enrichment*
+paragraph, which is evidence of the gap rather than cover for it.)
+
+**TWO causes, both small, both PROVEN end to end 2026-10-17 by a throwaway patch that was
+measured and reverted: 6 endpoints → 14, every one of the eight missing rows appearing as
+`resolved`.** *(This entry first named "one level of BOM import is followed, a chain is not".
+That was wrong — inferred from the symptom instead of read from the code. Nested imports,
+BOM-scoped properties and a depth cap of 16 are all already implemented and correct.)*
+
+**Cause 1 — `${project.version}` is a Maven BUILT-IN that `_interpolated` does not define.**
+`detect/maven.py::_interpolated` substitutes only from a pom's `<properties>` block, so
+`${project.version}` never resolves and returns `None`. `_managed_versions` then does this:
+
+```python
+settled = _interpolated(managed_raw, bom_properties)
+if settled is not None:
+    imported.setdefault(managed_coordinate, settled)
+```
+
+No `else`. **The managed entry is dropped with no message**, which is why the symptom read as
+"the BOM was never opened". Measured: every one of the four dependencies this module reports
+unresolved is managed as `version: ${project.version}` — 6 of 8 entries in
+`spring-cloud-gateway-dependencies`, 4 of 29 in `spring-cloud-netflix-dependencies`, 4 of 13 in
+`spring-cloud-config-dependencies`, 5 of 8 in `spring-cloud-circuitbreaker-dependencies`.
+It is the standard way a Spring Cloud component BOM versions its own artifacts.
+
+Injecting `project.version` into the BOM's own property scope (the version the import names)
+took `dependencies_not_resolved` from **4 to 0**.
+
+**Cause 2 — the catalog's `detect.coordinates` omits the new starter name.** With the versions
+resolved the catalog was still skipped, and `metadata.json` named the reason exactly:
+
+> a build declaration of one of `spring-cloud-gateway-server-webflux`,
+> `spring-cloud-starter-gateway`, `spring-cloud-gateway-server` — this module's build declares
+> and inherits none of them
+
+The module declares **`spring-cloud-starter-gateway-server-webflux`**, the 5.0.0 starter, which
+is none of those three (`spring-cloud-starter-gateway` is the pre-5.0 name). A transitive-only
+arrival is deliberately not counted, so the starter must be listed. COVERAGE already carries
+this half as `gateway-detect-4x-coordinate`, Minor — the register read it as cosmetic because
+nobody had measured what it costs.
+
+Adding the coordinate, on top of cause 1, produced all eight rows:
+
+| direction | derived |
+|---|---|
+| inbound | `/api/customer/**`, `/api/genai/**`, `/api/vet/**`, `/api/visit/**` |
+| outbound | `lb://customers-service`, `lb://genai-service`, `lb://vets-service`, `lb://visits-service` |
+
+**On the grade.** Major, and the grade is about cause 1: a silently dropped managed version makes
+every gated catalog miss on any Spring Cloud module that versions through the documented BOM, not
+only this one. Cause 2 is one line in one catalog.
+
+**What happens today:** a Spring Cloud module pinning versions the documented way reports four
+dependencies unresolved and derives nothing from any catalog gated on them.
+
+**Verify:**
+```
+.venv/bin/sextant module analyze examples/spring-petclinic-microservices/spring-petclinic-api-gateway
+.venv/bin/python -c "import json;print(json.load(open('…/.sextant/metadata.json'))['skipped_catalogs'])"
+```
+**Closes** by defining Maven's built-in `project.*` properties per pom as the inheritance walk
+visits it, by REPORTING a managed entry whose version cannot be interpolated instead of dropping
+it, and by listing the 5.0.0 starter in the catalog. The walk itself needs no change: it already
+follows `<parent>` links and `<scope>import</scope>` entries to a depth of 16, and this chain is
+2. Spec `docs/superpowers/specs/2026-10-17-outgoing-endpoint-addresses-design.md` §5a.
+
+**Falsified by** that module deriving four inbound and four outbound rows for its declared
+routes.
+
+### OI-138 — outbound addresses are 1 of 6 on a real multi-service Spring Boot system
+**Major · entered 2026-10-17, measured on `spring-petclinic-microservices` at `c649978a` · `src/sextant/application/resolve/shapes/arguments.py::channel_of_answer`, spec `2026-09-22-value-resolution-design.md` §6, `docs/components/D00-fact-schema.md` §5's `field_write`**
+
+**Measured, on eight built modules of a real Spring Boot microservice system:**
+
+| | derived | resolved |
+|---|---|---|
+| inbound | 17 | **17 — 100%** |
+| outbound | 6 | **1 — 17%** |
+
+The inbound half is complete. The one outbound that resolved,
+`GET /owners/{ownerId}` from `spring-petclinic-api-gateway`, matches
+`spring-petclinic-customers-service`'s own inbound row — **so the service-to-service link
+mechanism works**; five of six addresses are simply unreadable. And the one that worked is
+the only one written as a plain literal: `.uri("http://customers-service/owners/{ownerId}",
+ownerId)`.
+
+**Why this was not visible before.** No field pin exercised an outbound address. The three
+pinned upstreams are inbound-only *because the upstreams are* — `jhipster-sample-app` and
+`spring-petclinic-rest` contain no `RestTemplate`/`WebClient`/`@FeignClient`, and `mall`'s
+eleven are in `mall-demo` rather than the pinned `mall-admin`. So every "what would this
+buy" figure measured over fixtures plus these corpora was weighted toward inbound, which is
+how `OI-136` priced a capability at 2% that is a third of this system's outbound column.
+**Closed as of this entry**: `petclinic-api-gateway` and `petclinic-genai-service` are now
+pinned, so a change here moves a field number.
+
+**Four distinct causes, each with its own closure. They interlock — the second fills the
+first's hole — which is why they are one entry.**
+
+**1. A concatenation is never evaluated, even when every operand resolves.** Affects **5 of
+6**. The walk already does the hard part: on `VisitsServiceClient#getVisitsForPets` the
+shadow table holds `answer_kind: expression`, `value: {}pets/visits?petId={petId}`,
+`outcome: would_resolve`. `channel_of_answer` then refuses it — *"a template is not [a
+destination], and filling a hole is what §8.2 forbids"* — and `path` publishes NULL rather
+than the template. **Closes** by a ruling on spec §6: §8.2 bounds CONFIGURATION a deployment
+overrides, and a field initialiser's literal is a code fact, so evaluating a concatenation
+all of whose operands resolved to code literals fills no deployment hole. The narrow version
+publishes the template; the full version evaluates it.
+
+**2. `field_write` cannot carry a constant, only `from_parameter`.** Affects **1 of 6** — the
+hole in cause 1's template. `private String hostname = "http://visits-service/"`. **This is
+NOT capability 9.19 and not what `OI-136` deferred**: measured at `cp33_binding_writes.md`
+row 8, a field initialiser compiles to `aload_0; invokespecial; aload_0; ldc; putfield` —
+inside `<init>`, so the existing constructor filter already passes it. The fact grammar is
+the whole obstacle. **Closes** by `field_write` carrying a constant value beside the
+parameter ordinal — strictly smaller than lifting the `<init>` guard. With cause 1, this
+yields `http://visits-service/pets/visits?petId={petId}` from code facts alone, which
+matches `spring-petclinic-visits-service`'s own inbound rows.
+
+**3. `DiscoveryClient` is catalogued nowhere.** Affects **4 of 6**.
+`discoveryClient.getInstances("customers-service").get(0).getUri()` answers `external` —
+correctly, the URL is assigned at runtime. But **the service NAME is a literal argument we
+already read**, and a peer of `customers-service` with path `/owners` is exactly what an
+architecture document wants. Only Spring Cloud Gateway's `lb://` form is modelled
+(`spring-cloud-gateway-outbound.yml`). **Closes** with one catalog reading
+`getInstances(String)`/`DiscoveryClient` into `peer` — tier A, one YAML and a probe.
+
+**4. The field corpus could not see any of this.** **Closed by this entry** (two pins above).
+
+**What happens today:** a Spring Boot service that holds a peer's base URL in a field or
+builds a URL by concatenation exports an outbound row with `path` NULL. The call is
+reported; where it goes is not.
+
+**Real triggering input:** ordinary, and arguably the common case — `spring-petclinic-microservices`
+is Spring's own reference microservice sample, and 5 of its 6 outbound calls are written
+this way.
+
+**On the grade.** Major: no row is WRONG, but the outbound column is the half of the document
+that answers *what does this service call*, and it is 17% resolved on the only real system we
+measure it against. Under-reporting at this magnitude on the product's central question is
+not a stated boundary.
+
+**Verify:** `.venv/bin/python scripts/field_check.py petclinic-api-gateway petclinic-genai-service`,
+then `grep -n "an \`expression\` is" -A 3 src/sextant/application/resolve/shapes/arguments.py`.
+**Falsified by** an outbound row on that system carrying a resolved path for
+`VisitsServiceClient` or `AIDataProvider`.
+
+### OI-137 — CI does not read `uv.lock`, so an upstream release breaks a file the branch never touched
+**Major · entered 2026-10-17, measured on PR #38 on 2026-10-16 · `.github/workflows/pr.yml:43`, `pyproject.toml:17`, `:40`**
+
+CI installs with `pip install -e ".[dev]"`. That **ignores `uv.lock`** and resolves the
+newest release satisfying each floor in `pyproject.toml`, and the floors are loose:
+`graphql-core>=3.2.6`, `mypy>=1.10`, `ruff>=0.5`, `import-linter>=2.0`. The local `.venv`
+resolves from the lock. **They are therefore not the same environment**, and a green local
+gate is not evidence about CI.
+
+**It has already happened once, and the symptom is misleading.** `graphql-core` 3.3.0 made
+`EnumTypeDefinitionNode.values` `tuple[...] | None`. CI resolved 3.3.0, this machine had
+3.2.12, and mypy failed in `ingress/interpret/graphql_sdl.py` — a file the branch had not
+touched, and broken on `main` too, whose last green run was three weeks earlier. The full
+local gate had passed: 4088 tests, mypy on 133 files, guards 161/0. The fix that landed
+(`de6c3a2b`) corrected the one call site; the cause is untouched.
+
+**On the grade.** Major, because the failure is a wrong RESULT rather than a miss: the gate
+reports a branch as broken on the strength of a file it did not change, and the honest signal
+— does this branch pass? — is unavailable until someone diagnoses it. It also degrades with
+time rather than staying put: every loose floor is a future failure on an unrelated file,
+arriving whenever an upstream release lands.
+
+**What happens today:** every PR's gate result depends on what PyPI published that week.
+
+**Real triggering input:** ordinary — an upstream minor release.
+
+**Verify:** `grep -n "pip install" .github/workflows/pr.yml` beside
+`grep -n "graphql-core" pyproject.toml`, then compare against the lock's pin.
+**Closes** by CI installing the resolved set (`uv sync --frozen`, with the lock as the
+single source of truth for both environments). **It is CI configuration, which GUIDELINES
+§7 puts out of scope without the user's explicit instruction** — raised 2026-10-16, raised
+again here, and entered in the register so it stops living in commit messages. Falsified by
+a CI run whose installed `graphql-core` matches `uv.lock`.
+
+### OI-136 — the sixth edge is deferred: 16 of 756 asked positions, and the endpoints publish either way
+**Minor · entered 2026-10-17 · plan `2026-09-22-value-resolution.md` Tasks 11-12, spec §4 · probe `scripts/probes/cp33_binding_writes.md`**
+
+Capability 9.19 (`written_by` — a binding assigned outside an initialiser) and the task that
+wires it into `value_edges` are **deferred by ruling, not blocked**. The walk ships with five
+of its six edge kinds and `no_writer` is the honest answer at the sixth.
+
+**The yield, measured across all 27 corpora.** At positions a shipped catalog asks about:
+
+| | count |
+|---|---|
+| resolve as a literal at the call site | 537 |
+| resolve by crossing at least one edge | 203 |
+| …of which cross a caller or return boundary | 77 |
+| answer `no_writer` — what 9.19 would address | **16** |
+
+So the capability addresses **16 of 756** asked positions, about 2%.
+
+**And it costs no endpoint.** `call_sites`, `call_edges` and `return_flows` are read from
+bytecode, and endpoint rows come from annotations and matched call sites; value resolution
+fills in the ADDRESS column of a row that already exists. A field-held destination costs the
+address, never the endpoint — the row publishes with `path` NULL at `unresolved`, which is
+D02 §2's unresolved-is-an-answer working as designed.
+
+**What is NOT the gap, because it reads like it is.** "A value passed as a parameter" and "a
+compile-time constant" both resolve today. The walk follows a value out of one method into
+another — 77 crossings in this estate, e.g. `'pet'` reached through `Owner#getPet`'s return —
+and javac INLINES a `static final String TOPIC = "orders"` at every use site, so it arrives
+as a literal with no field read at all (`shapes/identity_calls.py`). The gap is narrower:
+**a value stored into a mutable field in one method and read in another.**
+
+**Two things settled while deferring it, both recorded so they are not re-litigated.**
+
+*A field with several writers is not a hazard.* It is several POSSIBLE values, and ruling 1
+(multiplicity) already says several enumerable answers yield one row per answer — so the
+rows publish each possibility rather than picking one. This was raised as a fabrication risk
+and it is not one; the design answers it.
+
+*A literal assigned in a method body is a code fact, not configuration.* An argument was
+made that resolving `this.topic = "default"` in `@PostConstruct` would assert a property of
+the running system under §8.2. That is wrong: §8.2 bounds CONFIGURATION a deployment
+overrides, and a literal in a method body is a code fact like any literal at a call site.
+Applied consistently that argument would forbid reading call-site literals, which is most of
+what the system does.
+
+**The probe is already written and committed**, so whoever picks this up does not re-measure:
+`cp33_binding_writes.md` records that a setter presents the existing `ALOAD 0; xLOAD k;
+PUTFIELD` triple verbatim (so the capability is a guard removal plus a per-method
+`firstSlot`, since a static method's parameters start at slot 0); that `@PostConstruct` and
+static initialisers assign CONSTANTS, which `{field, from_parameter}` cannot express; and
+that a computed assignment never presents the triple, so "direct traces only" holds outside
+`<init>` for free.
+
+**One claim the spec made for this capability is WITHDRAWN, measured 2026-10-17** (probe
+row 7, added at Task 13). Spec §4 says the sixth edge *"is what closes
+`akka-pekko-actors`"*. It does not. `ActorRef ref = system.actorOf(props, "worker")`
+assigns a CALL'S RESULT, and `javap` shows `aload_0; aload_1; iconst_0; invokeinterface;
+checkcast; putfield` — a call between the receiver load and the `putfield`, so the
+`ALOAD 0; xLOAD k; PUTFIELD` triple never presents, exactly as it does not for
+`@PostConstruct`'s `ldc`. A setter-injected `ActorRef` would be reached; one from the
+factory the framework's own documentation uses would not. **So that framework's tier does
+not move on this capability**, and the spec is corrected rather than left to be read as a
+promise (`docs/COVERAGE.md` §5.12, `docs/java-kotlin-delivery-list.md`'s
+`akka-pekko-actors` row).
+
+**THE YIELD FIGURE ABOVE IS CORPUS-BIASED, measured 2026-10-17 — read `OI-138` beside
+it.** "16 of 756" was computed over the fixtures and the three field pins, and **not one of
+those pins contains a single outbound call** (the upstreams genuinely make none). On
+`spring-petclinic-microservices`, Spring's own reference microservice sample, the outbound
+column is 1 of 6 resolved and field-held or concatenated addresses are what cost the other
+five. The deferral still stands — this entry's capability (a write OUTSIDE an initialiser)
+is not what that system needs; `OI-138` cause 2 is, and that one is INSIDE `<init>` and
+strictly smaller. But the 2% was measured on a corpus that could not see the half of the
+product the question was about, and that is recorded here rather than left for the next
+person to re-derive.
+
+**Closes when** someone wants those 16 addresses enough to add an extractor capability, or
+when a corpus arrives where the count is materially larger. The yield is what makes this
+Minor; the work is understood and the probe is done.
 ### OI-135 — an invented hop key loads silently, and neither cheap way of closing that works
 **Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a step 3, §5b**
 
@@ -1945,7 +2222,27 @@ unresolved, as pinned; nothing references it.
 **Real triggering input:** the Spring AMQP style that declares `Queue` beans for auto-declaration
 and injects them into the container.
 
-**Verify:** `grep -n "second_hop\|bean_second_hop" src/sextant/application/resolve/engines/fluent.py`.
+**STILL OPEN after the value walk, and the measurement says why** (Task 13, 2026-10-17).
+The walk named in spec 2026-09-22 was expected to close this and does not. Measured on
+`fixtures/spring-integration-probe` with `--shadow`:
+
+| position | answer |
+|---|---|
+| `AmqpTopologyBeans#topologyContainer`@1 slot 0 — the `setQueues(topologyOrdersQueue)` argument | `unresolved(external)` |
+| `AmqpTopologyBeans#topologyOrdersQueue`@0 slot 0 — the `new Queue("topology.orders.queue")` literal | `would_resolve` → `topology.orders.queue` |
+
+**The value is one bean away and readable; the walk cannot get to it, and the reason is
+structural rather than a missing edge.** A `@Bean` method's parameter is bound by the
+CONTAINER, reflectively — there is no call site in the module's bytecode, so no
+`bound_to_parameter` edge exists to cross and `external` is the correct answer. The
+remaining hop is a bean-graph join (by type, name, qualifier or `@Primary`), which is
+`bean_via`'s own mechanism and not a value edge. So the walk made this issue no easier and
+no harder, and the fix is still the one below.
+
+**Verify:** `grep -n "One hop only" src/sextant/application/resolve/engines/fluent.py` — the
+docstring of `_fold_bean_captures`, which still reads *"a container built in a third bean is
+unresolved"*. (This line cited `second_hop` until 2026-10-17; the reason string is built as
+`f"bean_{reason}"`, so the grep matched nothing and looked like a closed issue.)
 **Closes** with a bounded multi-hop fold (the depth guard the combinator's helper walk already
 has), each hop in its own bean method's context.
 
@@ -2281,7 +2578,17 @@ derives everything; a plain-SDK module derives nothing.
 the criterion that makes this worth logging at all, and it is why the magnitude is stated in words
 above rather than left to be inferred from the grade.
 
-**Verify:** `grep -n "PROGRAMMATIC WORKER" -A 8 src/sextant/catalogs/temporal-workflow.yml`.
+**STILL OPEN after the value walk** (Task 13, 2026-10-17), and this entry already said why
+before the work started: *"No such cross-engine attachment exists."* The walk answers *what
+is this value?* at a position a catalog asks about. It does not attach a value read at a
+CALL SITE to a row another engine derived from a DECLARATION, which is the whole of this
+issue. `resolve/endpoint_attributes.py` is unchanged and still writes
+`endpoint_metadata` from annotation attributes only (`_from_annotation_attributes`,
+`effective_annotation_uses`). Spec 2026-09-22's header listed this among the issues it
+closes; that claim is withdrawn, and nothing about the capability it would need has changed.
+
+**Verify:** `grep -n "PROGRAMMATIC WORKER" -A 8 src/sextant/catalogs/temporal-workflow.yml`,
+and `grep -n "_from_annotation_attributes" -A 20 src/sextant/application/resolve/endpoint_attributes.py`.
 **Closes** with the cross-engine attachment above, which is a spec of its own.
 
 ### OI-125 — `request(...)` derives no reply shape, because the reply type is the call's RETURN type
@@ -2332,7 +2639,18 @@ body, so every row derives. The cross-method form derives nothing and is not exe
 from several places — which is a real idiom in Vert.x verticles, though the one-body form is the
 common one.
 
-**Verify:** `grep -n "HANDED TO ANOTHER METHOD" -A 6 src/sextant/catalogs/vertx-eventbus-chain.yml`.
+**STILL OPEN after the value walk** (Task 13, 2026-10-17). Spec 2026-09-22's header named
+this as one of the three issues it closes, and it does not. **What was lost here was never a
+VALUE; it was the chain's root.** The walk resolves a value to its source across method
+boundaries — 77 such crossings in this estate (`OI-136`) — so it could tell you what address
+`bus.consumer("a")` named. What no mechanism does is join a `handler` terminal in one body
+to a root in another, and `engines/fluent.py` still keys every chain on `context.caller`
+(`_fold_bean_captures` answers `bean_across_bodies` for exactly this shape). A value walk
+cannot supply a root, so this issue was mis-scoped against that spec rather than left
+undone by it.
+
+**Verify:** `grep -n "HANDED TO ANOTHER METHOD" -A 6 src/sextant/catalogs/vertx-eventbus-chain.yml`,
+and `grep -n "across_bodies" src/sextant/application/resolve/engines/fluent.py`.
 **Closes** with `OI-110`, by whatever cross-method value tracking that issue settles on — one
 mechanism answers both, and answering them separately would be two.
 

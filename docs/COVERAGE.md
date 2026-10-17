@@ -1851,11 +1851,106 @@ enumerations, `scripts/probes/w19_catalog_surface/run.sh` for the method surface
 `scripts/probes/w19b_type_and_annotation_surface/run.sh` for the annotation and
 repository ones, neither of which `scripts/check.sh` does.
 
+### 3c. Which asked positions the value walk cannot answer — measured, not asserted
+
+`3b` says which of a framework's methods a catalog never looks at. This says something
+narrower and newer: of the positions a catalog **did** ask about, how many came back
+without a value, and under which of the six `unresolved` reasons.
+
+The distinction is the one spec
+[2026-09-22 §3d](superpowers/specs/2026-09-22-value-resolution-design.md) draws. A §5 row's
+boundary prose names FORMS a catalog does not read — `.topic(Function)`, `from(Supplier)`,
+XML — which is framework semantics and stays prose. The table below is the other half: a
+count of what the backward value walk could not resolve at positions the catalogs reached.
+That half had gone stale twice before it was generated, so it is no longer written by hand.
+
+**Read it as a floor on honesty, not as a defect list.** A row here is a position where an
+address is reported as unresolved rather than guessed, which is the project's standing
+trade (`misses are acceptable, fabrications are not`). `external` dominating is the
+expected shape: most values a framework catalog asks about arrive from outside the module
+that was scanned.
+
+<!-- BEGIN GENERATED: value_boundaries -->
+
+Measured over **18 built fixtures** at `c649978a`
+by `python scripts/value_boundaries.py --measure`. Not built, so not measured: `gradle-orders`, `orders-reactor`.
+
+| catalog | answered | `external` | `not_readable` | `no_writer` | `escapes` | `non_enumerable` | `cycle` |
+|---|---|---|---|---|---|---|---|
+| `apache-httpclient` | 11 | — | — | — | — | — | — |
+| `aws-sqs-sdk` | 4 | 3 | — | — | — | — | — |
+| `google-pubsub-client` | 0 | 2 | — | — | — | — | — |
+| `google-pubsub-publisher` | 2 | — | — | — | — | — | — |
+| `google-pubsub-subscriber` | 8 | — | 1 | — | — | — | — |
+| `jakarta-jms` | 4 | — | — | — | — | — | — |
+| `jakarta-servlet` | 2 | — | — | — | — | — | — |
+| `jakarta-websocket-client` | 10 | — | — | — | — | — | — |
+| `jakarta-websocket-programmatic` | 1 | — | — | — | — | — | — |
+| `javalin` | 10 | — | — | — | — | — | — |
+| `javalin-apibuilder` | 9 | — | 12 | — | — | — | — |
+| `jdk-httpclient` | 46 | 10 | 2 | — | — | — | — |
+| `kafka-clients` | 4 | 3 | — | — | — | — | — |
+| `kafka-consumer` | 9 | 1 | — | — | — | — | — |
+| `kafka-streams` | 11 | 1 | — | — | — | — | — |
+| `kafka-streams-sink` | 3 | — | — | — | — | — | — |
+| `kafka-streams-topology` | 3 | — | — | — | — | — | — |
+| `ktor-routing` | 82 | 99 | 93 | 1 | — | — | — |
+| `okhttp` | 8 | 16 | 1 | — | — | — | — |
+| `pekko-connectors-kafka` | 6 | — | — | — | — | — | — |
+| `spring-cloud-gateway` | 13 | — | 8 | — | — | — | — |
+| `spring-cloud-gateway-outbound` | 8 | — | 8 | — | — | — | — |
+| `spring-integration-amqp` | 17 | 3 | 16 | 3 | — | — | — |
+| `spring-integration-kafka` | 10 | — | 16 | — | — | — | — |
+| `spring-integration-pubsub` | 6 | 3 | 16 | — | — | — | — |
+| `spring-jms-template` | 5 | 2 | — | — | — | — | — |
+| `spring-kafka-message` | 3 | 1 | 1 | — | — | — | — |
+| `spring-kafka-replying` | 4 | 3 | — | — | — | — | — |
+| `spring-kafka-template` | 7 | 6 | — | — | — | — | — |
+| `spring-mvc-router` | 21 | 7 | 20 | — | — | — | — |
+| `spring-pubsub` | 3 | 1 | — | — | — | — | — |
+| `spring-rabbit-template` | 5 | — | — | — | — | — | — |
+| `spring-restclient` | 23 | 1 | 2 | — | — | — | — |
+| `spring-resttemplate` | 14 | 2 | — | — | — | — | — |
+| `spring-sqs-template` | 2 | 2 | 1 | — | — | — | — |
+| `spring-sqs-template-receive` | 4 | — | 4 | — | — | — | — |
+| `spring-stomp-client` | 9 | — | — | — | — | — | — |
+| `spring-stomp-endpoint` | 3 | — | — | — | — | — | — |
+| `spring-stomp-template` | 1 | 2 | — | — | — | — | — |
+| `spring-web` | 1 | 46 | — | — | — | — | — |
+| `spring-webclient` | 38 | 3 | 2 | 3 | — | — | — |
+| `spring-webflux-router` | 30 | 7 | 28 | — | — | — | — |
+| `spring-websocket-client` | 8 | — | — | — | — | — | — |
+| `spring-ws-template` | 1 | 3 | — | — | — | — | — |
+| `temporal-untyped` | 1 | — | — | — | — | — | — |
+| `vertx-eventbus` | 6 | 4 | — | — | — | — | — |
+| `vertx-eventbus-chain` | 3 | 1 | 1 | — | — | — | — |
+| `vertx-eventbus-mutiny` | 4 | 3 | — | — | — | — | — |
+| **total** | **483** | **235** | **232** | **7** | **—** | **—** | **—** |
+
+**A dash is a reason that did not fire for that catalog, never a reason that cannot.** Across the whole fixture corpus `escapes`, `non_enumerable`, `cycle` fire nowhere — which is a statement about these fixtures, not about the vocabulary; `docs/research/2026-09-23-value-walk-measurement.md` §4 has the estate-wide counts and the six real recursions `cycle` answers.
+
+<!-- END GENERATED: value_boundaries -->
+
+**The corpus is the fixtures, not the field.** These are the modules COVERAGE §5's rows
+cite, which is why they are the corpus — but a reason that never fires here may fire on
+real code, and the estate-wide counts (989 asked positions across fixtures, examples and
+the field corpus) live in
+`docs/research/2026-09-23-value-walk-measurement.md` §4 rather than being copied here.
+
 ### What this does not tell you
 
 - **A measured version means the RULES were read at it, not that a project on it was
   analysed end to end.** The field corpus (`scripts/field_check.py`) is where that is
-  proved, and it currently holds three projects, all inbound HTTP.
+  proved, and it holds **five pins over four repositories** — three of them inbound-only,
+  and two added 2026-10-17 that are the first to measure the OUTBOUND half at all
+  (`petclinic-api-gateway`, `petclinic-genai-service`, from
+  `spring-petclinic-microservices`). *The three inbound-only pins are inbound-only because
+  the upstreams are: measured, `jhipster-sample-app` and `spring-petclinic-rest` contain no
+  `RestTemplate`/`WebClient`/`@FeignClient` at all, and `mall`'s eleven `RestTemplate`
+  occurrences are in `mall-demo` rather than the pinned `mall-admin`. So `outbound: {}` on
+  those three is the truth and not a gap — but it also meant **no field pin exercised an
+  outbound address until now**, and any "what would this capability buy" figure measured
+  over this corpus was weighted toward inbound (`OI-138`).*
 - **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
   The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything
   else Spring is 6.1.6 and later.
@@ -3685,7 +3780,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | Spring Integration | Spring Integration Java DSL flows — `IntegrationFlow.from(<source spec>)`, the flow's members (`transform`, `filter`, `channel`, `handle`, `route`, …), its consumer, and a flow sourced from a channel (`from("ch")`). The flow definition's 34 public members (CP-27 row 2; `IntegrationFlows` does not exist at 6.2.4, row 1) are classified once in `catalogs/step-models/spring-integration.yml` — pass-through, channel link, handler, discard (`nullChannel`), divert (`route`, `gateway`, `scatterGather`, `publishSubscribeChannel`, `controlBus`, `trigger`, `to` — each constructs a router or fan-out, row 4) — and merged into each broker catalog, on the owners javac names at the call sites (row 16) | `fluent_chain` | ✅ **shipped** (2026-09-21, spec 2026-09-21 §5). A source spec's chain continues into `from(…)` and along the flow to `handle(lambda)` — the lambda body is the row's `handler` — or to `.channel("x")`, which is the channel the flow feeds (the join mints the row against `x`'s readers); `handle(h).channel("y")` keeps `h` and records `y` as its output (`sends_to`, no reader yet — `OI-107`); a `divert` before `handle` leaves `handler` NULL with the row resolved (the message may leave the linear flow — never a guessed consumer); `from("ch").handle(lambda)` makes the flow `ch`'s READER (`from("ch").channel("b").handle(lambda)` makes it `b`'s — the handler reads the channel linked before it) and `from("ch").handle(<sink spec>)` the outbound row with `ch` fed outbound; `handleReactive` ends a flow without `get()` and is a terminal on every broker catalog. **Stated boundaries:** the lambda flow form's implicit `<beanName>.input` channel (its `handle(sink)` DOES derive, `caller` the lambda body); `from(Supplier)`/`from(MessageSource)`; `from(<adapter bean>)` (`OI-112`); a bridge (`from("a").channel("b")`, neither wire nor handler — nothing); `channel(MessageChannelSpec)`/`channel(Function)` (the link unreadable from there on); `handle(bean, "method")` where the bean is not the module's; `.channel("x").handle(h).channel("y")` loses `fed_by(x)` (`OI-115`); two-hop container sources (`OI-110`). The broker-specific boundaries — Kafka's `Pattern`/`TopicPartitionOffset` subscriptions and AMQP's `configureContainer(c -> c.addQueueNames(…))` — are stated on the broker rows, §5.8's "Spring Integration Kafka (DSL + adapters)" and §5.9's "Spring Integration AMQP (adapters + DSL)". Pinned by `tests/e2e/test_async_delivered.py::test_kafka_shapes_rows`, `test_amqp_shapes_rows` |
 | Java | Spring Integration | XML-configured flows — the flow's topology, and the anonymous channels inside it | `filesystem` | **Boundary — derives nothing.** An XML-configured flow contributes **zero** facts — the extractor reads `target/classes/**/*.class` and the XML is a resource sitting beside them — so it needs a resource reader of its own, the same category as the `.avsc` reader |
 | Java | Spring Integration | The `protocol` column on a `channel_destination` question — which broker, if any, a channel actually reaches | `config_join` | **Boundary — the column is EMPTY, and that is the answer.** It read `amqp` from Task 9 until OI-1's fix: a wire STYLE had to declare a protocol (`resolve/endpoints.py`) and D00's closed set has no "unknown" member (NFR-5), so `spring-integration.yml` declared the one value the probe measured a channel join against end to end (Q3) — and **every** question it filed was filed under it, a Kafka- or JMS-fed channel's included. The rule is now keyed on whether the CATALOG derives endpoint rows rather than on what its style is nominally called, so a catalog that mints none declares no wire identity and its questions carry none. What remains is an ABSENCE, stated as one: nothing here reads which broker feeds a channel, the ledger row says so, and the renderer prints the channel name alone. **Since 2026-09-21 the protocol DOES come from the adapter that feeds the channel** — for a channel some `@Bean` adapter or DSL flow feeds, the `fed_by` edge carries the broker catalog's protocol and the join mints a row under it, and no question is filed at all; the column is empty only on the questions that remain, which are exactly the channels nothing in the module feeds. **Falsified by** a question carrying a protocol nothing measured |
-| Java | Akka / Pekko actors | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` — receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7** |
+| Java | Akka / Pekko actors | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` — receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7.** *Tier unchanged by the value walk, and now measured rather than assumed (2026-10-17): spec 2026-09-22 §4 claimed its sixth edge would close this row, and `scripts/probes/cp33_binding_writes.md` row 7 shows it would not. `ActorRef ref = system.actorOf(props, "worker")` assigns a CALL'S RESULT — `aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield` — so the `ALOAD 0; xLOAD k; PUTFIELD` triple a `field_write` fact needs never presents. A setter-injected reference would be read; the factory form the framework documents would not. `OI-136`* |
 | Python | Celery | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` — a real async boundary, easy to miss | `annotation` | A |
 | TS | bullmq | `bullmq` `new Queue("n")`, `new Worker("n", fn)` — string names, matchable like topics | `registration_call` | A |
 | Go | robfig/cron, Temporal Go SDK | `robfig/cron` `c.AddFunc("@hourly", fn)`; Temporal Go SDK `w.RegisterWorkflow(fn)` | `registration_call` | A |
