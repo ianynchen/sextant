@@ -1,6 +1,6 @@
 # A configured path prefix reaches the rows it moves
 
-**Status:** design, with **one decision open** (§3) that is the user's and is not picked here.
+**Status:** design. **Both open decisions were ruled by the user on 2026-10-18** — §3 Option B, and §4 in scope rather than a gap statement, with the reason they gave recorded there because it is a reusable rule and not a one-off.
 Written 2026-10-18 after `spring-petclinic-rest` — a PINNED corpus — was found publishing 44
 routes without the prefix its own `application.properties` sets.
 
@@ -88,7 +88,7 @@ probe has measured the interaction — CP-5 rows 7-8 measured `base-path` on one
 
 ---
 
-## 3. THE OPEN DECISION — where the declaration lives
+## 3. Where the declaration lives — **RULED: Option B**
 
 The prefix is a property of **the module's server**, not of any one catalog: a Boot app with
 `context-path=/petclinic` serves every controller under it, including the rows
@@ -126,35 +126,97 @@ HTTP row in a module whose build declares the matching starter
   `ruoyi-vue-pro`, `jhipster-sample-app`, `spring-petclinic-rest` and `apollo-portal` are each
   single-stack.
 
-**Recommended: Option B**, because the prefix is one fact about one server and Option A spreads
-it over ten files that must each remember a fact none of them owns. The against-case is real
-and unmeasured, so it is stated as a boundary rather than dismissed: a mixed-stack module gets
-one prefix applied to rows the other stack serves.
+**RULED: Option B** (user, 2026-10-18). The prefix is one fact about one server, and Option A
+spreads it over ten files that must each remember a fact none of them owns. The against-case is
+real and unmeasured, so it ships as a stated boundary rather than dismissed: a module embedding
+two server stacks gets one prefix applied to rows the other stack serves. No corpus in the
+estate has that shape — all six pins are single-stack — and the boundary is written on the
+declaration itself so the next reader meets it there.
 
 ---
 
-## 4. Out of scope, named so the closure list stays honest
+## 4. `setPathPrefixes` IS in scope — **RULED**, and the reason generalises
 
-**`RequestMappingHandlerMapping.setPathPrefixes` is NOT derived.** `ruoyi-vue-pro` prefixes
-`/admin-api` and `/app-api` by handing the mapping a map of prefix → predicate:
+**The ruling, in the user's own distinction (2026-10-18):**
+
+> *"the lambda is still config … I said business logic in the other case because the path was
+> dependent upon the path being called, a runtime logic, whereas this one is configured"*
+
+That is the line this project needs and did not have written down. `OI-143`'s Apollo case is
+runtime logic because the address **varies per call** — 64 callers hand in 64 different paths,
+and no single answer exists until a call happens. ruoyi's prefix map is built **once at
+wiring time** from values fixed before any request arrives. A lambda is not evidence of
+runtime logic; *varying per call* is. Written as code or as YAML, a value settled at startup
+is configuration.
+
+### What the facts already hold — measured, not assumed
 
 ```java
-mapping.setPathPrefixes(pathPrefixes);     // "/admin-api" -> clazz -> matcher.match("**.controller.admin.**", clazz.getPackage().getName())
+// WebProperties — the values, as string literals
+private Api adminApi = new Api("/admin-api", "**.controller.admin.**");
+private Api appApi   = new Api("/app-api",   "**.controller.app.**");
+
+// buildPathPrefixes                         putPathPrefix(Map, Api api, AntPathMatcher m)
+putPathPrefix(prefixes, props.getAdminApi(), m);   //   m.put(api.getPrefix(), clazz -> …)
+putPathPrefix(prefixes, props.getAppApi(),   m);   //   lambda: m.match(api.getController(), clazz.getPackage().getName())
 ```
 
-The VALUES are configuration (`WebProperties.adminApi`, defaulting to `/admin-api`). Which
-classes receive which prefix is a lambda over package names, and evaluating it is application
-logic — the thing this project does not do.
+Every step is in the fact stream, verified on
+`yudao-framework/yudao-spring-boot-starter-web`:
 
-**What it gets instead: a gap statement.** Where a module calls `setPathPrefixes`, the document
-says so in Known gaps, naming the call site, so a reader is told the paths below are served
-under a prefix this analysis did not apply. A statement, never a guessed path — publishing
-`/system/user/page` for something served at `/admin-api/system/user/page` is the failure, and
-publishing it *silently* is the part this fixes.
+| step | fact |
+|---|---|
+| the framework call | `RequestMappingHandlerMapping#setPathPrefixes`, one argument — a **Spring** API, so cataloguable |
+| the two literals | `WebProperties#<init>` ordinals 1 and 2: `new Api("/app-api", "**.controller.app.**")` and `new Api("/admin-api", "**.controller.admin.**")`, both plain `string` arguments |
+| the prefix | `putPathPrefix` ordinal 4: `Map#put(source 15, lambda …)` where 15 is `api.getPrefix()` |
+| the pattern | `lambda$putPathPrefix$0` ordinal 4: `AntPathMatcher#match(source 10, source 13)` where 10 is `api.getController()` and 13 is `clazz.getPackage().getName()` |
+| the PAIRING | both halves read the same `api` — parameter 1 of `putPathPrefix`, captured into the lambda (`captures: 2`) — so prefix and pattern pair by receiver identity, never by position |
 
-`OI-148` therefore narrows rather than closes, and the entry says which half closed.
+**The parameter crossing and the pairing already work.** Walking `Map#put`'s key answers on
+**two paths**, one per `putPathPrefix` call site, which is the walk's multiplicity with
+`_combine`'s coherence rule doing exactly the job it exists for: it cannot pair `/admin-api`
+with `**.controller.app.**`, because those two readings never happened together.
 
----
+### One edge is missing, and it is already a register item
+
+Both halves answer `unresolved(no_writer)`:
+
+```
+Map#put's key (the prefix)                  → unresolved(no_writer) × 2 paths
+AntPathMatcher#match's pattern              → unresolved(no_writer)
+```
+
+`no_writer` is the walk's sixth edge — capability 9.19's `written_by`, deferred as `OI-136`.
+The hop that needs it is `getAdminApi()` → the field `adminApi` → the value written into it.
+Here the field holds a CONSTRUCTED object, so the shape is
+`aload_0; new; dup; ldc; ldc; invokespecial; putfield` — a third shape beside `OI-141`'s
+`ldc`-into-field, and the same missing capability behind both.
+
+**So `OI-148` splits by mechanism rather than by judgement:**
+
+* **§2's keys ship now.** They are read from `resolved_config`, which is already populated, and
+  need nothing from the walk.
+* **`setPathPrefixes` ships with the sixth edge.** Catalog, lambda read and pairing are all
+  within reach; the field write is not, and guessing past it would invent a prefix.
+
+Until then the document SAYS SO rather than publishing a path nobody serves: where a module
+calls `setPathPrefixes`, Known gaps names the call site and states that the paths below are
+served under a prefix this analysis did not apply. That is the interim, not the answer.
+
+### What this measurement does to `OI-136`'s deferral
+
+`OI-136` deferred the sixth edge on two grounds, and this case weakens both:
+
+* *"16 of 756 asked positions, about 2%"* — the denominator is positions **a shipped catalog
+  asks about**, and no catalog asks about `Map#put`'s key today. The same bounded-measurement
+  mistake as `OI-143`'s *"nothing in the 27 measured corpora reaches it"*
+  ([[nothing-in-the-corpus-is-about-the-corpus]]).
+* *"And it costs no endpoint … a field-held destination costs the ADDRESS, never the
+  endpoint … the row publishes with `path` NULL at `unresolved`"* — true for a destination,
+  **false here**. These 480 rows publish a path that LOOKS resolved and is wrong by a prefix.
+  Nothing reads as unresolved, so nothing tells a reader to doubt it.
+
+That is recorded on `OI-136` itself, where the mechanism lives, rather than restated here.
 
 ## 5. What moves, and in the step that moves it
 

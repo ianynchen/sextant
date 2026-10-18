@@ -957,6 +957,15 @@ written "for testing purpose" and called from no main-source code, so the bindin
 writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
 single address, the day capability 9.19 makes the setter visible.
 
+*A THIRD shape in this family, measured 2026-10-18 (`ruoyi-vue-pro`): a field holding a
+CONSTRUCTED object. `WebProperties` declares
+`private Api adminApi = new Api("/admin-api", "**.controller.admin.**")`, which compiles to
+`aload_0; new; dup; ldc; ldc; invokespecial; putfield` — the middle instruction is an
+`invokespecial`, so `fieldWrites`' `VarInsnNode` requirement refuses it exactly as it refuses
+the `ldc` shape. Both literals are in the facts at `WebProperties#<init>` ordinals 1 and 2 and
+neither is reachable from the field. It is what blocks `setPathPrefixes` (`OI-148` §4), and it
+is the same capability as this entry's own shape.*
+
 *A real-project instance, 2026-10-18 (`ruoyi-vue-pro`): the websocket endpoint's own path.
 `YudaoWebSocketAutoConfiguration` registers the handler with*
 
@@ -1319,6 +1328,31 @@ the running system under §8.2. That is wrong: §8.2 bounds CONFIGURATION a depl
 overrides, and a literal in a method body is a code fact like any literal at a call site.
 Applied consistently that argument would forbid reading call-site literals, which is most of
 what the system does.
+
+**BOTH GROUNDS FOR THE DEFERRAL ARE WEAKER THAN THEY READ, measured 2026-10-18 on
+`YunaiV/ruoyi-vue-pro`** (spec `2026-10-18-configured-path-prefixes-design.md` §4):
+
+* *"16 of 756 asked positions"* — the denominator is positions **a shipped catalog asks
+  about**, and no catalog asks about `Map#put`'s key, which is where this case needs it. A
+  yield measured over today's questions cannot see a case that needs a new question; the same
+  shape as `OI-143`'s *"nothing in the 27 measured corpora reaches it"*, which the first real
+  production codebase hit 64 times.
+* *"And it costs no endpoint"* — true for a DESTINATION and **false for a PREFIX**. ruoyi
+  configures `/admin-api` and `/app-api` through
+  `RequestMappingHandlerMapping.setPathPrefixes`, whose prefix and package pattern are
+  literals in `WebProperties#<init>` (`new Api("/admin-api", "**.controller.admin.**")`).
+  Walking either half answers `unresolved(no_writer)` at exactly this edge — the key on TWO
+  coherent paths, one per `putPathPrefix` call, so the crossing and the pairing already work
+  — and the consequence is not a NULL column. **480 inbound rows publish a path that looks
+  resolved and is wrong by its prefix.** Nothing in the row says to doubt it.
+
+So the honest statement of the yield is now "16 positions of the 756 we ask about, plus the
+prefix on every row of a module that configures one", and the honest statement of the cost is
+no longer "never an endpoint". The deferral may still be right; the two sentences it rested on
+are not the ones to rest it on. The user ruled this case IN scope on 2026-10-18, which makes
+this edge a blocker rather than a nicety: *"the lambda is still config … I said business logic
+in the other case because the path was dependent upon the path being called, a runtime logic,
+whereas this one is configured."*
 
 **The probe is already written and committed**, so whoever picks this up does not re-measure:
 `cp33_binding_writes.md` records that a setter presents the existing `ALOAD 0; xLOAD k;
