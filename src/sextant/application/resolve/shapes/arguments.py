@@ -25,7 +25,8 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.application.resolve.values import LITERAL, STRING, Answer
+from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
+from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
@@ -57,15 +58,82 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     wrong kind — a `uri` step whose argument is a `lambda`, the uriBuilder
     form — or a positional slot the call site never filled) still derives
     the row, path NULL, resolution `unresolved`: D02 §2's "this method calls
-    something over HTTP" is true and useful on its own."""
-    if (
-        argument is not None
-        and argument.get("kind") == "string"
-        and isinstance(argument.get("value"), str)
-    ):
-        peer, path = split_url(str(argument["value"]))
-        return peer, path, "resolved"
-    return None, None, "unresolved"
+    something over HTTP" is true and useful on its own.
+
+    **An `expression` carrying a HOLE is the third answer** (spec 2026-10-18 §5,
+    `OI-143`): the walk assembled this address from several pieces, read some of them and
+    printed the rest as `{}`. `apolloconfig/apollo` is why — its own HTTP wrapper calls
+    `restTemplate.exchange(parseHost(service) + path, …)`, so 64 call sites hand in a real
+    path behind a host nobody can read, and `unresolved` published all 64 as
+    "somewhere unknown" with the paths discarded.
+
+    * **`partial`, not `resolved`**, because part of this address was never read, and not
+      `unresolved`, because part of it WAS. D00 §4's set already holds the word.
+    * **the peer only where the authority carries no hole and no placeholder.**
+      `http://host/{}/x` yields peer `host`; `{}apps/{appId}` yields peer NULL, since an
+      authority half-read is not an authority. That is `carries_expression`'s own refusal
+      (below) in one more notation.
+    * **a hole is required.** An `expression` with none is a `${…}` address, which reads
+      exactly as it did before.
+    * **and TEXT is required beside the hole.** `{}{}` carries no address at all — two
+      runtime values and nothing the code states — so publishing it at `partial` would
+      claim a read that did not happen, which is precisely the false positive spec §7
+      names as this work's own risk. Measured, not predicted: Apollo's
+      `parseHost(service) + path` publishes exactly that template, and the first run of
+      this change put it in the document as a partly-known address. Such a row stays
+      `unresolved` with `path` NULL, which is what it has always been.
+
+    A `path` holding `{}` is a statement that part of the address was read, NOT an exact
+    address — stated here because the linking tier is unwritten, and a stitcher that
+    matched it as literal text would join two rows on a `{}` they share.
+    """
+    if argument is None or not isinstance(argument.get("value"), str):
+        return None, None, str(Resolution.UNRESOLVED)
+    text = str(argument["value"])
+    if argument.get("kind") == "string":
+        peer, path = split_url(text)
+        return peer, path, str(Resolution.RESOLVED)
+    if argument.get("kind") == EXPRESSION and _HOLE in text and text.replace(_HOLE, ""):
+        peer, path = split_url(text)
+        if peer is not None and (_HOLE in peer or carries_expression(peer)):
+            peer = None
+        return peer, path, str(Resolution.PARTIAL)
+    return None, None, str(Resolution.UNRESOLVED)
+
+
+# The walk's own spelling for a hole nothing filled (`values._HOLE`), which is what the
+# recipe's `\u0001` prints as. Compared here rather than imported so that the two layers
+# stay separable; `test_a_hole_is_spelled_the_way_the_walk_spells_it` is the gate
+# that keeps the two spellings one.
+_HOLE = "{}"
+
+
+def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]:
+    """`url_of`, for a url position the backward value walk answered (spec 2026-10-18 §2).
+
+    `channel_of_answer`'s sibling, and born for the same reason one commit later: an
+    ASSEMBLED address is the catalog's OWN position rather than a hop, so an engine may
+    resolve it through the walk with no `url_via` declaration — and then needs the url
+    reader, not the channel one. `fluent` said there was "deliberately no `url_of_answer`
+    to reach for" on 2026-10-17, correctly for that day: every answer it could take was a
+    whole literal, so a `string` argument carried it. §3's partly-filled template is not a
+    `string` and must not be written as one, which is what needs the second kind here.
+
+    The two kinds, and nothing else is a url:
+
+    * a `string` LITERAL — the whole address, read exactly as a literal at the call site;
+    * an EXPRESSION — `{}`-bearing, which `url_of` publishes at `partial`.
+
+    A `symbol`, an `int`, a `bool`, an `absent` and "no answer at all" are all
+    `unresolved`, for the reasons `channel_of_answer` states one by one.
+    """
+    if answer is None:
+        return None, None, str(Resolution.UNRESOLVED)
+    if answer.kind == LITERAL and answer.literal_kind == STRING:
+        return url_of({"kind": "string", "value": str(answer.value)})
+    if answer.kind == EXPRESSION:
+        return url_of({"kind": EXPRESSION, "value": str(answer.value)})
+    return None, None, str(Resolution.UNRESOLVED)
 
 
 def parameter_index(argument: dict[str, Any] | None) -> int | None:

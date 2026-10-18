@@ -41,6 +41,7 @@ from sextant.application.resolve.shapes.arguments import (
     peer_of,
     supertypes_of,
     url_of,
+    url_of_answer,
     valid_via_arity,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
@@ -51,7 +52,7 @@ from sextant.application.resolve.shapes.rooting import (
     names_a_type,
 )
 from sextant.application.resolve.values import ValueIndex, cached_value_index, resolve_site
-from sextant.domain.closed_sets import Direction
+from sextant.domain.closed_sets import Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -61,6 +62,12 @@ from sextant.domain.symbols import (
     parameter_types,
     returned_type,
 )
+
+# D00 §5's argument kind for a string the code ASSEMBLES — javac's
+# `makeConcatWithConstants` recipe, read by the extractor into `pieces` and a
+# template. `fluent` spells it once too; the two are the same word from the same
+# extractor capability.
+_CONCAT = "concat"
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -678,6 +685,75 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 if _channel_declared(method)
                 else [read_destination(url_argument)]
             )
+            # **AN ASSEMBLED ADDRESS IS THE CATALOG'S OWN POSITION, SO IT NEEDS NO
+            # DECLARATION** (spec 2026-10-18 §2, `OI-143`). Every branch above consults the
+            # walk only where the row declares a hop — `channel_via` — and that gate is
+            # right for a hop and wrong for a join: `channel_via` says the value lives on
+            # some OTHER call's argument, which a catalog must say because following a
+            # `source` to an undeclared producer is how a row publishes a destination its
+            # own form never reached. A `concat` is neither. The catalog already named THIS
+            # position and the operands are the concat site's own arguments, so there is
+            # nothing left for a declaration to permit.
+            #
+            # **This was found and fixed in `fluent` on 2026-10-17 and never carried here**,
+            # which is the whole of `OI-143`: `apolloconfig/apollo` funnels 64 calls into
+            # `restTemplate.exchange(parseHost(service) + path, …)` — a `single_call` row —
+            # and published 8 addressless rows where 64 carry a real path.
+            #
+            # **With NO identity entries**, exactly as `fluent` asks: an `identified_by`
+            # entry says what a value STANDS FOR while a join renders text as an ADDRESS,
+            # and the two part company (`String.valueOf(x)` is `x.toString()`, so a
+            # destination whose identity is `"orders"` renders as a vendor debug string —
+            # `OI-142`). An empty table holds this arm to text the code states.
+            #
+            # **The literal read stays first**, so this can only ADD an answer: a `concat`
+            # is never a `string`, and the 2F field ladder has already replaced a
+            # config-fed field with its expression above, so neither reaches here.
+            #
+            # **Read from the row's OWN declared position**, re-read here rather than
+            # taken from `url_argument`: that variable may have travelled — a
+            # `lambda_arg` row's address lives in a synthetic method whose frame is not
+            # this `site`'s, and a `default_address` row's came off the receiver's
+            # configuration. Walking `site` for either would resolve a slot of the wrong
+            # call. A `concat` is never a `field`, so the 2F ladder above cannot have
+            # replaced it, and this re-read is the same argument the literal read saw.
+            declared_url = method.get("url_arg")
+            url_slot: int | str | None = (
+                declared_url if isinstance(declared_url, int | str) else None
+            )
+            if (
+                url_slot is not None
+                and not _channel_declared(method)
+                # **The address must be at THIS site's declared position**, and the two
+                # exclusions are what makes that true rather than assumed. A `lambda_arg`
+                # row's address lives in a synthetic method whose frame is not this
+                # `site`'s (W57's Critical, one layer out), and a `default_address` row's
+                # came off the receiver's configuration rather than any argument. Walking
+                # `site` for either resolves a slot of the wrong call.
+                and _LAMBDA_ARG not in method
+                and not configured
+                and isinstance(url_argument, dict)
+                and url_argument.get("kind") == _CONCAT
+            ):
+                if values is None:
+                    values = cached_value_index(workspace)
+                # One tuple per DISTINCT destination, as the `channel_via` branch above:
+                # several paths routinely agree about this slot (§1c), and 64 callers
+                # handing in 64 paths are 64 destinations while two paths reading the same
+                # path are one. Rows stay distinct per caller downstream — `caller` is in
+                # the dedup key (F5 §6.1, W27's fix).
+                walked = list(
+                    dict.fromkeys(
+                        url_of_answer(binding.slots.get(url_slot))
+                        for binding in resolve_site(workspace, site, values, ())
+                    )
+                )
+                # The walk may never take an answer away. Where it reached nothing the
+                # literal read above stands, which for a `concat` is the addressless row
+                # this engine has always derived.
+                answered = [tuple_ for tuple_ in walked if tuple_[1] is not None]
+                if answered:
+                    destinations = answered
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
@@ -746,10 +822,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # (`body_declared` stands in for either), so a linked
             # constructor whose payload slot could not be read narrows this
             # row's resolution the same way.
-            resolution = (
-                "resolved"
-                if (verb is not None or verbless)
-                and url_resolution == "resolved"
+            captures_read = (
+                (verb is not None or verbless)
                 # The descriptors are what these captures PRODUCED, and passing them is
                 # what stops a row claiming a read failure over a column that was read
                 # (`OI-77`, W43's review).
@@ -757,7 +831,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 and _capture_resolved(
                     method.get("response_arg") is not None, response_argument, response_shape
                 )
-                else "unresolved"
+            )
+            # **THE ROW CARRIES THE ADDRESS'S OWN WORD** (spec 2026-10-18 §5), where it
+            # used to recompute `resolved`/`unresolved` from it. The two agree on both
+            # words the readers answered before, and the pass-through is what lets `url_of`
+            # add a third: `partial`, for an address the walk assembled and read part of —
+            # `{}/services/admin`. `resolved` would promise the whole address and
+            # `unresolved` denies the half that WAS read, which is what made real paths
+            # invisible.
+            #
+            # I1's rule is untouched and is the other half of the condition: every declared
+            # capture must still have read, so `partial` is a statement about the ADDRESS
+            # and never a licence for an unread body.
+            resolution = (
+                url_resolution
+                if captures_read and url_resolution != str(Resolution.UNRESOLVED)
+                else str(Resolution.UNRESOLVED)
             )
             # Only a *whole* resolved wire identity dedups, so an unreadable
             # verb keeps each row its own for the same reason an unreadable

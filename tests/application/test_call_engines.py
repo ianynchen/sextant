@@ -16,7 +16,8 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.shapes import derive_endpoint_shapes
-from sextant.application.resolve.shapes.arguments import split_url
+from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
+from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -132,6 +133,69 @@ def test_a_string_url_and_a_class_literal_response_derive_a_resolved_endpoint(
         "shape_id": ORDER_VIEW,
     }
     assert endpoint["request_shape"] is None
+
+
+def test_an_assembled_url_publishes_the_path_half_it_states(tmp_path: Path):
+    """`OI-143`, end to end through the engine (spec 2026-10-18 §2, §5).
+
+    `restTemplate.getForObject(parseHost(service) + "/health", …)` — javac emits ONE
+    `invokedynamic` whose recipe holds `/health` and one hole, and the hole is a call on a
+    parameter that nothing can read. Two separate refusals used to meet here and the row
+    derived with `path` NULL:
+
+    * this engine consulted the walk only where a row declared `channel_via`, a HOP, and
+      an assembled address is not one — the catalog already named this position. The
+      identical miss was found and fixed in `fluent` on 2026-10-17 and never carried here.
+    * `url_of` read a `string` argument and nothing else, so a template was unpublishable
+      even once the walk had assembled it.
+
+    `partial` and not `resolved`: the host was never read, and `{}` says so in the text.
+    """
+    caller = "com/acme/http/Client#checkHealth()."
+    facts = [
+        # The concat itself: one operand, a value no reader can settle (`parseHost(...)`).
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner="java/lang/invoke/StringConcatFactory#",
+                name="makeConcatWithConstants",
+                descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=88,
+            arguments=[CallArgument(kind="unresolved", source=86)],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="concat", source=88, value="{}/health"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["method"], endpoint["path"]) == ("GET", "{}/health")
+    # The authority was never read, so the peer column stays empty rather than carrying a
+    # hole dressed as a hostname (§5).
+    assert endpoint["peer"] is None
+    assert endpoint["resolution"] == "partial"
 
 
 # --- 2. exchange: an enum verb, the HttpEntity hop, and the PTR response --
@@ -992,6 +1056,99 @@ def test_split_url_leaves_a_relative_url_path_only_with_no_peer():
 
 def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
     assert split_url("https://billing.internal") == ("billing.internal", "")
+
+
+# --- Spec 2026-10-18: a partly-known address publishes at `partial` --------
+
+
+def test_a_template_with_a_hole_and_read_text_publishes_at_partial():
+    """`OI-143`'s whole point. `parseHost(service) + "/health"` assembles an address whose
+    host nobody can read and whose PATH the source states, and until 2026-10-18 the row
+    carried `path` NULL — "this method calls something over HTTP", and nothing more. The
+    path was in the bytecode the entire time."""
+    assert url_of({"kind": "expression", "value": "{}/health"}) == (
+        None,
+        "{}/health",
+        "partial",
+    )
+
+
+def test_a_template_whose_authority_was_read_keeps_its_peer():
+    """`"http://host/" + path` knows exactly where the authority ends, so the peer column
+    is not in doubt and only the path half is partly known."""
+    assert url_of({"kind": "expression", "value": "http://host/{}/orders"}) == (
+        "host",
+        "/{}/orders",
+        "partial",
+    )
+
+
+@pytest.mark.pins("arguments.an-authority-holding-a-hole-is-not-a-peer")
+def test_a_template_whose_authority_holds_a_hole_publishes_no_peer():
+    """Spec §5: an authority half-read is not an authority. The scheme-relative form says
+    where the authority ENDS (`OI-142`, ruling 2), which is what makes this decidable at
+    all — the path is published and the peer column stays empty rather than carrying
+    `{}` as if it were a hostname."""
+    assert url_of({"kind": "expression", "value": "//{}/orders"}) == (
+        None,
+        "/orders",
+        "partial",
+    )
+
+
+@pytest.mark.pins("arguments.a-template-with-no-read-text-is-not-partly-known")
+def test_a_template_that_states_no_text_at_all_stays_unresolved():
+    """Spec §3, added from the first measurement of this change rather than predicted:
+    Apollo's `parseHost(service) + path` assembles `{}{}` — two runtime values and nothing
+    the code states — and the first run published it as a partly-known address. It is not
+    one. There is no read half to report, so the row reads as it always has."""
+    assert url_of({"kind": "expression", "value": "{}{}"}) == (None, None, "unresolved")
+
+
+def test_a_configuration_expression_is_not_a_partly_known_address():
+    """`${billing.host}/orders` carries no hole, and `carries_expression` is already the
+    rule for it: a deployment placeholder is resolved per environment by the config join,
+    not published as a half-read address."""
+    assert url_of({"kind": "expression", "value": "${billing.host}/orders"}) == (
+        None,
+        None,
+        "unresolved",
+    )
+
+
+def test_a_hole_is_spelled_the_way_the_walk_spells_it():
+    """Two modules name the same character pair — the walk writes a hole and this reader
+    recognises one — and a drift between them would silently stop every partly-known
+    address publishing. Compared rather than imported so the two layers stay separable
+    (`arguments.py`'s own note at `_HOLE`)."""
+    from sextant.application.resolve import values
+    from sextant.application.resolve.shapes import arguments
+
+    assert arguments._HOLE == values._HOLE
+
+
+def test_url_of_answer_reads_the_walk_s_two_url_kinds_and_refuses_the_rest():
+    """`channel_of_answer`'s sibling (spec §2). A whole `string` literal is the address; an
+    `expression` is §3's partly-filled template. A `symbol` is a DECLARATION reference and
+    writing it into `path` would publish a symbol as an address, which is the one failure
+    the value work risks; `absent` is the code stating there is no value; and no answer at
+    all is a position the site does not have."""
+    assert url_of_answer(Answer(kind=LITERAL, value="/orders", literal_kind=STRING)) == (
+        None,
+        "/orders",
+        "resolved",
+    )
+    assert url_of_answer(Answer(kind=EXPRESSION, value="{}/orders")) == (
+        None,
+        "{}/orders",
+        "partial",
+    )
+    assert url_of_answer(Answer(kind=LITERAL, value="com/acme/Worker#", literal_kind="symbol")) == (
+        None,
+        None,
+        "unresolved",
+    )
+    assert url_of_answer(None) == (None, None, "unresolved")
 
 
 # --- Task 6: `single_call` learns arity, channel_arg, per-row direction and

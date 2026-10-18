@@ -1743,15 +1743,27 @@ def test_two_holes_are_filled_in_order(walked):
     assert [b.slots[0].value for b in bindings] == ["/alpha/middle/omega"]
 
 
-def test_a_concat_with_one_runtime_operand_carries_the_template_unchanged(walked):
-    """The ruling's second half, and the half that keeps §6: *"If any piece comes from a
-    config file, a method parameter, or anything that changes at runtime — don't join,
-    behave exactly as today."* One operand is a parameter, so the row answers the
-    template with its holes unfilled — including the hole whose operand DID resolve,
-    because a half-filled address is a claim about a string nobody wrote."""
+def test_a_concat_fills_the_holes_it_can_and_leaves_the_rest_as_holes(walked):
+    """Spec 2026-10-18 §3, replacing an all-or-nothing rule that discarded what WAS read.
+
+    One operand is a source literal and the other a method PARAMETER. Until 2026-10-18
+    this answered the template untouched — `{}orders/{}` — on the reasoning that a
+    half-filled address is a claim about a string nobody wrote. That reasoning was right
+    about the ADDRESS and wrong about the answer: `http://host/orders/{}` claims no
+    address, it states the part that was read and prints the part that was not as a hole.
+
+    `OI-143` is what made the difference matter. `apolloconfig/apollo` funnels 64 calls
+    into `restTemplate.exchange(parseHost(service) + path, …)`, a template of `{}{}` whose
+    host hole never resolves — so all-or-nothing discarded 64 known paths to avoid
+    half-stating one address.
+
+    **`expression`, never `literal`, and that is the safety.** A partly-filled template is
+    not a value the code states, and `channel_of_answer` refuses an expression — so no
+    messaging catalog can read one as a destination. A broker resolves a destination it is
+    GIVEN, and half of one is not a destination."""
     bindings = _bindings(walked, _symbol(_HALF_JOINER, "call", _TAKES_STRING), 1)
     assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [
-        ("expression", "{}orders/{}")
+        ("expression", "http://host/orders/{}")
     ]
 
 
