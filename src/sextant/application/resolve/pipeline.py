@@ -14,6 +14,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoin
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.reachability import record_reachability
 from sextant.application.resolve.request_requirements import record_request_requirements
@@ -202,6 +203,16 @@ def resolve(
     reset_open_questions(workspace)
     with _timed("derive_endpoints"):
         skipped = derive_endpoints(workspace, declared, capabilities)
+    # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
+    # `OI-148`): every row exists by now, and nothing has copied an address yet.
+    # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the
+    # path, so a prefix applied after any of them would leave a root and a conflict keyed on
+    # an address the module does not serve — `OI-28`'s shape.
+    #
+    # Before `derive_endpoint_shapes` too, which is merely the earliest safe point rather
+    # than a requirement: shapes come off the handler's signature and never off the path.
+    with _timed("apply_path_prefixes"):
+        apply_path_prefixes(workspace, declared)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints
     # just wrote.

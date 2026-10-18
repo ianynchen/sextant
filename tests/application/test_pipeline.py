@@ -4601,6 +4601,10 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_return_flows",
         "record_call_edges",
         "derive_endpoints",
+        # The module's own server prefix, between the rows existing and anything copying
+        # an address (spec 2026-10-18 §3) — `record_roots` and `record_routing_conflicts`
+        # key on the path, so the order here is a correctness property, not a listing.
+        "apply_path_prefixes",
         "derive_endpoint_shapes",
         "bind_parse_calls",
         "record_service_identity_gaps",

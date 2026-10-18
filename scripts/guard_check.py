@@ -150,6 +150,7 @@ _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
+_PATH_PREFIX = "sextant/application/resolve/path_prefix.py"
 _MAVEN = "sextant/ingress/detect/maven.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
@@ -313,6 +314,25 @@ GUARDS: dict[str, Guard] = {
                 "                break",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n"
                 "                break",
+            ),
+        ),
+    ),
+    "path_prefix.a-version-outside-the-measured-range-takes-no-prefix": Guard(
+        what="a server-model entry applies only where the module's framework version is "
+        "inside the range that entry was MEASURED on",
+        why="the version is in the table because the key name rots: Boot 1 reads "
+        "`server.context-path` where Boot 2+ reads `server.servlet.context-path`, and CP-38 "
+        "measured only 2.7.18, 3.5.14 and 4.1.1. With the range check gone, a Boot 1 module "
+        "would have the Boot 2 key applied to it and a 4.x reactive module would take a "
+        "`spring.webflux.base-path` row that no jar in any local repository could confirm — "
+        "in both cases a prefix asserted from a measurement that does not cover the module, "
+        "on EVERY inbound row it has. Returning True unconditionally is a one-line edit and "
+        "every corpus in the estate keeps passing, because all of them are in range",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="    if not found:\n        return True\n    return any(",
+                replace="    if not found:\n        return True\n    return True or any(",
             ),
         ),
     ),

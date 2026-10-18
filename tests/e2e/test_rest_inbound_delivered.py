@@ -328,6 +328,7 @@ def _short_caller(row: dict) -> str:
 
 
 SPRING7 = FIXTURES / "orders-spring7"
+CONTEXT_PATH = FIXTURES / "orders-contextpath"
 
 
 @pytest.fixture(scope="module")
@@ -354,6 +355,63 @@ def spring7(tmp_path_factory: pytest.TempPathFactory) -> tuple[list[dict], list[
 @pytest.fixture(scope="module")
 def spring7_questions(spring7) -> list[dict]:
     return spring7[1]
+
+
+@pytest.fixture(scope="module")
+def context_path_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """`fixtures/orders-contextpath`, analysed once. Its own module because a context path
+    moves EVERY inbound path in the module that sets it, so the key cannot live in a fixture
+    whose figures anything else pins."""
+    workspace_dir = tmp_path_factory.mktemp("contextpath")
+    compile_fixture(CONTEXT_PATH)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(CONTEXT_PATH), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_a_configured_context_path_and_servlet_path_reach_the_published_rows(context_path_rows):
+    """`OI-148`, and the intention test for spec 2026-10-18 (§4.1 — the fixture and the
+    assertion come first, and this one failed before the mechanism existed).
+
+    The fixture's `application.properties` sets
+
+        server.servlet.context-path=/shop/
+        spring.mvc.servlet.path=/api
+
+    and its controller says only `@RequestMapping("/orders")` + `@GetMapping("/{id}")`. The
+    served address is therefore `/shop/api/orders/{id}` and **nothing in the Java says so** —
+    the only evidence for `/shop/api` is configuration, which `annotation_driven` could not
+    read (COVERAGE §5.1's boundary, in its own words: *"a module that overrides the base path
+    is published under `/actuator` regardless"*).
+
+    Measured before the fix: both rows published at `/orders/{id}` and `/orders`, `resolved`,
+    with both keys sitting resolved in `resolved_config` and nothing joining them. The same
+    defect had 44 wrong routes recorded in a PINNED corpus — `spring-petclinic-rest` sets
+    `server.servlet.context-path=/petclinic/`.
+
+    **The trailing separator is part of the test, not an accident.** The configured value ends
+    in `/` exactly as petclinic's does, and the published path must be `/shop/api/orders/{id}`
+    rather than `/shop//api/orders/{id}`.
+    """
+    served = {
+        (row["method"], row["path"]) for row in context_path_rows if row["direction"] == "inbound"
+    }
+
+    assert served == {
+        ("GET", "/shop/api/orders/{id}"),
+        ("POST", "/shop/api/orders"),
+    }
+    # And the rows stay resolved: a prefix every environment agrees on is an answer, not a
+    # reason to doubt the address (spec §1's second outcome).
+    assert {row["resolution"] for row in context_path_rows if row["direction"] == "inbound"} == {
+        "resolved"
+    }
 
 
 def test_class_level_produces_reaches_every_handler_that_declares_none(spring7):

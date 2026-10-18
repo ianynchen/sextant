@@ -1,0 +1,63 @@
+# The SERVER's own path prefix, as configuration keys (spec 2026-10-18 §3).
+#
+# **Why this is not on a catalog.** A context path is a property of the embedded container,
+# not of `@RestController`: a Boot app that sets one serves every controller under it,
+# including the rows `spring-data-rest` and `spring-actuator` derive, and catalogs are flat
+# with no `family:` key. Declaring it per catalog would put the same block in ten files, each
+# holding a fact none of them owns, and the eleventh catalog written next year would forget it
+# and publish unprefixed paths with nothing failing.
+#
+# **Why the key carries a framework and a version.** Both narrower gates rot. The build
+# COORDINATE rots because Boot 4 renamed `spring-boot-starter-web` to
+# `spring-boot-starter-webmvc`, so a gate naming the old spelling is inert on
+# `spring-petclinic-rest` — the one corpus that sets a prefix at all. The bare KEY rots too:
+# `server.context-path` became `server.servlet.context-path` in Boot 2. Recording the key WITH
+# its framework and version range, and picking by what the module actually uses, is the only
+# shape that stays correct across versions instead of merely going quiet. Ruled by the user
+# 2026-10-18.
+id: spring-boot
+
+prefixes:
+  # **MEASURED, from the framework's own bytes** — `scripts/probes/cp38_boot_prefix_keys.md`
+  # reads `META-INF/spring-configuration-metadata.json` out of the Boot jars, which names
+  # every property Boot binds and records deprecations with their replacements. Both keys
+  # below are declared and undeprecated at 2.7.18, 3.5.14 and 4.1.1; what moved between those
+  # versions is the ARTIFACT that declares them (`spring-boot-autoconfigure` to
+  # `spring-boot-web-server`/`spring-boot-webmvc`), never the names.
+  #
+  # `keys` is ORDERED and composes left to right: `server.servlet.context-path=/petclinic` with
+  # `spring.mvc.servlet.path=/api` serves `@GetMapping("/owners")` at `/petclinic/api/owners`.
+  - framework: org.springframework.boot
+    versions: ">=2.0"
+    measured: ["2.7.18", "3.5.14", "4.1.1"]
+    keys: [server.servlet.context-path, spring.mvc.servlet.path]
+    # The protocols this container serves, and the two it is measured for. SSE is an HTTP
+    # response from the same DispatcherServlet, so it carries the same prefix.
+    #
+    # **`websocket` is deliberately ABSENT.** A handshake URL is very probably under the
+    # context path too, and "very probably" is not a measurement — no probe has opened a
+    # Boot websocket app, and a wrong prefix on a handshake path is a wrong row. A websocket
+    # row therefore keeps its unprefixed path, which is what it published before this file
+    # existed.
+    protocols: [http, sse]
+
+  # The reactive stack, bounded to where it was measured. `spring.webflux.base-path` is
+  # declared at 2.7.18 and 3.5.14; at 4.1.1 it is absent from the 37 metadata-carrying
+  # artifacts this repository holds, and `spring-boot-webflux` is not among them — so Boot 4
+  # reactive is OUTSIDE this row rather than covered by it (CP-38's own "what it does not
+  # settle"). A `>=2.0` range here would claim a version nobody opened.
+  - framework: org.springframework.boot
+    versions: ">=2.0 <4.0"
+    measured: ["2.7.18", "3.5.14"]
+    keys: [spring.webflux.base-path]
+    protocols: [http, sse]
+
+# NOT DECLARED, and the absences are the point:
+#
+# * Boot 1's `server.context-path` / `server.servlet-path`. No Boot 1 jar was opened, and §5.4
+#   does not let a version scope be written from recollection. A Boot 1 module publishes
+#   unprefixed paths exactly as today until someone measures and adds the row.
+# * `management.endpoints.web.base-path`, which prefixes the ACTUATOR surface alone rather
+#   than the module's. It composes after the keys above when management shares the main port
+#   and does not when `management.server.port` moves it — an interaction CP-5 measured on one
+#   port only. Declaring it here would apply it to every row.

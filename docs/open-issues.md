@@ -410,7 +410,7 @@ raw `CommonResult`'s `data` field is an unbound `T`, and `expansion.py` names th
 ("a shape with an undescribed field is OPEN") as a deliberate refusal to claim more than the
 evidence supports.*
 
-### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong
+### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong · **the CONFIGURATION half CLOSED 2026-10-18; `setPathPrefixes` open on the sixth edge**
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` and on the PINNED `spring-petclinic-rest` · `src/sextant/application/resolve/engines/annotation_driven.py`**
 
 Three spellings of one gap. An inbound path is read from annotations alone, and a prefix the
@@ -450,6 +450,38 @@ against `scripts/field-expectations/spring-petclinic-rest.json`'s `routes.inboun
 
 **Closes when** a `context-path`-setting module publishes its paths with the prefix, the pin
 moves with it, and `ruoyi-vue-pro`'s own prefix is either applied or named as a gap.
+
+> **THE CONFIGURATION HALF IS BUILT (2026-10-18)**, spec
+> `2026-10-18-configured-path-prefixes-design.md`.
+>
+> `catalogs/server-models/spring-boot.yml` declares the keys with the framework and version
+> range they were measured on (CP-38, from Boot's own
+> `META-INF/spring-configuration-metadata.json` at 2.7.18, 3.5.14 and 4.1.1), and
+> `resolve/path_prefix.py` applies them to every inbound row of the protocols the entry
+> names — one pass, so a catalog written later is covered without knowing anything about it.
+> It runs immediately after `derive_endpoints` and before `record_roots`,
+> `record_routing_conflicts` and `record_self_exchange`, which key on the address.
+>
+> **Measured: `spring-petclinic-rest` publishes all 44 inbound rows under `/petclinic`**,
+> where all 44 lacked it. The pin moved in the same commit, reviewed by `OI-32`'s procedure
+> and asserted rather than eyeballed: 44 rows before and after, and **every change is the
+> prefix alone** — no route gained, lost or otherwise altered.
+>
+> **What it refuses, which is the half that could have published a wrong address.** A key
+> whose environments DISAGREE is refused outright and the row keeps the path it had, because
+> choosing one environment's value publishes an address the others do not serve; a module
+> whose framework version is outside the measured range takes no prefix (guard
+> `path_prefix.a-version-outside-the-measured-range-takes-no-prefix`); `websocket` is not in
+> the shipped protocol list, because a handshake path is *probably* under the context path
+> and probably is not a measurement.
+>
+> **Still open: `setPathPrefixes`** (§4 of the spec). Ruled IN scope — the prefix map is built
+> once at wiring time from string literals, so it is configuration and not runtime logic — and
+> blocked on one edge: `getAdminApi()` → the field → the value written into it answers
+> `unresolved(no_writer)`, which is `OI-136`'s sixth edge, with `OI-141` carrying the field
+> shape. Everything else is in the facts and measured: the Spring call is cataloguable, both
+> literals sit at `WebProperties#<init>` ordinals 1-2, and the prefix pairs with its package
+> pattern by receiver identity on two coherent paths.
 
 ### OI-147 — RocketMQ is catalogued nowhere, and it is absent from COVERAGE as well
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` · `src/sextant/catalogs/`**
@@ -957,6 +989,15 @@ written "for testing purpose" and called from no main-source code, so the bindin
 writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
 single address, the day capability 9.19 makes the setter visible.
 
+*A THIRD shape in this family, measured 2026-10-18 (`ruoyi-vue-pro`): a field holding a
+CONSTRUCTED object. `WebProperties` declares
+`private Api adminApi = new Api("/admin-api", "**.controller.admin.**")`, which compiles to
+`aload_0; new; dup; ldc; ldc; invokespecial; putfield` — the middle instruction is an
+`invokespecial`, so `fieldWrites`' `VarInsnNode` requirement refuses it exactly as it refuses
+the `ldc` shape. Both literals are in the facts at `WebProperties#<init>` ordinals 1 and 2 and
+neither is reachable from the field. It is what blocks `setPathPrefixes` (`OI-148` §4), and it
+is the same capability as this entry's own shape.*
+
 *A real-project instance, 2026-10-18 (`ruoyi-vue-pro`): the websocket endpoint's own path.
 `YudaoWebSocketAutoConfiguration` registers the handler with*
 
@@ -1319,6 +1360,31 @@ the running system under §8.2. That is wrong: §8.2 bounds CONFIGURATION a depl
 overrides, and a literal in a method body is a code fact like any literal at a call site.
 Applied consistently that argument would forbid reading call-site literals, which is most of
 what the system does.
+
+**BOTH GROUNDS FOR THE DEFERRAL ARE WEAKER THAN THEY READ, measured 2026-10-18 on
+`YunaiV/ruoyi-vue-pro`** (spec `2026-10-18-configured-path-prefixes-design.md` §4):
+
+* *"16 of 756 asked positions"* — the denominator is positions **a shipped catalog asks
+  about**, and no catalog asks about `Map#put`'s key, which is where this case needs it. A
+  yield measured over today's questions cannot see a case that needs a new question; the same
+  shape as `OI-143`'s *"nothing in the 27 measured corpora reaches it"*, which the first real
+  production codebase hit 64 times.
+* *"And it costs no endpoint"* — true for a DESTINATION and **false for a PREFIX**. ruoyi
+  configures `/admin-api` and `/app-api` through
+  `RequestMappingHandlerMapping.setPathPrefixes`, whose prefix and package pattern are
+  literals in `WebProperties#<init>` (`new Api("/admin-api", "**.controller.admin.**")`).
+  Walking either half answers `unresolved(no_writer)` at exactly this edge — the key on TWO
+  coherent paths, one per `putPathPrefix` call, so the crossing and the pairing already work
+  — and the consequence is not a NULL column. **480 inbound rows publish a path that looks
+  resolved and is wrong by its prefix.** Nothing in the row says to doubt it.
+
+So the honest statement of the yield is now "16 positions of the 756 we ask about, plus the
+prefix on every row of a module that configures one", and the honest statement of the cost is
+no longer "never an endpoint". The deferral may still be right; the two sentences it rested on
+are not the ones to rest it on. The user ruled this case IN scope on 2026-10-18, which makes
+this edge a blocker rather than a nicety: *"the lambda is still config … I said business logic
+in the other case because the path was dependent upon the path being called, a runtime logic,
+whereas this one is configured."*
 
 **The probe is already written and committed**, so whoever picks this up does not re-measure:
 `cp33_binding_writes.md` records that a setter presents the existing `ALOAD 0; xLOAD k;
