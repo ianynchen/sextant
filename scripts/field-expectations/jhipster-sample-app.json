@@ -10,6 +10,7 @@
   },
   "terminal_kinds": {
     "persistence/database": 70,
+    "throws": 40,
     "unresolved": 1071
   },
   "narrowed_sites": {

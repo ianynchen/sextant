@@ -535,7 +535,7 @@ carried, with its answer deferred rather than guessed.
 literal. Not measured on a corpus yet; `apollo-portal` reaches it zero times (its wrapper is
 a `single_call` shape).
 
-### OI-145 — three field pins fail on `terminal_kinds`, and have since a terminal kind landed
+### OI-145 — three field pins fail on `terminal_kinds`, and have since a terminal kind landed · **CLOSED 2026-10-18**
 **Minor · entered 2026-10-18, found while running the field check for spec 2026-10-18 · `scripts/field-expectations/{jhipster-sample-app,mall-admin,spring-petclinic-rest}.json`**
 
 `scripts/field_check.py` fails on three of its six pins, each the same way:
@@ -567,6 +567,43 @@ IS different — `OI-32` was route spellings after an identity migration, this i
 current `main`, in a commit that says what moved and why — `field_check.py` calls refreshing a
 pin *"a deliberate, reviewed act"*, and `OI-32` is the worked example of doing it properly:
 someone looked at the rows, agreed the new values were right, and recorded that they had.
+
+**CLOSED 2026-10-18. The rows were looked at; here is what was seen.**
+
+**Nothing was reclassified — `throws` is purely additive.** Every count these pins already
+recorded is identical today, which is the measurement that separates "the corpus gained a kind"
+from "a rule stopped matching and its rows fell into `unresolved`":
+
+| pin | unchanged | added |
+|---|---|---|
+| `jhipster-sample-app` | `persistence/database` 70, `unresolved` 1071 | `throws` **40** |
+| `mall-admin` | `persistence/cache` 41, `persistence/database` 199, `unresolved` 5112 | `throws` **242** |
+| `spring-petclinic-rest` | `persistence/database` 102, `unresolved` 1972 | `throws` **15** |
+
+*The re-recording script asserts both halves rather than trusting the eye: each prior count must
+match, and `throws` must be the only new key.*
+
+**Spot-checked against the upstream source, and each is a real throw exit:**
+
+* `BankAccountResource#updateBankAccount` — 3 terminals, 3 explicit
+  `throw new BadRequestAlertException(…)` (lines 80, 83, 87); `partialUpdateBankAccount` the
+  same three (114, 117, 121).
+* `GeneratedCriteria#addCriterion` — **228** of `mall-admin`'s 242, one per MyBatis-generated
+  `*Example` class, each `throw new RuntimeException("Value for condition cannot be null")`.
+* `JdbcOwnerRepositoryImpl#findById` — `throw new ObjectRetrievalFailureException(…)` in the
+  `EmptyResultDataAccessException` catch; `EntityUtils#getById` — the trailing `throw` after
+  its loop.
+* `CallMonitoringAspect#invoke` — 3 terminals and **no `throw` in the source**: the method is
+  `try { return joinPoint.proceed(); } finally { … synchronized … }`, which javac compiles to
+  handler code ending in `athrow`. A true "this trace exits by throwing" and worth naming,
+  because the kind holds two shapes — a source `throw` and a compiler-generated rethrow — and
+  a reader counting `throws` against source statements will not find them all.
+
+**Cause, for the record:** `throws` became a terminal kind in `211ac499` (2026-09-12, `G-74`),
+and nothing re-recorded the pins. Five weeks of red.
+
+**All six pins pass**, which is the first time the field check has been green since
+`apollo-portal` joined it.
 
 ### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape
 **Major · entered 2026-10-18, measured on `apolloconfig/apollo` (530 non-test Java files, 8 modules, commit `ea35677`) · `src/sextant/application/resolve/values.py::_joined`**
