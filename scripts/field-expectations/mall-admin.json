@@ -14,6 +14,7 @@
   "terminal_kinds": {
     "persistence/cache": 41,
     "persistence/database": 199,
+    "throws": 242,
     "unresolved": 5112
   },
   "narrowed_sites": {
