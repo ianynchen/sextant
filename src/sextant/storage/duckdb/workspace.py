@@ -1245,6 +1245,7 @@ _NAMED_DERIVATIONS = {
     "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
+    "prefix_endpoint_paths": "prefix_endpoint_paths.sql",
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
     "shapes_reset": "reset_shapes.sql",

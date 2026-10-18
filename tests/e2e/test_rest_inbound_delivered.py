@@ -375,12 +375,6 @@ def context_path_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OI-148: the mechanism is unbuilt — spec 2026-10-18 §2. The fixture and this "
-    "assertion come first (GUIDELINES §4.1), and `strict` is what makes the marker come "
-    "off in the same commit that builds it.",
-)
 def test_a_configured_context_path_and_servlet_path_reach_the_published_rows(context_path_rows):
     """`OI-148`, and the intention test for spec 2026-10-18 (§4.1 — the fixture and the
     assertion come first, and this one failed before the mechanism existed).

@@ -410,7 +410,7 @@ raw `CommonResult`'s `data` field is an unbound `T`, and `expansion.py` names th
 ("a shape with an undescribed field is OPEN") as a deliberate refusal to claim more than the
 evidence supports.*
 
-### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong
+### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong · **the CONFIGURATION half CLOSED 2026-10-18; `setPathPrefixes` open on the sixth edge**
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` and on the PINNED `spring-petclinic-rest` · `src/sextant/application/resolve/engines/annotation_driven.py`**
 
 Three spellings of one gap. An inbound path is read from annotations alone, and a prefix the
@@ -450,6 +450,38 @@ against `scripts/field-expectations/spring-petclinic-rest.json`'s `routes.inboun
 
 **Closes when** a `context-path`-setting module publishes its paths with the prefix, the pin
 moves with it, and `ruoyi-vue-pro`'s own prefix is either applied or named as a gap.
+
+> **THE CONFIGURATION HALF IS BUILT (2026-10-18)**, spec
+> `2026-10-18-configured-path-prefixes-design.md`.
+>
+> `catalogs/server-models/spring-boot.yml` declares the keys with the framework and version
+> range they were measured on (CP-38, from Boot's own
+> `META-INF/spring-configuration-metadata.json` at 2.7.18, 3.5.14 and 4.1.1), and
+> `resolve/path_prefix.py` applies them to every inbound row of the protocols the entry
+> names — one pass, so a catalog written later is covered without knowing anything about it.
+> It runs immediately after `derive_endpoints` and before `record_roots`,
+> `record_routing_conflicts` and `record_self_exchange`, which key on the address.
+>
+> **Measured: `spring-petclinic-rest` publishes all 44 inbound rows under `/petclinic`**,
+> where all 44 lacked it. The pin moved in the same commit, reviewed by `OI-32`'s procedure
+> and asserted rather than eyeballed: 44 rows before and after, and **every change is the
+> prefix alone** — no route gained, lost or otherwise altered.
+>
+> **What it refuses, which is the half that could have published a wrong address.** A key
+> whose environments DISAGREE is refused outright and the row keeps the path it had, because
+> choosing one environment's value publishes an address the others do not serve; a module
+> whose framework version is outside the measured range takes no prefix (guard
+> `path_prefix.a-version-outside-the-measured-range-takes-no-prefix`); `websocket` is not in
+> the shipped protocol list, because a handshake path is *probably* under the context path
+> and probably is not a measurement.
+>
+> **Still open: `setPathPrefixes`** (§4 of the spec). Ruled IN scope — the prefix map is built
+> once at wiring time from string literals, so it is configuration and not runtime logic — and
+> blocked on one edge: `getAdminApi()` → the field → the value written into it answers
+> `unresolved(no_writer)`, which is `OI-136`'s sixth edge, with `OI-141` carrying the field
+> shape. Everything else is in the facts and measured: the Spring call is cataloguable, both
+> literals sit at `WebProperties#<init>` ordinals 1-2, and the prefix pairs with its package
+> pattern by receiver identity on two coherent paths.
 
 ### OI-147 — RocketMQ is catalogued nowhere, and it is absent from COVERAGE as well
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` · `src/sextant/catalogs/`**

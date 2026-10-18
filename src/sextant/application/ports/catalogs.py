@@ -286,6 +286,19 @@ class Catalog:
     # reader must not treat an entry as a direct supertype edge.
     type_model: list[dict[str, Any]] = field(default_factory=list)
 
+    # The SERVER's own path prefix as configuration keys (`server-models/*.yml`, spec
+    # 2026-10-18 §3), per framework and version range. The source reads it once and hands
+    # every catalog the same list, exactly as the two models above.
+    #
+    # It is not a per-catalog fact and deliberately not declared as one: a context path
+    # belongs to the embedded container, so it moves rows every catalog in the module
+    # derived, including ones that know nothing about it.
+    #
+    # Carried whole and unread here. `resolve/path_prefix.py` interprets it, and is also
+    # where a version range is compared against the module's own and where a key whose
+    # environments disagree is refused.
+    server_model: list[dict[str, Any]] = field(default_factory=list)
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

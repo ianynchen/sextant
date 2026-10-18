@@ -63,6 +63,72 @@ class YamlCatalogSource:
             models[str(_required(raw, "id", path))] = raw
         return models
 
+    def server_model(self) -> list[dict[str, Any]]:
+        """The SERVER's own path prefix, as configuration keys per framework and version
+        (`server-models/*.yml`, spec 2026-10-18 §3).
+
+        **Not on a catalog, because it is not a catalog's fact.** A context path belongs to
+        the embedded container: a module that sets one serves every endpoint under it,
+        including rows `spring-data-rest` and `spring-actuator` derive. Catalogs are flat —
+        no `family:` key — so per-catalog declaration would be the same block in ten files,
+        each holding a fact none of them owns, and the next catalog written would forget it
+        and publish unprefixed paths with nothing failing.
+
+        **Each row carries a framework and a VERSION RANGE because both narrower gates
+        rot.** A build coordinate rots: Boot 4 renamed `spring-boot-starter-web` to
+        `spring-boot-starter-webmvc`, so a gate on the old spelling is inert on
+        `spring-petclinic-rest`, the one corpus that sets a prefix. A bare key rots too:
+        `server.context-path` became `server.servlet.context-path` in Boot 2. Picking by the
+        framework version the module actually uses is the only shape that stays correct
+        rather than going quiet — ruled by the user 2026-10-18.
+
+        Read whole and interpreted by `resolve/path_prefix.py`, as `value_model` and
+        `type_model` above are read by their own consumers. Validated HERE, loudly, because
+        a `.yml` under `catalogs/` is an instruction written for Sextant and a typo that
+        read as "prefix nothing" would be indistinguishable from a module that configures
+        none.
+        """
+        model: list[dict[str, Any]] = []
+        for path in sorted((self._directory / "server-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise CatalogError(f"loading server model {path}: not a YAML mapping")
+            entries = raw.get("prefixes")
+            if not isinstance(entries, list):
+                raise CatalogError(f"loading server model {path}: `prefixes` must be a list")
+            for entry in entries:
+                required = {"framework", "versions", "measured", "keys", "protocols"}
+                if not isinstance(entry, dict) or not required <= set(entry):
+                    raise CatalogError(
+                        f"loading server model {path}: each entry is a mapping with "
+                        f"`framework`, `versions`, `measured` — the versions whose own "
+                        f"metadata was read (§5.4) — `keys` and `protocols`, got {entry!r}"
+                    )
+                keys = entry["keys"]
+                protocols = entry["protocols"]
+                measured = entry["measured"]
+                for name, value in (
+                    ("keys", keys),
+                    ("protocols", protocols),
+                    ("measured", measured),
+                ):
+                    if not isinstance(value, list) or not value:
+                        raise CatalogError(
+                            f"loading server model {path}: `{name}` must be a non-empty list, "
+                            f"got {value!r}"
+                        )
+                model.append(
+                    {
+                        "framework": str(entry["framework"]),
+                        "versions": str(entry["versions"]),
+                        "measured": [str(one) for one in measured],
+                        # ORDERED: the keys compose left to right.
+                        "keys": [str(key) for key in keys],
+                        "protocols": [str(one) for one in protocols],
+                    }
+                )
+        return model
+
     def type_model(self) -> list[dict[str, Any]]:
         """Which types may stand where another is declared (`type-models/*.yml`).
 
@@ -202,6 +268,7 @@ class YamlCatalogSource:
         # type (GUIDELINES §8.1 — the language tells two overloads apart by their parameter
         # types, and mirroring a language's own rule is not optional).
         conformance = self.type_model()
+        servers = self.server_model()
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
@@ -280,6 +347,8 @@ class YamlCatalogSource:
                     value_model=identities,
                     # The source's own type-conformance table, built above.
                     type_model=conformance,
+                    # The server's own prefix keys, built above.
+                    server_model=servers,
                 )
             )
         return catalogs
