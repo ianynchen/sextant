@@ -234,6 +234,11 @@ _ROLE = "role"
 # reaches them, and a cleanup that touches five modules is not this fix (§3).
 _ALL_STRINGS = "all_strings"
 
+# An `identified_by` entry saying its call's result stands for whatever its RECEIVER stands
+# for, rather than for one of its own arguments (`OI-142`). The third form, beside an `arg`
+# index and the `all_strings` rule.
+_FROM_RECEIVER = "from_receiver"
+
 # The marker `MethodFlow.concatTemplate` writes for a runtime operand it could not fold —
 # one per `\u0001` in the bootstrap's recipe. Spelled once here because `_joined` both
 # COUNTS them (to check the template against the operand list) and SPLITS on them.
@@ -1093,12 +1098,58 @@ class _Walk:
         # the negative direction (§8's "exclude only on proof": a miss asserted, not read).
         if self._identified_rule(site) == _ALL_STRINGS:
             return self._all_arguments(site, trail, frames)
+        # **The identity its RECEIVER carries** (`OI-142`), for a call that hands back
+        # something still standing for the same thing. Below the two arms above because
+        # they are more specific: a call naming its own identifying argument answers from
+        # that argument, never from what it was invoked on.
+        if self._preserves_receiver(site):
+            return self._through_receiver(site, trail, frames)
         # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
         # of 2,065 value-producing sites are that boundary, so `external` is the common
         # answer and not the corner case.
         return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
+
+    def _through_receiver(
+        self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """The receiver's own identity, handed on as this call's — or `not_readable` where
+        the receiver does not resolve to exactly one.
+
+        **EXACTLY ONE, and that single condition is what makes an entry on `List.get` safe.**
+        It is the user's own argument of 2026-10-17: element access on a list of a service's
+        instances yields the same service, because every instance of a service IS that
+        service. What makes it sound in general is that the identity table already separates
+        the two cases, and the walk's multiplicity separates them again at resolve time:
+
+        * a SINGLE-VALUED identity resolves to one answer, and an element of a collection
+          identified as one thing is that thing. MEASURED over the shipped table: of 23
+          entries, the only single-valued one producing a collection is
+          `Collections.singletonList` at `arg: 0` — and `singletonList("x").get(0)` IS `x`,
+          so propagating is right there too;
+        * an ENUMERATING identity (`all_strings`) resolves to several, and an element of a
+          collection identified as MANY things is one of them, which one being unknowable.
+          MEASURED: all three such entries are topic lists — `List.of`, `Arrays.asList`,
+          `Subscriptions.topics` — and propagating would answer every topic for one element,
+          a wrong answer at `resolved`, which is the one failure §7 names.
+
+        So the refusal is not caution about a case nobody has: it is the exact line between
+        the three entries that must not propagate and the rest. A future entry that breaks
+        it would have to declare a single-valued identity on a producer whose elements differ
+        from it, and `by:` means no entry lands without a measurement saying otherwise.
+        """
+        row = self._index.sites.get(site)
+        receiver = None if row is None else row.get("receiver")
+        if receiver is None:
+            # A static or unreadable receiver. `not_readable` rather than `external`: the
+            # call IS in what was scanned, and the thing that is missing is the value it
+            # was invoked on.
+            return _only(trail, _unresolved(NOT_READABLE))
+        reached = self._through(site[0], int(str(receiver)), site[1], trail, frames)
+        if len(reached) != 1:
+            return _only(trail, _unresolved(NOT_READABLE))
+        return reached
 
     def _all_arguments(
         self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
@@ -1207,6 +1258,22 @@ class _Walk:
             if isinstance(slot, int):
                 return slot
         return None
+
+    def _preserves_receiver(self, site: tuple[str, int]) -> bool:
+        """Whether a matching entry says this call's result stands for whatever its
+        RECEIVER stands for.
+
+        The third form `arg` cannot express, and the one a discovery chain needs
+        (`OI-142`). `discoveryClient.getInstances("customers-service")` names its service
+        at argument 0, but the two calls after it name it nowhere: `.get(0)`'s argument is
+        an int index and `.getUri()` has no arguments at all. What both say is "I hand back
+        something that is still about the same service", and an identity model built only
+        out of positions has no way to say it.
+
+        **The caller gates this on the receiver resolving to exactly ONE answer, and that
+        gate is the whole safety argument** — see `_through_receiver`.
+        """
+        return any(entry.get(_FROM_RECEIVER) is True for entry in self._identity_matches(site))
 
     def _identified_rule(self, site: tuple[str, int]) -> str | None:
         """The RULE a matching entry names in place of a slot, or None — the plural half of

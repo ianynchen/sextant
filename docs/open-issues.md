@@ -309,7 +309,62 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
-### OI-142 — a service name three calls back needs a word the identity grammar does not have
+### OI-142 — a service name five calls back resolves; publishing it as a PEER does not
+**Minor · entered 2026-10-17, HALF BUILT the same day · `src/sextant/catalogs/value-models/spring-cloud.yml`, `src/sextant/application/resolve/values.py`, probe `scripts/probes/cp36_discovery_client.md`**
+
+> **The grammar half is built and measured. The publishing half is not, and it needs
+> ruling 2's plumbing rather than more identity work.**
+>
+> **What shipped.** `identified_by` gained a third form, `from_receiver: true` — "my
+> result stands for whatever my RECEIVER stands for" — because `arg` could not express
+> it: `List.get(int)`'s argument is an index and `ServiceInstance.getUri()` takes nothing
+> (CP-36 rows 1 and 3). Three entries declare the chain, and
+> `values._through_receiver` resolves it.
+>
+> **What makes an entry on a JDK accessor safe, measured rather than argued.** The
+> user's point of 2026-10-17: every instance of a service IS that service, so element
+> access preserves the identity. The gate is the walk's own multiplicity — a
+> SINGLE-VALUED identity resolves to one answer and propagates; an ENUMERATING one
+> (`all_strings`) resolves to several and is refused, because an element of a collection
+> identified as many things is one of them and which one is unknowable. Over the shipped
+> table of 23 entries: three are enumerating and all three are topic lists (`List.of`,
+> `Arrays.asList`, `Subscriptions.topics`), and of the twenty single-valued ones exactly
+> one produces a collection — `Collections.singletonList` at `arg: 0`, where
+> `singletonList("x").get(0)` IS `x`. The gate is therefore the exact line between the
+> entries that must not propagate and every other entry. Guard
+> `values.an-enumerating-identity-is-not-preserved-through-a-receiver` kills on it.
+>
+> **PROVEN end to end, by a throwaway entry that was measured and reverted.** With one
+> more identity — `java.lang.String#valueOf` at `arg: 0`, which javac inserts around a
+> non-String concat operand — the chain resolves **five hops**:
+>
+> ```
+> uri(concat "{}/owners")  ->  makeConcatWithConstants  ->  String.valueOf
+>   ->  getCustomerServiceUri()  ->  getUri()  ->  get(0)  ->  getInstances("customers-service")
+> ```
+>
+> and answers `customers-service/owners`.
+>
+> **And that is why it is not shipped.** `customers-service` is a service NAME, not a
+> host with a scheme, so joining it into the template produces a string `split_url` reads
+> as a relative path: `peer` stays NULL and the path column carries both halves. The row
+> would be more informative than today's NULL and still miss the arrow, which is the
+> thing the document is for.
+>
+> **What remains is ruling 2, and it cannot be inferred from the string.** The user
+> granted "peer and path from separate evidence" for exactly this case. The engine would
+> need to know that the resolved operand MEANS a peer — and no shape test can tell it:
+> `basePath + "/orders"` where `basePath = "/api/v1"` has the same shape and `/api/v1` is
+> not a peer. `role` is not the hook either: it says WHICH PART of a composite value an
+> argument is (`new ProducerRecord(topic, …, payload)`), not what the value means to a
+> consumer, and `_identity_matches` skips roled entries by design.
+>
+> **Closes** by the walk's answer carrying what the value is — an authority rather than an
+> address — so the engine can fill `peer` from it and `path` from the template's tail,
+> plus the `String.valueOf` entry. **Falsified by** those three rows publishing peer
+> `customers-service` with paths `/owners` and `/owners/{}/pets`.
+
+### OI-142 (original entry, kept for the measurement) — a service name three calls back needs a word the identity grammar does not have
 **Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 4 · `src/sextant/catalogs/value-models/`, `docs/components/D02-catalog-schema.md` §1f**
 
 `spring-petclinic-genai-service` calls `customers-service` three times, and the document

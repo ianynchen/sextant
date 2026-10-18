@@ -87,6 +87,7 @@ _IDENTIFIED = _PKG + "Identified#"
 _UNREAD = _PKG + "Unread#"
 _LOOP = _PKG + "Loop#"
 _ASSEMBLER = _PKG + "Assembler#"
+_PRESERVED = _PKG + "Preserved#"
 _JOINER = _PKG + "Joiner#"
 _HALF_JOINER = _PKG + "HalfJoiner#"
 _CONFIG_JOINER = _PKG + "ConfigJoiner#"
@@ -227,6 +228,7 @@ def _facts() -> list[Fact]:
             _UNREAD,
             _LOOP,
             _ASSEMBLER,
+            _PRESERVED,
             _JOINER,
             _HALF_JOINER,
             _CONFIG_JOINER,
@@ -734,6 +736,64 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="concat", value="/orders/{}", source=4)],
         ),
+        # A producer the table identifies, then a call ON its result that hands back
+        # something still standing for the same thing — the `from_receiver` chain
+        # (`OI-142`). Two methods: one where the producer's identity is SINGLE-VALUED and
+        # one where it ENUMERATES, because the gate between them is the safety argument.
+        _declared(_PRESERVED, "single", "()V"),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="string", value="one-service"),
+            ],
+            result=50,
+        ),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            receiver=50,
+            result=51,
+            arguments=[CallArgument(kind="int", value=0)],
+        ),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=51)],
+        ),
+        _declared(_PRESERVED, "enumerating", "()V"),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="topic-a"),
+                CallArgument(kind="string", value="topic-b"),
+            ],
+            result=60,
+        ),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            receiver=60,
+            result=61,
+            arguments=[CallArgument(kind="int", value=0)],
+        ),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=61)],
+        ),
         # An assembled address whose every operand IS a source literal — the shape
         # ruling 1 (2026-10-17) joins. The producing site is the concat itself, and its
         # own arguments are the operands.
@@ -1218,6 +1278,7 @@ def test_a_value_from_a_body_this_workspace_never_read_is_unresolved_external(wa
 # exactly there, and that the entries it must pass over are passed over.
 
 _OF_TWO_IDENTITY = {"owner": _NAME, "method": "of", "arg": 1}
+_ALL_STRINGS_SPELLING = "all_strings"
 
 
 def _identified(
@@ -1267,6 +1328,63 @@ def test_an_identity_chain_goes_as_deep_as_the_code_does(walked):
         [_OF_TWO_IDENTITY, {"owner": _NAME, "method": "text", "arg": 0}],
     )
     assert [b.slots[0].value for b in bindings] == ["deep-notify"]
+
+
+# The `from_receiver` form (`OI-142`): an entry saying its call's result stands for
+# whatever its RECEIVER stands for. `arg` cannot express it — a discovery chain's
+# `.get(0)` names an index and `.getUri()` names nothing — and the gate below is what
+# makes an entry on a JDK accessor safe to declare estate-wide.
+_PRESERVING = {"owner": _ONE_TARGET[0], "method": _ONE_TARGET[1], "from_receiver": True}
+
+
+def test_a_receiver_preserving_entry_hands_on_a_single_valued_identity(walked):
+    """The positive half. The producer's identity is ONE value, the call on its result
+    says "I still stand for that", and the consuming position answers it.
+
+    This is the user's own argument of 2026-10-17, which is what the entry rests on: an
+    element of a list of a service's instances is that same service, because every
+    instance of a service IS that service. Measured over the shipped table, the only
+    single-valued entry producing a collection is `Collections.singletonList` at
+    `arg: 0` — and `singletonList("x").get(0)` IS `x`, so propagating is right there too.
+    """
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "single", "()V"), 2, [_OF_TWO_IDENTITY, _PRESERVING]
+    )
+    assert [b.slots[0].value for b in bindings] == ["one-service"]
+    assert [b.slots[0].literal_kind for b in bindings] == ["string"]
+
+
+@pytest.mark.pins("values.an-enumerating-identity-is-not-preserved-through-a-receiver")
+def test_a_receiver_preserving_entry_REFUSES_an_enumerating_identity(walked):
+    """**The safety half, and the reason the form can be declared on a JDK accessor at
+    all.** An `identified_by` entry is read by every catalog at once, over every call in
+    the estate — so an entry on element access meets topic lists as well as service
+    instances. `List.of("topic-a", "topic-b").get(0)` must NOT answer both topics: that
+    is one element reported as every element, a wrong answer at `resolved`, which is the
+    single failure spec 2026-09-22 §7 says this family of work risks.
+
+    The gate is the walk's own multiplicity rather than a special case: an enumerating
+    identity resolves to SEVERAL answers, and an element of a collection identified as
+    many things is one of them, which one being unknowable from the facts. MEASURED over
+    the shipped table — 23 entries, three enumerating, and all three are topic lists
+    (`List.of`, `Arrays.asList`, `Subscriptions.topics`).
+    """
+    enumerating = {**_OF_TWO_IDENTITY, "arg": _ALL_STRINGS_SPELLING}
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "enumerating", "()V"), 2, [enumerating, _PRESERVING]
+    )
+    assert _reasons(bindings) == ["not_readable"]
+    assert [b.slots[0].value for b in bindings] == [None]
+
+
+def test_a_receiver_preserving_entry_on_a_static_call_answers_nothing(walked):
+    """No receiver, nothing to preserve. `not_readable` rather than `external`: the call
+    IS inside what was scanned, and what is missing is the value it was invoked on — a
+    distinction §1d draws and a consumer acts on."""
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "single", "()V"), 2, [{**_PRESERVING, "method": "of"}]
+    )
+    assert _reasons(bindings) == ["external"]
 
 
 @pytest.mark.pins("values.an-identity-entry-with-a-role-is-not-an-identity")
