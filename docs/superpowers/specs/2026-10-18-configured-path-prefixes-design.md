@@ -88,52 +88,89 @@ probe has measured the interaction — CP-5 rows 7-8 measured `base-path` on one
 
 ---
 
-## 3. Where the declaration lives — **RULED: Option B**
+## 3. The declaration — **RULED: one table of (key, framework, version), picked per module**
 
 The prefix is a property of **the module's server**, not of any one catalog: a Boot app with
 `context-path=/petclinic` serves every controller under it, including the rows
-`spring-data-rest` and `spring-actuator` derive. Catalogs are flat — there is no `family:` key —
-so the two shapes are genuinely different pieces of work and the choice is the user's.
+`spring-data-rest` and `spring-actuator` derive. Catalogs are flat — there is no `family:`
+key — so one declaration of the server beats the same block in ten catalogs that must each
+remember a fact none of them owns. **Option B, ruled by the user 2026-10-18.**
 
-### Option A — each catalog declares the keys that prefix ITS rows
+Two gates were proposed and both rot. The user's ruling is the third shape, and it is the
+only one that is CORRECT across versions rather than merely loud when stale.
+
+### Why not the build coordinate
+
+Measured: `spring-petclinic-rest` — the one corpus that sets a prefix key — declares
+**`spring-boot-starter-webmvc`**, because Boot 4 renamed `spring-boot-starter-web`. A gate
+naming the old spelling is inert exactly where it matters, which the register already has a
+case of (`gateway-detect-4x-coordinate`: a coordinate list that changes nothing either way).
+
+### Why not the bare key either
+
+The user's objection, and it is right: *"the key can change based on spring version"*. It has
+— `server.context-path` became `server.servlet.context-path` in Boot 2.
+
+### The ruling: record the key WITH its framework and version, and pick by what the module uses
 
 ```yaml
-# spring-web.yml, spring-mvc.yml, spring-webflux-router.yml, spring-mvc-router.yml,
-# spring-actuator.yml, spring-data-rest.yml, …
-path_prefix_from: [server.servlet.context-path, spring.mvc.servlet.path]
+prefixes:
+  - framework: org.springframework.boot
+    versions: "[2.0,)"          # measured at 2.7.18 and 4.1.1 — CP-38
+    stack: servlet
+    keys: [server.servlet.context-path, spring.mvc.servlet.path]   # composed in this order
+  - framework: org.springframework.boot
+    versions: "[2.0,)"
+    stack: reactive
+    keys: [spring.webflux.base-path]
 ```
 
-Applied per row by its own `catalog_id`, which every endpoint row already carries.
+**Measured, from the framework's own bytes** (CP-38): Boot ships
+`META-INF/spring-configuration-metadata.json` naming every property it reads, with
+deprecations and their replacements. At **2.7.18** and **4.1.1** both spellings above are
+declared and neither is deprecated; 2.7.18 also records `server.servlet.path` as deprecated in
+favour of `spring.mvc.servlet.path`. What moved between those versions is the JAR that
+declares them — `spring-boot-autoconfigure` to `spring-boot-web-server`/`spring-boot-webmvc` —
+not the names.
 
-* **For:** it is catalog data, which is where §8.1 puts framework knowledge; the scope of each
-  key is stated by the catalog that knows it; a non-Spring row can never pick up a Spring key.
-* **Against:** the same block in roughly ten catalogs, and **every future Spring inbound catalog
-  has to remember it** — a catalog that forgets publishes unprefixed paths and nothing fails.
-  That is the shape [[removing-the-cause-beats-detecting-it]] warns about: N copies plus a test.
+**Only measured rows are declared.** Boot 1's spellings are not in the table: no Boot 1 jar
+was opened, and §5.4 does not let a version scope be written from recollection. A Boot 1
+module therefore publishes unprefixed paths exactly as today until someone measures and adds
+the row — a known absence, not a guess.
 
-### Option B — one declaration of the SERVER, gated on the module's build
+### Picking the row
 
-One place names the keys and the stack each belongs to; the pass applies them to every inbound
-HTTP row in a module whose build declares the matching starter
-(`spring-boot-starter-web` → servlet, `spring-boot-starter-webflux` → reactive), which
-`dependency_coordinates` already answers.
+| the module's framework version | how the row is chosen |
+|---|---|
+| recorded | it selects the row. Precise, and the ordinary case |
+| **not** recorded | every row for that framework is eligible, and the key PRESENT in the module's own `resolved_config` decides — a module configures one Boot generation, so at most one spelling can be there |
+| two spellings present at once | a contradiction in the module's own configuration, reported rather than resolved by preference |
 
-* **For:** the prefix is modelled where it actually lives — the server — so it reaches rows from
-  catalogs that know nothing about it, including future ones, and there is one place to be right.
-* **Against:** "which rows does this server serve" becomes an inference rather than a
-  declaration. A module embedding Spring Boot's container AND a second framework's routes would
-  prefix both, and only one is right. No corpus in the estate does that; `mall-swarm`,
-  `ruoyi-vue-pro`, `jhipster-sample-app`, `spring-petclinic-rest` and `apollo-portal` are each
-  single-stack.
+**The version is already in the workspace.** The `module` fact carries
+`dependency_versions` as `coordinate -> version`: `spring-petclinic-rest` answers **4.1.1** on
+eleven coordinates and `mall-swarm/mall-admin` **3.5.14**. No new extraction is needed.
 
-**RULED: Option B** (user, 2026-10-18). The prefix is one fact about one server, and Option A
-spreads it over ten files that must each remember a fact none of them owns. The against-case is
-real and unmeasured, so it ships as a stated boundary rather than dismissed: a module embedding
-two server stacks gets one prefix applied to rows the other stack serves. No corpus in the
-estate has that shape — all six pins are single-stack — and the boundary is written on the
-declaration itself so the next reader meets it there.
+### Where the version is NOT recorded, the answer is to follow the chain — ruled
 
----
+`ruoyi-vue-pro`'s modules record no Boot version at all, because their versions come from its
+own `yudao-dependencies` BOM and a `${revision}` property and the detector follows neither.
+The user's ruling on that, 2026-10-18:
+
+> *"it still applies, as it eventually depends on a version of spring anyways. It aligns with
+> our design that we should trace through the dependency chain rather than cap at a level"*
+
+Which is `OI-149`'s principle one layer out — *the reactor is the whole tree* — and the
+standing instruction already recorded for BOMs: track versions down the chain, not a few
+levels. So the fallback above is an INTERIM, not the design: the direction is that
+`dependency_versions` answers for a module whose version lives two hops away, which is
+`OI-139` (imported BOM chains, Major, open) and `OI-8` (a library version only a parent
+manages).
+
+**It changes nothing for `ruoyi` in this spec, and that is worth stating plainly rather than
+leaving implied: `ruoyi` sets NONE of these keys** — verified on all three built modules,
+`resolved_config` holds no row for any of the four. Its `/admin-api` comes from
+`setPathPrefixes` (§4) and waits on the sixth edge. The chain work raises precision for
+modules that DO set a key and hide their version; today the corpus has none.
 
 ## 4. `setPathPrefixes` IS in scope — **RULED**, and the reason generalises
 
