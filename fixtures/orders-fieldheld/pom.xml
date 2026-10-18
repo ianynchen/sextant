@@ -1,0 +1,26 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-fieldheld</artifactId>
+  <version>1.0.0</version>
+  <!-- A destination held in a field that a CONSTRUCTOR assigned, which is the shape the
+       walk's sixth edge exists for (spec 2026-10-18, `OI-136`, `OI-141`). Its own module
+       rather than a class added to `orders-service`: a new outbound row there moves set
+       assertions across the e2e suite for a change that exercises one edge, and this
+       fixture's whole content is the one shape.
+
+       `spring-kafka` 3.1.4 and Spring 6.1.6, the versions `orders-receivers` already
+       builds with, so the jars are in the local repository already. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId><artifactId>spring-kafka</artifactId><version>3.1.4</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>6.1.6</version>
+    </dependency>
+  </dependencies>
+</project>
