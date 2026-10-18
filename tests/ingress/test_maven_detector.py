@@ -534,6 +534,280 @@ def test_a_malformed_config_stops_detection_rather_than_extracting_nothing(tmp_p
         MavenDetector().detect(root)
 
 
+def test_a_sibling_inside_a_NESTED_aggregator_is_read(tmp_path: Path):
+    """`OI-149`: a shared type in `framework/common` was invisible, so every endpoint's
+    response contract was open.
+
+    The layout is `YunaiV/ruoyi-vue-pro`'s, which is the common shape for a large build:
+    the root aggregates `framework` and `app`, and `framework` is ITSELF an aggregator
+    holding the module that declares the envelope every controller returns. Measured
+    there: 85 open shapes in one module, 45 in another, and the response of all 323 of
+    their endpoints undescribed.
+
+    `_sibling_roots` was never the problem — it walks declared dependencies transitively
+    and reads their compiled output, with no `.sextant.yml` opt-in, which is why
+    `macrozheng/mall-swarm` (a FLAT reactor) resolves the same envelope correctly. The
+    gap was `_reactor_modules`, which resolved the parent's `<modules>` entries and
+    stopped: the root names `framework`, an aggregator with no `target/classes`, so the
+    module holding the type was in no map and nothing could reach it.
+    """
+    root = tmp_path / "build"
+    (root / "framework" / "common").mkdir(parents=True)
+    (root / "app").mkdir()
+    (root / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version>
+  <packaging>pom</packaging>
+  <modules><module>framework</module><module>app</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    # The nested aggregator: no compiled output of its own, which is exactly why
+    # stopping at it read nothing.
+    (root / "framework" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version></parent>
+  <artifactId>framework</artifactId>
+  <packaging>pom</packaging>
+  <modules><module>common</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "framework" / "common" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>framework</artifactId><version>4.1.0</version></parent>
+  <artifactId>common</artifactId>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "app" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version></parent>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>common</artifactId><version>4.1.0</version></dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+    classes = root / "framework" / "common" / "target" / "classes"
+    classes.mkdir(parents=True)
+    # A sibling root is taken only where compiled output EXISTS (`_sibling_roots`), so the
+    # file has to be there; its contents are the scanner's business, not the detector's.
+    (classes / "Envelope.class").write_bytes(b"\xca\xfe\xba\xbe")
+
+    module = MavenDetector().detect(root / "app").modules[0]
+
+    assert [root_.coordinate for root_ in module.library_roots] == ["com.acme:common"]
+    assert module.library_roots[0].archive == classes
+    # The version is the one THIS module declared for it, as for any sibling.
+    assert module.library_roots[0].version == "4.1.0"
+    assert module.sibling_coordinates == ("com.acme:common",)
+
+
+@pytest.mark.pins("maven.a-climb-stops-at-the-aggregator-that-contains-this-module")
+def test_an_ancestor_that_does_not_contain_this_module_does_not_replace_the_reactor_root(
+    tmp_path: Path,
+):
+    """The climb above must not walk out of the project, and this is the case that taught
+    it: a reactor root commonly inherits from a parent that is not its aggregator at all.
+
+    `macrozheng/mall`'s root pom declares
+    `<parent>org.springframework.boot:spring-boot-starter-parent</parent>` with an empty
+    `<relativePath/>`, so `_parent_pom` resolves it out of the local repository. An
+    unconditional climb replaced the real root with a pom inside `~/.m2` and found no
+    siblings at all — `mall-admin` fell from **629 shape fields to 73**, and its field pin
+    is what caught it.
+
+    Here the outside parent is on disk and declares `<modules>` of its own, which is the
+    harder version of the same thing: a plausible ancestor that aggregates something else.
+    The rule is containment — an aggregator reaches its modules by relative paths, so one
+    that does not contain this module cannot be the tree this module belongs to.
+    """
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-parent</artifactId><version>9.0.0</version>
+  <packaging>pom</packaging>
+  <modules><module>something-else</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    root = tmp_path / "build"
+    (root / "common").mkdir(parents=True)
+    (root / "app").mkdir()
+    (root / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>com.vendor</groupId><artifactId>vendor-parent</artifactId><version>9.0.0</version>
+    <relativePath>../outside/pom.xml</relativePath>
+  </parent>
+  <artifactId>build</artifactId><packaging>pom</packaging>
+  <modules><module>common</module><module>app</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "common" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.vendor</groupId><artifactId>build</artifactId><version>9.0.0</version></parent>
+  <artifactId>common</artifactId>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "app" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.vendor</groupId><artifactId>build</artifactId><version>9.0.0</version></parent>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency><groupId>com.vendor</groupId><artifactId>common</artifactId><version>9.0.0</version></dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+    classes = root / "common" / "target" / "classes"
+    classes.mkdir(parents=True)
+    (classes / "Shared.class").write_bytes(b"\xca\xfe\xba\xbe")
+
+    module = MavenDetector().detect(root / "app").modules[0]
+
+    assert module.sibling_coordinates == ("com.vendor:common",)
+
+
+def test_a_nested_module_reaches_a_sibling_in_ANOTHER_subtree(tmp_path: Path):
+    """The other half of `OI-149`, and live in the same project: the walk has to start at
+    the TOP of the reactor, not at this module's own parent.
+
+    `ruoyi-vue-pro` again — `yudao-module-mall/yudao-module-promotion` depends on
+    `yudao-module-system`, which is a ROOT-level module, and
+    `yudao-module-mall/yudao-module-product` depends on
+    `yudao-framework/yudao-spring-boot-starter-web`, which is in a different subtree
+    entirely. Descending from `yudao-module-mall` reaches neither: the dependency is up
+    and across, and a reactor is the whole tree from its root by Maven's own definition.
+
+    Climbing is per-step validated by `_parent_pom`, which accepts a `<relativePath>` pom
+    only when it declares the coordinates the `<parent>` names — so this follows genuine
+    Maven inheritance and cannot wander into an unrelated aggregator that happens to sit
+    one directory up.
+    """
+    root = tmp_path / "build"
+    (root / "framework" / "starter-web").mkdir(parents=True)
+    (root / "mall" / "promotion").mkdir(parents=True)
+    (root / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version>
+  <packaging>pom</packaging>
+  <modules><module>framework</module><module>mall</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    for aggregator, child in (("framework", "starter-web"), ("mall", "promotion")):
+        (root / aggregator / "pom.xml").write_text(
+            f"""<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version></parent>
+  <artifactId>{aggregator}</artifactId><packaging>pom</packaging>
+  <modules><module>{child}</module></modules>
+</project>
+""",
+            encoding="utf-8",
+        )
+    (root / "framework" / "starter-web" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>framework</artifactId><version>4.1.0</version></parent>
+  <artifactId>starter-web</artifactId>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "mall" / "promotion" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>mall</artifactId><version>4.1.0</version></parent>
+  <artifactId>promotion</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>starter-web</artifactId><version>4.1.0</version></dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+    classes = root / "framework" / "starter-web" / "target" / "classes"
+    classes.mkdir(parents=True)
+    (classes / "WebAutoConfiguration.class").write_bytes(b"\xca\xfe\xba\xbe")
+
+    module = MavenDetector().detect(root / "mall" / "promotion").modules[0]
+
+    assert module.sibling_coordinates == ("com.acme:starter-web",)
+    assert module.library_roots[0].archive == classes
+
+
+def test_a_nested_aggregators_sibling_this_module_does_not_depend_on_is_still_refused(
+    tmp_path: Path,
+):
+    """The widening above must not become "every module in the reactor", which was tried
+    and was wrong on its face: `mall-portal`'s `@Scheduled` cron task rendered inside
+    `mall-admin`'s document because its classes entered a workspace that never compiles
+    against them (`_sibling_roots`' own docstring). Descending into an aggregator adds
+    CANDIDATES; the dependency list still decides.
+    """
+    root = tmp_path / "build"
+    (root / "framework" / "common").mkdir(parents=True)
+    (root / "framework" / "unrelated").mkdir(parents=True)
+    (root / "app").mkdir()
+    (root / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version>
+  <packaging>pom</packaging>
+  <modules><module>framework</module><module>app</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    (root / "framework" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version></parent>
+  <artifactId>framework</artifactId><packaging>pom</packaging>
+  <modules><module>common</module><module>unrelated</module></modules>
+</project>
+""",
+        encoding="utf-8",
+    )
+    for name in ("common", "unrelated"):
+        (root / "framework" / name / "pom.xml").write_text(
+            f"""<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>framework</artifactId><version>4.1.0</version></parent>
+  <artifactId>{name}</artifactId>
+</project>
+""",
+            encoding="utf-8",
+        )
+        compiled = root / "framework" / name / "target" / "classes"
+        compiled.mkdir(parents=True)
+        (compiled / "Thing.class").write_bytes(b"\xca\xfe\xba\xbe")
+    (root / "app" / "pom.xml").write_text(
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent><groupId>com.acme</groupId><artifactId>build</artifactId><version>4.1.0</version></parent>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>common</artifactId><version>4.1.0</version></dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+
+    module = MavenDetector().detect(root / "app").modules[0]
+
+    assert module.sibling_coordinates == ("com.acme:common",)
+
+
 # --- Reactor discovery (2M Task 2) ---------------------------------------
 
 REACTOR = FIXTURE.parent / "orders-reactor"

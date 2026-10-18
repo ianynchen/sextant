@@ -357,6 +357,48 @@ grep -c "shapes referring to it are open" examples/ruoyi-vue-pro/yudao-module-sy
 **Closes when** `_reactor_modules` descends into a `<module>` that is itself an aggregator.
 **Falsified by** that count reaching 0 while `mall-swarm`'s own figures do not move.
 
+> **FIX IN FLIGHT (2026-10-18), and it took two halves rather than one.**
+>
+> * **Descend.** `_reactor_modules` now walks every aggregator's `<modules>`
+>   breadth-first, each aggregator's own directory being the base its relative paths
+>   resolve against.
+> * **And start at the TOP.** The entry above described only the downward half, and the
+>   same project has the other: `yudao-module-mall/yudao-module-promotion` depends on
+>   `yudao-module-system`, a ROOT-level module, and `yudao-module-product` on
+>   `yudao-framework/yudao-spring-boot-starter-web`, a different subtree entirely.
+>   Descending from `yudao-module-mall` reaches neither. The walk now climbs the
+>   `<parent>` chain first.
+>
+> **Measured on `yudao-module-system`, same commit before and after:**
+>
+> | | shapes | open | shape fields | `DictDataRespVO` fields |
+> |---|---|---|---|---|
+> | before | 122 | 89 | 212 | **0** |
+> | after | **167** | **60** | **807** | **10** |
+>
+> `yudao-module-infra`: 422 shape fields where it had 212-ish, and its unexpanded list
+> falls from 45 entries to 5. The six and five that REMAIN are correct — `java/util/List#`,
+> `java/lang/Object#`, `java/time/LocalDateTime#` and a third-party captcha library — none
+> of which is in the reactor, and all of which `extract_libraries` exists for.
+>
+> **The climb broke a pinned corpus on its first attempt, and the pin is what caught it.**
+> `macrozheng/mall`'s root pom inherits from `spring-boot-starter-parent` with an empty
+> `<relativePath/>`, so an unconditional climb landed `parent_path` inside `~/.m2`,
+> discarded the real reactor root, and took `mall-admin` from **629 shape fields to 73** —
+> every wire contract that module publishes, silently. The rule that fixes it is
+> containment: an ancestor replaces this one only where it declares `<modules>` AND its
+> directory contains the module being analysed. Guard
+> `maven.a-climb-stops-at-the-aggregator-that-contains-this-module` kills on it, because a
+> field pin is not something the suite runs.
+>
+> **The remaining 60 open shapes are a DIFFERENT, pre-existing limit** and are not this
+> entry's: `CommonResult#<PageResult#<DictDataRespVO#>>`'s `data` field points at the RAW
+> `PageResult#`, so the page's element type is not reachable from the envelope. `mall-swarm`
+> does the same with `CommonPage#` and did so before this change. `expansion.py` states the
+> rule it follows ("a field holding an unbound type variable gets no shape id"); whether a
+> NESTED generic's binding should travel is its own question, unentered until someone
+> measures what it would buy.
+
 *The openness that remains in `mall-swarm` after the fix is CORRECT and must not be chased: a
 raw `CommonResult`'s `data` field is an unbound `T`, and `expansion.py` names that case
 ("a shape with an undescribed field is OPEN") as a deliberate refusal to claim more than the

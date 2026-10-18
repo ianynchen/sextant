@@ -693,7 +693,8 @@ class MavenDetector:
         path: Path, pom: ElementTree.Element
     ) -> dict[str, tuple[Path, ElementTree.Element]]:
         """Every module of this module's reactor, by coordinate, with its directory and
-        its own parsed POM.
+        its own parsed POM — including the children of a `<module>` that is itself an
+        aggregator, which is the whole of `OI-149`.
 
         Reached through `<parent>` because `analyze` runs against ONE module's path: the
         detector's own `<modules>` walk descends from an aggregator and so never sees
@@ -708,27 +709,93 @@ class MavenDetector:
         parent_path, parent_pom, _reason = MavenDetector._parent_pom(parent, path)
         if parent_path is None or parent_pom is None:
             return {}
-        modules = parent_pom.find("m:modules", _POM_NS)
-        if modules is None:
-            return {}
+        # **AND THE WALK STARTS AT THE TOP OF THE REACTOR, not at this module's parent**
+        # (`OI-149`, the other half). A reactor is the whole tree from its root by Maven's
+        # own definition, and a dependency can be up AND across:
+        # `ruoyi-vue-pro`'s `yudao-module-mall/yudao-module-promotion` depends on
+        # `yudao-module-system`, a ROOT-level module, and its neighbour
+        # `yudao-module-product` on `yudao-framework/yudao-spring-boot-starter-web`, which
+        # is in a different subtree. Descending from `yudao-module-mall` reaches neither.
+        #
+        # **An ancestor replaces this one only if it AGGREGATES THIS MODULE** — it declares
+        # `<modules>`, and its directory contains the module being analysed. Both halves
+        # are load-bearing, and the second was learned by breaking a pinned corpus:
+        # `macrozheng/mall`'s root pom inherits from `spring-boot-starter-parent`, which
+        # `_parent_pom` resolves out of the local repository, so an unconditional climb
+        # left `parent_path` inside `~/.m2` and DISCARDED the real reactor root.
+        # `mall-admin` went from 629 shape fields to 73 — the field pin caught it.
+        #
+        # Containment is the reactor's own property rather than a heuristic: an aggregator
+        # reaches its modules by relative `<module>` paths, so one that does not contain
+        # this module cannot be the tree this module belongs to. It also ends the climb at
+        # the project boundary without having to reason about where a pom was read from.
+        climbed: set[Path] = {parent_path.resolve()}
+        module_dir = path.resolve()
+        while (grandparent := parent_pom.find("m:parent", _POM_NS)) is not None:
+            up_path, up_pom, _reason = MavenDetector._parent_pom(grandparent, parent_path.parent)
+            if up_path is None or up_pom is None or up_path.resolve() in climbed:
+                break
+            if up_pom.find("m:modules", _POM_NS) is None or not module_dir.is_relative_to(
+                up_path.parent.resolve()
+            ):
+                break
+            parent_path, parent_pom = up_path, up_pom
+            climbed.add(up_path.resolve())
+
         found: dict[str, tuple[Path, ElementTree.Element]] = {}
-        for module in modules.findall("m:module", _POM_NS):
-            name = (module.text or "").strip()
-            if not name:
+        # **A `<module>` may itself be an aggregator, and its children are reactor
+        # modules too** (`OI-149`). Resolving one level and stopping is what made a
+        # shared type invisible: `YunaiV/ruoyi-vue-pro` puts the envelope every
+        # controller returns in `yudao-framework/yudao-common`, and the root names only
+        # `yudao-framework` — `<packaging>pom</packaging>`, no `target/classes`, nothing
+        # to read. Measured there: 85 open shapes in one module and 45 in another, which
+        # is the response contract of all 323 of their endpoints. `macrozheng/mall-swarm`
+        # resolves the same envelope correctly for one reason only — its reactor is FLAT.
+        #
+        # **This widens the CANDIDATES and not the result.** `_sibling_roots` still walks
+        # this module's declared dependencies, transitively, and reads nothing else; a
+        # module in the reactor that nothing here compiles against stays out, which is the
+        # refusal that docstring was written for after `mall-portal`'s cron task rendered
+        # inside `mall-admin`'s document.
+        #
+        # Breadth-first from the parent, with each aggregator's own directory as the base
+        # its `<module>` paths resolve against — Maven's own rule, and the reason the base
+        # travels on the frontier rather than being computed from `parent_path`.
+        frontier: list[tuple[Path, ElementTree.Element]] = [(parent_path.parent, parent_pom)]
+        # Keyed on the DIRECTORY, because that is what a `<module>` names and what a cycle
+        # would repeat. A reactor is a DAG by Maven's own rule, so this bounds a walk that
+        # a hand-written build file could otherwise make unbounded — the same guard, and
+        # the same reason, as `_sibling_roots`' own visited set.
+        seen: set[Path] = {parent_path.parent.resolve()}
+        while frontier:
+            base, aggregator = frontier.pop(0)
+            modules = aggregator.find("m:modules", _POM_NS)
+            if modules is None:
                 continue
-            sibling = (parent_path.parent / name).resolve()
-            if sibling == path.resolve():
-                continue
-            sibling_pom = _parsed_pom(sibling / "pom.xml")
-            if sibling_pom is None:
-                continue
-            # The sibling's OWN coordinates, inherited from its parent the way Maven
-            # inherits them — never the directory name.
-            group = MavenDetector._text(sibling_pom, "groupId", sibling, inherited=True)
-            artifact = MavenDetector._text(sibling_pom, "artifactId", sibling)
-            if group is None or artifact is None:
-                continue
-            found[f"{group}:{artifact}"] = (sibling, sibling_pom)
+            for module in modules.findall("m:module", _POM_NS):
+                name = (module.text or "").strip()
+                if not name:
+                    continue
+                sibling = (base / name).resolve()
+                if sibling == path.resolve() or sibling in seen:
+                    continue
+                seen.add(sibling)
+                sibling_pom = _parsed_pom(sibling / "pom.xml")
+                if sibling_pom is None:
+                    continue
+                # Descend whatever it turns out to be. An aggregator is not asked for by
+                # `<packaging>`: a pom carrying `<modules>` aggregates, and one carrying
+                # none contributes nothing to the frontier anyway, so reading the element
+                # that decides it is simpler than reading a declaration ABOUT it — and it
+                # cannot disagree with itself the way the pair could.
+                frontier.append((sibling, sibling_pom))
+                # The sibling's OWN coordinates, inherited from its parent the way Maven
+                # inherits them — never the directory name.
+                group = MavenDetector._text(sibling_pom, "groupId", sibling, inherited=True)
+                artifact = MavenDetector._text(sibling_pom, "artifactId", sibling)
+                if group is None or artifact is None:
+                    continue
+                found[f"{group}:{artifact}"] = (sibling, sibling_pom)
         return found
 
     @staticmethod
