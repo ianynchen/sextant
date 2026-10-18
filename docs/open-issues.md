@@ -1361,14 +1361,37 @@ overrides, and a literal in a method body is a code fact like any literal at a c
 Applied consistently that argument would forbid reading call-site literals, which is most of
 what the system does.
 
+**AND THE EDGE IS NOT ONE EDGE. A BACKEND ALREADY REPORTS THE COMMONEST SHAPE, AND THE WALK
+HAS NEVER READ IT** (measured 2026-10-18, spec `2026-10-18-the-sixth-edge-design.md`). This
+entry and `value_edges.sql`'s header both say *"no fact behind it"*; that is true of a write
+OUTSIDE an initialiser and false of the edge. `MethodFlow.fieldWrites` emits `field_write`
+for every constructor that assigns a parameter straight to a field — the shape every
+constructor-injected Spring bean has — and:
+
+* `grep -c field_writes src/sextant/storage/duckdb/value_edges.sql` is **0**;
+* `values._binding` returns `no_writer` without being handed the binding's symbol at all,
+  though its own position carries one.
+
+**Measured at positions a shipped catalog asks about**, instrumented at `_binding` across
+every built corpus: **276** binding reads, of which `field_writes` already describes the
+writer for **112 (41%)** — 94 of them in `apollo-portal` alone. So wiring one arm over an
+existing fact is most of this entry's value, with no extractor change and no schema change.
+
+*`mall-admin` and `jhipster-sample-app` answer 0 of 17 and 0 of 28, and that is not a gap:
+they use `@Autowired` FIELD injection, which the container writes reflectively, so no method
+contains a write instruction to report. §8.2 bounds it and no capability reaches it.*
+
 **BOTH GROUNDS FOR THE DEFERRAL ARE WEAKER THAN THEY READ, measured 2026-10-18 on
 `YunaiV/ruoyi-vue-pro`** (spec `2026-10-18-configured-path-prefixes-design.md` §4):
 
-* *"16 of 756 asked positions"* — the denominator is positions **a shipped catalog asks
-  about**, and no catalog asks about `Map#put`'s key, which is where this case needs it. A
-  yield measured over today's questions cannot see a case that needs a new question; the same
-  shape as `OI-143`'s *"nothing in the 27 measured corpora reaches it"*, which the first real
-  production codebase hit 64 times.
+* *"16 of 756 asked positions"* — two things are wrong with it. The denominator is positions
+  **a shipped catalog asks about**, and no catalog asks about `Map#put`'s key, which is where
+  this case needs it. And the NUMERATOR was measured before `apollo-portal` joined the
+  corpora: re-measured with it in, **226** asked positions answer `no_writer`, 17× the figure
+  the deferral rests on. The same bounded-measurement mistake as `OI-143`'s *"nothing in the
+  27 measured corpora reaches it"*, which the first real production codebase hit 64 times —
+  the third instance of it, and the reason
+  [[nothing-in-the-corpus-is-about-the-corpus]] exists.
 * *"And it costs no endpoint"* — true for a DESTINATION and **false for a PREFIX**. ruoyi
   configures `/admin-api` and `/app-api` through
   `RequestMappingHandlerMapping.setPathPrefixes`, whose prefix and package pattern are
