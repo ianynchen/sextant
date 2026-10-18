@@ -309,6 +309,144 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
+**Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**
+
+`yudao-module-system` publishes 212 inbound rows and **85 of its shapes are open**;
+`yudao-module-infra` 116 rows and 45 open. Every one is the envelope those endpoints return —
+`CommonResult#<PageResult#<DictDataRespVO#>>` and 129 siblings of it. So the document names
+every endpoint correctly and describes the response of **none** of them.
+
+**The mechanism that should cover this already exists and is right.** `_sibling_roots` reads
+the compiled output of every reactor sibling a module depends on, transitively, with no
+opt-in — and it works: `mall-swarm/mall-admin` reads `CommonResult`'s three fields out of
+`mall-common` that way, reached through `mall-security`, exactly as its docstring says.
+
+**The cause is one level of nesting.** `_reactor_modules` resolves the PARENT's `<modules>`
+entries and stops:
+
+```
+ruoyi-vue-pro/pom.xml        <modules>: yudao-framework, yudao-module-system, yudao-server, …
+yudao-framework/pom.xml      <packaging>pom</packaging>   <modules>: yudao-common, yudao-spring-boot-starter-web, …
+```
+
+`yudao-module-system` depends on `yudao-spring-boot-starter-biz-tenant` and friends, which
+live one level further down. The root's module list names `yudao-framework` — an aggregator
+with no `target/classes` — so `by_coordinate` never contains the children and
+`_sibling_roots` finds nothing to read. **`mall-swarm` is flat, which is the only reason it
+works there**, and a flat reactor is not the common shape in large Java projects.
+
+**Not reachable by the two obvious workarounds, both measured.** A reactor-root
+`analyze` leaves the figure at 85 — each module still gets its own workspace.
+`extract_libraries` cannot substitute: the two-part coordinate defers to the build for a
+version the module does not declare (the dependency is transitive), and the pinned three-part
+form needs an archive in the local repository, which `mvn compile` never installs. The
+pinned form DOES work where a jar exists — proved on `mall-admin`, where it read
+`com.macro.mall:mall-common:1.0-SNAPSHOT` and the scan went from 74,464 facts to 75,417 —
+so the opt-in is sound and is simply not the right tool for a sibling.
+
+**Real triggering input:** ordinary. A `framework/` or `common/` aggregator holding the shared
+envelope is a standard layout for a large multi-module build.
+
+**Verify:**
+```
+.venv/bin/sextant module analyze examples/ruoyi-vue-pro/yudao-module-system
+.venv/bin/sextant module render examples/ruoyi-vue-pro/yudao-module-system
+grep -c "shapes referring to it are open" examples/ruoyi-vue-pro/yudao-module-system/.sextant/render/architecture.md
+```
+**Closes when** `_reactor_modules` descends into a `<module>` that is itself an aggregator.
+**Falsified by** that count reaching 0 while `mall-swarm`'s own figures do not move.
+
+*The openness that remains in `mall-swarm` after the fix is CORRECT and must not be chased: a
+raw `CommonResult`'s `data` field is an unbound `T`, and `expansion.py` names that case
+("a shape with an undescribed field is OPEN") as a deliberate refusal to claim more than the
+evidence supports.*
+
+### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong
+**Major · entered 2026-10-18, measured on `ruoyi-vue-pro` and on the PINNED `spring-petclinic-rest` · `src/sextant/application/resolve/engines/annotation_driven.py`**
+
+Three spellings of one gap. An inbound path is read from annotations alone, and a prefix the
+framework prepends at runtime is never added:
+
+| spelling | evidence | where it is live |
+|---|---|---|
+| `server.servlet.context-path` | **pure configuration, one line** | `spring-petclinic-rest`, a PINNED corpus: `application.properties` sets `/petclinic/` and all **44** pinned routes lack it |
+| `spring.mvc.servlet.path`, `spring.webflux.base-path` | pure configuration | not yet seen in the corpus |
+| `management.endpoints.web.base-path` | pure configuration | already a stated boundary (COVERAGE §5.1, CP-5 rows 7-8) |
+| `RequestMappingHandlerMapping.setPathPrefixes` | a Spring MVC API, values from configuration, predicate in application code | `ruoyi-vue-pro`: **all 480** inbound rows across three modules |
+
+**What the document says versus what the app serves.** `/system/user/page` against
+`/admin-api/system/user/page`. Worse than incomplete: ruoyi's admin and app controllers both
+map `/system/tenant/get-by-website`, distinguished ONLY by their prefixes, so the two collapse
+into one path in the document and a reader sees one endpoint where two exist.
+
+**The cause is one boundary already written down** — `annotation_driven` never reads
+`resolved_config` (COVERAGE §5.1 states it for Actuator's base path and §9 restates it as
+per-ENGINE). The first three rows above need nothing but that read. The fourth needs a ruling:
+the prefix VALUES are configuration, but which classes receive which prefix is a lambda over
+package names (`clazz.getPackage().getName()` matched against `**.controller.admin.**` from
+config), and evaluating it is business logic. The honest stop for that one may be to STATE the
+prefix in the gaps section rather than publish a path nobody serves.
+
+**Real triggering input:** ordinary, and a pinned corpus already carries it.
+
+**Verify:** `grep context-path examples/spring-petclinic-rest/src/main/resources/application.properties`
+against `scripts/field-expectations/spring-petclinic-rest.json`'s `routes.inbound`.
+
+**Closes when** a `context-path`-setting module publishes its paths with the prefix, the pin
+moves with it, and `ruoyi-vue-pro`'s own prefix is either applied or named as a gap.
+
+### OI-147 — RocketMQ is catalogued nowhere, and it is absent from COVERAGE as well
+**Major · entered 2026-10-18, measured on `ruoyi-vue-pro` · `src/sextant/catalogs/`**
+
+`@RocketMQMessageListener(topic = "${yudao.websocket.sender-rocketmq.topic}")` and
+`RocketMQTemplate` derive **nothing** — no row, no gap line. `ruoyi-vue-pro` uses RocketMQ in
+19 files and ships it as one of three interchangeable broker backends for its websocket
+fan-out; the other two (Kafka, RabbitMQ) both derive rows, so the document presents a
+two-broker module where the code offers three.
+
+**Cause:** there is no `rocketmq` catalog, and — unlike every other unsupported surface —
+**no COVERAGE row says so either**: `grep -i rocketmq docs/*.md` is empty. Apache RocketMQ is
+a mainstream broker, dominant in the ecosystem these corpora come from.
+
+**Real triggering input:** ordinary for any project using it.
+
+**Closes when** a `rocketmq` catalog derives the listener and the template, with the usual
+`measured:` block. A COVERAGE row stating the absence is worth having even before that.
+
+### OI-146 — a destination a catalog cannot address drops the row and says nothing
+**Major · entered 2026-10-18, measured on `ruoyi-vue-pro` · `src/sextant/application/resolve/engines/annotation_driven.py` (the addresses-nothing gate)**
+
+```java
+@RabbitListener(bindings = @QueueBinding(
+        value = @Queue(name = "${yudao.websocket.sender-rabbitmq.queue}" + "-" + "#{T(java.util.UUID).randomUUID()}"),
+        exchange = @Exchange(name = "${yudao.websocket.sender-rabbitmq.exchange}", type = ExchangeTypes.TOPIC)))
+public class RabbitMQWebSocketMessageConsumer { @RabbitHandler public void onMessage(…) { … } }
+```
+
+`yudao-spring-boot-starter-websocket`'s document lists two inbound endpoints — the Kafka
+consumer and the websocket handler. **This consumer appears nowhere: not as a row, not as an
+unresolved derivation, not in Known gaps.** A reader cannot tell the difference between "this
+module does not consume from AMQP" and "it does, and the destination could not be read".
+
+**The ADDRESSING boundary is already documented and is not what this entry is about.**
+COVERAGE §5.9 states it exactly: no `path_from` alias can name an attribute inside a nested
+annotation, and `declaring path_from: [bindings]` would publish a `@QueueBinding`'s JSON text
+as a queue name. That reasoning is right. What is wrong is the SILENCE: the addresses-nothing
+gate drops the would-be row, and nothing downstream records that a listener was seen.
+
+**Why it matters more than the missing address.** An `unresolved` row with a named handler is
+usable — it says a boundary exists here and its destination is unknown, which is what every
+other engine does when it cannot read a value (`single_call` publishes `amqp (unresolved)` for
+the SENDER in this very module). A dropped row is indistinguishable from absence.
+
+**Real triggering input:** ordinary. `bindings = @QueueBinding(…)` is the idiomatic form for a
+listener that declares its own queue, and it is in Spring AMQP's own reference documentation.
+
+**Closes when** a listener whose destination no `path_from` can reach derives an `unresolved`
+row naming its handler, or is listed in Known gaps by name. Addressing it properly is the
+separate, already-stated COVERAGE item.
+
 ### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
 **Minor · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 
@@ -711,6 +849,18 @@ with `no_writer`'s two meanings separated. **Falsified by** `VisitsServiceClient
 written "for testing purpose" and called from no main-source code, so the binding has two
 writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
 single address, the day capability 9.19 makes the setter visible.
+
+*A real-project instance, 2026-10-18 (`ruoyi-vue-pro`): the websocket endpoint's own path.
+`YudaoWebSocketAutoConfiguration` registers the handler with*
+
+```java
+.addHandler(webSocketHandler, webSocketProperties.getPath())      // WebSocketProperties: private String path = "/ws";
+```
+
+*and the row publishes `websocket (unresolved)` where the served path is `/ws`. The default is
+a FIELD INITIALISED WITH A LITERAL — exactly the `ldc` shape this entry is about — so the value
+is in the bytecode and the grammar cannot say it. The getter hop on top of it is `OI-106`'s
+rung. One row, and it is the whole websocket surface of that module.*
 
 ### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **CLOSED 2026-10-17**
 
@@ -2600,6 +2750,22 @@ the written name is the documented one.
 — read only where no name attribute was written. **Closes** when the writer records the
 fallback as a second accepted spelling (a second row, or a column for it) — a schema question,
 D01 §3.
+
+*Measured on real code 2026-10-18 (`ruoyi-vue-pro`), which adds a case the entry did not
+name: the ladder reads a `@ConfigurationProperties` getter and **not a nested one**.
+`yudao-spring-boot-starter-websocket` sends with*
+
+```java
+kafkaTemplate.send(topic, mqMessage)   // topic ← websocketProperties.getSenderKafka().getTopic()
+rabbitTemplate.convertAndSend(topicExchange.getName(), null, mqMessage)
+```
+
+*and both rows publish no destination. The first is a getter on a getter — the properties
+class nests `SenderKafka` inside `WebSocketProperties`, which is how every multi-transport
+`@ConfigurationProperties` tree is written. The second is this entry's own bean rung
+(`TopicExchange` is a `@Bean` whose name comes from configuration), so it is already covered.
+Both are honest `unresolved` rows with a named caller, which is the behaviour `OI-146` asks for
+elsewhere.*
 
 ### OI-105 — `optional` for a Kotlin default parameter assumes `kotlin-reflect` at runtime
 **Minor · logged 2026-09-20, found at the whole-branch review (item 2, CP-25 row 3) ·
