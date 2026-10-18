@@ -1,6 +1,6 @@
 # The sixth edge: a field read reaches the value written into it
 
-**Status:** design, with **one imprecision to rule on** (§4) that is the user's.
+**Status:** design. **§4 was ruled by the user 2026-10-18**, and the ruling replaced the question rather than answering it — the rule is ENUMERABILITY, and `narrowed` was the wrong word for an exact answer.
 Written 2026-10-18 after `OI-148`'s `setPathPrefixes` half proved to need exactly this edge,
 and after measuring it.
 
@@ -55,7 +55,9 @@ is §8.2's territory — not a gap to close, and no extractor change reaches it.
 
 ---
 
-## 1. What ships
+## 1. What ships, in two steps
+
+### Step 1 — wire the fact that already exists
 
 **One arm in `value_edges.sql`, and `_binding` following it.** No extractor change, no new
 fact, no schema change.
@@ -64,20 +66,53 @@ fact, no schema change.
 written_by | the binding symbol | the writing method | parameter N
 ```
 
-* The arm reads `field_writes` joined to nothing: the fact already names the field and the
-  parameter index, and the writing constructor is the field's own owner.
+* The arm reads `field_writes`, which already names the field and the parameter index; the
+  writing constructor is the field's own owner.
 * `_binding` is handed the symbol it already has in its position — `(_BINDING, symbol)`,
   formed at `values.py`'s `kind == "field"` arm — and resolves the writer as a PARAMETER of
-  the writing method, which is `_parameter`'s existing crossing. Nothing new is invented
-  after the edge: the parameter crossing, the path coherence and the multiplicity are the
-  machinery that already carries every other edge.
+  the writing method, which is `_parameter`'s existing crossing. Nothing is invented after the
+  edge: the crossing, the path coherence and the multiplicity already carry every other edge.
 
-**Several writers are several answers**, which is ruling 1 unchanged and is already the
-answer `OI-136` recorded for this case: *"A field with several writers is not a hazard. It is
-several POSSIBLE values, and ruling 1 already says several enumerable answers yield one row
-per answer."*
+**Several writers are several answers** — §4's case 1, which `OI-136` itself already recorded
+for this shape: *"A field with several writers is not a hazard. It is several POSSIBLE values,
+and ruling 1 already says several enumerable answers yield one row per answer."*
 
----
+**What step 1 gives `ruoyi`:** the two prefixes resolve and pair correctly — `_combine` keeps
+`/admin-api` with `**.controller.admin.**`, because both halves read the same `api` and cross
+`Api#<init>` identically. What it does NOT give is attribution: the route runs through
+`Api#prefix`, a CLASS-level fact, so each read collects both constructions and nothing says
+which field it came through. For the output `OI-148` §4 needs — prefix paired with package
+pattern — that is sufficient and exact. For a reader asking *"what does `getAdminApi()`
+return"* it is two answers where one is true.
+
+### Step 2 — the field's own value, so the instance stops being lost
+
+Step 1's imprecision is not inherent; it is the route. The direct route exists in the
+bytecode and has no fact:
+
+```
+getAdminApi() returns field WebProperties#adminApi      (method_returns — a fact today)
+WebProperties#adminApi  ←  the value `new Api(…)` produced      ← NO FACT (CP-33 row 7)
+```
+
+So step 2 is:
+
+* **a widened `field_write`**, carrying `from_value` beside `from_parameter` — the instruction
+  index of the value assigned, which is how the extractor already numbers values (a call's
+  `result` IS its index, and a constructed instance is referenced as
+  `{kind: instance, source: 8}`). CP-33 row 7 measured the shape it must match;
+* **receiver-aware field resolution**: where the walk knows the receiver came from
+  construction A, a read of A's field resolves against A's arguments and no other
+  construction's. The machinery is in hand — `from_receiver` and the `RECEIVER` slot were
+  added 2026-10-17 for `OI-142`.
+
+Then `getAdminApi()` answers `/admin-api` exactly and `getAppApi()` answers `/app-api`
+exactly, while §4 case 2 — a field read on an object this module never constructs — still
+answers `external`.
+
+**Step 1 first, and not merely for size.** It is self-contained, measured at 112 reads, and
+step 2 builds on the same edge rather than replacing it: step 2 adds a second thing a field
+write can say, and the arm that follows it is the one step 1 writes.
 
 ## 2. The worked example, fact by fact
 
@@ -110,34 +145,46 @@ and a binding read that answered immediately now crosses into a constructor.
 
 ---
 
-## 4. THE ONE IMPRECISION — and it is the user's to rule on
+## 4. Several values are an EXACT answer where the set is closed — **RULED**
 
-**The walk has no instance identity.** A field is a property of an OBJECT, and
-`field_writes` describes the class. So where a class is constructed twice with different
-arguments, a read of that field resolves to BOTH values, on two paths — even though the
-object in hand had one of them.
+The question this section asked was how to hedge a field read that resolves to several
+values. The user's ruling discards the premise: **a complete enumeration is not uncertainty,
+it is the answer.** Three cases, in their words (2026-10-18):
 
-For `ruoyi` that is exactly right: two `Api` instances, two prefixes, both real, and a
-consumer wants both rows. In general it is **wider than the truth**: an over-report, never a
-single wrong answer, and the same shape ruling 1 already accepts for two callers of one
-helper.
+| # | the case | the answer |
+|---|---|---|
+| 1 | *"the parameter is preconstructed, meaning only certain values exist — we should be able to enumerate all possible values, that's exactly match"* | **resolved**, one row per value |
+| 2 | *"the parameter … needs to be passed in as parameter. If there is no call to this function, we don't know what are possible values"* | **unresolved** |
+| 3 | *"same as 2, but calls to the function exists and contains specific values"* | **resolved**, one row per caller |
 
-Where it could mislead: a destination. Two `KafkaTemplate` wrappers constructed with
-different topics, one read in a `send`, and the row publishes both topics for a call that
-only ever used one.
+**All three are already the walk's behaviour**, which is the strongest argument for the rule:
 
-* **Option A — follow it, and accept multiplicity.** Consistent with ruling 1, which the
-  register already applied to this exact case. A reader sees every value any construction
-  supplied.
-* **Option B — follow it only where the class is constructed ONCE in the module.** One
-  construction means one possible value, so the answer is exact. `ruoyi` has two, so this
-  option does not unlock `OI-148` §4 — it would resolve nothing there.
+* case 2 is `_parameter`'s own answer — *"No edge at all is `external`: nothing this
+  workspace scanned binds this parameter"* — and `external` publishes an unresolved row;
+* case 3 is the `bound_to_parameter` crossing, one path per caller, which is ruling 1's
+  multiplicity and has shipped since the walk existed;
+* case 1 is what this spec's edge adds: one path per construction, same shape.
 
-**Recommended: A**, because B's precision is bought by refusing the case this edge was
-measured for, and because an over-report that says "one of these two" is the honest shape of
-what the bytecode states — a field of a class whose instances differ.
+So **`narrowed` is NOT used, and reaching for it was the error.** It would mark an exact
+answer as a hedge: two `Api` objects with two prefixes is not a doubt about one prefix, it is
+two prefixes, both registered, both true. The word stays where it belongs — dispatch that
+narrowed to several bodies, and a format rung that narrowed to several candidates.
 
----
+### The bound this ruling carries, stated rather than discovered later
+
+"Resolved" means resolved **from what this module can see**. An enumeration is exact only if
+it is complete, and it can be silently incomplete two ways:
+
+* a construction in a module this workspace did not read — the sibling case `OI-149` just
+  widened for types, which does not reach value facts;
+* an object the container builds reflectively (`@Autowired` field injection), where no
+  construction instruction exists anywhere — §8.2, and the reason `mall-admin` answers 0 of
+  17 in §0.
+
+**Neither is new, and that is why the ruling is safe to apply as stated.** The identical bound
+already governs `bound_to_parameter`: a method's callers may live in another module, and the
+walk answers from the callers it sees without marking the set partial. One more edge with the
+same bound is consistent; a different treatment for this one would be the anomaly.
 
 ## 5. What stays open, named so the closure list is honest
 
