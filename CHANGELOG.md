@@ -14,6 +14,32 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A path prefix the module declares now reaches the rows it moves, both spellings**
+  (`OI-148`, spec `docs/superpowers/specs/2026-10-18-configured-path-prefixes-design.md`;
+  COVERAGE §5.1 gains a row per spelling and the Actuator base-path boundary is narrowed to
+  its own key). Until now an inbound path came off annotations alone, so a module that serves
+  everything under a prefix published addresses nobody can call.
+
+  `resolve/path_prefix.py` is one pass over the derived rows, so every engine is covered and a
+  catalog written later needs to know nothing about it. It reads two sources: the CONFIGURED
+  prefix (`server.servlet.context-path`, `spring.mvc.servlet.path`, `spring.webflux.base-path`,
+  with the framework and the versions each key was measured on) and the prefix a module
+  INSTALLS per controller package through `RequestMappingHandlerMapping.setPathPrefixes`.
+
+  **Measured: `spring-petclinic-rest`'s 44 pinned routes publish under `/petclinic`**, where
+  all 44 lacked it, and **`YunaiV/ruoyi-vue-pro`'s 480 inbound rows across three modules
+  publish 472 of them under `/admin-api` or `/app-api`**, where every one published a bare
+  `/system/…` path before — two controllers that differ only by prefix no longer collapse onto
+  one address in the document. The remaining 8 sit in a package no pattern names and are served
+  unprefixed.
+
+  It refuses rather than guesses, and each refusal is a guard with a fixture row: a key the
+  environments disagree about, a module outside the measured version range, an entry whose map
+  never reaches an installer, a `${…}` prefix nobody has resolved, a class the predicate's own
+  annotation test does not admit, and a package two prefixes both claim. `OI-150` records the
+  one spelling still unread — a pattern a lambda captures as a local or parameter, which needs
+  a walk edge of its own.
+
 - **No version bump with this entry — the standing gate still holds** (Spring Boot
   end-to-end before any bump). The items below close three register ids — `pubsub-channel-adapter`
   (the Pub/Sub row of the register empties), `dsl-media-route` and `gateway-properties-routes`

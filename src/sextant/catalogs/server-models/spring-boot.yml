@@ -61,3 +61,77 @@ prefixes:
 #   than the module's. It composes after the keys above when management shares the main port
 #   and does not when `management.server.port` moves it — an interaction CP-5 measured on one
 #   port only. Declaring it here would apply it to every row.
+
+# **A prefix installed PER CONTROLLER PACKAGE** (spec 2026-10-18 §4, `OI-148`), which is how
+# `YunaiV/ruoyi-vue-pro` serves every one of its 480 endpoints under `/admin-api` or
+# `/app-api` with nothing in any controller saying so:
+#
+#     prefixes.put(api.getPrefix(), clazz -> matcher.match(api.getController(),
+#                                                          clazz.getPackage().getName()));
+#     mapping.setPathPrefixes(prefixes);
+#
+# SIX framework symbols, and the pass holds the shape rather than a grammar nobody else
+# would use. `resolve/path_prefix.py` states what it does with each: the installer names
+# WHICH MAP carries prefixes, the `match`-on-a-package-name pair is what tells a prefix
+# declaration from any other map of strings to predicates, and the annotation test is the
+# predicate's other half — the framework asks it only about classes carrying that
+# annotation, so a row whose handler does not is not a row this mapping serves.
+class_path_prefixes:
+  # Which library the symbols belong to. Documentation here rather than a gate — unlike the
+  # key entries above, nothing is selected by it, because the symbols below already name the
+  # library they come from.
+  framework: org.springframework
+  # `javap`, spring-webmvc 7.0.9: `setPathPrefixes(Map<String, Predicate<Class<?>>>)` on
+  # `RequestMappingHandlerMapping`, and `AntPathMatcher.match(String, String)`. The same
+  # symbols exist in 6.x, which no probe here has opened — so the row is bounded to what was
+  # read, as every `measured:` block in this directory is.
+  measured: ["7.0.9"]
+  # **No `versions:` range, unlike the key entries above, and that is a difference in KIND.**
+  # A configuration key rots silently: a module on a version that spells it differently is
+  # read as not declaring it, so the range is the only thing that stops a prefix measured on
+  # one generation from being applied to another. A SYMBOL cannot rot that way — a version
+  # without `setPathPrefixes` has no call site to match, so the gate enforces itself and a
+  # range would be an unmeasured claim doing no work.
+  protocols: [http, sse]
+  # Every symbol as a DOTTED type and a method name, which is the one notation a catalog
+  # writes (`tests/architecture/test_source_rules.py::test_catalogs_use_one_fqn_notation`);
+  # the loader converts them through `domain.symbols.type_descriptor`, the same seam every
+  # other catalog type goes through.
+  # **Two installers, one per stack.** The servlet and reactive `RequestMappingHandlerMapping`
+  # are unrelated classes carrying the same method (`javap`: both declare
+  # `private final Map pathPrefixes` and `setPathPrefixes`, at 5.3.39, 6.1.6 and 7.0.x), and
+  # naming one would silently skip the other. A SUBCLASS of either counts too — extending
+  # the mapping to customise it is ordinary Spring — which the pass resolves through the
+  # module's own type hierarchy.
+  installer:
+    type:
+      - org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
+      - org.springframework.web.reactive.result.method.annotation.RequestMappingHandlerMapping
+    method: setPathPrefixes
+  # **No type, deliberately.** javac emits `put` against whatever the variable was DECLARED
+  # as — `Map` in `ruoyi`, `LinkedHashMap` wherever the author skipped the interface — and
+  # the author's choice of static type is not what identifies the call. What identifies it is
+  # the map it writes into: the pass accepts an entry only where that map is the one an
+  # installer above receives, which is a stronger test than any owner and the one that keeps
+  # an unrelated string-to-predicate map out.
+  entry:
+    method: put
+  matcher:
+    type: org.springframework.util.AntPathMatcher
+    method: match
+  # What makes the lambda a PACKAGE predicate rather than any other two-string match.
+  package_of:
+    type: java.lang.Class
+    method: getPackage
+  package_name:
+    type: java.lang.Package
+    method: getName
+  # The predicate's OTHER half, and the reason a prefix does not reach every row in a
+  # matching package: `clazz.isAnnotationPresent(RestController.class)`. The annotation is
+  # read off the lambda rather than assumed, and a row whose handler class does not carry it
+  # keeps the path it had. Read as the framework reads it — `Class#isAnnotationPresent` is
+  # the class's OWN annotations, not a meta-annotation search, so a `@MyRestController`
+  # composed from `@RestController` answers false here exactly as it does in Spring.
+  annotation_test:
+    type: java.lang.Class
+    method: isAnnotationPresent

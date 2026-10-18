@@ -56,6 +56,7 @@ PRIMED_FIXTURES = (
     "orders-spring7",
     "orders-contextpath",
     "orders-fieldheld",
+    "orders-pathprefixes",
     "spring-integration-probe",
     "orders-micronaut",
     "orders-quarkus",

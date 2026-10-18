@@ -329,6 +329,7 @@ def _short_caller(row: dict) -> str:
 
 SPRING7 = FIXTURES / "orders-spring7"
 CONTEXT_PATH = FIXTURES / "orders-contextpath"
+PATH_PREFIXES = FIXTURES / "orders-pathprefixes"
 
 
 @pytest.fixture(scope="module")
@@ -373,6 +374,87 @@ def context_path_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         return [dict(row) for row in workspace.query("endpoints")]
     finally:
         workspace.close()
+
+
+@pytest.fixture(scope="module")
+def path_prefix_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`fixtures/orders-pathprefixes`, analysed once."""
+    workspace_dir = tmp_path_factory.mktemp("pathprefixes")
+    compile_fixture(PATH_PREFIXES)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(PATH_PREFIXES), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["method"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "inbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("path_prefix.a-prefix-pairs-with-the-pattern-on-ITS-OWN-path")
+@pytest.mark.pins("path_prefix.an-entry-belongs-to-the-map-the-installer-RECEIVES")
+@pytest.mark.pins("path_prefix.a-prefix-reaches-only-the-classes-the-predicate-ADMITS")
+@pytest.mark.pins("path_prefix.an-UNRESOLVED-prefix-is-refused")
+@pytest.mark.pins("path_prefix.a-SUBCLASS-of-the-mapping-installs-prefixes-too")
+@pytest.mark.pins("path_prefix.the-ENTRY-is-not-matched-on-the-maps-static-type")
+def test_a_prefix_installed_by_package_reaches_the_rows_it_moves(path_prefix_rows):
+    """`OI-148` §4, and the intention test for it.
+
+    Two controllers map `/orders/{id}`, in `…controller.admin` and `…controller.app`, and a
+    config class installs a prefix per package through Spring's own API:
+
+        prefixes.put("/admin-api", clazz -> matcher.match("**.controller.admin.**",
+                                                          clazz.getPackage().getName()));
+        mapping.setPathPrefixes(prefixes);
+
+    **Measured before the mechanism: TWO rows, both `/orders/{id}`** — so the document showed
+    one path where two endpoints exist, which is exactly `ruoyi-vue-pro`'s own collapse
+    (`/system/tenant/get-by-website` appears once there, and its admin and app controllers
+    are separated by nothing else).
+
+    This is configuration rather than runtime logic, by the user's distinction of 2026-10-18:
+    the map is built once at wiring time from values fixed before any request arrives. What
+    unblocked it was the walk's sixth edge, which made `ruoyi`'s own getter chain resolve.
+
+    **`/internal-api` and `/ops-api` are the pairing**, and the reason this fixture has more
+    than two controllers. They are declared at ONE `put` site — `putPathPrefix`, called once
+    per group, which is `ruoyi`'s own shape — so the walk answers both prefixes and both
+    patterns there. A reader that paired them by site would cross them; `resolve_positions`
+    pairs them by PATH, and the two crossed combinations are refused because they chose
+    different `new Api(…)` sites on the way out. Their installer is also a SUBCLASS of the
+    framework's mapping, which is how an ordinary Spring customisation spells it.
+
+    **The last three rows are the ones that must NOT move, and each is a wrong address a
+    reader can publish** — all three were measured as real defects on probe modules before
+    the conjuncts that refuse them existed:
+
+    * `/audit-logs/{id}` — `auditCategories()` builds a map of exactly this shape and hands
+      it to nobody, so there is nothing to join it to an installer. Published `/AUDIT/…`.
+    * `/ext/{id}` — its prefix IS declared, as `${api.ext-prefix}`, which Spring resolves
+      through its embedded value resolver first. Published the placeholder verbatim.
+    * `/fn/items` — a functional route whose class sits in `…controller.admin`, prefixed for
+      `@RestController` classes. `RouterFunctionMapping` has no prefixes at all, and the
+      predicate's own annotation conjunct is what says so. Published `/admin-api/fn/items`.
+
+    Two more shapes are asserted by the rows above rather than by rows of their own: the
+    inline entries are `put` on a `LinkedHashMap`-TYPED variable (so no `java/util/Map#put`
+    site exists for them), and `/admin-api` and `/app-api` are installed on the framework
+    class while `/internal-api` and `/ops-api` are installed on the subclass.
+    """
+    assert path_prefix_rows == {
+        ("GET", "/admin-api/orders/{id}", "resolved"),
+        ("GET", "/app-api/orders/{id}", "resolved"),
+        ("GET", "/internal-api/orders/{id}", "resolved"),
+        ("GET", "/ops-api/orders/{id}", "resolved"),
+        ("GET", "/audit-logs/{id}", "resolved"),
+        ("GET", "/ext/{id}", "resolved"),
+        ("GET", "/fn/items", "resolved"),
+    }
 
 
 def test_a_configured_context_path_and_servlet_path_reach_the_published_rows(context_path_rows):

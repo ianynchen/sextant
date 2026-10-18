@@ -357,6 +357,28 @@ def package_path(dotted: str) -> str:
     return dotted.replace(".", "/")
 
 
+def dotted_package(symbol: str) -> str | None:
+    """The DOTTED package the type `symbol` names a member of — `package_path`'s
+    inverse, read off a symbol rather than off a catalog.
+
+    `… com/acme/pp/controller/admin/AdminOrderController#get(sig_1).` answers
+    `com.acme.pp.controller.admin`, and a type in the default package answers
+    `""`. `None` means there is no owning type to take a package from, which
+    is a free-function descriptor's answer (`owner_of` above).
+
+    Here rather than at the call site because it reads two notations at once —
+    the module-coordinates/descriptor split and the type marker — and a pass
+    that compared a package against an author's pattern would otherwise spell
+    both (`resolve/path_prefix.py`, spec 2026-10-18 §4).
+    """
+    owner = owner_of(bare_descriptor(symbol))
+    if owner is None:
+        return None
+    path = without_type_marker(owner)
+    package, separator, _ = path.rpartition("/")
+    return package.replace("/", ".") if separator else ""
+
+
 def simple_name(symbol: str) -> str:
     """The display name for a SCIP symbol (D00 §5a): the last path segment,
     with the trailing `#` a type descriptor always carries stripped."""

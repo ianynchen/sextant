@@ -528,6 +528,59 @@ def resolve_site(
     return [Binding(path=_path(trail), slots=slots) for trail, slots in combined]
 
 
+def resolve_positions(
+    workspace: Workspace,
+    positions: Mapping[str, tuple[Mapping[str, Any], int | str]],
+    index: ValueIndex | None = None,
+    identities: "Identities" = (),
+) -> list[dict[str, Answer]]:
+    """Slots of SEVERAL sites, resolved together on one coherent path.
+
+    `resolve_site` is this function's one-site case: it combines the slots of a single call
+    site and refuses any combination no single path reaches. The two values a caller needs
+    are not always slots of one site, and when they are not, pairing them by anything other
+    than the path is M-1's fabricated cross product under another name.
+
+    **The case this exists for** (spec 2026-10-18 §4, measured on
+    `yudao-spring-boot-starter-web`). A prefix declaration is a key and a predicate:
+
+        pathPrefixes.put(api.getPrefix(),                       // the key, here
+                clazz -> matcher.match(api.getController(),     // the pattern, THERE
+                        clazz.getPackage().getName()));
+
+    One `put` site is called twice with two different `api` objects, so the key resolves to
+    `/admin-api` AND `/app-api`, and the pattern — a slot of a site inside the lambda body,
+    a different method — to `**.controller.admin.**` AND `**.controller.app.**`. Four
+    pairings exist and two of them are wrong. Both walks cross the same context on the way
+    out (the two `new Api(…)` sites in `WebProperties#<init>`, reached through the sixth
+    edge), so the coherence rule separates them exactly: the crossed pairs are refused and
+    the two true ones survive. Measured, and the reason the per-site pairing the spec first
+    wrote down is not enough — ruoyi has ONE `put` site, not one per prefix.
+
+    `positions` is `{label: (site, slot)}` and the answers come back under those labels, one
+    dict per coherent path, in a deterministic order (NFR-1): the first label's paths drive
+    the outer order. A label whose position no path reaches at all yields no dict rather than
+    an `unresolved` entry — the empty list is the M-1 ruling's own answer, as it is in
+    `resolve_site`.
+    """
+    fold = index if index is not None else value_index(workspace)
+    walk = _Walk(fold, identities)
+    combined: list[tuple[_Trail, dict[str, Answer]]] = [((), {})]
+    for label, (named, slot) in positions.items():
+        # Projected for the reason `resolve_site` states: a caller that hands in a raw
+        # `call_sites` row for a bridge call is otherwise answered with the bridge's own
+        # arguments.
+        site = fold.sites.get((str(named["caller"]), int(str(named["ordinal"]))), named)
+        reached = walk.at(site, slot)
+        combined = [
+            (merged, {**answers, label: answer})
+            for trail, answers in combined
+            for path, answer in reached
+            if (merged := _combine(trail, path)) is not None
+        ]
+    return [answers for _, answers in combined]
+
+
 def _slots_of(site: Mapping[str, Any]) -> list[int | str]:
     """Which positions this site HAS. The arguments by index, and the receiver where the
     facts name one — `receiver` is the value id it came from and `receiver_parameter` the

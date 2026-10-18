@@ -127,6 +127,58 @@ class YamlCatalogSource:
                         "protocols": [str(one) for one in protocols],
                     }
                 )
+            # **The per-package prefix declaration** (spec 2026-10-18 §4), a sibling block
+            # rather than another `prefixes` entry: it names framework SYMBOLS instead of
+            # configuration keys, so one shape would have to carry two unrelated sets of
+            # required fields. Validated with the same loudness for the same reason.
+            installed = raw.get("class_path_prefixes")
+            if installed is not None:
+                required = {
+                    "framework",
+                    "measured",
+                    "protocols",
+                    "installer",
+                    "entry",
+                    "matcher",
+                    "package_of",
+                    "package_name",
+                    "annotation_test",
+                }
+                if not isinstance(installed, dict) or not required <= set(installed):
+                    raise CatalogError(
+                        f"loading server model {path}: `class_path_prefixes` is a mapping with "
+                        f"{sorted(required)} — `package_of`/`package_name` being the pair that "
+                        f"tells a package predicate from any other match — got {installed!r}"
+                    )
+                # The two LISTS are validated as lists, not merely as present: a string
+                # where a list belongs iterates into its characters, and `protocols: http`
+                # would then match no protocol and silence the whole reader rather than
+                # failing. Loudly here is the only place it can be caught (§13.6).
+                for named in ("measured", "protocols"):
+                    if not isinstance(installed[named], list) or not installed[named]:
+                        raise CatalogError(
+                            f"loading server model {path}: `class_path_prefixes.{named}` is a "
+                            f"non-empty list, got {installed[named]!r}"
+                        )
+                model.append(
+                    {
+                        "installed": True,
+                        "framework": str(installed["framework"]),
+                        "measured": [str(one) for one in installed["measured"]],
+                        "protocols": [str(one) for one in installed["protocols"]],
+                    }
+                    | {
+                        named: _declared_method(installed[named], f"{path}: `{named}`")
+                        for named in (
+                            "installer",
+                            "entry",
+                            "matcher",
+                            "package_of",
+                            "package_name",
+                            "annotation_test",
+                        )
+                    }
+                )
         return model
 
     def type_model(self) -> list[dict[str, Any]]:
@@ -378,6 +430,46 @@ _WRAPPER_KEYS = ("call_wrappers", "record_wrappers")
 # arguments, which is what a bare `payload_arg` beside a `type` is everywhere else in the
 # catalogs (`resolve/shadow.py` measures both populations and says which is which).
 _CTOR_ARG = "_ctor_arg"
+
+
+def _declared_method(declared: object, where: str) -> dict[str, Any]:
+    """A `{type, method}` pair as a projected call site's own two columns: `{"owners": (…),
+    "name": …}`.
+
+    `type` may name one type, several, or none at all, and the three mean different things:
+
+    * ONE — the ordinary case, and an exact match on the site's owner.
+    * SEVERAL — one API reachable under two names. The servlet and reactive
+      `RequestMappingHandlerMapping` are two unrelated classes carrying the same
+      `setPathPrefixes`, and a reader that named one would silently skip the other stack
+      (`catalog_symbols` takes scalar-or-list for the same reason, in the catalogs proper).
+    * NONE — the owner is deliberately unconstrained, because the author's choice of static
+      type is not what identifies the call. `Map#put` against `LinkedHashMap#put` is the
+      case: javac emits whichever the variable was declared as, and what identifies a prefix
+      entry is the MAP it writes into, not how the variable was spelled.
+
+    The catalog writes types DOTTED, as every catalog does, and the conversion happens here:
+    `type_descriptor` is the seam, and a `#` written into a catalog by hand is that seam
+    skipped rather than applied
+    (`tests/architecture/test_source_rules.py::test_catalogs_use_one_fqn_notation`).
+    """
+    if not isinstance(declared, dict) or not isinstance(declared.get("method"), str):
+        raise CatalogError(
+            f"loading server model {where} names a method as `{{type, method}}` with the type "
+            f"dotted, got {declared!r}"
+        )
+
+    types = declared.get("type")
+    named = [types] if isinstance(types, str) else types if isinstance(types, list) else []
+    if types is not None and not (named and all(isinstance(one, str) for one in named)):
+        raise CatalogError(
+            f"loading server model {where} names `type` as one dotted type or a list of "
+            f"them, got {types!r}"
+        )
+    return {
+        "owners": tuple(type_descriptor(str(one)) for one in named),
+        "name": str(declared["method"]),
+    }
 
 
 def _identities(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:

@@ -151,6 +151,7 @@ _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _PATH_PREFIX = "sextant/application/resolve/path_prefix.py"
+_SPRING_BOOT_SERVER_MODEL = "sextant/catalogs/server-models/spring-boot.yml"
 _MAVEN = "sextant/ingress/detect/maven.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
@@ -333,6 +334,170 @@ GUARDS: dict[str, Guard] = {
                 path=_PATH_PREFIX,
                 find="    if not found:\n        return True\n    return any(",
                 replace="    if not found:\n        return True\n    return True or any(",
+            ),
+        ),
+    ),
+    "path_prefix.a-prefix-pairs-with-the-pattern-on-ITS-OWN-path": Guard(
+        what="an installed prefix and the package pattern it applies to are resolved "
+        "TOGETHER, so a pair that chose differently on the way out is refused",
+        why="`ruoyi` declares every prefix at ONE `put` site — `putPathPrefix`, called once "
+        "per API group — so the walk answers `/admin-api` AND `/app-api` there, and both "
+        "patterns beside them. Pairing by site is a cross product: two of the four pairings "
+        "are wrong and each would prefix a whole package family with another family's "
+        "prefix, at `resolved`, on every row that package serves. The pairs are separated by "
+        "the path alone (the two `new Api(…)` sites they leave through), which is exactly "
+        "what a per-site pairing cannot see",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="    for answers in resolve_positions(\n"
+                "        workspace, {_PREFIX: (entry_site, 0), _PATTERN: (matcher_site, 0)}, index\n"
+                "    ):\n"
+                "        prefix, pattern = _text(answers.get(_PREFIX)), _text(answers.get(_PATTERN))\n"
+                "        if prefix and pattern and is_path_shaped(prefix):\n"
+                "            pairs.append((prefix, pattern))",
+                replace="    # guard disabled by scripts/guard_check.py: paired by SITE\n"
+                "    prefixes = [\n"
+                "        _text(answers.get(_PREFIX))\n"
+                "        for answers in resolve_positions(workspace, {_PREFIX: (entry_site, 0)}, index)\n"
+                "    ]\n"
+                "    patterns = [\n"
+                "        _text(answers.get(_PATTERN))\n"
+                "        for answers in resolve_positions(workspace, {_PATTERN: (matcher_site, 0)}, index)\n"
+                "    ]\n"
+                "    for prefix in prefixes:\n"
+                "        for pattern in patterns:\n"
+                "            if prefix and pattern and is_path_shaped(prefix):\n"
+                "                pairs.append((prefix, pattern))",
+            ),
+        ),
+    ),
+    "path_prefix.a-pattern-segment-matches-a-WHOLE-segment": Guard(
+        what="an Ant pattern segment matches a package component end to end, never a prefix of one",
+        why="`**.controller.admin.**` must not match `com.acme.controller.administration."
+        "user`, and a prefix test says it does. The consequence is not a missing row but a "
+        "wrong one: every endpoint in a package that merely STARTS with the named component "
+        "is published under an address the server does not serve it at. The fixture's four "
+        "packages all match their own pattern exactly, so no e2e row moves — this is the "
+        "case only a near-miss can state",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="    return re.fullmatch(expression, segment) is not None",
+                replace="    return re.match(expression, segment) is not None  # guard disabled",
+            ),
+        ),
+    ),
+    "path_prefix.a-package-predicate-is-what-identifies-a-declaration": Guard(
+        what="a `Map#put` entry is read as a prefix declaration only where its lambda "
+        "matches the pattern against a CLASS'S PACKAGE NAME — `Package#getName` on "
+        "`Class#getPackage`",
+        why="that pair of facts is the whole discriminator. A module has other maps of "
+        "strings to predicates and other `match` calls; without the check, any two-argument "
+        "`match` inside any lambda handed to any `put` is read as a prefix rule, and its "
+        "first argument becomes an address prefix applied to real endpoints. The shipped "
+        "fixtures declare nothing but genuine prefix maps, so no e2e row can tell the "
+        "difference",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find='    arguments = site["arguments"] or []\n'
+                "    if len(arguments) < 2 or not isinstance(arguments[1], dict):\n"
+                "        return None\n"
+                '    caller = str(site["caller"])',
+                replace="    return 0  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "path_prefix.an-entry-belongs-to-the-map-the-installer-RECEIVES": Guard(
+        what="a `put` is read as a prefix entry only where the map it writes into is the map "
+        "an installer was handed, compared by the object's origin",
+        why="**this is the whole difference between reading a declaration and guessing at "
+        "one.** Every other test a prefix entry passes — a string key, a lambda, a package "
+        "match — is passed just as well by any other map of classes to predicates, and a "
+        "module that installs prefixes anywhere has such maps: measured, an `auditCategories` "
+        "map handed to NOBODY published `GET /AUDIT/audit-logs/{id}` at `resolved`, an "
+        "address the app does not serve, and the wrong path propagated into `roots`. Dropping "
+        "the join is a one-line edit and every row the shipped fixture expects still derives",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="        if not (_receiver_origins(index, site) & carries):\n"
+                "            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            continue",
+            ),
+        ),
+    ),
+    "path_prefix.a-prefix-reaches-only-the-classes-the-predicate-ADMITS": Guard(
+        what="an installed prefix moves a row only where the handler's class carries the "
+        "annotation the predicate tests, not merely because its package matches",
+        why="the predicate has two conjuncts and the framework asks both — "
+        "`clazz.isAnnotationPresent(RestController.class) && matcher.match(…)`. Reading the "
+        "package alone prefixes rows the mapping does not serve: measured, a "
+        '`RouterFunctions.route(GET("/fn/items"), …)` bean that merely SITS in a prefixed '
+        "package was published at `/admin-api/fn/items`, while `javap` shows "
+        "`RouterFunctionMapping` has no `pathPrefixes` field at all. An annotation test is "
+        "also how a module says which of its own classes are handlers, so without it every "
+        "config class, entity and helper in a prefixed package is a candidate",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="        if one.annotation in carries and _ant_matches(one.pattern, package)",
+                replace="        if _ant_matches(one.pattern, package)  # guard disabled",
+            ),
+        ),
+    ),
+    "path_prefix.an-UNRESOLVED-prefix-is-refused": Guard(
+        what="a prefix that is not path-shaped — a `${…}` placeholder — is refused rather "
+        "than published verbatim",
+        why='`prefixes.put("${api.ext-prefix}", …)` is an ordinary spelling, and Spring '
+        "passes the key through `embeddedValueResolver.resolveStringValue` before using it "
+        "(`javap -c`, byte-identical at 5.3.39 and 7.0.9). Published verbatim it put "
+        "`${api.ext-prefix}/ext/{id}` into `endpoints` AND into `roots` — a path that is not "
+        "even path-shaped, which every downstream reader then carries",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find="        if prefix and pattern and is_path_shaped(prefix):",
+                replace="        if prefix and pattern:  # guard disabled",
+            ),
+        ),
+    ),
+    "path_prefix.a-SUBCLASS-of-the-mapping-installs-prefixes-too": Guard(
+        what="the installer gate accepts a call on a subclass of the framework's mapping, "
+        "resolved through the module's own type hierarchy",
+        why="`class MyMapping extends RequestMappingHandlerMapping` is ordinary Spring "
+        "customisation, and javac emits `invokevirtual MyMapping.setPathPrefixes`, so an "
+        "exact-owner gate reads such a module as installing nothing — measured, its admin "
+        "controller published `/orders/{id}` where the app serves `/admin-api/orders/{id}`. "
+        "That is the collapse this whole item exists to fix, reappearing one subclass away",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find='    found = [site for site in named if str(site["owner"]) in owners]\n'
+                "    if len(found) == len(named):\n"
+                "        return found",
+                replace='    found = [site for site in named if str(site["owner"]) in owners]\n'
+                "    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        return found",
+            ),
+        ),
+    ),
+    "path_prefix.the-ENTRY-is-not-matched-on-the-maps-static-type": Guard(
+        what="a prefix entry is found whatever type the map VARIABLE was declared as — the "
+        "model declares the method name and no owner",
+        why="javac emits `put` against the declared type: `Map<…> prefixes` gives "
+        "`java/util/Map#put` and `LinkedHashMap<…> prefixes` gives "
+        "`java/util/LinkedHashMap#put`, and both are ordinary Java. Requiring the interface "
+        "silently loses every module written the other way — measured, the fixture's own "
+        "`/admin-api`, `/app-api` and `${…}` entries all disappear with the owner put back, "
+        "and the identity join is what identifies the entry instead",
+        edits=(
+            Edit(
+                path=_SPRING_BOOT_SERVER_MODEL,
+                find="  entry:\n    method: put",
+                replace="  entry:\n    type: java.util.Map\n    method: put",
             ),
         ),
     ),
@@ -2349,11 +2514,14 @@ def copy_tree(destination: Path) -> Path:
     # stops being true if the control is ever removed.
     (destination / "fixtures").mkdir()
     shutil.copy2(REPO / "fixtures" / "pom.xml", destination / "fixtures" / "pom.xml")
-    shutil.copytree(
-        REPO / "fixtures" / "orders-soap-client",
-        destination / "fixtures" / "orders-soap-client",
-        ignore=ignore,
-    )
+    for named in ("orders-soap-client", "orders-pathprefixes"):
+        # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
+        # failure shape is two real packages served under each other's prefix. Nothing
+        # synthetic can state it — the two values are paired by the path they left through,
+        # which exists only in real facts — so the test that pins it is an e2e one, and an
+        # e2e test needs its fixture. 90 KB of sources and classes, and the stamp's mtime
+        # survives `copy2`, so no `mvn` runs here either.
+        shutil.copytree(REPO / "fixtures" / named, destination / "fixtures" / named, ignore=ignore)
     return destination
 
 
