@@ -42,6 +42,21 @@ def bare_descriptor(symbol: str) -> str:
     return symbol.rsplit(" ", 1)[-1]
 
 
+def with_descriptor(symbol: str, descriptor: str) -> str:
+    """`symbol`'s module coordinates carrying `descriptor` instead of its own —
+    `bare_descriptor`'s inverse, for a member of the SAME module.
+
+    A symbol is coordinates then a descriptor (D00 §5a), and a caller that has
+    one member's full symbol and another's bare descriptor can build the
+    second's full symbol only by knowing that split. The lambda entry of the
+    argument grammar is exactly that caller: it names its synthetic body bare,
+    while every index is keyed on full symbols, and the body is declared in the
+    same class as the method that captured it. A bare `symbol` carries no
+    coordinates, so the descriptor is returned as it stands.
+    """
+    return symbol[: len(symbol) - len(bare_descriptor(symbol))] + descriptor
+
+
 def owner_of(descriptor: str) -> str | None:
     """The owning type's descriptor, trailing `#` included, or `None` for a
     free-function descriptor — SCIP spells those with no `#` at all, and an

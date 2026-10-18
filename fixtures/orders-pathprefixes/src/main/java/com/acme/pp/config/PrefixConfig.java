@@ -38,6 +38,8 @@ public class PrefixConfig {
     private static final String APP_PACKAGES = "**.controller.app.**";
     private static final String EXT_PACKAGES = "**.controller.ext.**";
     private static final String AUDIT_PACKAGES = "**.controller.audit.**";
+    private static final String TEXT_PREFIX = "/text-api";
+    private static final String TEXT_PACKAGES = "**.controller.text.**";
 
     public RequestMappingHandlerMapping mapping() {
         RequestMappingHandlerMapping mapping = new RequestMappingHandlerMapping();
@@ -72,8 +74,27 @@ public class PrefixConfig {
         ApiGroups groups = new ApiGroups();
         putPathPrefix(prefixes, groups.getInternalApi(), matcher);
         putPathPrefix(prefixes, groups.getOpsApi(), matcher);
+        putTextPrefix(prefixes, TEXT_PREFIX, TEXT_PACKAGES, matcher);
         mapping.setPathPrefixes(prefixes);
         return mapping;
+    }
+
+    /**
+     * The same declaration with the prefix and the pattern as plain `String` PARAMETERS.
+     *
+     * <p>The prefix is an argument of `put` and resolves by following this method's callers.
+     * The pattern does not: the lambda CAPTURES it, so reaching it means crossing from the
+     * lambda's synthetic body into the site that captured it — the walk's seventh edge
+     * (`OI-150`). Until that edge existed this entry resolved nothing and
+     * `…controller.text` published an unprefixed path.
+     */
+    private void putTextPrefix(
+            Map<String, Predicate<Class<?>>> prefixes,
+            String prefix,
+            String packages,
+            AntPathMatcher matcher) {
+        prefixes.put(prefix, clazz -> clazz.isAnnotationPresent(RestController.class)
+                && matcher.match(packages, clazz.getPackage().getName()));
     }
 
     /**

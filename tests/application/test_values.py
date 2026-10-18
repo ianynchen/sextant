@@ -82,6 +82,10 @@ _BINDER = _PKG + "Binder#"
 # 2026-10-18). `Written#<init>(String)` assigns its parameter to the field, and two
 # callers construct it with different literals, so the edge resolves to BOTH.
 _WRITTEN = _PKG + "Written#"
+# A lambda that CLOSES OVER a value — the seventh edge's own shape (`OI-150`).
+# `Closing#install` captures a literal into `Closing#body`, whose parameter 0 is that
+# capture; nothing calls `body` directly, so without the edge its parameter is `external`.
+_CLOSING = _PKG + "Closing#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -230,6 +234,7 @@ def _facts() -> list[Fact]:
             _MUTATOR,
             _BINDER,
             _WRITTEN,
+            _CLOSING,
             _ENTRY,
             _OUTSIDE,
             _IDENTIFIED,
@@ -637,6 +642,46 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        # **The seventh edge: a lambda's CAPTURE** (`OI-150`). `install` captures a literal
+        # into the synthetic `body`, and `body`'s parameter 0 IS that capture. The two facts
+        # that say so are the capture site — whose arguments are the captured values, in
+        # order — and the `lambda` entry naming the body it created, which carries the value
+        # the capture site produced.
+        _declared(_CLOSING, "install", "()V"),
+        _site(
+            _symbol(_CLOSING, "install", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "test", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="string", value="closed-over")],
+            result=5,
+        ),
+        _site(
+            _symbol(_CLOSING, "install", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    # The entry names the body as the extractor does: BARE, which is the
+                    # descriptor half of its real symbol and not a name invented here.
+                    symbol=method_descriptor(_CLOSING, "body", _TAKES_STRING),
+                    captures=1,
+                    source=5,
+                )
+            ],
+        ),
+        # The body reads its capture and hands it on. Nothing calls `body`: the framework
+        # invokes it, which is exactly why the capture is the only edge that reaches it.
+        _declared(_CLOSING, "body", _TAKES_STRING),
+        _void(_CLOSING, "body", _TAKES_STRING),
+        _site(
+            _symbol(_CLOSING, "body", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1359,6 +1404,28 @@ def test_a_binding_read_follows_the_writer_the_facts_name(walked):
     # come from outside what was scanned". Without the edge the answer is `no_writer`, a
     # different statement, and that difference is what this test exists to hold.
     assert _reasons(bindings) == ["external"]
+
+
+@pytest.mark.pins("values.a-lambda-body-reaches-the-values-it-CAPTURED")
+def test_a_lambda_body_reaches_the_value_it_closed_over(walked):
+    """**THE SEVENTH EDGE** (`OI-150`). A lambda body is a synthetic method whose leading
+    parameters are the values the enclosing method closed over, and nothing in the
+    `bound_to_parameter` facts binds them — so the walk answered `external` for every
+    captured value, however plainly the code stated it.
+
+    Here `install` captures the literal `closed-over` and `body` reads it. The edge is the
+    two facts already in the stream: the capture site, whose arguments ARE the captured
+    values in order, and the `lambda` entry naming the body and carrying the value that site
+    produced. With the edge gone the answer is `external` — "the values come from outside
+    what was scanned" — about a literal six lines up.
+
+    **What it cost to be missing**, measured on real bytecode: a prefix declaration holding
+    its pattern as a captured `String` parameter resolved nothing, so two controllers
+    differing only by their prefix collapsed onto one published path. The e2e row is
+    `tests/e2e/test_rest_inbound_delivered.py`'s `/text-api/text/{id}`.
+    """
+    bindings = _bindings(walked, _symbol(_CLOSING, "body", _TAKES_STRING), 0)
+    assert [binding.slots[0].value for binding in bindings] == ["closed-over"]
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):
