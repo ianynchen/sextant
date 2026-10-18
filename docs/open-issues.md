@@ -345,6 +345,12 @@ pinned form DOES work where a jar exists — proved on `mall-admin`, where it re
 `com.macro.mall:mall-common:1.0-SNAPSHOT` and the scan went from 74,464 facts to 75,417 —
 so the opt-in is sound and is simply not the right tool for a sibling.
 
+*The two-part form's failure here is `OI-8`'s shortfall seen from the field, and this entry
+first described it as though it were new: that entry says `_library_roots` resolves a version
+from the module's own pom alone, so a coordinate whose version a parent manages — or, as here,
+one the module does not declare at all — lands in `libraries_not_resolved` asking the author to
+pin it. Recorded there as evidence rather than restated as a finding.*
+
 **Real triggering input:** ordinary. A `framework/` or `common/` aggregator holding the shared
 envelope is a standard layout for a large multi-module build.
 
@@ -432,6 +438,13 @@ prefix in the gaps section rather than publish a path nobody serves.
 
 **Real triggering input:** ordinary, and a pinned corpus already carries it.
 
+*The INBOUND half of the family `OI-111` holds the other half of: there, a gateway's
+`StripPrefix`/`PrefixPath` filters change the path sent UPSTREAM while the outbound row carries
+the `uri` verbatim. Same shape — a path the framework transforms and the document publishes
+untransformed — in the other direction, by another mechanism, and neither fix is the other's.
+Filed apart deliberately, cross-referenced so a reader costing "paths we publish wrong" finds
+both.*
+
 **Verify:** `grep context-path examples/spring-petclinic-rest/src/main/resources/application.properties`
 against `scripts/field-expectations/spring-petclinic-rest.json`'s `routes.inbound`.
 
@@ -489,6 +502,10 @@ listener that declares its own queue, and it is in Spring AMQP's own reference d
 row naming its handler, or is listed in Known gaps by name. Addressing it properly is the
 separate, already-stated COVERAGE item.
 
+*`OI-109` is the nearby case and is NOT this one: a configurer that adds a second queue leaves
+the row with its first queue — *"fewer queues, never a wrong one"*. That is an under-report with
+a row to hang it on; this is no row at all, which a reader cannot tell from absence.*
+
 ### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
 **Minor · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 
@@ -535,17 +552,21 @@ counts and route sets agree on all six** — only the terminal classification mo
 (2026-09-12, G-74) and these three pins were never re-recorded against it. Verified by
 running the check at `HEAD` with the branch's own changes stashed: byte-identical failure.
 
-**Why it matters anyway.** The field check is the only thing that validates the twelve
-shipped `terminals` rules against real code, and a check that has failed for five weeks
-tells nobody anything — the next real drift in those rules arrives in a run that was already
-red. It also means every field-check run since then needed a human to decide which three
-failures were "the known ones".
+**Why it matters, and `OI-32` already argued it.** That entry is the same situation on the
+same corpus — `spring-petclinic-rest`'s pinned ROUTES, stale through the whole of 2O — and it
+states the cost: *"a suite that is known-red is a suite nobody reads: the next real regression
+in these two repositories lands in a check that was already failing, and looks identical to
+this."* Written 2026-09-06, closed 2026-09-07, and re-derived here from scratch on 2026-10-18
+instead of cited, which is what a duplicate costs even when the instances differ. The instance
+IS different — `OI-32` was route spellings after an identity migration, this is
+`terminal_kinds` after a terminal kind landed — and the ruling is the same one.
 
 **Real triggering input:** running `scripts/field_check.py`, which is how the pins exist.
 
-**Fix:** re-record `terminal_kinds` on the three pins against current `main`, which
-`field_check.py`'s own docstring calls "a deliberate, reviewed act" — so it belongs in a
-commit that says what moved and why, not folded into unrelated work.
+**Fix: `OI-32`'s procedure, applied to `terminal_kinds`.** Re-record on the three pins against
+current `main`, in a commit that says what moved and why — `field_check.py` calls refreshing a
+pin *"a deliberate, reviewed act"*, and `OI-32` is the worked example of doing it properly:
+someone looked at the rows, agreed the new values were right, and recorded that they had.
 
 ### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape
 **Major · entered 2026-10-18, measured on `apolloconfig/apollo` (530 non-test Java files, 8 modules, commit `ea35677`) · `src/sextant/application/resolve/values.py::_joined`**
@@ -778,7 +799,14 @@ consistency, and recorded as no speed-up rather than claimed as one.*
 > than a key. **Falsified by** those three rows publishing peer `customers-service` with
 > paths `/owners` and `/owners/{}/pets`.
 
-### OI-142 (original entry, kept for the measurement) — a service name three calls back needs a word the identity grammar does not have
+#### How it was first measured, 2026-10-17 — and the words that were missing then
+*This was filed as a second entry under the number `OI-142`, which made every citation of
+`OI-142` ambiguous. It is the same defect at an earlier stage, so it is folded in here
+rather than left as a rival entry; nothing below is edited, only re-headed. The grammar it
+says is missing — "my result stands for whatever my RECEIVER stands for" — SHIPPED on
+2026-10-17 as `from_receiver`, with the type gate this block asks for, which is the
+"HALF BUILT" above.*
+
 **Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 4 · `src/sextant/catalogs/value-models/`, `docs/components/D02-catalog-schema.md` §1f**
 
 `spring-petclinic-genai-service` calls `customers-service` three times, and the document
@@ -2459,7 +2487,7 @@ when `quarkus-rest.yml` gains its own per-level annotation walk distinct from wo
 shared §3.6 emulation — a catalog-scoped variant of sibling inheritance, not a change to the
 word every other catalog relies on.
 
-### OI-92 — the `protocol_hint` pass reads raw annotation facts, so an inherited `hint_annotations` marker never reaches it
+### OI-92 — annotation readers fold the RAW `annotations` table, so an inherited marker and a repeated container both read false (merged with `OI-93`)
 **Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
 `src/sextant/application/resolve/protocol_hint.py::apply_protocol_hints`,
 `src/sextant/application/resolve/conditions.py::annotation_index`**
@@ -2494,36 +2522,32 @@ annotation universe (`_synthetic_annotations`'s output folded into the index it 
 or the walk persists its synthesized rows into a table every downstream reader folds — one
 change, made once, rather than a second inheritance walk inside the pass.
 
-### OI-93 — a REPEATED `@KafkaListener(batch = "true")` never satisfies `wrappers[].when`, because `conditions.holds` reads raw rows while the SQL side unfolds the container
-**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
-`src/sextant/application/resolve/conditions.py::holds`,
-`src/sextant/application/resolve/engines/annotation_driven.py::_synthetic_annotations`**
+#### The repeated-container symptom, filed separately as `OI-93` and merged here 2026-10-18
 
-`@KafkaListener` is `@Repeatable(KafkaListeners.class)` (CP-16 rows 2a/2b), so two uses on
-one method reach the class file as ONE `@KafkaListeners` row whose `value` holds both
-(JLS 9.7.5). `spring-kafka.yml` names the container (`OI-36`), and the engine unfolds it
-into two ordinary `@KafkaListener` rows — but only into `derive_endpoints.sql`'s
-`$synthetic` parameter (`folded_rows`, `_synthetic_annotations`). `conditions.holds`, which
-`wrappers[].when` (spec §5a) and `hint_when` read through, folds the raw `annotations`
-table (`annotation_index`): on the repeated method it finds `@KafkaListeners`, never
-`@KafkaListener`, and the `batch` attribute is inside the container's `value` array where
-the condition's `names` lookup does not reach. The condition is therefore false, the
-`List` wrapper stays unconditional-off, and the row publishes the array.
+`@KafkaListener(topics = "a", batch = "true") @KafkaListener(topics = "b")` compiles to a
+`@KafkaListeners` CONTAINER, which the SQL side unfolds and `conditions.holds` does not: the
+fold over the raw `annotations` table finds `@KafkaListeners` and never `@KafkaListener`, with
+`batch` inside the container's `value` array where the condition's `names` lookup cannot reach.
+So `wrappers[].when` is false, the `List` wrapper stays off, and the row publishes the array —
+`array<X>` where the listener takes a batch.
 
-**Real triggering input:** `@KafkaListener(topics = "a", batch = "true") @KafkaListener(topics
-= "b", batch = "true") void onBatch(List<OrderEvent> events)` — two batch listeners on one
-handler. Not present in any fixture: `fixtures/orders-service`'s `OrderEventsListener`
-carries one `@KafkaListener` per batch method, and its repeated-listener fixture
-(`OI-36`'s) is a record listener with no `batch` attribute.
+**WHY THE TWO ARE ONE ITEM.** `OI-93`'s own closing line said it: *"Closes with `OI-92`'s fix
+and by the same change: one composed annotation universe (folded, composed, inherited) that
+every annotation reader folds, rather than a second unfold inside `conditions.py`."* One cause
+— every annotation reader folds the raw table rather than a composed one — two symptoms, one
+edit. Separate numbers made it look like two, and the pattern this register keeps hitting is
+that the narrower of a pair gets fixed and the other is discovered again later.
 
-**Cost:** the array is published as the request shape — the pre-branch answer for that
-handler, never a fabricated one; the two rows' addresses and the listener itself are right.
+**Both symptoms close together**, and a fix that cures one and not the other has not made the
+composed universe it claims to.
 
-**Verify:** `grep -n "annotation_index(workspace)" src/sextant/application/resolve/shapes/contracts.py src/sextant/application/resolve/protocol_hint.py`
-— both readers fold the raw table; `grep -n "folded" src/sextant/application/resolve/engines/annotation_driven.py`
-— the unfold reaches the SQL parameter only. **Closes** with `OI-92`'s fix and by the same
-change: one composed annotation universe (folded, composed, inherited) that every
-annotation reader folds, rather than a second unfold inside `conditions.py`.
+### OI-93 — a REPEATED `@KafkaListener(batch = "true")` never satisfies `wrappers[].when` · **MERGED INTO `OI-92` (2026-10-18)**
+**Minor · logged 2026-09-18 · the body now lives under `OI-92`**
+
+One cause (every annotation reader folds the RAW `annotations` table), two symptoms (an
+inherited marker, a repeatable container), one edit — which this entry's own closing line
+already named as `OI-92`'s. Nothing cites `OI-93` outside this file; the stub is kept so the
+number resolves rather than looking lost.
 
 ### OI-94 — a batch listener's reply row roots its payload with the unconditional wrappers, so `@SendTo` on a `List<X>`-returning batch listener publishes `X` as the response and `array<X>` on the reply
 **Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
@@ -2861,6 +2885,12 @@ to the bean fold. **Closes** when the ladder gains a rung that resolves the para
 `bean_of` and folds the bean method's chain as `fluent._bean_chain_capture` does, once, in the
 bean method's own context.
 
+*Not the same item as `OI-110`, which is the fluent engine's `bean_via` folding only ONE hop (a
+container built in a third bean). Same root — a bean-graph join is not a value edge, so the
+value walk reaches neither, and `OI-110` carries that measurement — but a different file, a
+different mechanism and a different fix: this is a MISSING rung, that is a rung that stops too
+early. Cross-referenced rather than merged.*
+
 ### OI-107 — `sends_to` edges have no reader
 **Minor · logged 2026-09-21, found at the Task 4–5 fix round (`059342a`) ·
 `src/sextant/application/resolve/engines/fluent.py::_edge`,
@@ -2965,6 +2995,13 @@ unresolved"*. (This line cited `second_hop` until 2026-10-17; the reason string 
 **Closes** with a bounded multi-hop fold (the depth guard the combinator's helper walk already
 has), each hop in its own bean method's context.
 
+*`OI-126` states that it closes WITH this one — *"one mechanism answers both, and answering
+them separately would be two"* — and the back-reference was missing here, so a reader costing
+this item saw one symptom instead of two. They are kept apart rather than merged because the
+two differ in how the OTHER body is found: a bean-graph join here, a value handed to a method
+there. What they share is folding a chain in a body that is not the caller's, which is the
+piece neither has.*
+
 ### OI-111 — Gateway `filters` rewrite the upstream path and are not read
 **Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §7b ·
 `src/sextant/catalogs/spring-cloud-gateway-properties.yml`, `spring-cloud-gateway.yml`,
@@ -3051,7 +3088,7 @@ applies the default where no environment answers — the same rule the field lad
 `resolved_peers` substitution would need, and D02 §2i's placeholder model already names the
 separator.
 
-### OI-115 — `channel_link` is a last-wins slot
+### OI-115 — `_fold`'s captures are LAST-WINS, so a second `channel` and a second `handle` each overwrite the first (merged with `OI-121`)
 **Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_fold_site`, `_derive`**
 
 `.channel("x").handle(h).channel("y")` captures `channel_link` twice; the capture dict keeps `y`,
@@ -3077,6 +3114,35 @@ catalog, the wire shape writes `read_by(x, h)`, `sends_to(y, h)` and the row.
 the handler the later link followed. **Closes** when the wire branch writes `fed_by(x)` from
 `_READS_LINK` and withholds the row where the `_LINK_SENDER` handler itself followed a link —
 the value the fix needs is already there; what is missing is the wire branch reading it.
+
+#### The `handler` slot, filed separately as `OI-121` and merged here 2026-10-18
+
+`from("ch").channel("x").handle(h1).handle(h2)` captures `handler` twice; the capture dict keeps
+`h2` (last wins, D02 §4), so the flow writes `read_by(x, h2)` and nothing for `h1`. The framework
+subscribes `h1` to `x` and hands `h1`'s reply to `h2` on an anonymous channel — so `x`'s reader
+is `h1`, and the row the join mints against `x` names `h2` as its handler and `h1` nowhere. A
+mis-attribution one step along the chain: the wire and the channel are right, the handler column
+is the next consumer rather than the first.
+
+**What happens today:** no fixture flow handles twice in one chain; measured on the invented flow
+catalog, the bindings table holds the one `read_by(x, h2)` edge.
+
+**Real triggering input:** a flow that chains two `handle(...)` steps — the second a service
+activator on the first's reply. Uncommon under a channel source; the idiomatic flow handles once
+or transforms between. The Kafka catalog's boundary list states `handle(Object bean, String
+method)` where the bean is the module's and the lambda flow form; this is the third `handle`
+shape it does not read whole.
+
+**Verify:** `grep -n '"handler" in folded' src/sextant/application/resolve/engines/fluent.py` —
+one slot, folded by `_fold` last-wins.
+
+**WHY THE TWO ARE ONE ITEM, and why they are now one entry.** Same function, same cause —
+`_fold` keeps the last capture for a slot a chain may fill twice — and the same fix, which
+`OI-121` already stated as *"Closes with `OI-115`: the chain's handlers as a LIST in walk order,
+the first after a link its reader and each later one the previous one's consumer."* Two numbers
+for one edit made it look like two pieces of work and invited half of it. **Closes** with that
+one change: both slots folded as lists in walk order, the wire branch reading `_READS_LINK` for
+`fed_by`, and the handler column taking the FIRST handler after a link.
 
 ### OI-116 — `read_by`/`sends_to` edges are written once per vararg destination
 **Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_derive`**
@@ -3130,7 +3196,7 @@ drift would let one engine write a kind the reader does not know.
 **Closes** by moving the tuple to `resolve/request_requirements.py` (the pass that reads the
 stash) and importing it in both engines.
 
-### OI-119 — no mechanical pin ties fluent `roots:`/`steps:`/`beans:` descriptors to the probes
+### OI-119 — the descriptor gate reads `matches.methods` only, so a `fluent` catalog's `roots:`/`steps:`/`beans:` descriptors are outside it entirely (merged with `OI-129`)
 **Minor · logged 2026-09-21, found at the Task 6 self-review · `tests/architecture/test_catalog_descriptors.py`, `scripts/probes/cp10_catalog_descriptors.md`**
 
 CP-10's ratchet reads `matches.methods` rows only. The three broker catalogs and the step model
@@ -3146,9 +3212,30 @@ pass.
 **Real triggering input:** a future edit — a version bump that changes a return type in a
 descriptor.
 
-**Verify:** `grep -n '"methods"' tests/architecture/test_catalog_descriptors.py` — the one key
-read. **Closes** by extending the harness and the test to `roots`, `steps` and `beans` (and the
-step-model file), the same two-direction agreement.
+**Verify:** `grep -n '"methods"' scripts/probes/cp10_catalog_descriptors/descriptors.py
+tests/architecture/test_catalog_descriptors.py` — one key, read twice. **Closes** by extending
+the harness AND the architecture test to `roots`, `steps` and `beans` (and the step-model
+files), the same two-direction agreement over more rows.
+
+#### The wider statement, filed separately as `OI-129` and merged here 2026-10-18
+
+Both halves of the two-direction agreement read the same one key:
+
+```python
+for method in matches.get("methods") or []:
+```
+
+So the descriptors are not merely UNPINNED, they are **outside the gate**: in
+`vertx-eventbus-chain.yml` alone that is **seven erased descriptors** (four roots, three
+steps), and the three Spring Integration broker catalogs plus the step model carry some
+seventy more. It is **pre-existing** — Group D (2026-09-22) is where somebody read the loop,
+not where it started.
+
+**WHY THE TWO ARE ONE ITEM.** `OI-129`'s own text said it: *"`OI-119` logs the missing
+mechanical PIN between those descriptors and the probe tables; this is the wider statement of
+the same absence"*, and its closing line was *"Closes with `OI-119`"*. One edit, two numbers,
+and the narrower of the two understated the problem — which is the real cost of a duplicate
+here, not the untidiness.
 
 ### OI-120 — `setTopicExpression(e)` followed by `setTopic("t")` reads unresolved
 **Minor · logged 2026-09-21, ruled at Task 3 (sticky poisons) · `src/sextant/application/resolve/engines/fluent.py` (`_POISONED`, `_fold`), `src/sextant/catalogs/spring-integration-pubsub.yml`, `spring-integration-amqp.yml`**
@@ -3166,28 +3253,13 @@ to `t` and the row reads `unresolved`. Stated on both catalogs.
 setter-shaped poisons are declared liftable (`poisons: {channel: liftable}`, say) while
 divert-shaped ones stay sticky — a catalog word, once a real module needs it.
 
-### OI-121 — `handler` is a last-wins slot
-**Minor · logged 2026-09-21, found at the final whole-branch review · `src/sextant/application/resolve/engines/fluent.py::_fold_site`, `_derive`**
+### OI-121 — `handler` is a last-wins slot · **MERGED INTO `OI-115` (2026-10-18)**
+**Minor · logged 2026-09-21 · the body now lives under `OI-115`**
 
-`from("ch").channel("x").handle(h1).handle(h2)` captures `handler` twice; the capture dict keeps
-`h2` (last wins, D02 §4), so the flow writes `read_by(x, h2)` and nothing for `h1`. The framework
-subscribes `h1` to `x` and hands `h1`'s reply to `h2` on an anonymous channel — so `x`'s reader
-is `h1`, and the row the join mints against `x` names `h2` as its handler and `h1` nowhere. A
-mis-attribution one step along the chain, `OI-115`'s shape one capture over; the wire and the
-channel are right, the handler column is the next consumer rather than the first.
-
-**What happens today:** no fixture flow handles twice in one chain; measured on the invented
-flow catalog, the bindings table holds the one `read_by(x, h2)` edge.
-
-**Real triggering input:** a flow that chains two `handle(...)` steps — the second a
-service activator on the first's reply. Uncommon under a channel source; the idiomatic flow
-handles once or transforms between. The Kafka catalog's boundary list states `handle(Object
-bean, String method)` where the bean is the module's and the lambda flow form; this is the third
-`handle` shape it does not read whole.
-
-**Verify:** `grep -n '"handler" in folded' src/sextant/application/resolve/engines/fluent.py` —
-one slot, folded by `_fold` last-wins. **Closes** with `OI-115`: the chain's handlers as a LIST in
-walk order, the first after a link its reader and each later one the previous one's consumer.
+One defect, one function, one fix: `_fold` keeps the last capture, and a chain may fill
+`channel_link` twice or `handler` twice. This entry's own closing line already said *"Closes
+with `OI-115`"*, so two numbers only made one edit look like two items. The stub stays because
+`docs/java-kotlin-delivery-list.md` and the Group E design both cite `OI-121` by name.
 
 ### OI-122 — the linking tier's metadata refinement rule is stated twice and built nowhere
 **Minor · logged 2026-09-22, found at Group D Task 10 · `docs/components/D02-catalog-schema.md` §2l (line ~4798), spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md` §1f, `GAP-2`**
@@ -3450,36 +3522,12 @@ scripts/probes/cp10_catalog_descriptors/descriptors.py`. **Closes** by checking 
 rather than breaking at the first, and reporting per candidate — one cell per `(descriptor,
 version)` — with the caption corrected to match whichever it ends up meaning.
 
-### OI-129 — the descriptor gate reads `matches.methods` only, so a `fluent` catalog's roots and steps are outside it entirely
-**Minor · logged 2026-09-22, found at Group D Task 8 · `scripts/probes/cp10_catalog_descriptors/descriptors.py::catalog_descriptors` (line ~154), `tests/architecture/test_catalog_descriptors.py` (line ~114)**
+### OI-129 — the descriptor gate reads `matches.methods` only · **MERGED INTO `OI-119` (2026-10-18)**
+**Minor · logged 2026-09-22 · the body now lives under `OI-119`**
 
-Both halves of the two-direction agreement read the same one key:
-
-```python
-for method in matches.get("methods") or []:
-```
-
-A `fluent` catalog declares its descriptors on `roots:`, `steps:` and `beans:`, none of which that
-loop reaches — so **every one of them is outside the gate**, not merely unpinned. In
-`vertx-eventbus-chain.yml` alone that is **seven erased descriptors** (four roots, three steps).
-`OI-119` logs the missing mechanical PIN between those descriptors and the probe tables; this is
-the wider statement of the same absence, and the one that says the descriptors are not measured at
-all rather than measured and unpinned. **It affects every `fluent` catalog** — the three Spring
-Integration broker catalogs and the step model carry some seventy more — and it is
-**pre-existing**, not something Group D introduced; Group D is where somebody read the loop.
-
-**What happens today:** every declared descriptor was copied from a probe row, and each catalog's
-positive tests fail if one is wrong (a wrong descriptor matches nothing). That is real evidence
-and it is why this is Minor. It is also per-fixture: a root or step no fixture exercises is
-checked by nothing at all.
-
-**Real triggering input:** a version bump that changes a return type inside a root's or a step's
-descriptor, on an overload no fixture happens to call.
-
-**Verify:** `grep -n '"methods"' scripts/probes/cp10_catalog_descriptors/descriptors.py
-tests/architecture/test_catalog_descriptors.py` — one key, read twice. **Closes** with `OI-119`,
-by widening `catalog_descriptors()` and the architecture test to `roots`, `steps` and `beans` (and
-the step-model files), which is the same two-direction agreement over more rows.
+The same absence stated twice: `OI-119` filed the missing pin, this entry filed the fact that
+the descriptors are outside the gate altogether, and both closed with the same widening of
+`catalog_descriptors()` and its architecture test. Folded so the item is costed once.
 
 ### OI-130 — `@KafkaListener(value = "a", groupId = "b")` writes two contradicting consumer groups where Micronaut resolves one
 **Minor · logged 2026-09-22, found at Group D Task 9 fix round 1 · `src/sextant/catalogs/micronaut-kafka.yml` (the both-written paragraph beside the two `metadata_from` entries), `scripts/probes/cp32_listener_attributes.md` Q12, Q13**
