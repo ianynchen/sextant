@@ -309,6 +309,120 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-142 — a service name three calls back needs a word the identity grammar does not have
+**Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 4 · `src/sextant/catalogs/value-models/`, `docs/components/D02-catalog-schema.md` §1f**
+
+`spring-petclinic-genai-service` calls `customers-service` three times, and the document
+publishes `path` NULL for all three. The code:
+
+```java
+private URI getCustomerServiceUri() {
+    return discoveryClient.getInstances("customers-service").get(0).getUri();
+}
+...
+.uri(getCustomerServiceUri() + "/owners")
+```
+
+**Everything needed is readable.** There is no URL in that class file at all — verified,
+zero occurrences of `http://` — because the address is resolved from a registry at run
+time. What IS there: the service name as a plain literal, and the path in the concat's
+template. `ServiceInstance.createUri` builds from `%s://%s:%s`, so the runtime URI carries
+no path and `/owners` is the WHOLE path rather than a suffix of one (measured from
+spring-cloud-commons 5.0.0).
+
+**The obstacle is the identity grammar, measured on the facts.** The chain is three call
+sites:
+
+```
+ord=0  getInstances("customers-service")   result=5
+ord=1  get(0)         receiver=5           result=7
+ord=2  getUri()       receiver=7           result=9
+```
+
+`identified_by` answers *"which ARGUMENT of a call carries the value its result stands
+for"* (D02 §1f). `getInstances` fits — argument 0. The other two do not: `get(0)`'s
+argument is an int index, and `getUri()` has no arguments at all. What both need to say is
+*"my result stands for whatever my RECEIVER stands for"*, and the grammar has no such
+entry — `method` and `arg` are required, and `role` names a purpose rather than a source.
+
+**And the obvious widening is a fabrication.** An entry declaring that `List.get`
+preserves its receiver's identity is read by every catalog at once, over every list in the
+estate. A `List<String>` of topics whose identity is `all_strings` would then answer the
+whole list for `get(0)` — one element reported as every element. The type that makes it
+safe here (`List<ServiceInstance>`) is not something the entry can name: `arity` and
+`descriptor` discriminate overloads, and `List.get(int)` has exactly one.
+
+**What happens today:** three outbound rows carry `path` NULL and `peer` NULL, so the
+document says this service calls something over HTTP three times and will not say what.
+
+**Real triggering input:** ordinary for a service-discovery client that resolves addresses
+itself rather than through a load-balanced template.
+
+**Verify:** `grep -n "getCustomerServiceUri" -A 2` on `AIDataProvider.java`, then
+`grep -c "http://"` on its class file (0).
+**Closes** by a receiver-preserving identity entry plus the type gate that keeps it off
+every other `List` — Task 8 of the previous plan built `_producer_conforms` for exactly
+this class of borrow, so the gate exists and the entry does not. **Falsified by** those
+three rows publishing peer `customers-service` with paths `/owners` and `/owners/{}/pets`.
+
+*Ruling 2 (peer and path from separate evidence) was granted for this case and is NOT the
+blocker — there is simply no evidence to put in the peer column until the identity above
+can be stated.*
+
+### OI-141 — a binding's literal value is not a fact, and it is worth one row today
+**Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 3 · `extractor-jvm/.../MethodFlow.java::fieldWrites`, `src/sextant/storage/duckdb/value_edges.sql`, `src/sextant/application/resolve/values.py`**
+
+`field_write` can say *"field F holds parameter N"* and cannot say *"field F holds this
+constant"*. `MethodFlow.fieldWrites` requires the middle instruction of its triple to be a
+`VarInsnNode`; an `ldc` is not one, so a field initialised with a literal emits nothing.
+Measured at `scripts/probes/cp33_binding_writes.md` row 8, the shape is
+`aload_0; invokespecial; aload_0; ldc; putfield` — **inside `<init>`**, so the existing
+constructor filter already admits it and only the grammar refuses. **This is NOT capability
+9.19** (`OI-136`), which is a write OUTSIDE an initialiser and a method-filter change.
+
+**The yield, measured over every built corpus.** Shadow mode answers `no_writer` at 11
+positions. One is this shape:
+
+| shape | positions | reached by this? |
+|---|---|---|
+| `@Value("${…}")` field or parameter | 5 | no — configuration, which §8.2 forbids joining |
+| a `static final` that is not a compile-time constant | 1 | no — `ldc; putstatic`, no receiver load (CP-33 row 6) |
+| shadow over-match (a catalog the engines never run there) | 4 | no — not a real ask |
+| **a plain instance-field initialiser** | **1** | **yes** — `VisitsServiceClient#hostname` |
+
+**Three structural costs against that one row**, which is why it is filed rather than built:
+
+1. a fact-grammar change in the extractor;
+2. a **partial** `written_by` arm in `value_edges.sql`, whose own comment explains the kind
+   is absent rather than empty *because "the walk has not looked"* — a partial arm makes
+   `no_writer` mean either "no constant write" or "the capability is absent";
+3. a second reader of `field_write`. `values.py` refuses one by name: *"giving it a second
+   home in the walk is how one answer becomes two spellings that drift."* The field ladder
+   reads `from_parameter` for `@Value` expressions today.
+
+*Cost 3 may be smaller than it reads, and whoever picks this up should check rather than
+inherit the sentence: the two arms would be DISJOINT — a field assigned a parameter carries
+no constant and a field assigned a constant names no parameter — so they are two readers of
+two fields, not two spellings of one answer.*
+
+**What happens today:** `VisitsServiceClient` publishes an outbound row with `path` NULL. The
+walk joins the concat around the hole (`OI-138` cause 1, shipped) and the hole itself answers
+`no_writer`, so the template is carried verbatim and no address is published.
+
+**Real triggering input:** ordinary — a client holding its base URL in a non-final field. It
+is one row in this estate, which is the whole reason this is deferred.
+
+**Verify:** `grep -n "VarInsnNode valueLoad" extractor-jvm/src/main/java/dev/sextant/extractor/MethodFlow.java`.
+**Closes** by `field_write` carrying a constant value beside the parameter ordinal, an arm
+in `value_edges.sql` reading it, and `values._resolve`'s binding arm following that edge —
+with `no_writer`'s two meanings separated. **Falsified by** `VisitsServiceClient` publishing
+`http://visits-service/pets/visits?petId={petId}`.
+
+**Note for the shape, not the fix:** that field also has a package-private `setHostname`
+written "for testing purpose" and called from no main-source code, so the binding has two
+writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
+single address, the day capability 9.19 makes the setter visible.
+
 ### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **PARTLY CLOSED 2026-10-17**
 
 > **Closed: the format and the two symbol columns.** `Format.ANY` now carries "no format

@@ -245,7 +245,36 @@ matching `vets-service`'s own inbound `GET /vets`.
 
 ---
 
-## Task 3: A binding's literal value is a fact
+## Task 3: A binding's literal value is a fact · **DEFERRED 2026-10-17, measured**
+
+> **One row, measured, against four structural costs.** Shadow mode over every built
+> corpus answers `no_writer` at **11 positions**, and only **one** is the shape this task
+> addresses — `VisitsServiceClient`'s `private String hostname = "http://visits-service/"`.
+> The other ten: five are `@Value("${…}")` fields or parameters (configuration, which
+> §8.2 says must NOT be joined and which the field ladder already reads for its own
+> purpose), one is a `static final` that is not a compile-time constant (`ldc; putstatic`,
+> no receiver load — out of reach by CP-33 row 6 whatever this task does), and four are
+> shadow over-matches on catalogs the engines never run there.
+>
+> **The costs, each real:** a fact-grammar change in the extractor; a PARTIAL `written_by`
+> arm in `value_edges.sql`, where the file's own comment explains that the kind is absent
+> rather than empty *because "the walk has not looked"* — a partial arm makes `no_writer`
+> mean two things; and a second reader of `field_write`, which `values.py` refuses by name
+> (*"giving it a second home in the walk is how one answer becomes two spellings that
+> drift"*). The field ladder reads `from_parameter` today for `@Value` expressions.
+>
+> That is the same trade the user ruled on for the previous plan's Tasks 11-12 (16 of 756
+> asked positions → defer), at a worse ratio. **Deferred on the number, not on difficulty.**
+> `OI-141` carries it.
+>
+> *Worth recording for whoever picks it up:* that field also has a package-private
+> `setHostname`, written "for testing purpose" and called from no main-source code. So the
+> binding has two writers — a constant initialiser and a setter — and resolving it is
+> ruling 1's multiplicity, not a single answer, the day capability 9.19 makes the setter
+> visible.
+
+### The original plan, kept for whoever revisits it
+
 
 **1 row.** `VisitsServiceClient` holds `private String hostname = "http://visits-service/"`.
 Measured at `cp33_binding_writes.md` row 8: a field initialiser is
@@ -281,7 +310,19 @@ rows.
 
 ---
 
-## Task 4: `peer` and `path` from separate evidence, and a service name is a destination
+## Task 4: `peer` and `path` from separate evidence, and a service name is a destination · **BLOCKED 2026-10-17, measured — `OI-142`**
+
+> The plan called this "one YAML + a probe, tier A". It is not. `identified_by` names an
+> ARGUMENT, and the chain is `getInstances("customers-service").get(0).getUri()` — three
+> call sites, of which only the first has an argument carrying the identity. `get(0)` names
+> an int index and `getUri()` names nothing. The entry needed says *"my result stands for
+> whatever my receiver stands for"*, which the grammar has no word for; and declaring it on
+> `List.get` would answer a whole topic list for `get(0)` on every list in the estate.
+>
+> **Ruling 2 is not the blocker** — it was granted and it holds. There is simply no evidence
+> to put in the peer column until that identity can be stated. `OI-142` has the measurement
+> and names the gate (`_producer_conforms`, built by the previous plan's Task 8) that would
+> make the widening safe.
 
 **3 rows, and the only task needing both rulings.** `AIDataProvider` has **no URL in its class
 file** (verified: zero `http://`). The service name is `#147 = String customers-service`, the
