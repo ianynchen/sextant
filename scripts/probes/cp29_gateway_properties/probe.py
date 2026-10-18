@@ -465,6 +465,36 @@ def q10_media_overloads(artifacts: dict[str, Artifact]) -> str:
     return _STEP.join(cells)
 
 
+# --- Q11: does a route with no `Method=` predicate constrain the method? ----------------
+
+
+def q11_no_method_predicate(gateway: Path) -> str:
+    """What builds a `Route` from a definition, and whether anything there is a method.
+
+    The question behind the fan-out: a route declaring only `Path=` — which is every route
+    `spring-petclinic-api-gateway` writes — serves WHICH methods? Fanning a route out over
+    all eight is only honest if all eight really reach it, and the counter-example is in
+    this repository already: `RouterFunctions.resources(...)` is verb-less too and serves
+    GET, HEAD and OPTIONS only, so fanning THAT out publishes five routes nobody can call
+    (spec 2026-09-21 §0b A1).
+
+    Two readings, from `RouteDefinitionRouteLocator` — the class that turns a definition
+    into a `Route`: what `combinePredicates` does with an EMPTY predicate list, and how
+    many times `HttpMethod` is mentioned anywhere in the class. A zero there is the answer:
+    nothing in route construction can constrain a method it never names.
+    """
+    locator = "org.springframework.cloud.gateway.route.RouteDefinitionRouteLocator"
+    body = _body(_javap("-p", "-c", locator, classpath=gateway), "combinePredicates(")
+    empty_arm = _steps(body, keep=("isEmpty", "invokedynamic", "AsyncPredicate.from"))
+    mentions = _javap("-p", "-v", locator, classpath=gateway).count("HttpMethod")
+    return _STEP.join(
+        [
+            f"combinePredicates empty-list arm: {empty_arm}",
+            f"HttpMethod mentions in the whole class: {mentions}",
+        ]
+    )
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     for spec in specs:
@@ -497,6 +527,12 @@ def main(specs: list[str]) -> int:
             f"| {number} | {question} | `{artifact.group}:{artifact.name}` | {artifact.observed} | `{observed}` |"
         )
 
+    row(
+        "11",
+        "does a route declaring only `Path=` constrain the method at all",
+        gateway,
+        q11_no_method_predicate(gateway.jar),
+    )
     row(
         "1",
         "F6: `GatewayProperties.PREFIX`, its `@ConfigurationProperties`, the `routes` field",

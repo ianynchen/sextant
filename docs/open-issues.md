@@ -423,9 +423,26 @@ written "for testing purpose" and called from no main-source code, so the bindin
 writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
 single address, the day capability 9.19 makes the setter visible.
 
-### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **PARTLY CLOSED 2026-10-17**
+### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **CLOSED 2026-10-17**
 
-> **Closed: the format and the two symbol columns.** `Format.ANY` now carries "no format
+> **CLOSED. The verb was the last of the four and the user ruled it: fan out, but only to
+> methods that are SUPPORTED, not invalid ones.** Both gateway catalogs now declare
+> `all_methods`, so a route declaring no `Method=` is one row per method — the config form
+> through a new fan-out in `config_join`, the DSL form through `combinator._fanned`, which
+> already had it. `scripts/probes/cp29_gateway_properties.md` Q11 is what makes all eight
+> honest: `HttpMethod` appears **zero** times in `RouteDefinitionRouteLocator`, so route
+> construction cannot constrain a method it never names. The route that declares
+> `Method=GET,POST` is NOT widened, the unresolved routes are NOT fanned (one doubt must
+> not read as eight facts), and the outbound forward targets are NOT fanned (one
+> destination, not eight rows saying it). `RouterFunctions.resources(...)` is why the router
+> catalog still declines `all_methods`: it serves three methods, so a fan-out there would
+> publish five routes nobody can call.
+>
+> `spring-petclinic-api-gateway` now reads `GET /api/vet/**` … `TRACE /api/vet/**` where it
+> read `(unresolved) /api/vet/**` — 36 inbound rows where there were 8 this morning and 4
+> yesterday.
+>
+> **Closed earlier the same day: the format and the two symbol columns.** `Format.ANY` now carries "no format
 > constraint exists" as a resolved answer (user ruling), and `_peer_cell` /
 > `_handler_fallback` carry "this evidence held no such symbol" instead of printing
 > `unresolved` or the literal `None`. **Still open: the VERB.** It renders

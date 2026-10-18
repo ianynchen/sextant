@@ -104,6 +104,19 @@ requires: [call_site, string_constants, chain_reconstruction]
 #   * a route whose chain never reaches `uri(…)` declares nothing — the framework's
 #     `build()` fails on it too (`Route$AbstractBuilder.build`: "uri can not be null").
 matches:
+  # **A route declaring no `Method=` predicate serves every method, so it fans out to all
+  # eight** (user ruling 2026-10-17: fan out, but only to methods that are SUPPORTED).
+  # Measured at `scripts/probes/cp29_gateway_properties.md` Q11: `combinePredicates` with an
+  # empty predicate list returns a predicate that always holds, and `HttpMethod` is
+  # mentioned ZERO times in `RouteDefinitionRouteLocator` — route construction cannot
+  # constrain a method it never names.
+  #
+  # This is what separates the gateway from `RouterFunctions.resources(...)`, which is
+  # verb-less too and serves GET/HEAD/OPTIONS only, so a fan-out there publishes five
+  # routes nobody can call (spec 2026-09-21 §0b A1). `all_methods` is per CATALOG: the
+  # router catalog mixes routes that take everything with one that takes three and so
+  # declines it; every route on this catalog forwards whatever arrives.
+  all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
   entries:
     # `route(String, Function)` and `route(Function)`: the lambda's parameter 0 is the
     # `PredicateSpec` every chain starts on — `origin_param: 0`, resolved through the

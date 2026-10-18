@@ -5999,14 +5999,26 @@ def _gateway_facts(chain_owner: str) -> list:
 def test_the_gateway_catalog_derives_a_route_from_the_real_entry(tmp_path: Path):
     """The paired positive (GUIDELINES §10): the shipped rules fire on the real owners.
     `path("/orders/**")` — a vararg, one literal — then `uri(…)`: one route, `/orders/**`,
-    no verb (a catch-all one column over, spec §13 case 7), no handler (a gateway route
-    forwards), caller = the method holding `build()`."""
+    no handler (a gateway route forwards), caller = the method holding `build()`.
+
+    **ONE ROW PER METHOD since 2026-10-17, where this read one verbless row.** Ruled by the
+    user — *fan out, but only to methods that are supported, not invalid ones* — and the
+    catalog now declares `all_methods`, so `_fanned` applies. What makes that honest here is
+    measured at `scripts/probes/cp29_gateway_properties.md` Q11: `combinePredicates` with no
+    predicates returns a predicate that always holds, and `HttpMethod` is mentioned ZERO
+    times in `RouteDefinitionRouteLocator`, so route construction cannot constrain a method
+    it never names. Spec §13 case 7's "a catch-all one column over" is the rendering this
+    supersedes; `RouterFunctions.resources(...)`, which serves three methods and not eight,
+    is why its own catalog still declines `all_methods`."""
     workspace = _resolve(tmp_path, _gateway_facts(_GW_BUILDER), _shipped_gateway_catalog())
     rows = _rows(workspace)
     workspace.close()
 
-    assert _identities(rows) == [(None, "/orders/**", None, "resolved")]
-    assert [row["caller"] for row in rows] == [_GW_ROUTES]
+    assert _identities(rows) == [
+        (verb, "/orders/**", None, "resolved")
+        for verb in ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+    ]
+    assert [row["caller"] for row in rows] == [_GW_ROUTES] * 8
 
 
 @pytest.mark.declines("spring-cloud-gateway")
