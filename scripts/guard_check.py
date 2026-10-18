@@ -150,6 +150,7 @@ _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
+_MAVEN = "sextant/ingress/detect/maven.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
 _PROTOCOL_HINT = "sextant/application/resolve/protocol_hint.py"
@@ -289,6 +290,29 @@ GUARDS: dict[str, Guard] = {
                 "            peer = None",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n"
                 "            peer = None",
+            ),
+        ),
+    ),
+    "maven.a-climb-stops-at-the-aggregator-that-contains-this-module": Guard(
+        what="the reactor walk climbs to an ancestor only where that ancestor declares "
+        "`<modules>` AND its directory contains the module being analysed",
+        why="a reactor root commonly inherits from a pom that is not its aggregator — "
+        "`macrozheng/mall`'s root declares `spring-boot-starter-parent` with an empty "
+        "`<relativePath/>`, which `_parent_pom` resolves out of the local repository. "
+        "Without the containment half the climb replaced the real root with a directory "
+        "inside `~/.m2`, found no siblings at all, and `mall-admin` fell from 629 shape "
+        "fields to 73 — EVERY wire contract that module publishes, gone, with no error "
+        "and no gap line. It was caught by a field pin rather than by the suite, which is "
+        "precisely the kind of silent reduction a guard is for",
+        edits=(
+            Edit(
+                path=_MAVEN,
+                find='            if up_pom.find("m:modules", _POM_NS) is None or not module_dir.is_relative_to(\n'
+                "                up_path.parent.resolve()\n"
+                "            ):\n"
+                "                break",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                break",
             ),
         ),
     ),
