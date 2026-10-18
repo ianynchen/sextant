@@ -758,10 +758,27 @@ then `grep -n "an \`expression\` is" -A 3 src/sextant/application/resolve/shapes
 **Falsified by** an outbound row on that system carrying a resolved path for
 `VisitsServiceClient` or `AIDataProvider`.
 
-### OI-137 — CI does not read `uv.lock`, so an upstream release breaks a file the branch never touched
+### OI-137 — CI does not read `uv.lock`, so an upstream release breaks a file the branch never touched · **CLOSED 2026-10-18**
 **Major · entered 2026-10-17, measured on PR #38 on 2026-10-16 · `.github/workflows/pr.yml:43`, `pyproject.toml:17`, `:40`**
 
-CI installs with `pip install -e ".[dev]"`. That **ignores `uv.lock`** and resolves the
+> **CLOSED.** `.github/workflows/pr.yml` installs with `uv sync --frozen --extra dev`,
+> so CI and a developer read the same lock. `--frozen` also refuses to re-resolve, which
+> turns a `pyproject.toml` edited without `uv lock` into a loud failure rather than a
+> silent install of something the lock never saw.
+>
+> **And closing it surfaced the mirror of the same bug.** The local `.venv` carried ruff
+> 0.16.5 while the lock pins 0.16.6, so after the change CI would have run a ruff the
+> developer does not — the same divergence, one patch version wide instead of unbounded.
+> The local environment was synced to the lock too, and the gate re-run with the locked
+> tool versions found nothing new. *Fixing one side of a two-sided problem looks like a
+> fix and is half of one; the check that caught it was asking what the lock pins and
+> comparing, which took one command and was nearly skipped.*
+>
+> Verified before committing, in an isolated environment via
+> `UV_PROJECT_ENVIRONMENT`: the project imports, `graphql-core` installs at the locked
+> 3.2.12 rather than the newest, and all four tools CI invokes are present.
+
+Was: CI installs with `pip install -e ".[dev]"`. That **ignores `uv.lock`** and resolves the
 newest release satisfying each floor in `pyproject.toml`, and the floors are loose:
 `graphql-core>=3.2.6`, `mypy>=1.10`, `ruff>=0.5`, `import-linter>=2.0`. The local `.venv`
 resolves from the lock. **They are therefore not the same environment**, and a green local

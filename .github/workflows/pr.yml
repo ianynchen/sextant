@@ -37,10 +37,42 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"   # the floor in pyproject; a newer local version must not hide a break
-          cache: pip
+          # No pip cache: nothing installs with pip here any more. See below.
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
 
       - name: Install
-        run: pip install -e ".[dev]"
+        # FROM THE LOCK, which is the whole point of this step (`OI-137`).
+        #
+        # This was `pip install -e ".[dev]"`, and that **ignores `uv.lock`**: it reads the
+        # floors in `pyproject.toml` and installs whatever is newest on PyPI that satisfies
+        # them. The floors are loose — `graphql-core>=3.2.6`, `mypy>=1.10`, `ruff>=0.5`,
+        # `import-linter>=2.0` — so the versions this job tested were chosen by the DATE it
+        # ran, while a developer's `.venv` resolves from the lock. The two were therefore
+        # different environments, and a green local gate said nothing about this one.
+        #
+        # IT COST A DIAGNOSIS CYCLE ON PR #38. `graphql-core` 3.3.0 changed
+        # `EnumTypeDefinitionNode.values` from `Tuple[...]` to `tuple[...] | None`; CI
+        # resolved 3.3.0, the developer's machine had 3.2.12, and mypy failed in
+        # `ingress/interpret/graphql_sdl.py` — a file the branch had not touched, and broken
+        # on `main` too, whose last green run was three weeks earlier. The first suspicion
+        # for a red gate is always the branch, so the honest signal ("does this branch
+        # pass?") was unavailable until someone reproduced the resolution by hand.
+        #
+        # `--frozen` is the half that matters beyond pinning: it REFUSES to re-resolve, so a
+        # `pyproject.toml` edited without `uv lock` fails here loudly instead of silently
+        # installing something the lock never saw. `--extra dev` because `dev` is an extra
+        # (`[project.optional-dependencies]`) rather than a dependency group, which is what
+        # the old `".[dev]"` was asking for.
+        #
+        # `scripts/check.sh` needs no change: it already prefers `.venv/bin/` where one
+        # exists, which is where `uv sync` installs. The two fixture-priming steps below
+        # keep using the bare interpreter deliberately — both are stdlib-only, so neither
+        # needs the project's dependencies, and pointing them at the venv would imply they
+        # do.
+        run: uv sync --frozen --extra dev
 
       - name: Prime the fixture's dependencies
         # The suite compiles fixtures with `mvn -o`. Offline is deliberate —
