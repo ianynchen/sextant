@@ -28,6 +28,45 @@ So the deferral is right about *writes outside an initialiser* and wrong about t
 commonest shape in a Spring estate — constructor injection — has had a fact behind it all
 along.
 
+### A WRITE IS A WRITE — the `<init>` guard is the larger half, measured
+
+The user, 2026-10-18: *"Why does this have to be constructor? Whether it's a constructor or a
+setter, this is a write to a field and both are the same."*
+
+Right, and the register already said so without anyone acting on it: `OI-136` describes
+capability 9.19 as *"a write OUTSIDE an initialiser and a **method-filter change**"*, and
+CP-33 row 1 measured that a setter presents the identical triple — *"the triple, unchanged —
+confirmed `aload_0; aload_1; putfield`"*. The only thing refusing it is one line:
+
+```java
+public static List<String> fieldWrites(String documentId, MethodNode method) {
+    if (!"<init>".equals(method.name)) return List.of();   // ← this
+```
+
+**Measured by lifting it** — the extractor rebuilt, three modules re-scanned, then reverted:
+
+| corpus | `field_writes` with the guard | with it lifted | added |
+|---|---|---|---|
+| `spring-petclinic-rest` | 86 | **237** | **+151** |
+| `apollo-portal` | 553 | **1638** | **+1085** |
+| `fixtures/orders-fieldheld` | 2 | 2 | 0 — it declares no setters |
+
+So the guard hides **roughly two thirds** of the writes on real code. It is not a follow-up to
+this spec; it is most of it, and it is two lines in the same function as the other change.
+
+**What it makes non-optional.** With constructors alone, a field usually has one writer and
+`written_by` is a precision improvement. With every instance method eligible, a field commonly
+has several — a constructor AND a setter, both assigning parameter 0 — and without the writer
+recorded the walk would cross to the wrong method's callers. The two changes are therefore one
+change: lift the guard, record the writer.
+
+**The bound it carries, which is §4's rule and not a new one.** A setter can be called many
+times and the last call wins at runtime, so the walk's answer is *every value any writer ever
+passed*. Where every caller is in the module that set is closed and enumerating it is exact
+(§4 case 1); where it is not, the crossing answers `external` (§4 case 2). Sequential writes to
+one field — `setTopic("a"); setTopic("b")` — are over-reported as two values, which is the
+same over-report two callers of one helper already produce and the same answer ruling 1 gives.
+
 ### Measured, at positions a shipped catalog asks about
 
 Instrumented at `_binding`, where the position carries the symbol, over every built corpus:
@@ -192,14 +231,22 @@ Capability 9.19's remaining shapes, each with CP-33's measured bytecode:
 
 | CP-33 row | shape | why this spec does not reach it |
 |---|---|---|
-| 2 | `@PostConstruct` assigning a literal | the value load is `ldc`, not an `xLOAD` — no triple, so no fact |
+| 2 | `@PostConstruct` assigning a LITERAL | the value load is `ldc`, not an `xLOAD` — no triple, so no fact |
 | 6 | a static initialiser | `ldc; putstatic` — no receiver load and `PUTSTATIC`, not `PUTFIELD` |
 | 7 | a field assigned a CALL's result | an `invokeinterface` and a `checkcast` intervene |
 | 8 | an instance field initialiser (`ldc`) | inside `<init>`, so the guard passes; the FACT GRAMMAR refuses it (`OI-141`) |
-| 1 | a setter assigning its parameter | the triple holds — only the `<init>` guard refuses it |
 
-Row 1 is the cheapest of the five (lift one guard) and row 8 is `OI-141`'s own. All five are
-extractor work and a widened fact, and none is needed for the 112 reads above.
+**Row 1 — a setter assigning its parameter — has MOVED INTO the work** (§0), on the user's
+point that a write is a write. What remains is the three shapes where the VALUE is not a
+parameter load (2, 7, 8) and the one where the instruction is `putstatic` (6). Each needs a
+widened fact grammar rather than a filter change, and none is needed for the reads §0 measures.
+
+**A `lateinit var` assigned in a method is row 1's Kotlin spelling**, so it comes with the
+guard lift. Measured on a kotlinc 2.2.0 probe: of seven Kotlin property shapes, a
+primary-constructor `val`, a `data class` with a default, an `init {}` assignment and a
+secondary constructor all emit the fact today; `lateinit var` does not, and does once the guard
+goes. A computed property has no backing field and `by lazy` stores a delegate — both answer
+through the seed the constructor took, and neither is a gap.
 
 **`@Autowired` field injection is NOT on that list** and never will be: there is no write
 instruction to read. §8.2 bounds it.
