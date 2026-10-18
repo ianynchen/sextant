@@ -260,6 +260,7 @@ class YamlCatalogSource:
                     default_produces=tuple(raw.get("default_produces", [])),
                     format_fixed=raw.get("format_fixed", {}),
                     media_formats=raw.get("media_formats", {}),
+                    format_any=bool(raw.get("format_any", False)),
                     json_default_markers=raw.get("json_default_markers", []),
                     parse_calls=raw.get("parse_calls", {}),
                     # 2H design §6 — optional, checked where the pass reads it
@@ -341,13 +342,47 @@ def _identities(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:
             raise CatalogError(
                 f"loading value model {path}: each `identified_by` entry is a mapping"
             )
-        missing = [key for key in ("method", "arg", "by") if key not in entry]
+        # `arg` OR `from_receiver`, never neither and never both. The second form says the
+        # result stands for whatever the RECEIVER stands for, which is what a chain like
+        # `getInstances(name).get(0).getUri()` needs and what a model built only out of
+        # positions cannot say (`OI-142`). Refusing BOTH is not pedantry: an entry carrying
+        # each would be two different claims about one call, and nothing downstream could
+        # say which the author meant.
+        has_arg, from_receiver = "arg" in entry, entry.get("from_receiver")
+        if has_arg and from_receiver is not None:
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares BOTH "
+                f"`arg` and `from_receiver` — one says which of this call's own positions "
+                f"carries the value, the other says it carries whatever its receiver does, "
+                f"and an entry claiming each is two claims about one call"
+            )
+        if from_receiver is not None and from_receiver is not True:
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares "
+                f"`from_receiver: {from_receiver!r}` — the only value is `true`, because the "
+                f"key is a claim and not a setting"
+            )
+        required = ("method", "by") if from_receiver else ("method", "arg", "by")
+        missing = [key for key in required if key not in entry]
         if missing:
             raise CatalogError(
                 f"loading value model {path}: `identified_by` entry {entry!r} declares no "
                 f"{', '.join(missing)} — `owner` is optional (spec §5a: a free function is an "
-                f"answer, not an error), `method` and `arg` say which position carries the "
-                f"value, and `by` is the probe row behind the claim (§7b)"
+                f"answer, not an error), `method` with either `arg` or `from_receiver` says "
+                f"where the value comes from, and `by` is the probe row behind the claim (§7b)"
+            )
+        # WHAT KIND of thing the identity yields — a closed pair, so a typo is a refusal
+        # rather than a silent `address`. Almost every entry yields a whole address and
+        # says nothing; a service-discovery lookup yields only the AUTHORITY (who is being
+        # called, with no scheme and no path), and nothing about the resolved STRING could
+        # tell the two apart: `customers-service` and `/api/v1` both lack a scheme, and
+        # reading either as the other publishes a wrong column at `resolved` (`OI-142`).
+        yields = entry.get("yields")
+        if yields is not None and yields not in ("address", "authority"):
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares "
+                f"`yields: {yields!r}` — the only values are `address` (the default, a whole "
+                f"URL) and `authority` (who is being called, with no scheme and no path)"
             )
         if not isinstance(entry["by"], str) or not entry["by"]:
             raise CatalogError(

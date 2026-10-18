@@ -5,20 +5,56 @@
   "module": "spring-petclinic-api-gateway",
   "endpoints": {
     "inbound": {
-      "http": 4
+      "http": 36
     },
     "outbound": {
-      "http": 2
+      "http": 6
     }
   },
   "routes": {
     "inbound": [
+      "DELETE /api/customer/**",
+      "DELETE /api/genai/**",
+      "DELETE /api/vet/**",
+      "DELETE /api/visit/**",
       "GET /",
       "GET /**",
+      "GET /api/customer/**",
       "GET /api/gateway/owners/{ownerId}",
-      "POST /fallback"
+      "GET /api/genai/**",
+      "GET /api/vet/**",
+      "GET /api/visit/**",
+      "HEAD /api/customer/**",
+      "HEAD /api/genai/**",
+      "HEAD /api/vet/**",
+      "HEAD /api/visit/**",
+      "OPTIONS /api/customer/**",
+      "OPTIONS /api/genai/**",
+      "OPTIONS /api/vet/**",
+      "OPTIONS /api/visit/**",
+      "PATCH /api/customer/**",
+      "PATCH /api/genai/**",
+      "PATCH /api/vet/**",
+      "PATCH /api/visit/**",
+      "POST /api/customer/**",
+      "POST /api/genai/**",
+      "POST /api/vet/**",
+      "POST /api/visit/**",
+      "POST /fallback",
+      "PUT /api/customer/**",
+      "PUT /api/genai/**",
+      "PUT /api/vet/**",
+      "PUT /api/visit/**",
+      "TRACE /api/customer/**",
+      "TRACE /api/genai/**",
+      "TRACE /api/vet/**",
+      "TRACE /api/visit/**"
     ],
     "outbound": [
+      "(unresolved) lb://customers-service",
+      "(unresolved) lb://genai-service",
+      "(unresolved) lb://vets-service",
+      "(unresolved) lb://visits-service",
       "GET (unresolved)",
       "GET /owners/{ownerId}"
     ]

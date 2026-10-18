@@ -1191,20 +1191,32 @@ def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
     pass-through reached unconsumed, a duplicate) cannot pass silently."""
     rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway"]
     identities = {(r["method"], r["path"], r["resolution"]) for r in rows}
+    # **Every resolved route is one row per method since 2026-10-17** (user ruling: fan out,
+    # but only to methods that are SUPPORTED). What makes all eight honest for a gateway is
+    # measured at `scripts/probes/cp29_gateway_properties.md` Q11 — `HttpMethod` appears
+    # ZERO times in `RouteDefinitionRouteLocator`, so route construction constrains no
+    # method. `RouterFunctions.resources(...)` serves three and not eight, which is why its
+    # own catalog still declines `all_methods`.
+    #
+    # Three things this pins that the fan-out could have broken, and did not:
+    #   * `/orders/**` carries an explicit POST and PUT route BESIDE a verbless one, and the
+    #     result is eight rows rather than ten — the fanned rows dedupe against the declared
+    #     ones through `call_endpoints`' insert-if-absent, so a route declared twice is not
+    #     counted twice;
+    #   * the two UNRESOLVED rows are not fanned. A route whose address could not be read is
+    #     one doubt, and eight rows would present it as eight facts (`_fanned` refuses a
+    #     poisoned route for the same reason);
+    #   * `/guarded/**`'s header and query requirements ride every fanned row, asserted in
+    #     `test_gateway_header_and_query_predicates_reach_endpoint_metadata` below.
+    verbs = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+    served = ("/orders/**", "/a/**", "/b/**", "/billing/**", "/**", "/guarded/**")
     assert {
-        (None, "/orders/**", "resolved"),
-        ("POST", "/orders/**", "resolved"),
-        ("PUT", "/orders/**", "resolved"),
-        (None, "/a/**", "resolved"),
-        (None, "/b/**", "resolved"),
-        (None, "/billing/**", "resolved"),  # captured `this`: the spec is parameter 0
-        (None, "/**", "resolved"),  # host only, the `route(Function)` overload
-        (None, "/guarded/**", "resolved"),  # header + query predicates: requirements, not address
+        *((verb, path, "resolved") for path in served for verb in verbs),
         (None, None, "unresolved"),  # not-admin, and legacy (captured local, concat path)
     } == identities, sorted(identities, key=str)
     unresolved = [r for r in rows if r["resolution"] == "unresolved"]
     assert len(unresolved) == 2 and all(r["method"] is None for r in unresolved), unresolved
-    assert len(rows) == 10, sorted(identities, key=str)
+    assert len(rows) == len(served) * len(verbs) + 2, sorted(identities, key=str)
     assert all(r["handler"] is None for r in rows), [r["handler"] for r in rows]
     assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
 
@@ -1225,9 +1237,17 @@ def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tab
     beside `Method=GET,POST`, so the same requirement stands against each of its two
     rows — through the same stash, joined by `None == None` on `caller` and `handler`
     (`test_gateway_property_routes_derive_their_inbound_and_outbound_rows` below).*"""
+    # **`/guarded/**`'s two requirements ride EVERY fanned row** since 2026-10-17, which is
+    # `_fanned`'s own rule — "each carrying the route's requirements" — now that the catalog
+    # declares `all_methods`. `/cfg/orders/**` declares `Method=GET,POST` and is NOT widened,
+    # so its two rows stay two: the contrast is the user's ruling (fan out only to methods
+    # that are supported) visible in one assertion.
     assert _requirements(gateway_tables["endpoint_metadata"]) == {
-        (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
-        (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
+        *(
+            (verb, "/guarded/**", None, kind, name, value, "required", "resolved")
+            for verb in ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+            for kind, name, value in (("header", "X-Api", "v2"), ("query", "debug", None))
+        ),
         ("GET", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
         ("POST", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
     }
@@ -1253,14 +1273,26 @@ def test_gateway_property_routes_derive_their_inbound_and_outbound_rows(gateway_
     requirement is asserted above."""
     rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway-properties"]
     identities = {(r["direction"], r["method"], r["path"], r["resolution"]) for r in rows}
+    # **The config form fans out exactly as the DSL form does** since 2026-10-17 (user
+    # ruling), and the two routes in one fixture pin both halves of it: `/cfg/items/**`
+    # declares no `Method=` and becomes one row per method; `/cfg/orders/**` declares
+    # `Method=GET,POST` and stays two. A fan-out keyed on "the verb is NULL" rather than on
+    # the catalog's `all_methods` would have widened the declared pair too.
+    #
+    # **The outbound forward targets are NOT fanned**, deliberately: one destination, and
+    # eight rows naming `lb://orders` would say one thing eight times. The inbound rows are
+    # the endpoints this module SERVES, which is what a reader asks about by method.
     assert identities == {
         ("inbound", "GET", "/cfg/orders/**", "resolved"),
         ("inbound", "POST", "/cfg/orders/**", "resolved"),
-        ("inbound", None, "/cfg/items/**", "resolved"),
+        *(
+            ("inbound", verb, "/cfg/items/**", "resolved")
+            for verb in ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+        ),
         ("outbound", None, "lb://orders", "resolved"),
         ("outbound", None, "http://items.internal:8080", "resolved"),
     }, sorted(identities, key=str)
-    assert len(rows) == 5, sorted(identities, key=str)
+    assert len(rows) == 12, sorted(identities, key=str)
     assert all(r["handler"] is None and r["caller"] is None and r["peer"] is None for r in rows)
     assert all(r["protocol"] == "http" and r["evidence"] == "compiler" for r in rows)
     dsl = {r["catalog_id"] for r in gateway_rows} - {"spring-cloud-gateway-properties"}

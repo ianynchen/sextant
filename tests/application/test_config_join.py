@@ -3465,13 +3465,27 @@ def test_the_shipped_edge_catalog_derives_property_routes_through_derive_endpoin
     workspace.close()
 
     assert skipped == []
-    assert rows == [
-        ("inbound", "GET", "/cfg/orders/**", None, None, None, "resolved"),
-        ("inbound", "POST", "/cfg/orders/**", None, None, None, "resolved"),
-        ("inbound", None, "/cfg/items/**", None, None, None, "resolved"),
-        ("outbound", None, "http://items.internal:8080", None, None, None, "resolved"),
-        ("outbound", None, "lb://orders", None, None, None, "resolved"),
-    ]
+    # **`/cfg/items/**` declares no `Method=` and is now one row per method; the
+    # `/cfg/orders/**` route declares `Method=GET,POST` and stays two.** That contrast IS
+    # the user's ruling of 2026-10-17 — fan out, but only to methods that are supported —
+    # and it is why the fan-out keys on `matches.all_methods` rather than on "the verb is
+    # NULL": a declared pair is not widened, and the four outbound forward targets are not
+    # fanned either, since eight rows naming one destination say one thing eight times.
+    # Sorted with `_edge_rows`' own `key=str` rather than hand-ordered: ten rows in a
+    # total order no reader can verify by eye is a pin that passes for the wrong reason.
+    assert rows == sorted(
+        [
+            ("inbound", "GET", "/cfg/orders/**", None, None, None, "resolved"),
+            ("inbound", "POST", "/cfg/orders/**", None, None, None, "resolved"),
+            *(
+                ("inbound", verb, "/cfg/items/**", None, None, None, "resolved")
+                for verb in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
+            ),
+            ("outbound", None, "http://items.internal:8080", None, None, None, "resolved"),
+            ("outbound", None, "lb://orders", None, None, None, "resolved"),
+        ],
+        key=str,
+    )
     assert stash == [
         (None, None, "GET", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),
         (None, None, "POST", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),

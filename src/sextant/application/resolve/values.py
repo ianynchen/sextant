@@ -123,8 +123,9 @@ work that takes under a millisecond.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
@@ -233,6 +234,36 @@ _ROLE = "role"
 # reaches them, and a cleanup that touches five modules is not this fix (§3).
 _ALL_STRINGS = "all_strings"
 
+# An `identified_by` entry saying its call's result stands for whatever its RECEIVER stands
+# for, rather than for one of its own arguments (`OI-142`). The third form, beside an `arg`
+# index and the `all_strings` rule.
+_FROM_RECEIVER = "from_receiver"
+
+# The marker `MethodFlow.concatTemplate` writes for a runtime operand it could not fold —
+# one per `\u0001` in the bootstrap's recipe. Spelled once here because `_joined` both
+# COUNTS them (to check the template against the operand list) and SPLITS on them.
+_HOLE = "{}"
+
+
+# WHAT KIND OF THING an identity yields, and why a closed pair rather than a flag.
+#
+# A URL has parts: `http://customers-service/owners` is a SCHEME, an AUTHORITY (who you
+# are calling) and a PATH (what you are asking for). Almost every identity in the table
+# yields a whole address — `URI.create("https://…/x")` — and the consumer splits it with
+# CP-2's rule. A service-discovery lookup yields only the AUTHORITY: the chain
+# `getInstances("customers-service").get(0).getUri()` resolves to `customers-service`,
+# which is who, with no scheme and no what.
+#
+# **Nothing about the STRING says which it is, which is why this is a declared property
+# and not a test.** `customers-service` and `/api/v1` both lack a scheme; the first is a
+# service and the second is a path prefix, and reading either as the other publishes a
+# wrong column at `resolved`. What tells them apart is where the value came from, so the
+# entry says it (`OI-142`, ruling 2 — "peer and path from separate evidence").
+_YIELDS = "yields"
+_ADDRESS = "address"
+_AUTHORITY = "authority"
+_YIELDS_KINDS = (_ADDRESS, _AUTHORITY)
+
 
 @dataclass(frozen=True)
 class Answer:
@@ -252,6 +283,12 @@ class Answer:
     value: Any = None
     literal_kind: str | None = None
     reason: str | None = None
+    # `address` (the default, and what every value the code states is) or `authority` — WHO
+    # is being called, with no scheme and no path. Set only by an identity entry declaring
+    # `yields: authority`, and carried through every hop after it, because a value that
+    # stands for a service still stands for one after an accessor hands it on. A consumer
+    # reads it to decide which COLUMN the value belongs in; see `_joined`.
+    yields: str = _ADDRESS
 
 
 @dataclass(frozen=True)
@@ -307,6 +344,55 @@ class ValueIndex:
     # `external` (we cannot see the producer) from `not_readable` (we can, and it names
     # no value) — a distinction §1d exists to make and the edge query cannot.
     reached: frozenset[tuple[str, int]]
+
+
+# The index, built once per RESOLVE instead of once per catalog that asks for it.
+#
+# **This is a correctness enabler as much as a saving.** `fluent.run` built its own index
+# only where the catalog declared a `channel_via`/`url_via`, because building it per
+# catalog was measured as real: removing that gate cost **+1.3s on `mall-admin`** (6.22s
+# -> 7.50s end to end, resolve 4.65s -> 6.05s). But the gate also kept the walk away from
+# catalogs that need it for an ASSEMBLED address, which is not a hop and declares no key.
+# Sharing one index makes the gate unnecessary rather than merely cheaper: `mall-admin`
+# built the same index FIVE times before this.
+#
+# **A WeakKeyDictionary, not `id(workspace)`** — and the difference is a defect this
+# cache shipped with for one gate run. Keyed on `id()`, the argument for safety was "the
+# pipeline clears it before anything can ask", which is true of a pipeline run and FALSE
+# of every test that calls an engine directly: a workspace was freed, a new one landed at
+# the same address, and the previous test's index answered for it. Two tests in other
+# files failed while passing in isolation, which is how it was found.
+#
+# A weak key cannot do that. The entry disappears with the workspace it belongs to, so a
+# new object at the same address is simply a different key, and no clearing discipline has
+# to be remembered by anybody.
+_INDEX_BY_WORKSPACE: "WeakKeyDictionary[Workspace, ValueIndex]" = WeakKeyDictionary()
+
+
+def reset_value_index() -> None:
+    """Drops every cached index, so a resolve never answers from facts a previous one
+    loaded.
+
+    The weak keys above make this unnecessary for CORRECTNESS across objects — an entry
+    dies with its workspace — but a single workspace REUSED for two resolves, with facts
+    reloaded in between, is the same object and would keep the first resolve's index.
+    `pipeline.resolve` calls this before `load_facts` for that case.
+    """
+    _INDEX_BY_WORKSPACE.clear()
+
+
+def cached_value_index(workspace: Workspace) -> "ValueIndex":
+    """`value_index`, built at most once per workspace per resolve.
+
+    Every engine that resolves values should ask for this rather than `value_index`
+    directly: the fold is the same, and three engines times N catalogs each paid for it
+    separately before.
+    """
+    index = _INDEX_BY_WORKSPACE.get(workspace)
+    if index is None:
+        index = value_index(workspace)
+        _INDEX_BY_WORKSPACE[workspace] = index
+    return index
 
 
 def value_index(workspace: Workspace) -> ValueIndex:
@@ -605,16 +691,32 @@ class _Walk:
             return _only(trail, Answer(kind=LITERAL, value=value, literal_kind=literal_kind))
         if kind == "concat":
             # W4: an address the code ASSEMBLES, whose `value` is the TEMPLATE with a hole
-            # per runtime value. Carried verbatim — §1b's `expression` — and never
-            # evaluated: §6 as amended 2026-09-23 refuses the EVALUATION, not the template,
-            # and no hole is ever filled in (§8.2: this repository does not guess deployed
-            # values). It is never a `literal`, so a consumer reading literals is
-            # unaffected by it existing — and discarding it would make `produced_by`'s
-            # whole reason for reading `call_sites` rather than `call_edges` pointless,
-            # since reaching the concat site is exactly what that arm was fixed to do.
+            # per runtime value.
+            #
+            # **Joined where every hole's operand is a literal the SOURCE states, and
+            # carried verbatim otherwise** — ruling 1, granted by the user 2026-10-17 in
+            # these words: *"join them when every single piece is a fixed string typed
+            # into the source code. If any piece comes from a config file, a method
+            # parameter, or anything that changes at runtime — don't join, behave exactly
+            # as today."* That amends §6, which forbade evaluating a concatenation at all;
+            # the default is unchanged and the exception is exactly the sentence above.
+            #
+            # Nothing is reverse-engineered. javac emits one `invokedynamic` plus a recipe
+            # of literal text, `MethodFlow.concatTemplate` already turns that into this
+            # template — already SUBSTITUTING the bootstrap's own constants, because
+            # "that constant IS known" — and the operands are the concat site's own
+            # arguments, reached exactly as `domain/facts.py` says: "What FILLS the hole is
+            # the concat site's own call-site fact, reached by `source` -> `result`."
+            #
+            # §8.2 is untouched: a `${...}` operand answers `expression`, not `literal`, so
+            # it fails the all-literals test by construction and no deployment hole is ever
+            # filled in.
             template = argument.get("value")
             if not isinstance(template, str):
                 return _only(trail, _unresolved(NOT_READABLE))
+            joined = self._joined(template, argument, method, origin, trail, frames)
+            if joined is not None:
+                return joined
             return _only(trail, Answer(kind=EXPRESSION, value=template))
         if kind in _DECLARATION_KINDS:
             # **An identified CONSTRUCTION is answered before the type symbol, and the
@@ -770,6 +872,91 @@ class _Walk:
             merged = _combine(trail, (trailing,))
             reached.append((merged if merged is not None else trail, _unresolved(unread)))
         return tuple(reached)
+
+    def _joined(
+        self,
+        template: str,
+        argument: Mapping[str, Any],
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """The template with every hole filled from a source literal, or None to leave the
+        caller carrying it verbatim.
+
+        **Every refusal below returns None rather than an `unresolved`**, and that is the
+        shape of ruling 1: not joining is not a failure, it is the behaviour §6 already
+        had, so a template this cannot fill reads exactly as it did before.
+
+        The refusals, each because the alternative is a string nobody wrote:
+
+        * **no producing site for `source`** — the concat's own arguments are where the
+          operands live, and without that site there is nothing to fill from;
+        * **a hole count that disagrees with the operand count** — the template's `{}`
+          come from the recipe's `\u0001` markers, one per runtime argument, so a
+          mismatch means one of the two was misread and guessing an alignment would
+          publish operands in the wrong places;
+        * **an operand that is not exactly one answer** — several enumerable answers are
+          several possible addresses, and one row per combination is ruling 1's
+          multiplicity rule applied across operands. That product is deliberately NOT
+          built here: it needs a path-merge across operands that disagree, nothing in the
+          27 measured corpora reaches it, and carrying the template under-reports rather
+          than inventing. Recorded rather than silently narrowed;
+        * **an operand that is not a `string` literal** — a parameter, a `${...}`
+          expression, a symbol, an `absent`, an `unresolved`. The ruling's own boundary;
+        * **operand paths that do not cohere** — `_combine`'s rule, unchanged: two
+          operands that crossed the same context differently did not happen together.
+        """
+        source = argument.get("source")
+        if source is None:
+            return None
+        producers = self._index.producers.get((method, int(str(source))), ())
+        if not producers:
+            return None
+        site = self._index.sites.get((method, min(producers)))
+        if site is None:
+            return None
+        operands = site["arguments"] or []
+        pieces = template.split(_HOLE)
+        if len(pieces) != len(operands) + 1:
+            return None
+
+        path = trail
+        values: list[str] = []
+        answers: list[Answer] = []
+        for operand in operands:
+            reached = self._entry(operand, method, origin, trail, frames)
+            if len(reached) != 1:
+                return None
+            (reached_path, answer) = reached[0]
+            if answer.kind != LITERAL or answer.literal_kind != STRING:
+                return None
+            merged = _combine(path, reached_path)
+            if merged is None:
+                return None
+            path = merged
+            values.append(str(answer.value))
+            answers.append(answer)
+
+        filled = pieces[0] + "".join(
+            value + piece for value, piece in zip(values, pieces[1:], strict=True)
+        )
+        # **An AUTHORITY joined to a path is written scheme-relative**, which is how the
+        # boundary between the two survives being one string (`OI-142`, ruling 2).
+        #
+        # `getCustomerServiceUri() + "/owners"` resolves its hole to `customers-service` —
+        # who, not where — and the plain join `customers-service/owners` has no scheme, so
+        # CP-2's splitter reads the whole thing as a path and the peer column is lost.
+        # `//customers-service/owners` is RFC 3986 §4.2's scheme-relative reference: a real
+        # URI form, not an invention, and the `//` says exactly where the authority ends.
+        # `split_url` takes it from there, so no consumer needs to learn a second shape.
+        #
+        # Only where the result has no scheme of its own. `"http://" + host + "/x"` already
+        # says where the authority starts, and prefixing that would be wrong.
+        if any(answer.yields == _AUTHORITY for answer in answers) and "://" not in filled:
+            filled = f"//{filled}"
+        return _only(path, Answer(kind=LITERAL, value=filled, literal_kind=STRING))
 
     def _through(
         self, method: str, value: int, used_at: int | None, trail: _Trail, frames: "_Frames"
@@ -941,7 +1128,18 @@ class _Walk:
         # is the value (meaning), and no framework is named in this module either way.
         slot = self._identified(site)
         if slot is not None:
-            return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            identified = self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            # The ENTRY says what kind of thing this producer yields, so it is stamped here
+            # rather than carried by the slot's own answer: argument 0 of
+            # `getInstances("customers-service")` is an ordinary string literal, and what
+            # makes it an AUTHORITY is the entry, not the string.
+            kind = self._identified_yields(site)
+            if kind == _ADDRESS:
+                return identified
+            return tuple(
+                (crossed, replace(answer, yields=kind) if answer.kind == LITERAL else answer)
+                for crossed, answer in identified
+            )
         # **The PLURAL identity, and the reason it belongs beside the singular one rather
         # than in a reader of its own.** `consumer.subscribe(List.of("t1", "t2"))` reaches
         # here exactly as `createQueue` does — a producing call whose body is a JDK method
@@ -953,12 +1151,60 @@ class _Walk:
         # the negative direction (§8's "exclude only on proof": a miss asserted, not read).
         if self._identified_rule(site) == _ALL_STRINGS:
             return self._all_arguments(site, trail, frames)
+        # **The identity its RECEIVER carries** (`OI-142`), for a call that hands back
+        # something still standing for the same thing. Below the two arms above because
+        # they are more specific: a call naming its own identifying argument answers from
+        # that argument, never from what it was invoked on.
+        if self._preserves_receiver(site):
+            return self._through_receiver(site, trail, frames)
         # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
         # of 2,065 value-producing sites are that boundary, so `external` is the common
         # answer and not the corner case.
         return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
+
+    def _through_receiver(
+        self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """The receiver's own identity, handed on as this call's — or `not_readable` where
+        the receiver does not resolve to exactly one.
+
+        **EXACTLY ONE, and that single condition is what makes an entry on `List.get` safe.**
+        It is the user's own argument of 2026-10-17: element access on a list of a service's
+        instances yields the same service, because every instance of a service IS that
+        service. What makes it sound in general is that the identity table already separates
+        the two cases, and the walk's multiplicity separates them again at resolve time:
+
+        * a SINGLE-VALUED identity resolves to one answer, and an element of a collection
+          identified as one thing is that thing. MEASURED over the shipped table: of 23
+          entries, the only single-valued one producing a collection is
+          `Collections.singletonList` at `arg: 0` — and `singletonList("x").get(0)` IS `x`,
+          so propagating is right there too;
+        * an ENUMERATING identity (`all_strings`) resolves to several, and an element of a
+          collection identified as MANY things is one of them, which one being unknowable.
+          MEASURED: all three such entries are topic lists — `List.of`, `Arrays.asList`,
+          `Subscriptions.topics` — and propagating would answer every topic for one element,
+          a wrong answer at `resolved`, which is the one failure §7 names.
+
+        So the refusal is not caution about a case nobody has: it is the exact line between
+        the three entries that must not propagate and the rest. A future entry that breaks
+        it would have to declare a single-valued identity on a producer whose elements differ
+        from it, and `by:` means no entry lands without a measurement saying otherwise.
+        """
+        row = self._index.sites.get(site)
+        receiver = None if row is None else row.get("receiver")
+        if receiver is None:
+            # A static or unreadable receiver. `not_readable` rather than `external`: the
+            # call IS in what was scanned, and the thing that is missing is the value it
+            # was invoked on.
+            return _only(trail, _unresolved(NOT_READABLE))
+        reached = self._through(site[0], int(str(receiver)), site[1], trail, frames)
+        if len(reached) != 1:
+            return _only(trail, _unresolved(NOT_READABLE))
+        # Handed back WHOLE, which is what carries `yields` along the chain: a value that
+        # stands for a service still stands for one after `.get(0)` and after `.getUri()`.
+        return reached
 
     def _all_arguments(
         self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
@@ -1067,6 +1313,36 @@ class _Walk:
             if isinstance(slot, int):
                 return slot
         return None
+
+    def _identified_yields(self, site: tuple[str, int]) -> str:
+        """What KIND of thing the entry that answered for `site` yields — `address` unless
+        it says `authority`.
+
+        Read beside `_identified` rather than returned with it, so the slot reader keeps
+        the one-line contract every caller already has. The two always agree: both walk
+        `_identity_matches` in the table's order and take the first entry in a form they
+        understand.
+        """
+        for entry in self._identity_matches(site):
+            if isinstance(entry.get("arg"), int):
+                return str(entry.get(_YIELDS, _ADDRESS))
+        return _ADDRESS
+
+    def _preserves_receiver(self, site: tuple[str, int]) -> bool:
+        """Whether a matching entry says this call's result stands for whatever its
+        RECEIVER stands for.
+
+        The third form `arg` cannot express, and the one a discovery chain needs
+        (`OI-142`). `discoveryClient.getInstances("customers-service")` names its service
+        at argument 0, but the two calls after it name it nowhere: `.get(0)`'s argument is
+        an int index and `.getUri()` has no arguments at all. What both say is "I hand back
+        something that is still about the same service", and an identity model built only
+        out of positions has no way to say it.
+
+        **The caller gates this on the receiver resolving to exactly ONE answer, and that
+        gate is the whole safety argument** — see `_through_receiver`.
+        """
+        return any(entry.get(_FROM_RECEIVER) is True for entry in self._identity_matches(site))
 
     def _identified_rule(self, site: tuple[str, int]) -> str | None:
         """The RULE a matching entry names in place of a slot, or None — the plural half of

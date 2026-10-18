@@ -958,6 +958,167 @@ def test_an_imported_bom_answers_for_the_versions_it_manages(
     assert module.dependency_versions == {"com.fasterxml.jackson.core:jackson-databind": "2.17.2"}
 
 
+def test_a_bom_managing_its_own_artifacts_by_project_version_resolves_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`${project.version}` is a Maven BUILT-IN — the version of the pom the element is
+    written in — and it is NOT an entry in any `<properties>` block. It is how a Spring
+    Cloud component BOM versions its own artifacts: measured at
+    `scripts/probes/cp35_bom_chain.md`, 6 of 8 managed entries in
+    `spring-cloud-gateway-dependencies:5.0.0` are spelled exactly this way, and so is every
+    one of the four starters `spring-petclinic-api-gateway` declares.
+
+    Interpolating only from `<properties>` resolved nothing for it and `_managed_versions`
+    dropped the entry with no message, so a whole route table derived nothing while the
+    symptom read as a BOM that had never been opened (`OI-139`)."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _published_pom(
+        home,
+        "com.vendor:vendor-bom",
+        "5.0.0",
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>5.0.0</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies></dependencyManagement>
+</project>
+""",
+    )
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>1.0.0</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>5.0.0</version>
+      <type>pom</type><scope>import</scope>
+    </dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId></dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_versions == {"com.vendor:vendor-starter": "5.0.0"}
+    assert module.dependencies_not_resolved == ()
+
+
+def test_project_version_in_a_bom_is_the_boms_own_version_never_the_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The scope rule, asserted where getting it wrong is INVISIBLE rather than loud. If
+    `${project.version}` were answered from the importing module's model, this module's
+    `9.9.9` would be written into the version map and the coordinate
+    `com.vendor:vendor-starter:9.9.9` would simply not exist — a silent wrong answer where
+    today there is an honest `dependencies_not_resolved` entry. The two versions are
+    deliberately far apart so a passing test cannot be a coincidence."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _published_pom(
+        home,
+        "com.vendor:vendor-bom",
+        "1.2.3",
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies></dependencyManagement>
+</project>
+""",
+    )
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>9.9.9</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+      <type>pom</type><scope>import</scope>
+    </dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId></dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_versions == {"com.vendor:vendor-starter": "1.2.3"}
+
+
+def test_a_managed_version_an_imported_bom_cannot_settle_is_named_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The defect worth fixing beyond the one property. `_managed_versions` had no `else`
+    on its `if settled is not None:`, so an entry whose version named nothing readable
+    vanished from the map AND from the reasons — and a module then reported a dependency
+    unresolved for a cause nothing on the page could explain.
+
+    A module's OWN unresolvable version has always been named
+    (`test_a_version_nobody_could_resolve_is_named_rather_than_guessed`); one an imported
+    BOM manages was not. Same discipline, one level further out."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _published_pom(
+        home,
+        "com.vendor:vendor-bom",
+        "1.2.3",
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId>
+      <version>${nobody.defines.this}</version>
+    </dependency>
+  </dependencies></dependencyManagement>
+</project>
+""",
+    )
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>1.0.0</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+      <type>pom</type><scope>import</scope>
+    </dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.vendor</groupId><artifactId>vendor-starter</artifactId></dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_versions == {}
+    assert any(
+        "vendor-starter" in reason and "nobody.defines.this" in reason
+        for reason in module.dependencies_not_resolved
+    ), module.dependencies_not_resolved
+
+
 def test_a_version_nobody_could_resolve_is_named_rather_than_guessed(tmp_path: Path):
     """FR-17, the same discipline `libraries_not_resolved` keeps. The
     coordinate is still in the SET — the module does depend on it, and the

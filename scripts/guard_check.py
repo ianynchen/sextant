@@ -211,6 +211,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.an-enumerating-identity-is-not-preserved-through-a-receiver": Guard(
+        what="a `from_receiver` identity hands on its receiver's answer only where the "
+        "receiver resolved to EXACTLY ONE; several answers are refused",
+        why="an `identified_by` entry is read by every catalog at once, over every call in "
+        "the estate, so the entry on element access (`java.util.List#get`) meets topic "
+        "lists as well as a discovery lookup's instances. A single-valued identity "
+        "propagates correctly — an element of a collection identified as ONE thing is that "
+        'thing, and `Collections.singletonList("x").get(0)` IS `x`. An ENUMERATING one '
+        'must not: `List.of("orders", "audit").get(0)` would answer both topics for one '
+        "element, publishing every topic as the address of one call — a wrong row at "
+        "`resolved`, which spec 2026-09-22 §7 names as the one failure this work risks. "
+        "Weakening the count to `< 1` or dropping the check entirely is a one-word edit "
+        "that no migration diff distinguishes from a right answer, and MEASURED over the "
+        "shipped table all three enumerating entries are topic lists",
+        edits=(
+            Edit(
+                path=_VALUES,
+                # Two lines, because `_joined` carries the SAME count check for its own
+                # operands and a one-line anchor matched both. Anchoring on the refusal
+                # too keeps the mutation to this arm, which is what the guard is about.
+                find="        if len(reached) != 1:\n"
+                "            return _only(trail, _unresolved(NOT_READABLE))",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return _only(trail, _unresolved(NOT_READABLE))",
+            ),
+        ),
+    ),
     "arguments.only-a-string-literal-is-a-destination": Guard(
         what="a walk answer becomes a channel only when it is a `string` literal — a "
         "`symbol`, an `expression` and an `absent` each read as unresolved",

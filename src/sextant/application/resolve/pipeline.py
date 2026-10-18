@@ -25,6 +25,7 @@ from sextant.application.resolve.service_identity import record_service_identity
 from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
+from sextant.application.resolve.values import reset_value_index
 
 _log = logging.getLogger(__name__)
 
@@ -124,6 +125,11 @@ def resolve(
 ) -> ResolveReport:
     """Facts in, graph out. Language-blind: it branches on capabilities, never
     on names (M04)."""
+    # Before anything can ask for it: the walk's index is cached per workspace for the
+    # duration of ONE resolve, and clearing it here is what bounds that lifetime (see
+    # `values.cached_value_index`). A resolve that reused a previous one's index would
+    # answer from facts this run has not loaded yet.
+    reset_value_index()
     with _timed("load_facts"):
         loaded = workspace.load_facts(fact_root)
     declared = catalogs.load()

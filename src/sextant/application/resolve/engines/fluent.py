@@ -74,7 +74,11 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
-from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
+from sextant.application.resolve.values import (
+    ValueIndex,
+    cached_value_index,
+    resolve_site,
+)
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
@@ -122,6 +126,9 @@ _BEAN_VIA = "bean_via"
 # `_CONTINUE` below it is not a pseudo-field of `captures`: it rides on one ARGUMENT, in
 # the same namespace as the scanner's own keys, which is why the name is unmistakable.
 _CAPTURED_AT = "captured_at"
+# D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_argument`
+# treats it as the catalog's own declared position rather than as a hop - see there.
+_CONCAT = "concat"
 
 # The `read_by` end of the channel edge (spec 2026-09-21 §3b), read here for the
 # names the channel index knows — the bean fold's name rung for a channel
@@ -389,13 +396,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
     referenced: list[str] = []
-    # The walk's index, built ONCE PER RUN and only where this catalog declares a hop at
-    # all (Task 9). `_ChainContext` is frozen and is rebuilt per caller, so a lazily-built
-    # index would either have to mutate a frozen dataclass or pay `value_index`'s fold once
-    # per METHOD rather than once per module. A catalog declaring no `channel_via`/`url_via`
-    # anywhere never builds it — the same not-charging-the-innocent rule Task 7 measured at
-    # 0.16s on `mall-admin`, applied at the only granularity this engine's shape allows.
-    walk_index = value_index(workspace) if _declares_a_hop(matches) else None
+    # The walk's index, SHARED across every catalog in this resolve
+    # (`values.cached_value_index`). `_ChainContext` is frozen and rebuilt per caller, so
+    # a lazily-built index would either mutate a frozen dataclass or pay the fold once per
+    # METHOD rather than once per module — hence built here, once, at the top.
+    #
+    # **The `_declares_a_hop` gate is gone, and the measurement is why it could go.** It
+    # existed because each catalog built its own index: removing it with that still true
+    # cost +1.3s on `mall-admin` (6.22s -> 7.50s end to end). It also kept the walk away
+    # from an ASSEMBLED address, which is not a hop and declares no key, so a catalog whose
+    # url is `base + "/path"` could never reach it (`OI-138`, ruling 1). Sharing the index
+    # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
+    # index five times before.
+    walk_index = cached_value_index(workspace)
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -1415,14 +1428,9 @@ def _walked_channels(
     `single_call` and `interface_implementation` state: several paths routinely agree about
     this one slot, and keeping them apart would mint a second row for one registration.
     """
-    if context.values is None or context.workspace is None or not isinstance(argument, dict):
-        return None
-    captured = argument.get(_CAPTURED_AT)
-    if captured is None:
-        return None
-    caller, ordinal, slot = captured
-    site = context.values.sites.get((str(caller), int(str(ordinal))))
-    if site is None:
+    # The provenance, the index and the site are all checked by `_walked_with`, which
+    # does the walk; what is decided HERE is only which identities it may consult.
+    if not isinstance(argument, dict):
         return None
     # **The identities are THIS ROW's declared producers, not the whole table**, and that
     # is load-bearing rather than cautious. `linked_channels` followed a `source` only to a
@@ -1455,6 +1463,34 @@ def _walked_channels(
         if isinstance(form, dict) and {"owner", "method", "arg"} <= set(form)
     ]
     if not identities:
+        return None
+    return _walked_with(argument, context, identities)
+
+
+def _walked_with(
+    argument: dict[str, Any],
+    context: _ChainContext,
+    identities: Sequence[dict[str, Any]],
+) -> Sequence[tuple[str | None, str | None, str]] | None:
+    """`_walked_channels`' walk, with the identity list decided by the caller.
+
+    Split out so that **an EMPTY list is reachable deliberately**, which is not the same
+    thing as the refusal above it. That refusal exists because handing the walk
+    `catalog.value_model` would let a row publish a destination its own form never
+    reached, and two shipped guards measure it. An empty list has the OPPOSITE effect: no
+    `identified_by` entry is consulted at all, so the walk can only answer values it
+    reaches over plain value edges and can never conclude "this producer MEANS the
+    destination". That is why the assembled-address caller may ask without declaring a
+    hop.
+    """
+    if context.values is None or context.workspace is None:
+        return None
+    captured = argument.get(_CAPTURED_AT)
+    if captured is None:
+        return None
+    caller, ordinal, slot = captured
+    site = context.values.sites.get((str(caller), int(str(ordinal))))
+    if site is None:
         return None
     walked = list(
         dict.fromkeys(
@@ -1524,7 +1560,43 @@ def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str,
     a URL is one string, where a topic list is several."""
     argument = _address_read(captures.get("url"), context)
     forms = captures.get("url_via") or []
-    if _string_value(argument) is not None or not forms:
+    if _string_value(argument) is not None:
+        return argument
+    # **An ASSEMBLED address is not a hop, so it needs no `url_via`** (ruling 1,
+    # 2026-10-17). `url_via` declares that the address lives on some OTHER call's
+    # argument - `URI.create("...")` - and a catalog has to say so because following a
+    # `source` to an undeclared producer is how a row publishes a destination its own
+    # form never reached. A concat is neither: the catalog already pointed at THIS
+    # position, and the operands are the concat site's own arguments in the same method
+    # body. So the walk is asked with NO identity entries, which is what holds it to
+    # plain value edges - it can join literals and it cannot conclude that a producer
+    # means the destination.
+    #
+    # Same rule as the ladder below: one resolved answer is taken, anything else leaves
+    # the capture as it was. The walk may ADD an answer and never take one away.
+    #
+    # **AND THE EMPTY LIST IS LOAD-BEARING FOR A SECOND REASON, found 2026-10-17.** An
+    # `identified_by` entry says what a value STANDS FOR; a join publishes text as an
+    # ADDRESS. Those are different claims, and they part company exactly where it matters:
+    # `String.valueOf(x)` is `x.toString()` (read off the JDK's own bytecode), so for a
+    # `URI` the identity and the text coincide while for a messaging destination whose
+    # identity is `"orders"` the text is some vendor debug string. Joining an
+    # identity-derived answer would therefore publish an address that never existed.
+    # Consulting NO identity keeps this arm to text the code literally states, which is the
+    # only thing a join may render. `OI-142` carries the finding and what it blocks.
+    if isinstance(argument, dict) and argument.get("kind") == _CONCAT:
+        assembled = _walked_with(argument, context, ())
+        settled = (
+            [
+                literal
+                for _, literal, resolution in assembled
+                if resolution == "resolved" and literal
+            ]
+            if assembled is not None
+            else []
+        )
+        return {"kind": "string", "value": settled[0]} if len(settled) == 1 else argument
+    if not forms:
         return argument
     # **The backward walk, in place of the one-hop follow** (spec §2b, Task 9), reached
     # through the same `_captured_at` provenance the channel half uses. The order above is

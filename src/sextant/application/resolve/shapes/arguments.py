@@ -29,7 +29,12 @@ from sextant.application.resolve.values import LITERAL, STRING, Answer
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
-_ABSOLUTE_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://(?P<authority>[^/]*)(?P<path>/.*)?$")
+# The scheme is OPTIONAL, which admits RFC 3986 §4.2's scheme-relative reference
+# (`//authority/path`) beside an absolute URL. The walk writes that form when it joined
+# an AUTHORITY to a path and knows where the boundary is but not the scheme — a service
+# name from a discovery lookup (`OI-142`). Without it the join reads as a relative path
+# and the peer column is lost; with it, one splitter still answers both.
+_ABSOLUTE_URL = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.\-]*:)?//(?P<authority>[^/]*)(?P<path>/.*)?$")
 
 
 def split_url(url: str) -> tuple[str | None, str]:

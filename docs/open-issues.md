@@ -309,6 +309,291 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-142 — a service name five calls back resolves; publishing it as a PEER does not
+**Minor · entered 2026-10-17, HALF BUILT the same day · `src/sextant/catalogs/value-models/spring-cloud.yml`, `src/sextant/application/resolve/values.py`, probe `scripts/probes/cp36_discovery_client.md`**
+
+> **The grammar half is built and measured. The publishing half is not, and it needs
+> ruling 2's plumbing rather than more identity work.**
+>
+> **What shipped.** `identified_by` gained a third form, `from_receiver: true` — "my
+> result stands for whatever my RECEIVER stands for" — because `arg` could not express
+> it: `List.get(int)`'s argument is an index and `ServiceInstance.getUri()` takes nothing
+> (CP-36 rows 1 and 3). Three entries declare the chain, and
+> `values._through_receiver` resolves it.
+>
+> **What makes an entry on a JDK accessor safe, measured rather than argued.** The
+> user's point of 2026-10-17: every instance of a service IS that service, so element
+> access preserves the identity. The gate is the walk's own multiplicity — a
+> SINGLE-VALUED identity resolves to one answer and propagates; an ENUMERATING one
+> (`all_strings`) resolves to several and is refused, because an element of a collection
+> identified as many things is one of them and which one is unknowable. Over the shipped
+> table of 23 entries: three are enumerating and all three are topic lists (`List.of`,
+> `Arrays.asList`, `Subscriptions.topics`), and of the twenty single-valued ones exactly
+> one produces a collection — `Collections.singletonList` at `arg: 0`, where
+> `singletonList("x").get(0)` IS `x`. The gate is therefore the exact line between the
+> entries that must not propagate and every other entry. Guard
+> `values.an-enumerating-identity-is-not-preserved-through-a-receiver` kills on it.
+>
+> **PROVEN end to end, by a throwaway entry that was measured and reverted.** With one
+> more identity — `java.lang.String#valueOf` at `arg: 0`, which javac inserts around a
+> non-String concat operand — the chain resolves **five hops**:
+>
+> ```
+> uri(concat "{}/owners")  ->  makeConcatWithConstants  ->  String.valueOf
+>   ->  getCustomerServiceUri()  ->  getUri()  ->  get(0)  ->  getInstances("customers-service")
+> ```
+>
+> and answers `customers-service/owners`.
+>
+> **And that is why it is not shipped.** `customers-service` is a service NAME, not a
+> host with a scheme, so joining it into the template produces a string `split_url` reads
+> as a relative path: `peer` stays NULL and the path column carries both halves. The row
+> would be more informative than today's NULL and still miss the arrow, which is the
+> thing the document is for.
+>
+> **What remains is ruling 2, and it cannot be inferred from the string.** The user
+> granted "peer and path from separate evidence" for exactly this case. The engine would
+> need to know that the resolved operand MEANS a peer — and no shape test can tell it:
+> `basePath + "/orders"` where `basePath = "/api/v1"` has the same shape and `/api/v1` is
+> not a peer. `role` is not the hook either: it says WHICH PART of a composite value an
+> argument is (`new ProducerRecord(topic, …, payload)`), not what the value means to a
+> consumer, and `_identity_matches` skips roled entries by design.
+>
+> **THE AUTHORITY WORD IS NOW BUILT TOO** (`yields: authority`, 2026-10-17): an identity
+> entry declares what KIND of thing it yields, the answer carries it through every hop, and
+> a join whose hole yields an authority is written scheme-relative — `//customers-service/owners`,
+> RFC 3986 §4.2, a real URI form rather than an invention, with the `//` saying exactly
+> where the authority ends. `split_url`'s scheme is now optional so one splitter answers
+> both shapes, and the `/api/v1` counter-example is pinned: an identity yielding an
+> `address` is joined verbatim, because marking it would publish `api` as a service.
+>
+> **AND THE CHAIN STILL CANNOT BE CLOSED, for a reason that is worth more than the three
+> rows.** javac inserts `String.valueOf` around a non-String concat operand, so the chain
+> runs through it — and `String.valueOf` cannot be declared as an identity for this purpose.
+> Read off the JDK's own bytecode, `valueOf(Object)` returns `arg.toString()`. An
+> `identified_by` entry says what a value STANDS FOR; a join publishes text as an ADDRESS;
+> **those are different claims and they part company exactly where it matters.** For a
+> `URI` the identity and the rendering coincide. For a messaging destination whose identity
+> is `"orders"`, `toString()` is a vendor debug string — so joining the identity would
+> publish an address that never existed, at `resolved`, which is the one failure spec §7
+> names.
+>
+> **What keeps the shipped join sound is `fluent._url_argument` passing NO identities** for
+> an assembled address, so only text the code literally states is ever joined. That was
+> chosen for a different reason (not following undeclared hops) and is load-bearing for
+> this one; the comment there now says so.
+>
+> **Closes** when the walk can distinguish a value's IDENTITY from its textual RENDERING —
+> the conflation above — so a join may use the second and a peer the first. That is a
+> third property on an answer, not a fourth identity form, and it is design work rather
+> than a key. **Falsified by** those three rows publishing peer `customers-service` with
+> paths `/owners` and `/owners/{}/pets`.
+
+### OI-142 (original entry, kept for the measurement) — a service name three calls back needs a word the identity grammar does not have
+**Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 4 · `src/sextant/catalogs/value-models/`, `docs/components/D02-catalog-schema.md` §1f**
+
+`spring-petclinic-genai-service` calls `customers-service` three times, and the document
+publishes `path` NULL for all three. The code:
+
+```java
+private URI getCustomerServiceUri() {
+    return discoveryClient.getInstances("customers-service").get(0).getUri();
+}
+...
+.uri(getCustomerServiceUri() + "/owners")
+```
+
+**Everything needed is readable.** There is no URL in that class file at all — verified,
+zero occurrences of `http://` — because the address is resolved from a registry at run
+time. What IS there: the service name as a plain literal, and the path in the concat's
+template. `ServiceInstance.createUri` builds from `%s://%s:%s`, so the runtime URI carries
+no path and `/owners` is the WHOLE path rather than a suffix of one (measured from
+spring-cloud-commons 5.0.0).
+
+**The obstacle is the identity grammar, measured on the facts.** The chain is three call
+sites:
+
+```
+ord=0  getInstances("customers-service")   result=5
+ord=1  get(0)         receiver=5           result=7
+ord=2  getUri()       receiver=7           result=9
+```
+
+`identified_by` answers *"which ARGUMENT of a call carries the value its result stands
+for"* (D02 §1f). `getInstances` fits — argument 0. The other two do not: `get(0)`'s
+argument is an int index, and `getUri()` has no arguments at all. What both need to say is
+*"my result stands for whatever my RECEIVER stands for"*, and the grammar has no such
+entry — `method` and `arg` are required, and `role` names a purpose rather than a source.
+
+**And the obvious widening is a fabrication.** An entry declaring that `List.get`
+preserves its receiver's identity is read by every catalog at once, over every list in the
+estate. A `List<String>` of topics whose identity is `all_strings` would then answer the
+whole list for `get(0)` — one element reported as every element. The type that makes it
+safe here (`List<ServiceInstance>`) is not something the entry can name: `arity` and
+`descriptor` discriminate overloads, and `List.get(int)` has exactly one.
+
+**What happens today:** three outbound rows carry `path` NULL and `peer` NULL, so the
+document says this service calls something over HTTP three times and will not say what.
+
+**Real triggering input:** ordinary for a service-discovery client that resolves addresses
+itself rather than through a load-balanced template.
+
+**Verify:** `grep -n "getCustomerServiceUri" -A 2` on `AIDataProvider.java`, then
+`grep -c "http://"` on its class file (0).
+**Closes** by a receiver-preserving identity entry plus the type gate that keeps it off
+every other `List` — Task 8 of the previous plan built `_producer_conforms` for exactly
+this class of borrow, so the gate exists and the entry does not. **Falsified by** those
+three rows publishing peer `customers-service` with paths `/owners` and `/owners/{}/pets`.
+
+*Ruling 2 (peer and path from separate evidence) was granted for this case and is NOT the
+blocker — there is simply no evidence to put in the peer column until the identity above
+can be stated.*
+
+### OI-141 — a binding's literal value is not a fact, and it is worth one row today
+**Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 3 · `extractor-jvm/.../MethodFlow.java::fieldWrites`, `src/sextant/storage/duckdb/value_edges.sql`, `src/sextant/application/resolve/values.py`**
+
+`field_write` can say *"field F holds parameter N"* and cannot say *"field F holds this
+constant"*. `MethodFlow.fieldWrites` requires the middle instruction of its triple to be a
+`VarInsnNode`; an `ldc` is not one, so a field initialised with a literal emits nothing.
+Measured at `scripts/probes/cp33_binding_writes.md` row 8, the shape is
+`aload_0; invokespecial; aload_0; ldc; putfield` — **inside `<init>`**, so the existing
+constructor filter already admits it and only the grammar refuses. **This is NOT capability
+9.19** (`OI-136`), which is a write OUTSIDE an initialiser and a method-filter change.
+
+**The yield, measured over every built corpus.** Shadow mode answers `no_writer` at 11
+positions. One is this shape:
+
+| shape | positions | reached by this? |
+|---|---|---|
+| `@Value("${…}")` field or parameter | 5 | no — configuration, which §8.2 forbids joining |
+| a `static final` that is not a compile-time constant | 1 | no — `ldc; putstatic`, no receiver load (CP-33 row 6) |
+| shadow over-match (a catalog the engines never run there) | 4 | no — not a real ask |
+| **a plain instance-field initialiser** | **1** | **yes** — `VisitsServiceClient#hostname` |
+
+**Three structural costs against that one row**, which is why it is filed rather than built:
+
+1. a fact-grammar change in the extractor;
+2. a **partial** `written_by` arm in `value_edges.sql`, whose own comment explains the kind
+   is absent rather than empty *because "the walk has not looked"* — a partial arm makes
+   `no_writer` mean either "no constant write" or "the capability is absent";
+3. a second reader of `field_write`. `values.py` refuses one by name: *"giving it a second
+   home in the walk is how one answer becomes two spellings that drift."* The field ladder
+   reads `from_parameter` for `@Value` expressions today.
+
+*Cost 3 may be smaller than it reads, and whoever picks this up should check rather than
+inherit the sentence: the two arms would be DISJOINT — a field assigned a parameter carries
+no constant and a field assigned a constant names no parameter — so they are two readers of
+two fields, not two spellings of one answer.*
+
+**What happens today:** `VisitsServiceClient` publishes an outbound row with `path` NULL. The
+walk joins the concat around the hole (`OI-138` cause 1, shipped) and the hole itself answers
+`no_writer`, so the template is carried verbatim and no address is published.
+
+**Real triggering input:** ordinary — a client holding its base URL in a non-final field. It
+is one row in this estate, which is the whole reason this is deferred.
+
+**Verify:** `grep -n "VarInsnNode valueLoad" extractor-jvm/src/main/java/dev/sextant/extractor/MethodFlow.java`.
+**Closes** by `field_write` carrying a constant value beside the parameter ordinal, an arm
+in `value_edges.sql` reading it, and `values._resolve`'s binding arm following that edge —
+with `no_writer`'s two meanings separated. **Falsified by** `VisitsServiceClient` publishing
+`http://visits-service/pets/visits?petId={petId}`.
+
+**Note for the shape, not the fix:** that field also has a package-private `setHostname`
+written "for testing purpose" and called from no main-source code, so the binding has two
+writers. Resolving it is ruling 1's multiplicity — one row per enumerable answer — not a
+single address, the day capability 9.19 makes the setter visible.
+
+### OI-140 — a resolved gateway route renders as three kinds of "unresolved" · **CLOSED 2026-10-17**
+
+> **CLOSED. The verb was the last of the four and the user ruled it: fan out, but only to
+> methods that are SUPPORTED, not invalid ones.** Both gateway catalogs now declare
+> `all_methods`, so a route declaring no `Method=` is one row per method — the config form
+> through a new fan-out in `config_join`, the DSL form through `combinator._fanned`, which
+> already had it. `scripts/probes/cp29_gateway_properties.md` Q11 is what makes all eight
+> honest: `HttpMethod` appears **zero** times in `RouteDefinitionRouteLocator`, so route
+> construction cannot constrain a method it never names. The route that declares
+> `Method=GET,POST` is NOT widened, the unresolved routes are NOT fanned (one doubt must
+> not read as eight facts), and the outbound forward targets are NOT fanned (one
+> destination, not eight rows saying it). `RouterFunctions.resources(...)` is why the router
+> catalog still declines `all_methods`: it serves three methods, so a fan-out there would
+> publish five routes nobody can call.
+>
+> `spring-petclinic-api-gateway` now reads `GET /api/vet/**` … `TRACE /api/vet/**` where it
+> read `(unresolved) /api/vet/**` — 36 inbound rows where there were 8 this morning and 4
+> yesterday.
+>
+> **Closed earlier the same day: the format and the two symbol columns.** `Format.ANY` now carries "no format
+> constraint exists" as a resolved answer (user ruling), and `_peer_cell` /
+> `_handler_fallback` carry "this evidence held no such symbol" instead of printing
+> `unresolved` or the literal `None`. **Still open: the VERB.** It renders
+> `(unresolved)` and the choice between fanning the route out over `all_methods` and
+> rendering one row's absent verb as `any` is unmade — see the bottom of this entry.
+>
+> **The peer half was far wider than this entry's title.** Measured: EVERY messaging
+> outbound row in the estate printed `Peer: unresolved` — `kafka order-events`,
+> `jms audit.queue`, `websocket /topic/order-placed`, `soap {…}stubCharge` — while D02 §3
+> keeps messaging peers NULL *deliberately*. Nothing in the codebase ever tries and fails
+> to read a peer: one appears only when the address was absolute and `split_url` had an
+> authority to separate off. So `unresolved` reported a failure that never happened, on
+> every such row, and the gateway rows were how it was noticed rather than its extent.
+**Major · entered 2026-10-17, found at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 1 · `src/sextant/egress/render/`**
+
+With `OI-139` fixed, `spring-petclinic-api-gateway`'s four routes derive correctly — and the
+document renders them like this:
+
+```
+| Endpoint                             | Peer       | Caller | Format     | Resolution |
+| `(unresolved) lb://vets-service`     | unresolved | `None` | unresolved | resolved   |
+```
+
+**Every cell on that row is literally correct and the row as a whole is unreadable.** The
+stored row is `{method: None, path: 'lb://vets-service', peer: None, caller: None,
+format: None, format_resolution: 'unresolved', resolution: 'resolved'}` — **three deliberate
+blanks, one genuine unknown, and one "yes, we worked it out", with the first four printed
+using the same word**:
+
+* **the method** is blank BY DESIGN — a gateway route with no `Method=` predicate forwards
+  every verb, which is the framework's own catch-all and is recorded as resolved on purpose
+  (COVERAGE §5.1). The renderer prints `(unresolved)` in the verb's position, so the
+  Endpoint cell reads as a failure while carrying a perfectly good address;
+* **the peer** is blank BY DESIGN — D02 §3 keeps a routing destination whole, so
+  `lb://vets-service` is the `path` and splitting it would publish an empty path;
+* **the caller** is blank BY DESIGN — a route declared in configuration has no handler
+  method — and it prints as the bare string `None`, a Python value reaching a published
+  document, which is a defect on any reading;
+* **the format** is the one HONEST unknown: a gateway forwards whatever body arrives and
+  nothing declares a format, so `format_resolution` really is `unresolved`.
+
+*(Corrected 2026-10-17: this paragraph first said "three NULLs" and then listed four cells,
+without separating the deliberate blanks from the genuine unknown. The distinction is the
+whole fix, so conflating them in the entry that asks for it was worth putting right.)*
+
+A reader concludes the target is unknown. It is the one thing on the row that IS known.
+
+**Pre-existing, not introduced by `OI-139`.** Measured: `fixtures/orders-gateway` renders
+`(unresolved) http://ab-service | unresolved | … | unresolved | resolved` and has since
+gateway support shipped. `OI-139` only made it visible on a real system, where four of the
+module's six outgoing rows are gateway routes.
+
+**On the grade.** Major on the deliverable's own terms (user ruling 2026-10-17: *"the table
+isn't the result. it's intermediary"*). No row is wrong, but the document communicates the
+opposite of what it derived, which is a worse outcome than a blank — a blank invites a
+question, a contradiction invites a wrong conclusion. And `None` in a published cell is a
+defect on any reading.
+
+**What happens today:** every Spring Cloud Gateway module's route table reads as unresolved.
+
+**Real triggering input:** ordinary — every gateway module, in either the DSL or the
+properties form.
+
+**Verify:** `sed -n '/## Outbound endpoints/,/^---/p'` on any rendered gateway module.
+**Closes** by rendering a deliberate blank differently from a failed read — the data already
+distinguishes them, since `resolution` is `resolved` while `format_resolution` is
+`unresolved` on the very same row — and by never printing `None`. "Not applicable" and
+"could not read it" must not share a word. **Moves existing pinned output** (`orders-gateway`'s e2e rows and the
+`petclinic-api-gateway` field pin both record today's text verbatim), so it is a task of its
+own rather than a fix in passing.
+
 ### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` · `src/sextant/ingress/detect/` Maven version resolution, `src/sextant/catalogs/spring-cloud-gateway-properties.yml` `detect.coordinates`**
 

@@ -146,6 +146,7 @@ def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
     # `resolve_config` keeps for its own model.
     for catalog in catalogs:
         _validate(catalog)
+    unconstrained = frozenset(catalog.id for catalog in catalogs if catalog.format_any)
     fixed = _merged(catalogs, "format_fixed")
     media = _merged(catalogs, "media_formats")
     serializers = _serializer_candidates(workspace, catalogs)
@@ -155,7 +156,9 @@ def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
     rows: list[dict[str, Any]] = []
     questions: list[dict[str, Any]] = []
     for endpoint in workspace.query("endpoints"):
-        answer = _answer(endpoint, fixed, media, serializers, described, default_marker)
+        answer = _answer(
+            endpoint, unconstrained, fixed, media, serializers, described, default_marker
+        )
         # The row is matched back by its identity AND by every column the
         # answer above was read from (`stamp_format.sql`) — which is what
         # makes a duplicate match idempotent in a table with no unique key.
@@ -191,6 +194,7 @@ class _Answer:
 
 def _answer(
     endpoint: dict[str, Any],
+    unconstrained: frozenset[str],
     fixed: dict[str, str],
     media: dict[str, str],
     serializers: dict[tuple[str, str], list[dict[str, str]]],
@@ -201,6 +205,11 @@ def _answer(
     decides the row — cleanly if every candidate names the same format, as a
     conflict otherwise."""
     rungs = (
+        (
+            Resolution.RESOLVED,
+            "rung 0 (pass-through)",
+            _unconstrained_candidates(endpoint, unconstrained),
+        ),
         (Resolution.RESOLVED, "rung 1 (fixed by protocol)", _fixed_candidates(endpoint, fixed)),
         (Resolution.RESOLVED, "rung 2 (declared media)", _media_candidates(endpoint, media)),
         (
@@ -236,6 +245,36 @@ def _answer(
 
 
 # --- the rungs ------------------------------------------------------------
+
+
+def _unconstrained_candidates(
+    endpoint: dict[str, Any], unconstrained: frozenset[str]
+) -> list[dict[str, str]]:
+    """Rung 0. The catalog that minted this row says it is a PASS-THROUGH: the
+    endpoint forwards a body it never parses, so no format constraint exists.
+
+    `any` at `resolved` — and the two halves are both deliberate. A proxy's
+    format is KNOWN (whatever the caller sent) rather than unreadable, and
+    `unresolved` said the analysis had failed where it had succeeded
+    (`OI-140`, ruled by the user 2026-10-17).
+
+    **Above rung 1, not beside it.** A pass-through states a property of its
+    own channel, which no weaker evidence can contradict: a media type on a
+    forwarded request describes what the CALLER sent, not a constraint the
+    proxy imposes, so letting rung 2 answer first would publish the caller's
+    format as the endpoint's. Keyed on the row's own `catalog_id` because the
+    claim belongs to the catalog, not to the protocol — `format_fixed` is
+    per-protocol and `{http: any}` there would claim it of every HTTP
+    endpoint in the estate."""
+    if str(endpoint.get("catalog_id")) not in unconstrained:
+        return []
+    return [
+        {
+            "format": str(Format.ANY),
+            "seen_in": "catalog",
+            "why": f"{endpoint.get('catalog_id')} forwards an unparsed body",
+        }
+    ]
 
 
 def _fixed_candidates(endpoint: dict[str, Any], fixed: dict[str, str]) -> list[dict[str, str]]:

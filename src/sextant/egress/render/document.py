@@ -593,6 +593,31 @@ def _wire_address(
     return f"{prefix}{rendered_method} {rendered_path}"
 
 
+def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
+    """The Peer column, and the distinction it did not draw.
+
+    **Nothing ever tries and fails to read a peer.** A peer appears only when the
+    address it came from was ABSOLUTE and `split_url` had an authority to separate
+    off; every other row has none because its address names none — a Kafka topic, a
+    JMS queue, a relative path, a routing destination kept whole (D02 §3: messaging
+    peers stay NULL, deliberately). So `unresolved` on those rows reported a failure
+    that never happened, on every messaging row in the estate (`OI-140`).
+
+    The discriminator is the row's own two columns, the same shape
+    `_handler_fallback` uses: a NULL peer beside a READ path is an address with no
+    peer in it, while a NULL peer beside a NULL path is an address nobody could read
+    at all — and only there is the peer genuinely unknown.
+
+    `none recorded` is the house phrase for "this evidence carried no such symbol",
+    kept rather than a bespoke word for this column: the claim is about what the
+    evidence held, never that the callee does not exist.
+    """
+    peer = endpoint.get("peer")
+    if peer is not None:
+        return redactor.redact_text(str(peer))
+    return "unresolved" if endpoint.get("path") is None else "none recorded"
+
+
 def _short_handler(descriptor: str) -> str:
     """`descriptor` (a BARE descriptor, `bare_descriptor`'s own output) as the
     human spelling a reader recognizes at a glance: the owning type's simple
@@ -1194,13 +1219,25 @@ def assemble_module_document(
         headers = ("Endpoint", "Peer", "Caller", "Format", "Resolution")
         rows = []
         for endpoint in outbound:
-            peer = endpoint.get("peer")
-            caller = bare_descriptor(str(endpoint["caller"]))
+            # `_handler_fallback`'s discriminator, applied to the column that did not
+            # have it: a NULL on a RESOLVED row is evidence with no symbol to give, not
+            # a symbol the analysis failed to read. A route declared in CONFIGURATION
+            # names no code at all — nothing was lost, there was never a symbol — and
+            # this column printed `str(None)` for it: the literal word `None` in a
+            # published document
+            # (`OI-140`). The inbound Handler column has drawn this distinction since 2H;
+            # the outbound Caller column simply never used it.
+            caller_value = endpoint.get("caller")
+            caller_cell = (
+                _code(bare_descriptor(str(caller_value)))
+                if caller_value is not None
+                else _text(_handler_fallback(endpoint))
+            )
             rows.append(
                 (
                     _code(_wire_identity(endpoint, redactor)),
-                    _text("unresolved" if peer is None else redactor.redact_text(str(peer))),
-                    _code(caller),
+                    _text(_peer_cell(endpoint, redactor)),
+                    caller_cell,
                     _text(_format(endpoint)),
                     _text(str(endpoint["resolution"])),
                 )

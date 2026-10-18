@@ -209,6 +209,13 @@ class Catalog:
     default_produces: tuple[str, ...] = ()
     format_fixed: dict[str, str] = field(default_factory=dict)
     media_formats: dict[str, str] = field(default_factory=dict)
+    # `format_any` -- every row THIS catalog mints is a pass-through: the
+    # endpoint forwards a body it never parses, so no format constraint
+    # exists and `format` is `any` at `resolved` (`OI-140`). Per catalog and
+    # not per protocol, which is why it is not an entry in `format_fixed`:
+    # `{http: any}` there would claim it of every HTTP endpoint in the
+    # estate, and a gateway's rows are the exception rather than the rule.
+    format_any: bool = False
     json_default_markers: list[str | dict[str, str]] = field(default_factory=list)
     # 2G design §7's fourth format vocabulary, read only by
     # `resolve/shapes/parse_binding.py`: `{bytes_payloads: [...], calls:

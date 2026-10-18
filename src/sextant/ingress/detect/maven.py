@@ -612,6 +612,9 @@ class MavenDetector:
                     ancestor, located.parent, depth + 1, seen | {located}
                 )
         properties.update(MavenDetector._properties(pom))
+        # Last, and after the ancestor's: `${project.version}` in an entry this pom
+        # declares means THIS pom's version, never the parent's and never an importer's.
+        properties.update(MavenDetector._project_properties(pom))
         own_managed, imported_unreadable = MavenDetector._managed_versions(
             pom, properties, depth, seen
         )
@@ -824,6 +827,17 @@ class MavenDetector:
                 settled = _interpolated(managed_raw, bom_properties)
                 if settled is not None:
                     imported.setdefault(managed_coordinate, settled)
+                else:
+                    # REPORTED, never dropped. This branch did not exist, so an entry whose
+                    # version named nothing readable vanished from the map AND from the
+                    # reasons — and a module then reported a dependency unresolved for a
+                    # cause nothing in `metadata.json` could explain. Four wrong theories
+                    # about `OI-139` survived on that silence.
+                    unreadable.append(
+                        f"{managed_coordinate}: managed by {coordinate}:{version} at version "
+                        f"`{managed_raw}`, which names a property no pom this analysis "
+                        f"could read defines"
+                    )
         imported.update(own)
         return imported, unreadable
 
@@ -900,6 +914,46 @@ class MavenDetector:
         # an unbounded value out of a `::BIGINT` cast downstream — measured:
         # `str.isdigit()` accepted a 21-digit number that reached it.
         return release if 1 <= release <= 1000 else None
+
+    @staticmethod
+    def _project_properties(pom: ElementTree.Element) -> dict[str, str]:
+        """Maven's built-in `project.*` properties for THIS pom.
+
+        They are not `<properties>` entries and no pom declares them, so a reader that
+        interpolates only from `<properties>` resolves nothing for them — and
+        `${project.version}` is how a Spring Cloud component BOM versions its own
+        artifacts: 6 of 8 managed entries in `spring-cloud-gateway-dependencies:5.0.0`,
+        and every one of the four starters `spring-petclinic-api-gateway` declares
+        (`scripts/probes/cp35_bom_chain.md`). Before this existed those entries were
+        dropped, so a gateway's whole route table derived nothing (`OI-139`).
+
+        **Scoped to this pom, which is the whole point.** `_inherited_model` calls this
+        once per pom it opens, so an imported BOM's entries are settled against the BOM's
+        own version rather than the importing module's. Answering them from the module
+        would write a coordinate that does not exist into the version map — a silent wrong
+        answer where there is otherwise an honest `dependencies_not_resolved` entry.
+
+        `groupId` and `version` fall back to `<parent>`'s, which is Maven's rule for a pom
+        that omits them. The three spelled here are the ones a version string uses;
+        `project.name` and the rest are not version material and are left out rather than
+        half-supported.
+        """
+        parent = pom.find("m:parent", _POM_NS)
+        group = _text_of(pom, "groupId")
+        version = _text_of(pom, "version")
+        if parent is not None:
+            group = group or _text_of(parent, "groupId")
+            version = version or _text_of(parent, "version")
+        artifact = _text_of(pom, "artifactId")
+        return {
+            f"project.{name}": value
+            for name, value in (
+                ("groupId", group),
+                ("artifactId", artifact),
+                ("version", version),
+            )
+            if value is not None
+        }
 
     @staticmethod
     def _properties(pom: ElementTree.Element) -> dict[str, str]:

@@ -63,7 +63,7 @@ poms for the probes.
 
 ---
 
-## Task 1: Versions through the BOM chain, and the gateway's route table
+## Task 1: Versions through the BOM chain, and the gateway's route table · **DONE 2026-10-17**
 
 **8 rows — the largest single win, and it needs no ruling.** Both causes are already proven end
 to end (spec §5a): a throwaway patch took `api-gateway` from 6 endpoints to 14, every missing
@@ -81,7 +81,7 @@ row `resolved`. This task re-does that properly, with the reporting fix the sile
 - Produces: `dependency_versions` entries that were previously dropped, and a
   `dependencies_not_resolved` message where one still cannot be settled.
 
-- [ ] **Step 1: The probe first, because the claim is about other people's poms**
+- [x] **Step 1: The probe first, because the claim is about other people's poms**
 
 `scripts/probes/cp35_bom_chain/run.sh` GENERATES its table — walking from
 `spring-cloud-dependencies` and reporting, per dependency, the BOM that manages it, the hop
@@ -92,7 +92,7 @@ refuses a hand-written table; do not write one.
 Expected content, measured 2026-10-17: all four of `api-gateway`'s unresolved dependencies at
 **2 hops**, each via a different component BOM, each `version: ${project.version}`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 In `tests/ingress/test_maven_detector.py`, using that file's existing pom-building harness:
 
@@ -112,31 +112,31 @@ def test_project_version_resolves_in_the_declaring_poms_scope_not_the_modules():
     yield a coordinate that does not exist, which is worse than an honest unresolved."""
 ```
 
-- [ ] **Step 3: Run them to verify they fail**
+- [x] **Step 3: Run them to verify they fail**
 
 ```bash
 .venv/bin/python -m pytest tests/ingress/test_maven_detector.py -q
 ```
 Expected: FAIL — the entry is dropped and nothing is reported.
 
-- [ ] **Step 4: Define the built-ins per pom, scoped to that pom**
+- [x] **Step 4: Define the built-ins per pom, scoped to that pom**
 
 In `_managed_versions`, the imported BOM's property map gains `project.version` (the version the
 import names), `project.groupId` and `project.artifactId`. Scoped to that BOM, beside the
 existing comment that says the importing module's properties *"must not answer it"*.
 
-- [ ] **Step 5: Report a managed entry that cannot be interpolated**
+- [x] **Step 5: Report a managed entry that cannot be interpolated**
 
 The `if settled is not None:` branch gains an `else` appending to `unreadable`, which the
 surrounding code already threads into `dependencies_not_resolved`.
 
-- [ ] **Step 6: List the 5.0.0 starter in both gateway catalogs**
+- [x] **Step 6: List the 5.0.0 starter in both gateway catalogs**
 
 `org.springframework.cloud:spring-cloud-starter-gateway-server-webflux`, with a comment citing
 CP-35 and naming `spring-cloud-starter-gateway` as the pre-5.0 spelling it does not replace.
 Closes the `gateway-detect-4x-coordinate` half of `OI-139`.
 
-- [ ] **Step 7: Prove it on the real module, and move the pin**
+- [x] **Step 7: Prove it on the real module, and move the pin**
 
 ```bash
 .venv/bin/sextant module analyze examples/spring-petclinic-microservices/spring-petclinic-api-gateway
@@ -150,7 +150,20 @@ Expected: **14 endpoints** — 8 inbound (4 new: `/api/vet/**`, `/api/visit/**`,
 .venv/bin/python scripts/field_check.py petclinic-api-gateway petclinic-genai-service
 ```
 
-- [ ] **Step 8: Gate, guards, commit**
+- [x] **Step 8: Gate, guards, commit**
+
+**Result: 14 endpoints (was 6) — 8 inbound, 6 outbound, `dependencies_not_resolved` empty.**
+The four routes derive in both directions, all `resolved`. Three catalogs gained the
+coordinate, not two: `spring-cloud-gateway-outbound.yml` carries the same stale list.
+Field pins: both `ok`. Gate 4098 passed (+4), guards 161/0.
+
+**`OI-140` found and logged, NOT fixed here.** The four new rows render as
+`` `(unresolved) lb://vets-service` | unresolved | `None` | unresolved | resolved `` — three
+deliberate NULLs printed as the word "unresolved" on a row whose Resolution says resolved,
+plus a Python `None` in a published cell. Pre-existing (measured: `fixtures/orders-gateway`
+has rendered this way since gateway support shipped), real-input-triggered, and Major on the
+deliverable's own terms. Left out of this task because fixing it MOVES PINNED OUTPUT, which
+this plan's own constraint reserves to a task that says so.
 
 **A `peer` is NOT set on the four new outbound rows** — they carry `lb://…` whole as `path`,
 which is the shipped shape and already tells a reader where the route goes. Splitting it is
@@ -158,7 +171,7 @@ scoped out (spec §4) and must not be done here.
 
 ---
 
-## Task 2: Join a concatenation whose holes are all source literals — locals only
+## Task 2: Join a concatenation whose holes are all source literals — locals only · **DONE 2026-10-17**
 
 **1 row, and it proves the join end to end with no new fact.** `VectorStoreController` writes
 `vetsHostname + "vets"` where `vetsHostname` is a LOCAL holding a literal in the same method
@@ -182,7 +195,7 @@ at runtime — don't join, behave exactly as today."*
 - Produces: a `literal` of `literal_kind: string` where every hole answered one; today's
   `expression` otherwise, template unchanged.
 
-- [ ] **Step 1: Write the failing tests** — the negative cases first, because they are the ruling
+- [x] **Step 1: Write the failing tests** — the negative cases first, because they are the ruling
 
 ```python
 def test_a_concat_of_two_source_literals_joins():
@@ -197,10 +210,10 @@ def test_a_concat_reached_on_two_paths_with_different_operands_is_two_answers():
     """Memoisation stays keyed on (position, path) — spec §1c, ruling M-1."""
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
-- [ ] **Step 3: Resolve each hole through the ordinary walk; join only if all answered string literals**
+- [x] **Step 2: Run them to verify they fail**
+- [x] **Step 3: Resolve each hole through the ordinary walk; join only if all answered string literals**
 - [ ] **Step 4: Amend spec §6 in place**, marking what the ruling narrowed and what it did not
-- [ ] **Step 5: Re-run the cost measurement — the no-cap ruling was measured with this arm as a terminal**
+- [x] **Step 5: Re-run the cost measurement — the no-cap ruling was measured with this arm as a terminal**
 
 ```bash
 .venv/bin/python scripts/measure_value_walk.py
@@ -209,14 +222,59 @@ This arm turns one terminal answer into N sub-walks. §3a of the previous spec r
 measure first*; that measurement predates this change and must be redone before Task 4 widens it
 further.
 
-- [ ] **Step 6: Prove on the real module, move the pin, gate, guards, commit**
+- [x] **Step 6: Prove on the real module, move the pin, gate, guards, commit**
 
-Expected: `VectorStoreController` publishes peer `vets-service`, path `/vets` — matching
-`vets-service`'s own inbound `GET /vets`.
+**Result: exactly that** — `('outbound', 'GET', 'vets-service', '/vets', 'resolved')`,
+matching `vets-service`'s own inbound `GET /vets`.
+
+**Two things the plan did not foresee, both measured:**
+
+1. **The walk joined it and the ENGINE never asked.** `fluent` built the walk's index only
+   where the catalog declared a `channel_via`/`url_via`, and an assembled address is not a
+   hop, so `spring-webclient` could never reach it. Removing that gate alone cost **+1.3s
+   on `mall-admin`** (6.22s -> 7.50s), which is why the gate existed — the index was built
+   once PER CATALOG, five times over on that module. Sharing one index per resolve
+   (`values.cached_value_index`) made the gate unnecessary instead of merely cheaper, and
+   left the module **faster than baseline**: resolve 4.65s -> 3.9s, end to end 6.22s ->
+   5.45s.
+2. **The first cache was keyed on `id(workspace)` and leaked between tests.** The argument
+   for it — "the pipeline clears it before anything can ask" — is true of a pipeline run
+   and false of every test that calls an engine directly. Two tests in other files failed
+   while passing in isolation. A `WeakKeyDictionary` removes the hazard rather than
+   managing it.
 
 ---
 
-## Task 3: A binding's literal value is a fact
+## Task 3: A binding's literal value is a fact · **DEFERRED 2026-10-17, measured**
+
+> **One row, measured, against four structural costs.** Shadow mode over every built
+> corpus answers `no_writer` at **11 positions**, and only **one** is the shape this task
+> addresses — `VisitsServiceClient`'s `private String hostname = "http://visits-service/"`.
+> The other ten: five are `@Value("${…}")` fields or parameters (configuration, which
+> §8.2 says must NOT be joined and which the field ladder already reads for its own
+> purpose), one is a `static final` that is not a compile-time constant (`ldc; putstatic`,
+> no receiver load — out of reach by CP-33 row 6 whatever this task does), and four are
+> shadow over-matches on catalogs the engines never run there.
+>
+> **The costs, each real:** a fact-grammar change in the extractor; a PARTIAL `written_by`
+> arm in `value_edges.sql`, where the file's own comment explains that the kind is absent
+> rather than empty *because "the walk has not looked"* — a partial arm makes `no_writer`
+> mean two things; and a second reader of `field_write`, which `values.py` refuses by name
+> (*"giving it a second home in the walk is how one answer becomes two spellings that
+> drift"*). The field ladder reads `from_parameter` today for `@Value` expressions.
+>
+> That is the same trade the user ruled on for the previous plan's Tasks 11-12 (16 of 756
+> asked positions → defer), at a worse ratio. **Deferred on the number, not on difficulty.**
+> `OI-141` carries it.
+>
+> *Worth recording for whoever picks it up:* that field also has a package-private
+> `setHostname`, written "for testing purpose" and called from no main-source code. So the
+> binding has two writers — a constant initialiser and a setter — and resolving it is
+> ruling 1's multiplicity, not a single answer, the day capability 9.19 makes the setter
+> visible.
+
+### The original plan, kept for whoever revisits it
+
 
 **1 row.** `VisitsServiceClient` holds `private String hostname = "http://visits-service/"`.
 Measured at `cp33_binding_writes.md` row 8: a field initialiser is
@@ -252,7 +310,19 @@ rows.
 
 ---
 
-## Task 4: `peer` and `path` from separate evidence, and a service name is a destination
+## Task 4: `peer` and `path` from separate evidence, and a service name is a destination · **BLOCKED 2026-10-17, measured — `OI-142`**
+
+> The plan called this "one YAML + a probe, tier A". It is not. `identified_by` names an
+> ARGUMENT, and the chain is `getInstances("customers-service").get(0).getUri()` — three
+> call sites, of which only the first has an argument carrying the identity. `get(0)` names
+> an int index and `getUri()` names nothing. The entry needed says *"my result stands for
+> whatever my receiver stands for"*, which the grammar has no word for; and declaring it on
+> `List.get` would answer a whole topic list for `get(0)` on every list in the estate.
+>
+> **Ruling 2 is not the blocker** — it was granted and it holds. There is simply no evidence
+> to put in the peer column until that identity can be stated. `OI-142` has the measurement
+> and names the gate (`_producer_conforms`, built by the previous plan's Task 8) that would
+> make the widening safe.
 
 **3 rows, and the only task needing both rulings.** `AIDataProvider` has **no URL in its class
 file** (verified: zero `http://`). The service name is `#147 = String customers-service`, the

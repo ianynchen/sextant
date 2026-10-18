@@ -87,6 +87,12 @@ _IDENTIFIED = _PKG + "Identified#"
 _UNREAD = _PKG + "Unread#"
 _LOOP = _PKG + "Loop#"
 _ASSEMBLER = _PKG + "Assembler#"
+_PRESERVED = _PKG + "Preserved#"
+_AUTHORITY_CHAIN = _PKG + "AuthorityChain#"
+_JOINER = _PKG + "Joiner#"
+_HALF_JOINER = _PKG + "HalfJoiner#"
+_CONFIG_JOINER = _PKG + "ConfigJoiner#"
+_TWO_HOLES = _PKG + "TwoHoles#"
 _RECEIVING = _PKG + "Receiving#"
 _FACTORY = _PKG + "Factory#"
 _DEEP = _PKG + "Deep#"
@@ -223,6 +229,12 @@ def _facts() -> list[Fact]:
             _UNREAD,
             _LOOP,
             _ASSEMBLER,
+            _PRESERVED,
+            _AUTHORITY_CHAIN,
+            _JOINER,
+            _HALF_JOINER,
+            _CONFIG_JOINER,
+            _TWO_HOLES,
             _RECEIVING,
             _FACTORY,
             _DEEP,
@@ -726,6 +738,158 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="concat", value="/orders/{}", source=4)],
         ),
+        # A producer whose identity is an AUTHORITY, joined to a path — the shape ruling 2
+        # needs (`OI-142`). The hole is at the start, so the join must say where the
+        # authority ends rather than running the two together.
+        _declared(_AUTHORITY_CHAIN, "call", "()V"),
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="string", value="one-service"),
+            ],
+            result=70,
+        ),
+        # The concat's `source` names the INDY, not the producer — which is the real
+        # bytecode shape: javac emits one `invokedynamic` whose own argument is the
+        # operand. A fixture pointing the concat straight at the producer made `_joined`
+        # read that producer's TWO arguments as two operands against a one-hole template,
+        # and the count check refused it. Correct behaviour, wrong fixture.
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            result=71,
+            arguments=[CallArgument(kind="unresolved", source=70)],
+        ),
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/owners", source=71)],
+        ),
+        # A producer the table identifies, then a call ON its result that hands back
+        # something still standing for the same thing — the `from_receiver` chain
+        # (`OI-142`). Two methods: one where the producer's identity is SINGLE-VALUED and
+        # one where it ENUMERATES, because the gate between them is the safety argument.
+        _declared(_PRESERVED, "single", "()V"),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="string", value="one-service"),
+            ],
+            result=50,
+        ),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            receiver=50,
+            result=51,
+            arguments=[CallArgument(kind="int", value=0)],
+        ),
+        _site(
+            _symbol(_PRESERVED, "single", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=51)],
+        ),
+        _declared(_PRESERVED, "enumerating", "()V"),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="topic-a"),
+                CallArgument(kind="string", value="topic-b"),
+            ],
+            result=60,
+        ),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            receiver=60,
+            result=61,
+            arguments=[CallArgument(kind="int", value=0)],
+        ),
+        _site(
+            _symbol(_PRESERVED, "enumerating", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=61)],
+        ),
+        # An assembled address whose every operand IS a source literal — the shape
+        # ruling 1 (2026-10-17) joins. The producing site is the concat itself, and its
+        # own arguments are the operands.
+        _declared(_JOINER, "call", "()V"),
+        _site(
+            _symbol(_JOINER, "call", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=40,
+            arguments=[CallArgument(kind="string", value="http://host/")],
+        ),
+        _site(
+            _symbol(_JOINER, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}orders", source=40)],
+        ),
+        # Two holes, both literals: the template is filled in ORDER, not by chance.
+        _declared(_TWO_HOLES, "call", "()V"),
+        _site(
+            _symbol(_TWO_HOLES, "call", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=41,
+            arguments=[
+                CallArgument(kind="string", value="alpha"),
+                CallArgument(kind="string", value="omega"),
+            ],
+        ),
+        _site(
+            _symbol(_TWO_HOLES, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="/{}/middle/{}", source=41)],
+        ),
+        # One operand a literal, the other a PARAMETER — "anything that changes at
+        # runtime" in the ruling's own words, so nothing joins.
+        _declared(_HALF_JOINER, "call", _TAKES_STRING),
+        _site(
+            _symbol(_HALF_JOINER, "call", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=42,
+            arguments=[
+                CallArgument(kind="string", value="http://host/"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+        _site(
+            _symbol(_HALF_JOINER, "call", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}orders/{}", source=42)],
+        ),
         # A receiver produced by a call, which is a slot like any other.
         _declared(_FACTORY, "make", _MAKES_OBJECT),
         _returns(
@@ -1150,6 +1314,7 @@ def test_a_value_from_a_body_this_workspace_never_read_is_unresolved_external(wa
 # exactly there, and that the entries it must pass over are passed over.
 
 _OF_TWO_IDENTITY = {"owner": _NAME, "method": "of", "arg": 1}
+_ALL_STRINGS_SPELLING = "all_strings"
 
 
 def _identified(
@@ -1199,6 +1364,92 @@ def test_an_identity_chain_goes_as_deep_as_the_code_does(walked):
         [_OF_TWO_IDENTITY, {"owner": _NAME, "method": "text", "arg": 0}],
     )
     assert [b.slots[0].value for b in bindings] == ["deep-notify"]
+
+
+# The `from_receiver` form (`OI-142`): an entry saying its call's result stands for
+# whatever its RECEIVER stands for. `arg` cannot express it — a discovery chain's
+# `.get(0)` names an index and `.getUri()` names nothing — and the gate below is what
+# makes an entry on a JDK accessor safe to declare estate-wide.
+_PRESERVING = {"owner": _ONE_TARGET[0], "method": _ONE_TARGET[1], "from_receiver": True}
+
+
+def test_an_authority_joined_to_a_path_is_written_scheme_relative(walked):
+    """Ruling 2, granted by the user 2026-10-17: peer and path from separate evidence.
+
+    A service-discovery lookup yields WHO is being called — `one-service`, with no scheme
+    and no path. Run together with the template's tail that is `one-service/owners`, which
+    CP-2's splitter reads as a relative path, so the peer column is lost and both halves
+    end up in `path`.
+
+    `//one-service/owners` is RFC 3986 §4.2's scheme-relative reference — a real URI form
+    rather than an invention — and the `//` states exactly where the authority ends.
+    `split_url` then separates them with no new shape to learn, which is asserted in
+    `tests/application/test_arguments.py` on the string this produces.
+    """
+    entry = {**_OF_TWO_IDENTITY, "yields": "authority"}
+    bindings = _identified(walked, _symbol(_AUTHORITY_CHAIN, "call", "()V"), 2, [entry])
+    assert [b.slots[0].value for b in bindings] == ["//one-service/owners"]
+
+
+def test_an_ADDRESS_identity_joined_to_a_path_is_not_marked(walked):
+    """The negative half (GUIDELINES §10), and the one that keeps `/api/v1` safe. An
+    identity that yields an ADDRESS — every entry in the table but one — is joined
+    verbatim, because a value that is already a whole address says where its own authority
+    starts. Marking it would turn a path prefix into a host: `basePath + "/orders"` where
+    `basePath` is `/api/v1` has the identical SHAPE, and `//api/v1/orders` would publish
+    `api` as the service being called."""
+    bindings = _identified(walked, _symbol(_AUTHORITY_CHAIN, "call", "()V"), 2, [_OF_TWO_IDENTITY])
+    assert [b.slots[0].value for b in bindings] == ["one-service/owners"]
+
+
+def test_a_receiver_preserving_entry_hands_on_a_single_valued_identity(walked):
+    """The positive half. The producer's identity is ONE value, the call on its result
+    says "I still stand for that", and the consuming position answers it.
+
+    This is the user's own argument of 2026-10-17, which is what the entry rests on: an
+    element of a list of a service's instances is that same service, because every
+    instance of a service IS that service. Measured over the shipped table, the only
+    single-valued entry producing a collection is `Collections.singletonList` at
+    `arg: 0` — and `singletonList("x").get(0)` IS `x`, so propagating is right there too.
+    """
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "single", "()V"), 2, [_OF_TWO_IDENTITY, _PRESERVING]
+    )
+    assert [b.slots[0].value for b in bindings] == ["one-service"]
+    assert [b.slots[0].literal_kind for b in bindings] == ["string"]
+
+
+@pytest.mark.pins("values.an-enumerating-identity-is-not-preserved-through-a-receiver")
+def test_a_receiver_preserving_entry_REFUSES_an_enumerating_identity(walked):
+    """**The safety half, and the reason the form can be declared on a JDK accessor at
+    all.** An `identified_by` entry is read by every catalog at once, over every call in
+    the estate — so an entry on element access meets topic lists as well as service
+    instances. `List.of("topic-a", "topic-b").get(0)` must NOT answer both topics: that
+    is one element reported as every element, a wrong answer at `resolved`, which is the
+    single failure spec 2026-09-22 §7 says this family of work risks.
+
+    The gate is the walk's own multiplicity rather than a special case: an enumerating
+    identity resolves to SEVERAL answers, and an element of a collection identified as
+    many things is one of them, which one being unknowable from the facts. MEASURED over
+    the shipped table — 23 entries, three enumerating, and all three are topic lists
+    (`List.of`, `Arrays.asList`, `Subscriptions.topics`).
+    """
+    enumerating = {**_OF_TWO_IDENTITY, "arg": _ALL_STRINGS_SPELLING}
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "enumerating", "()V"), 2, [enumerating, _PRESERVING]
+    )
+    assert _reasons(bindings) == ["not_readable"]
+    assert [b.slots[0].value for b in bindings] == [None]
+
+
+def test_a_receiver_preserving_entry_on_a_static_call_answers_nothing(walked):
+    """No receiver, nothing to preserve. `not_readable` rather than `external`: the call
+    IS inside what was scanned, and what is missing is the value it was invoked on — a
+    distinction §1d draws and a consumer acts on."""
+    bindings = _identified(
+        walked, _symbol(_PRESERVED, "single", "()V"), 2, [{**_PRESERVING, "method": "of"}]
+    )
+    assert _reasons(bindings) == ["external"]
 
 
 @pytest.mark.pins("values.an-identity-entry-with-a-role-is-not-an-identity")
@@ -1462,6 +1713,46 @@ def test_an_assembled_address_is_carried_verbatim_and_never_evaluated(walked):
     bindings = _bindings(walked, _symbol(_ASSEMBLER, "call", "()V"), 0)
     assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [("expression", "/orders/{}")]
     assert _reasons(bindings) == [None]
+
+
+def test_a_concat_of_source_literals_joins_into_one_literal(walked):
+    """Ruling 1, granted by the user 2026-10-17: *"join them when every single piece is a
+    fixed string typed into the source code."*
+
+    Nothing is reverse-engineered. javac emits one `invokedynamic` plus a recipe, the
+    extractor already turns that recipe into a template with `{}` per runtime operand
+    (and already substitutes the bootstrap's own constants, `\u0002`), and the operands
+    are the concat site's OWN arguments — `domain/facts.py`: *"What FILLS the hole is the
+    concat site's own call-site fact, reached by `source` -> `result`."* This joins what
+    the facts already hold.
+
+    It answers `literal`, not `expression`, because the result IS a fixed string the code
+    states — the thing a catalog reading a destination can use."""
+    bindings = _bindings(walked, _symbol(_JOINER, "call", "()V"), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [
+        ("literal", "http://host/orders")
+    ]
+    assert [b.slots[0].literal_kind for b in bindings] == ["string"]
+
+
+def test_two_holes_are_filled_in_order(walked):
+    """The template is split on its holes and interleaved, never substituted one hole at a
+    time: a resolved operand that itself contains `{}` would otherwise be re-scanned and
+    the second hole filled from the first operand's text."""
+    bindings = _bindings(walked, _symbol(_TWO_HOLES, "call", "()V"), 1)
+    assert [b.slots[0].value for b in bindings] == ["/alpha/middle/omega"]
+
+
+def test_a_concat_with_one_runtime_operand_carries_the_template_unchanged(walked):
+    """The ruling's second half, and the half that keeps §6: *"If any piece comes from a
+    config file, a method parameter, or anything that changes at runtime — don't join,
+    behave exactly as today."* One operand is a parameter, so the row answers the
+    template with its holes unfilled — including the hole whose operand DID resolve,
+    because a half-filled address is a claim about a string nobody wrote."""
+    bindings = _bindings(walked, _symbol(_HALF_JOINER, "call", _TAKES_STRING), 1)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in bindings] == [
+        ("expression", "{}orders/{}")
+    ]
 
 
 def test_a_receiver_is_a_slot_like_any_other(walked):

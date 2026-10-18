@@ -1010,6 +1010,14 @@ def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
     path_rule, method_rule = item_block["path"], item_block["method"]
     requirement_rules: dict[str, dict[str, Any]] = item_block.get("requirements", {})
     pass_through = {str(name) for name in item_block.get("pass_through", [])}
+    # The verbs a route means when it names none (`combinator`'s own word, same spelling).
+    # **The OUTBOUND target row is deliberately not fanned**: it is one forwarding
+    # destination, and eight rows naming `lb://vets-service` would say one thing eight
+    # times. The inbound rows are the endpoints the module SERVES, which is what a reader
+    # asks about by method.
+    # Off `matches` itself, which is where `combinator` reads it — the two spellings of
+    # one gateway route must not need two declarations.
+    all_methods = [str(verb) for verb in catalog.matches.get("all_methods", [])]
     peer_field = str(item_block["peer"]["field"])
     peer_direction = str(item_block["peer"].get("direction", catalog.direction))
     inbound = str(Direction.INBOUND)
@@ -1065,7 +1073,19 @@ def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
             patterns = [_ANY_PATH] if served else [None]
         for pattern in patterns:
             path = None if pattern is None else _addressed(pattern, catalog.protocol, inbound)
-            for verb in verbs or [None]:
+            # **A route that declared no verb is one row per method the catalog says it
+            # serves** (`matches.all_methods`), which is `combinator._fanned`'s rule
+            # applied to the config form of the same declaration — the two spellings of a
+            # gateway route must not read differently. A catalog declaring no
+            # `all_methods` keeps the single `method` NULL row it always had, so nothing
+            # moves for the config catalogs that are not routers.
+            #
+            # `served` is deliberately NOT part of this: a route whose predicates could not
+            # be read is one unresolved row, not eight. Fanning out a row the engine could
+            # not settle would present one doubt as eight facts, which is the mistake
+            # `_fanned` states for a poisoned route.
+            fanned = verbs or (list(all_methods) if served else []) or [None]
+            for verb in fanned:
                 _mint(minted, catalog, inbound, verb, path, resolved and served, requirements)
         if peer_field in item.unread:
             _mint(minted, catalog, peer_direction, None, None, False, [])

@@ -244,6 +244,18 @@ class Format(StrEnum):
     `endpoints.format` holds one of these or NULL, and NULL is an answer —
     the ladder (2G design §5) reached no rung, and `format_resolution` says
     `unresolved` beside it.
+
+    **`ANY` is the opposite of that NULL and the distinction is the point**
+    (ruled by the user 2026-10-17). A proxy forwards a body it never parses,
+    so no format constraint exists — that is a fact ABOUT the channel, known
+    and `resolved`, not a rung the ladder failed to reach. Rendering it as
+    `unresolved` told a reader the analysis had failed where it had in fact
+    succeeded (`OI-140`). `ANY` is therefore not "unknown": it is "whatever
+    the caller sent, and the endpoint does not care".
+
+    It is also not `BYTES`. `BYTES` says the wire carries opaque bytes; `ANY`
+    says a JSON request stays JSON on the wire and the endpoint simply places
+    no constraint on it.
     """
 
     JSON = "json"
@@ -252,6 +264,7 @@ class Format(StrEnum):
     XML = "xml"
     STRING = "string"
     BYTES = "bytes"
+    ANY = "any"
 
 
 # Reserved: named by the design so a catalog cannot quietly claim it, and
