@@ -1,0 +1,23 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-pathprefixes</artifactId>
+  <version>1.0.0</version>
+  <!-- A module that prefixes its controllers by PACKAGE, through Spring's own
+       `RequestMappingHandlerMapping.setPathPrefixes` (spec 2026-10-18 §4, `OI-148`).
+       `YunaiV/ruoyi-vue-pro` is the shape this copies: every one of its 480 inbound paths is
+       served under `/admin-api` or `/app-api` and nothing in any controller says so.
+
+       Its own module because a prefix moves every inbound path in the module that declares
+       one, and Spring 7.0.9 alone — the version `orders-spring7` and `orders-contextpath`
+       already build with, so the jar is in the local repository. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-webmvc</artifactId><version>7.0.9</version>
+    </dependency>
+  </dependencies>
+</project>

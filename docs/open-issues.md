@@ -309,6 +309,52 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-150 — the value walk does not cross a lambda's CAPTURE, so a value a lambda closes over is `external`
+**Major · entered 2026-10-18, measured on a probe module built from `ruoyi`'s own shape · `src/sextant/application/resolve/values.py::_Walk._parameter`**
+
+A lambda's body is a synthetic method whose first parameters are the values it captured. The
+facts record the capture — the `invokedynamic` site carries the captured values as arguments,
+and the lambda entry of the argument grammar carries `captures: 2` — but `value_edges` emits
+no `bound_to_parameter` edge for it, so `ValueIndex.callers` has **no entry at all** for a
+lambda body's parameters and the walk answers `external`:
+
+```java
+putPathPrefix(prefixes, "/admin-api", "**.controller.admin.**", matcher);   // two Strings
+...
+private void putPathPrefix(Map<String, Predicate<Class<?>>> prefixes,
+        String prefix, String pattern, AntPathMatcher matcher) {
+    prefixes.put(prefix, clazz -> … && matcher.match(pattern, clazz.getPackage().getName()));
+}                                        // `pattern` is CAPTURED — unresolved(external)
+```
+
+**Measured**, on a probe that differs from `fixtures/orders-pathprefixes` only in holding the
+two strings as parameters rather than on an object:
+
+```
+prefix  (an argument of `put`, resolved through callers)  ->  /admin-api, /app-api
+pattern (captured by the lambda)                          ->  unresolved(external)
+```
+
+so both controllers publish `/orders/{id}` and the two collapse into one path — exactly
+`OI-148`'s symptom, one spelling to the side. `ruoyi` itself dodges it because its pattern
+comes off a captured OBJECT (`api.getController()`), which resolves through the field and
+`<init>` edges instead, and the fixture dodges it because `javac` inlines a `static final`
+String into the lambda body.
+
+**Real triggering input:** ordinary. Capturing a local or a parameter in a lambda is the most
+common thing a lambda does; this is visible only where a catalog asks about a value inside
+one.
+
+**Why it is filed rather than fixed inside `OI-148`:** it is a WALK EDGE, the same shape of
+work as the sixth edge (`2026-10-18-the-sixth-edge-design.md` — its own spec, its own
+additivity proof, its own PR). The honest accounting is that §4's reader is complete for the
+declarations it can see, and this is the seventh edge.
+
+**Closes when** a `bound_to_parameter`-equivalent edge binds a lambda body's parameters to the
+values the capture site hands it, and the probe above resolves both patterns. The `captures`
+count on the lambda entry is already in the facts, so this is an edge-query and walk change
+rather than an extractor one — to be confirmed by measuring, not assumed.
+
 ### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
 **Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**
 
@@ -410,7 +456,7 @@ raw `CommonResult`'s `data` field is an unbound `T`, and `expansion.py` names th
 ("a shape with an undescribed field is OPEN") as a deliberate refusal to claim more than the
 evidence supports.*
 
-### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong · **the CONFIGURATION half CLOSED 2026-10-18; `setPathPrefixes` open on the sixth edge**
+### OI-148 — a configured path prefix is never applied, so every path in a module can be wrong · **CLOSED 2026-10-18, both halves**
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` and on the PINNED `spring-petclinic-rest` · `src/sextant/application/resolve/engines/annotation_driven.py`**
 
 Three spellings of one gap. An inbound path is read from annotations alone, and a prefix the
@@ -475,13 +521,61 @@ moves with it, and `ruoyi-vue-pro`'s own prefix is either applied or named as a 
 > the shipped protocol list, because a handshake path is *probably* under the context path
 > and probably is not a measurement.
 >
-> **Still open: `setPathPrefixes`** (§4 of the spec). Ruled IN scope — the prefix map is built
-> once at wiring time from string literals, so it is configuration and not runtime logic — and
-> blocked on one edge: `getAdminApi()` → the field → the value written into it answers
-> `unresolved(no_writer)`, which is `OI-136`'s sixth edge, with `OI-141` carrying the field
-> shape. Everything else is in the facts and measured: the Spring call is cataloguable, both
-> literals sit at `WebProperties#<init>` ordinals 1-2, and the prefix pairs with its package
-> pattern by receiver identity on two coherent paths.
+> **`setPathPrefixes` IS BUILT TOO (2026-10-18)**, §4 of the same spec, once the walk's sixth
+> edge landed and `getAdminApi()` → the field → the constructor that wrote it began to resolve.
+>
+> `class_path_prefixes` in `catalogs/server-models/spring-boot.yml` names five framework
+> symbols and `resolve/path_prefix.py` reads them: the installer call is the gate, each
+> `Map#put` whose second argument is a lambda is an entry, the prefix is that site's argument 0
+> and the pattern is the `AntPathMatcher#match` argument inside the lambda body. What makes it
+> a READING rather than a guess is the discriminator — `match`'s second argument must come
+> from `Package#getName` on `Class#getPackage`, so a map of strings to predicates that is about
+> anything else contributes nothing (guard
+> `path_prefix.a-package-predicate-is-what-identifies-a-declaration`).
+>
+> **Measured on `ruoyi-vue-pro`, the three built modules, 480 inbound rows: 472 now carry the
+> prefix the app serves them under** — 466 `/admin-api`, 6 `/app-api` — and the 8 that do not
+> are `yudao-server`'s own `DefaultController`, whose package (`…server.controller`) matches
+> neither pattern and which the app genuinely serves unprefixed. Every row was `/system/...`
+> before. `spring-petclinic-rest` and the other five field pins are unchanged.
+>
+> **One correction to the spec, declared rather than quietly made (GUIDELINES §1.1).** §4 said
+> the prefix and its pattern pair *by the site*, on the reasoning that "each `put` is its own
+> site". Measured, that is false for the corpus the whole item exists for: ruoyi has ONE `put`
+> site, inside a `putPathPrefix` helper called once per API group, so the walk answers both
+> prefixes AND both patterns there and pairing by site is a cross product — two of its four
+> pairings would serve a package family under another family's prefix. They are paired BY PATH
+> instead, through a new `values.resolve_positions`, which is `resolve_site`'s several-sites
+> case: both values leave through the same context (the two `new Api(…)` sites in
+> `WebProperties#<init>`) and a pair that chose differently there is refused. That is the
+> spec's own stated requirement — *"two entries cannot cross"* — met by a mechanism the spec's
+> premise did not need to be right about. Pinned by the e2e fixture, whose four controllers
+> cover both shapes, and by guard
+> `path_prefix.a-prefix-pairs-with-the-pattern-on-ITS-OWN-path`.
+>
+> **Three wrong rows were reachable from ordinary Java in the first build of this, all three
+> found by review on probe modules and all three fixed before the commit.** Each is now a
+> conjunct with its own guard and its own controller in the fixture asserting the path it
+> keeps:
+>
+> | what published a wrong address | the row it published | what refuses it now |
+> |---|---|---|
+> | a map of the same shape handed to NOBODY (`auditCategories()`) | `GET /AUDIT/audit-logs/{id}`, and the same path into `roots` | an entry counts only where the map it writes into is the map an installer receives, compared by the object's ORIGIN — `_origins`, which follows a return into its callee and a parameter to its callers, because `ruoyi`'s `put` is two frames away from its installer |
+> | a prefix that is a placeholder | `${api.ext-prefix}/ext/{id}` — not even path-shaped | a prefix must be path-shaped; Spring resolves the key through `embeddedValueResolver` first, so an unresolved one is refused |
+> | a functional route whose class merely SITS in a prefixed package | `GET /admin-api/fn/items`, where `RouterFunctionMapping` has no prefixes at all | the predicate's OTHER conjunct, `clazz.isAnnotationPresent(RestController.class)`, read off the lambda and required of the handler's class |
+>
+> Two under-reports came with them, both ordinary Java and both fixed: a map variable declared
+> as `LinkedHashMap` rather than `Map` (javac emits `LinkedHashMap.put`, so the entry is now
+> matched on the method name with the identity join doing the identifying), and
+> `class MyMapping extends RequestMappingHandlerMapping` (the gate now resolves a subclass
+> through the module's own hierarchy). The reactive stack's own `RequestMappingHandlerMapping`
+> is declared beside the servlet one for the same reason.
+>
+> **What §4 still will not do:** read a predicate that tests no annotation at all (what it
+> means is "every handler this mapping serves", which is not a set these facts can name), and
+> settle a package two patterns claim — the framework applies the first entry of a
+> `LinkedHashMap` and the facts do not record that order, so the row keeps the path it had.
+> A pattern or prefix a lambda CAPTURES is `OI-150`.
 
 ### OI-147 — RocketMQ is catalogued nowhere, and it is absent from COVERAGE as well
 **Major · entered 2026-10-18, measured on `ruoyi-vue-pro` · `src/sextant/catalogs/`**
@@ -995,8 +1089,12 @@ CONSTRUCTED object. `WebProperties` declares
 `aload_0; new; dup; ldc; ldc; invokespecial; putfield` — the middle instruction is an
 `invokespecial`, so `fieldWrites`' `VarInsnNode` requirement refuses it exactly as it refuses
 the `ldc` shape. Both literals are in the facts at `WebProperties#<init>` ordinals 1 and 2 and
-neither is reachable from the field. It is what blocks `setPathPrefixes` (`OI-148` §4), and it
-is the same capability as this entry's own shape.*
+neither is reachable from the field. It is the same capability as this entry's own shape.
+**Measured again 2026-10-18 after the sixth edge landed: both literals now resolve** —
+`getPrefix()` answers `/admin-api` and `/app-api` — because the field's writer is the
+constructor and its parameter follows its callers to those two sites. That unblocked
+`setPathPrefixes` (`OI-148` §4, now closed); what this entry still holds is the shape where
+nothing is written from a PARAMETER at all.*
 
 *A real-project instance, 2026-10-18 (`ruoyi-vue-pro`): the websocket endpoint's own path.
 `YudaoWebSocketAutoConfiguration` registers the handler with*
