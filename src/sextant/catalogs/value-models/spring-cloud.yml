@@ -47,8 +47,15 @@ displayName: Service discovery — a lookup's identity, and the calls that prese
 identified_by:
   # The lookup itself: `getInstances(String)` returns `List<ServiceInstance>` (CP-36 row 1),
   # so the value it produces is the instances OF the service named at argument 0.
+  #
+  # `yields: authority` is the whole of ruling 2 in one key. What this chain resolves to is
+  # `customers-service` — WHO is being called — and not an address: no scheme, no path. The
+  # consumer therefore files it under `peer` and takes the path from elsewhere, where a
+  # plain join would have produced `customers-service/owners` and lost the peer column
+  # entirely. Nothing about the string could say so: `/api/v1` also lacks a scheme and is a
+  # path prefix rather than a service.
   - { owner: org.springframework.cloud.client.discovery.DiscoveryClient, method: getInstances,
-      arg: 0, by: scripts/probes/cp36_discovery_client.md }
+      arg: 0, yields: authority, by: scripts/probes/cp36_discovery_client.md }
 
   # Element access. Every instance of a service IS that service, so an element of this list
   # stands for what the list stands for. `descriptor` pins the single-argument accessor

@@ -123,7 +123,7 @@ work that takes under a millisecond.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -245,6 +245,26 @@ _FROM_RECEIVER = "from_receiver"
 _HOLE = "{}"
 
 
+# WHAT KIND OF THING an identity yields, and why a closed pair rather than a flag.
+#
+# A URL has parts: `http://customers-service/owners` is a SCHEME, an AUTHORITY (who you
+# are calling) and a PATH (what you are asking for). Almost every identity in the table
+# yields a whole address — `URI.create("https://…/x")` — and the consumer splits it with
+# CP-2's rule. A service-discovery lookup yields only the AUTHORITY: the chain
+# `getInstances("customers-service").get(0).getUri()` resolves to `customers-service`,
+# which is who, with no scheme and no what.
+#
+# **Nothing about the STRING says which it is, which is why this is a declared property
+# and not a test.** `customers-service` and `/api/v1` both lack a scheme; the first is a
+# service and the second is a path prefix, and reading either as the other publishes a
+# wrong column at `resolved`. What tells them apart is where the value came from, so the
+# entry says it (`OI-142`, ruling 2 — "peer and path from separate evidence").
+_YIELDS = "yields"
+_ADDRESS = "address"
+_AUTHORITY = "authority"
+_YIELDS_KINDS = (_ADDRESS, _AUTHORITY)
+
+
 @dataclass(frozen=True)
 class Answer:
     """What a slot holds, on one path (§1b).
@@ -263,6 +283,12 @@ class Answer:
     value: Any = None
     literal_kind: str | None = None
     reason: str | None = None
+    # `address` (the default, and what every value the code states is) or `authority` — WHO
+    # is being called, with no scheme and no path. Set only by an identity entry declaring
+    # `yields: authority`, and carried through every hop after it, because a value that
+    # stands for a service still stands for one after an accessor hands it on. A consumer
+    # reads it to decide which COLUMN the value belongs in; see `_joined`.
+    yields: str = _ADDRESS
 
 
 @dataclass(frozen=True)
@@ -898,6 +924,7 @@ class _Walk:
 
         path = trail
         values: list[str] = []
+        answers: list[Answer] = []
         for operand in operands:
             reached = self._entry(operand, method, origin, trail, frames)
             if len(reached) != 1:
@@ -910,10 +937,25 @@ class _Walk:
                 return None
             path = merged
             values.append(str(answer.value))
+            answers.append(answer)
 
         filled = pieces[0] + "".join(
             value + piece for value, piece in zip(values, pieces[1:], strict=True)
         )
+        # **An AUTHORITY joined to a path is written scheme-relative**, which is how the
+        # boundary between the two survives being one string (`OI-142`, ruling 2).
+        #
+        # `getCustomerServiceUri() + "/owners"` resolves its hole to `customers-service` —
+        # who, not where — and the plain join `customers-service/owners` has no scheme, so
+        # CP-2's splitter reads the whole thing as a path and the peer column is lost.
+        # `//customers-service/owners` is RFC 3986 §4.2's scheme-relative reference: a real
+        # URI form, not an invention, and the `//` says exactly where the authority ends.
+        # `split_url` takes it from there, so no consumer needs to learn a second shape.
+        #
+        # Only where the result has no scheme of its own. `"http://" + host + "/x"` already
+        # says where the authority starts, and prefixing that would be wrong.
+        if any(answer.yields == _AUTHORITY for answer in answers) and "://" not in filled:
+            filled = f"//{filled}"
         return _only(path, Answer(kind=LITERAL, value=filled, literal_kind=STRING))
 
     def _through(
@@ -1086,7 +1128,18 @@ class _Walk:
         # is the value (meaning), and no framework is named in this module either way.
         slot = self._identified(site)
         if slot is not None:
-            return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            identified = self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            # The ENTRY says what kind of thing this producer yields, so it is stamped here
+            # rather than carried by the slot's own answer: argument 0 of
+            # `getInstances("customers-service")` is an ordinary string literal, and what
+            # makes it an AUTHORITY is the entry, not the string.
+            kind = self._identified_yields(site)
+            if kind == _ADDRESS:
+                return identified
+            return tuple(
+                (crossed, replace(answer, yields=kind) if answer.kind == LITERAL else answer)
+                for crossed, answer in identified
+            )
         # **The PLURAL identity, and the reason it belongs beside the singular one rather
         # than in a reader of its own.** `consumer.subscribe(List.of("t1", "t2"))` reaches
         # here exactly as `createQueue` does — a producing call whose body is a JDK method
@@ -1149,6 +1202,8 @@ class _Walk:
         reached = self._through(site[0], int(str(receiver)), site[1], trail, frames)
         if len(reached) != 1:
             return _only(trail, _unresolved(NOT_READABLE))
+        # Handed back WHOLE, which is what carries `yields` along the chain: a value that
+        # stands for a service still stands for one after `.get(0)` and after `.getUri()`.
         return reached
 
     def _all_arguments(
@@ -1258,6 +1313,20 @@ class _Walk:
             if isinstance(slot, int):
                 return slot
         return None
+
+    def _identified_yields(self, site: tuple[str, int]) -> str:
+        """What KIND of thing the entry that answered for `site` yields — `address` unless
+        it says `authority`.
+
+        Read beside `_identified` rather than returned with it, so the slot reader keeps
+        the one-line contract every caller already has. The two always agree: both walk
+        `_identity_matches` in the table's order and take the first entry in a form they
+        understand.
+        """
+        for entry in self._identity_matches(site):
+            if isinstance(entry.get("arg"), int):
+                return str(entry.get(_YIELDS, _ADDRESS))
+        return _ADDRESS
 
     def _preserves_receiver(self, site: tuple[str, int]) -> bool:
         """Whether a matching entry says this call's result stands for whatever its

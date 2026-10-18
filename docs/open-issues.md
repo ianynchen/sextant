@@ -359,10 +359,35 @@ prose or a latent shape with no live consequence.
 > argument is (`new ProducerRecord(topic, …, payload)`), not what the value means to a
 > consumer, and `_identity_matches` skips roled entries by design.
 >
-> **Closes** by the walk's answer carrying what the value is — an authority rather than an
-> address — so the engine can fill `peer` from it and `path` from the template's tail,
-> plus the `String.valueOf` entry. **Falsified by** those three rows publishing peer
-> `customers-service` with paths `/owners` and `/owners/{}/pets`.
+> **THE AUTHORITY WORD IS NOW BUILT TOO** (`yields: authority`, 2026-10-17): an identity
+> entry declares what KIND of thing it yields, the answer carries it through every hop, and
+> a join whose hole yields an authority is written scheme-relative — `//customers-service/owners`,
+> RFC 3986 §4.2, a real URI form rather than an invention, with the `//` saying exactly
+> where the authority ends. `split_url`'s scheme is now optional so one splitter answers
+> both shapes, and the `/api/v1` counter-example is pinned: an identity yielding an
+> `address` is joined verbatim, because marking it would publish `api` as a service.
+>
+> **AND THE CHAIN STILL CANNOT BE CLOSED, for a reason that is worth more than the three
+> rows.** javac inserts `String.valueOf` around a non-String concat operand, so the chain
+> runs through it — and `String.valueOf` cannot be declared as an identity for this purpose.
+> Read off the JDK's own bytecode, `valueOf(Object)` returns `arg.toString()`. An
+> `identified_by` entry says what a value STANDS FOR; a join publishes text as an ADDRESS;
+> **those are different claims and they part company exactly where it matters.** For a
+> `URI` the identity and the rendering coincide. For a messaging destination whose identity
+> is `"orders"`, `toString()` is a vendor debug string — so joining the identity would
+> publish an address that never existed, at `resolved`, which is the one failure spec §7
+> names.
+>
+> **What keeps the shipped join sound is `fluent._url_argument` passing NO identities** for
+> an assembled address, so only text the code literally states is ever joined. That was
+> chosen for a different reason (not following undeclared hops) and is load-bearing for
+> this one; the comment there now says so.
+>
+> **Closes** when the walk can distinguish a value's IDENTITY from its textual RENDERING —
+> the conflation above — so a join may use the second and a peer the first. That is a
+> third property on an answer, not a fourth identity form, and it is design work rather
+> than a key. **Falsified by** those three rows publishing peer `customers-service` with
+> paths `/owners` and `/owners/{}/pets`.
 
 ### OI-142 (original entry, kept for the measurement) — a service name three calls back needs a word the identity grammar does not have
 **Minor · entered 2026-10-17, measured at plan `2026-10-17-outgoing-endpoint-addresses.md` Task 4 · `src/sextant/catalogs/value-models/`, `docs/components/D02-catalog-schema.md` §1f**

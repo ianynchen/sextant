@@ -88,6 +88,7 @@ _UNREAD = _PKG + "Unread#"
 _LOOP = _PKG + "Loop#"
 _ASSEMBLER = _PKG + "Assembler#"
 _PRESERVED = _PKG + "Preserved#"
+_AUTHORITY_CHAIN = _PKG + "AuthorityChain#"
 _JOINER = _PKG + "Joiner#"
 _HALF_JOINER = _PKG + "HalfJoiner#"
 _CONFIG_JOINER = _PKG + "ConfigJoiner#"
@@ -229,6 +230,7 @@ def _facts() -> list[Fact]:
             _LOOP,
             _ASSEMBLER,
             _PRESERVED,
+            _AUTHORITY_CHAIN,
             _JOINER,
             _HALF_JOINER,
             _CONFIG_JOINER,
@@ -735,6 +737,40 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="concat", value="/orders/{}", source=4)],
+        ),
+        # A producer whose identity is an AUTHORITY, joined to a path — the shape ruling 2
+        # needs (`OI-142`). The hole is at the start, so the join must say where the
+        # authority ends rather than running the two together.
+        _declared(_AUTHORITY_CHAIN, "call", "()V"),
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            0,
+            (_NAME, "of", _OF_TWO),
+            arguments=[
+                CallArgument(kind="string", value="a-project"),
+                CallArgument(kind="string", value="one-service"),
+            ],
+            result=70,
+        ),
+        # The concat's `source` names the INDY, not the producer — which is the real
+        # bytecode shape: javac emits one `invokedynamic` whose own argument is the
+        # operand. A fixture pointing the concat straight at the producer made `_joined`
+        # read that producer's TWO arguments as two operands against a one-hole template,
+        # and the count check refused it. Correct behaviour, wrong fixture.
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            result=71,
+            arguments=[CallArgument(kind="unresolved", source=70)],
+        ),
+        _site(
+            _symbol(_AUTHORITY_CHAIN, "call", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/owners", source=71)],
         ),
         # A producer the table identifies, then a call ON its result that hands back
         # something still standing for the same thing — the `from_receiver` chain
@@ -1335,6 +1371,35 @@ def test_an_identity_chain_goes_as_deep_as_the_code_does(walked):
 # `.get(0)` names an index and `.getUri()` names nothing — and the gate below is what
 # makes an entry on a JDK accessor safe to declare estate-wide.
 _PRESERVING = {"owner": _ONE_TARGET[0], "method": _ONE_TARGET[1], "from_receiver": True}
+
+
+def test_an_authority_joined_to_a_path_is_written_scheme_relative(walked):
+    """Ruling 2, granted by the user 2026-10-17: peer and path from separate evidence.
+
+    A service-discovery lookup yields WHO is being called — `one-service`, with no scheme
+    and no path. Run together with the template's tail that is `one-service/owners`, which
+    CP-2's splitter reads as a relative path, so the peer column is lost and both halves
+    end up in `path`.
+
+    `//one-service/owners` is RFC 3986 §4.2's scheme-relative reference — a real URI form
+    rather than an invention — and the `//` states exactly where the authority ends.
+    `split_url` then separates them with no new shape to learn, which is asserted in
+    `tests/application/test_arguments.py` on the string this produces.
+    """
+    entry = {**_OF_TWO_IDENTITY, "yields": "authority"}
+    bindings = _identified(walked, _symbol(_AUTHORITY_CHAIN, "call", "()V"), 2, [entry])
+    assert [b.slots[0].value for b in bindings] == ["//one-service/owners"]
+
+
+def test_an_ADDRESS_identity_joined_to_a_path_is_not_marked(walked):
+    """The negative half (GUIDELINES §10), and the one that keeps `/api/v1` safe. An
+    identity that yields an ADDRESS — every entry in the table but one — is joined
+    verbatim, because a value that is already a whole address says where its own authority
+    starts. Marking it would turn a path prefix into a host: `basePath + "/orders"` where
+    `basePath` is `/api/v1` has the identical SHAPE, and `//api/v1/orders` would publish
+    `api` as the service being called."""
+    bindings = _identified(walked, _symbol(_AUTHORITY_CHAIN, "call", "()V"), 2, [_OF_TWO_IDENTITY])
+    assert [b.slots[0].value for b in bindings] == ["one-service/owners"]
 
 
 def test_a_receiver_preserving_entry_hands_on_a_single_valued_identity(walked):

@@ -1574,6 +1574,16 @@ def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str,
     #
     # Same rule as the ladder below: one resolved answer is taken, anything else leaves
     # the capture as it was. The walk may ADD an answer and never take one away.
+    #
+    # **AND THE EMPTY LIST IS LOAD-BEARING FOR A SECOND REASON, found 2026-10-17.** An
+    # `identified_by` entry says what a value STANDS FOR; a join publishes text as an
+    # ADDRESS. Those are different claims, and they part company exactly where it matters:
+    # `String.valueOf(x)` is `x.toString()` (read off the JDK's own bytecode), so for a
+    # `URI` the identity and the text coincide while for a messaging destination whose
+    # identity is `"orders"` the text is some vendor debug string. Joining an
+    # identity-derived answer would therefore publish an address that never existed.
+    # Consulting NO identity keeps this arm to text the code literally states, which is the
+    # only thing a join may render. `OI-142` carries the finding and what it blocks.
     if isinstance(argument, dict) and argument.get("kind") == _CONCAT:
         assembled = _walked_with(argument, context, ())
         settled = (

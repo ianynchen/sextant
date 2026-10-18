@@ -371,6 +371,19 @@ def _identities(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:
                 f"answer, not an error), `method` with either `arg` or `from_receiver` says "
                 f"where the value comes from, and `by` is the probe row behind the claim (§7b)"
             )
+        # WHAT KIND of thing the identity yields — a closed pair, so a typo is a refusal
+        # rather than a silent `address`. Almost every entry yields a whole address and
+        # says nothing; a service-discovery lookup yields only the AUTHORITY (who is being
+        # called, with no scheme and no path), and nothing about the resolved STRING could
+        # tell the two apart: `customers-service` and `/api/v1` both lack a scheme, and
+        # reading either as the other publishes a wrong column at `resolved` (`OI-142`).
+        yields = entry.get("yields")
+        if yields is not None and yields not in ("address", "authority"):
+            raise CatalogError(
+                f"loading value model {path}: `identified_by` entry {entry!r} declares "
+                f"`yields: {yields!r}` — the only values are `address` (the default, a whole "
+                f"URL) and `authority` (who is being called, with no scheme and no path)"
+            )
         if not isinstance(entry["by"], str) or not entry["by"]:
             raise CatalogError(
                 f"loading value model {path}: `identified_by` entry {entry!r} declares a `by` "
