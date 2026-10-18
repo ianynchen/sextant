@@ -35,7 +35,11 @@ from sextant.application.resolve.shapes.arguments import (
     valid_via_arity,
 )
 from sextant.application.resolve.shapes.rooting import catalog_symbols
-from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
+from sextant.application.resolve.values import (
+    ValueIndex,
+    cached_value_index,
+    resolve_site,
+)
 from sextant.domain.symbols import (
     bare_descriptor,
     method_name,
@@ -113,8 +117,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         if not accepts_registration(site, owners, method_name):
             continue
         caller = str(site["caller"])
+        # `cached_value_index`, not `value_index`: the fold is shared across every
+        # engine and catalog in one resolve. Yesterday's measurement that justified
+        # sharing it landed in `fluent` alone and was not carried here — the same
+        # cross-engine miss `OI-143` records for the url reader, in the same file pair.
         if index is None:
-            index = value_index(workspace)
+            index = cached_value_index(workspace)
         # **The backward walk, in place of this engine's own copy of `single_call`'s
         # `channel_of`-then-`linked_channels`** (spec §2b, Task 7). The ladder it replaces
         # was two rungs, each capped at one hop: the literal at the declared position, then

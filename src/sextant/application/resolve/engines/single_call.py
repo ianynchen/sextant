@@ -50,7 +50,7 @@ from sextant.application.resolve.shapes.rooting import (
     catalog_symbols,
     names_a_type,
 )
-from sextant.application.resolve.values import ValueIndex, resolve_site, value_index
+from sextant.application.resolve.values import ValueIndex, cached_value_index, resolve_site
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import (
@@ -650,7 +650,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 destinations = [(None, None, "unresolved")]
             else:
                 if values is None:
-                    values = value_index(workspace)
+                    # Shared across the whole resolve (`cached_value_index`), not built
+                    # per catalog. See the note in `interface_implementation`.
+                    values = cached_value_index(workspace)
                 destinations = list(
                     dict.fromkeys(
                         channel_of_answer(binding.slots.get(channel_slot))

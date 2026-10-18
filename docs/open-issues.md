@@ -375,11 +375,40 @@ git clone --depth 1 https://github.com/apolloconfig/apollo.git examples/apollo
 cd examples/apollo && mvn -q -B -DskipTests compile
 .venv/bin/sextant module analyze examples/apollo/apollo-portal
 ```
-**Closes** by the multiplicity product across concat operands: one row per enumerable
-answer, which is ruling 1 unchanged and already the rule for a single position. The host
-half may stay unresolved — 64 rows carrying a real path and no peer are worth far more than
-8 carrying neither. **Falsified by** `apollo-portal` publishing 64 outbound rows with their
-paths.
+**WHY IT WAS MISSED, which is four parts and the first is the one that stings.** Measured
+by probing each in turn on this module:
+
+1. **`single_call` asks the walk only where a catalog declares `channel_via`**
+   (`elif "channel_via" in method:`). `spring-resttemplate`'s `exchange` row declares
+   `url_arg`, so the walk is never consulted and `url_of` sees a `concat` and gives up.
+   **The identical hole was found and fixed in `fluent` on 2026-10-17**, with the reasoning
+   written into that file — *"An ASSEMBLED address is not a hop, so it needs no `url_via`"* —
+   and the question was never carried to the other two engines. One engine fixed, three
+   engines affected, and the argument was already in hand.
+2. **`_joined` is all-or-nothing.** The template here is `{}{}` — `parseHost(service) +
+   path`, two holes and no literal text. One hole never resolves, so nothing is filled even
+   though the other hole is known 64 ways.
+3. **Multiplicity across operands was deferred** on "nothing in the 27 measured corpora
+   reaches it" — a corpus that could not contain the shape (see above).
+4. **An expression address is unpublishable by this engine.** `url_of` requires a plain
+   string; `fluent._address_of` publishes a `${…}` expression as a path with `peer` NULL and
+   `single_call` has no equivalent. `Resolution.PARTIAL` exists in the closed set and is
+   what a half-known address should carry.
+
+*A probe confirmed 2 and 3 alone are not enough: partial fill plus the product, applied
+without 1 and 4, left the module at 8 rows and 0 paths — because the walk is not asked and
+the answer could not be published if it were. Measured, then reverted.*
+
+**Closes** with all four. The host half may stay unresolved — 64 rows carrying a real path
+and no peer are worth far more than 8 carrying neither. **Falsified by** `apollo-portal`
+publishing 64 outbound rows with their paths.
+
+*Carried across in passing, since it was the same cross-engine miss in the same file pair:
+`interface_implementation` and `single_call` were still calling `value_index` rather than the
+shared `cached_value_index` that `fluent` got on 2026-10-17. **Measured, and it buys nothing
+worth naming** — 0.05s on `mall-admin`, 0.02s on `apollo-portal`, because one already folded
+lazily once per run and the other only fires for catalogs that reach the walk. Kept for
+consistency, and recorded as no speed-up rather than claimed as one.*
 
 ### OI-142 — a service name five calls back resolves; publishing it as a PEER does not
 **Minor · entered 2026-10-17, HALF BUILT the same day · `src/sextant/catalogs/value-models/spring-cloud.yml`, `src/sextant/application/resolve/values.py`, probe `scripts/probes/cp36_discovery_client.md`**
