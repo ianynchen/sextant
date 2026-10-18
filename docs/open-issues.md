@@ -309,6 +309,78 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape
+**Major · entered 2026-10-18, measured on `apolloconfig/apollo` (530 non-test Java files, 8 modules, commit `ea35677`) · `src/sextant/application/resolve/values.py::_joined`**
+
+**The inbound half works on real production code and the outbound half does not.** Measured
+across Apollo's four code-bearing modules:
+
+| | rows | resolved |
+|---|---|---|
+| inbound | **411** | **411 — all of them** |
+| outbound | 8 | **0** |
+
+Apollo makes **64** outgoing HTTP calls whose verb AND path are both written at the call
+site:
+
+```java
+restTemplate.get(env, "apps/{appId}/clusters/{clusterName}/namespaces", ...)
+restTemplate.post(env, "apps", app, AppDTO.class)
+restTemplate.delete(env, "/apps/{appId}?operator={operator}", appId, operator)
+```
+
+64 call sites, 64 distinct verb+path pairs. **None derives a row.** The eight rows that DO
+derive point at the wrapper's own internals — `RetryableRestTemplate#doExecute`,
+`#exchangeGet` — each with `path` NULL. So the document says this module makes eight calls
+to unknown destinations, when it makes 64 to known paths.
+
+**The shape, and why it is not a catalog problem.** `restTemplate` here is not Spring's — it
+is Apollo's own `RetryableRestTemplate`, injected through an abstract `API` base class. A
+framework catalog cannot name it: it is application code, one project's abstraction. Sextant
+catalogs frameworks.
+
+**But the facts are all there, and the blocker is one deferral of mine.** The wrapper funnels
+every call into:
+
+```java
+restTemplate.exchange(parseHost(service) + path, method, entity, responseType, uriVariables)
+```
+
+a concatenation whose `path` operand is a PARAMETER tracing back to those 64 literals
+(`bound_to_parameter`, which the walk crosses) and whose host operand is a discovered
+service address. `_joined` refuses it, by this rule written into it on 2026-10-17:
+
+> *"an operand that is not exactly one answer — several enumerable answers are several
+> possible addresses, and one row per combination is ruling 1's multiplicity rule applied
+> across operands. That product is deliberately NOT built here: it needs a path-merge across
+> operands that disagree, **nothing in the 27 measured corpora reaches it**, and carrying the
+> template under-reports rather than inventing."*
+
+**"Nothing in the 27 measured corpora reaches it" was true and misleading.** The first real
+production codebase tried after that sentence was written reaches it 64 times. The corpora
+were fixtures plus three field pins that are inbound-only (`OI-138`) — a set that could not
+contain the shape, so measuring it said nothing about how rare the shape is. *The lesson is
+about the denominator, not the deferral: "nothing in the corpus does X" is a statement about
+the corpus whenever the corpus was not chosen to contain X.*
+
+**What happens today:** any project with its own HTTP client wrapper — a very common
+structure, and the one Apollo, and most codebases of that size, actually use — publishes its
+real outgoing calls nowhere.
+
+**Real triggering input:** ordinary. The thinner the wrapper, the more total the loss.
+
+**Verify:**
+```
+git clone --depth 1 https://github.com/apolloconfig/apollo.git examples/apollo
+cd examples/apollo && mvn -q -B -DskipTests compile
+.venv/bin/sextant module analyze examples/apollo/apollo-portal
+```
+**Closes** by the multiplicity product across concat operands: one row per enumerable
+answer, which is ruling 1 unchanged and already the rule for a single position. The host
+half may stay unresolved — 64 rows carrying a real path and no peer are worth far more than
+8 carrying neither. **Falsified by** `apollo-portal` publishing 64 outbound rows with their
+paths.
+
 ### OI-142 — a service name five calls back resolves; publishing it as a PEER does not
 **Minor · entered 2026-10-17, HALF BUILT the same day · `src/sextant/catalogs/value-models/spring-cloud.yml`, `src/sextant/application/resolve/values.py`, probe `scripts/probes/cp36_discovery_client.md`**
 
