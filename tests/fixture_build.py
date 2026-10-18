@@ -54,6 +54,7 @@ PRIMED_FIXTURES = (
     "orders-service",
     "orders-soap-final",
     "orders-spring7",
+    "orders-contextpath",
     "spring-integration-probe",
     "orders-micronaut",
     "orders-quarkus",

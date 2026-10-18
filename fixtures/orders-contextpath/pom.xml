@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-contextpath</artifactId>
+  <version>1.0.0</version>
+  <!-- A module that sets `server.servlet.context-path`, which NO other fixture does, and
+       which is the whole reason this one exists (spec 2026-10-18, `OI-148`). Kept separate
+       from `orders-service` rather than setting the key there: a context path moves EVERY
+       inbound path in its module, so adding it to the main fixture would move every pinned
+       figure in the suite for a change that exercises one configuration key.
+
+       Spring 7.0.9 and nothing else, matching `orders-spring7` so the jar this build needs
+       is already in the local repository. The context path is a property of the SERVLET
+       CONTAINER rather than of any dependency, so no Boot starter is declared and the
+       fixture stays light. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>7.0.9</version>
+    </dependency>
+  </dependencies>
+</project>
