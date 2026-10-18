@@ -45,7 +45,9 @@ from sextant.domain.facts import (
     CallTarget,
     Document,
     Fact,
+    FieldWriteFact,
     MethodReturnFact,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -76,6 +78,10 @@ _ARRAYS = _PKG + "Arrays#"
 _MUTATOR = _PKG + "Mutator#"
 _BUFFER = _PKG + "Buffer#"
 _BINDER = _PKG + "Binder#"
+# A binding whose WRITER the facts name — the sixth edge's own shape (spec
+# 2026-10-18). `Written#<init>(String)` assigns its parameter to the field, and two
+# callers construct it with different literals, so the edge resolves to BOTH.
+_WRITTEN = _PKG + "Written#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -223,6 +229,7 @@ def _facts() -> list[Fact]:
             _ARRAYS,
             _MUTATOR,
             _BINDER,
+            _WRITTEN,
             _ENTRY,
             _OUTSIDE,
             _IDENTIFIED,
@@ -351,6 +358,38 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+        # A binding whose WRITER is reported: the field is assigned from the
+        # constructor's parameter 0, and two callers construct it with different
+        # literals. The sixth edge crosses to both (spec 2026-10-18 §4 case 1 —
+        # a closed set, so both ARE the answer).
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_WRITTEN, "<init>", _TAKES_STRING),
+            # A CONSTRUCTOR, not a method: `dispatch` resolves a `<init>` target against the
+            # construct kind, so a constructor declared as a method is a body `call_edges`
+            # cannot reach and `bound_to_parameter` never crosses into.
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=_MODULE + _WRITTEN,
+            signature=Signature(
+                parameters=[Parameter(name="value", type=TypeRef(symbol="java/lang/String#"))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_WRITTEN + "held.",
+            from_parameter=0,
+            written_by=_symbol(_WRITTEN, "<init>", _TAKES_STRING),
+        ),
+        _declared(_WRITTEN, "send", "()V"),
+        _site(
+            _symbol(_WRITTEN, "send", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_WRITTEN + "held.")],
         ),
         # A binding read.
         _declared(_BINDER, "read", "()V"),
@@ -1282,13 +1321,44 @@ def test_the_same_chain_with_nothing_in_between_resolves(walked):
     assert [b.slots[0].value for b in bindings] == ["solo"]
 
 
-def test_a_binding_read_is_unresolved_no_writer(walked):
-    """§1d's `no_writer`, and Task 2's absent sixth edge seen from the other side: the
-    walk asks `value_edges` for a writer, the query emits no `written_by` row until
-    capability 9.19 gives it a fact, and the answer names what is missing rather than
-    collapsing into the one word everything used to collapse into."""
+def test_a_binding_read_whose_writer_nobody_reported_is_unresolved_no_writer(walked):
+    """§1d's `no_writer`, and its meaning is NARROWER since the sixth edge landed
+    (2026-10-18): not "the walk cannot follow a writer" but "no write of this binding was
+    reported". `Binder#name` is assigned nowhere this fact set describes — the remaining
+    unreported shapes are a literal, a call's result and a static initialiser (CP-33 rows
+    2, 6, 7, 8), plus a container writing the field reflectively, which no bytecode shows.
+    """
     bindings = _bindings(walked, _symbol(_BINDER, "read", "()V"), 0)
     assert _reasons(bindings) == ["no_writer"]
+
+
+@pytest.mark.pins("values.a-field-read-reaches-the-value-written-into-it")
+def test_a_binding_read_follows_the_writer_the_facts_name(walked):
+    """**THE SIXTH EDGE** (spec `2026-10-18-the-sixth-edge-design.md`). `Written#held` is
+    assigned from its constructor's parameter 0, the `field_write` fact names that
+    constructor, and the walk now crosses into it instead of stopping.
+
+    **What this pins is the HOP, and the reason word is how it is visible here.** Nothing
+    in this fact set calls `Written#<init>`, so the crossing lands on §4's case 2 — the
+    user's own words, *"if there is no call to this function, we don't know what are
+    possible values"* — and the walk's word for that is `external`. With the edge gone the
+    answer is `no_writer`, which says something different: not "the values come from
+    outside" but "no write of this binding was reported".
+
+    **Case 1 is pinned on real bytecode instead**, where it belongs:
+    `tests/e2e/test_kafka_delivered.py::test_a_destination_held_in_a_constructor_assigned_field_derives_every_value`
+    builds `OrderPublisher` twice with different topics and asserts both rows derive
+    resolved. A synthetic fact set cannot stand in for that: `call_edges` resolves a
+    `<init>` callee from shapes real compilation produces, and a hand-built constructor
+    call here links to no body — which is why this test asserts the hop rather than the
+    values.
+    """
+    bindings = _bindings(walked, _symbol(_WRITTEN, "send", "()V"), 0)
+    # `external`, not `no_writer`: the writer WAS found and crossed into, and nothing in
+    # this fact set calls that constructor — which is the walk's own word for "the values
+    # come from outside what was scanned". Without the edge the answer is `no_writer`, a
+    # different statement, and that difference is what this test exists to hold.
+    assert _reasons(bindings) == ["external"]
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):

@@ -21,13 +21,19 @@
 -- facts, which is what makes it safe to leave unbounded while the walk on top
 -- of it is not (§3a).
 --
--- **FIVE kinds, not the design's six, and the absence is an answer.**
--- `written_by` — a binding assigned anywhere but an initialiser — is the one
--- edge with no fact behind it, and it is specified as a scanner CAPABILITY
--- rather than as work on any one backend (§4). Until a backend reports it, a
--- workspace with no binding-write facts yields no such edge at all, which is
--- what a reader can act on; an empty-but-present kind would say the walk looked
--- and found nothing, and the walk has not looked.
+-- **SIX kinds since 2026-10-18, and the sixth was half here all along.**
+-- `written_by` is the value a binding holds. This header used to say the edge
+-- had "no fact behind it" and waited on a scanner CAPABILITY; that was true of
+-- a write OUTSIDE an initialiser and wrong about the edge — `field_write` has
+-- always reported a constructor assigning a parameter to a field, the shape
+-- every constructor-injected bean has, and no arm read the table. Both halves
+-- landed together (spec `2026-10-18-the-sixth-edge-design.md`): the extractor's
+-- `<init>` guard lifted, which roughly tripled the facts on real code, and the
+-- writing METHOD recorded, without which several writers of one field cannot be
+-- told apart. What stays unreported is a write whose VALUE is not a bare
+-- parameter load — a literal, a call's result, a static initialiser (CP-33 rows
+-- 2, 6, 7, 8) — and a binding written any of those ways still answers
+-- `no_writer`.
 --
 -- **Its own file rather than a string literal in `workspace.py`.** Five arms,
 -- each carrying the fact and the projection behind it, is the value of this
@@ -332,6 +338,45 @@ FROM (SELECT caller, ordinal,
       FROM call_sites)
 WHERE (argument ->> 'kind') IN ('class', 'enum', 'instance')
   AND (argument ->> 'symbol') IS NOT NULL
+
+UNION ALL
+
+-- `written_by`: the value a binding HOLDS, as parameter N of the method that
+-- wrote it. The sixth kind, and the one the walk answered `no_writer` for while
+-- the fact sat unread.
+--
+-- **It resolves to a PARAMETER, not to a value**, which is why this arm carries
+-- `to_index` and nothing new follows it: `from_parameter` names a position of
+-- `written_by`, and the walk's existing crossing takes it from there to whatever
+-- each caller passed. One caller is one path; several callers — or several
+-- constructions — are several paths, which is ruling 1's multiplicity and, where
+-- every caller is in this module, the EXACT answer rather than an ambiguity
+-- (spec §4, ruled 2026-10-18).
+--
+-- **`from_method` is the fact's own `written_by`**, in the same symbol form
+-- `caller` carries above, so this arm is a read rather than a reconstruction. A
+-- row without it — a fact written before the extractor recorded it, or a
+-- hand-authored one — is DROPPED rather than guessed at: with the `<init>` guard
+-- gone a field commonly has several writers, and crossing to the wrong one's
+-- callers would publish a value the field never held.
+--
+-- **No ordinal**, because a field write is not a call site. `value_index` parses
+-- `to_ordinal` per branch for exactly this reason.
+--
+-- **The projection: the `field_writes` view**, which is fact-derived and carries
+-- no call sites, so neither `call_sites` nor `effective_call_sites` applies. It
+-- inherits the fact's own narrowness instead — instance methods, a bare
+-- parameter load — so a computed or literal assignment contributes nothing here.
+SELECT 'written_by'                AS kind,
+       written_by                  AS from_method,
+       CAST(NULL AS INTEGER)       AS from_value,
+       field                       AS to_symbol,
+       CAST(NULL AS BIGINT)        AS to_ordinal,
+       from_parameter              AS to_index
+FROM field_writes
+WHERE written_by IS NOT NULL
+  AND field IS NOT NULL
+  AND from_parameter IS NOT NULL
 
 -- Over the whole union, and on every column, which is what makes the ordering
 -- TOTAL (NFR-1). `kind, from_method, to_ordinal` is not: one site binds several

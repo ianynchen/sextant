@@ -336,6 +336,26 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-field-read-reaches-the-value-written-into-it": Guard(
+        what="a binding read resolves through the WRITER the facts name — `written_by` — and "
+        "answers `no_writer` only where no write of it was reported",
+        why="this is the walk's sixth edge, and without it a destination held in a field "
+        "publishes no address at all: measured, `kafkaTemplate.send(topic, payload)` with "
+        "`topic` assigned by the constructor derived ONE row with `path` NULL where the two "
+        "constructions name `orders-v2` and `orders-audit`. Returning `no_writer` "
+        "unconditionally is what the method did for a year and every other test in the suite "
+        "passes with it back, because no other fixture holds a destination in a field — so "
+        "the suite cannot tell the edge from its absence without this guard",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        written = self._index.writers.get(symbol, ())\n"
+                "        if not written:",
+                replace="        written = self._index.writers.get(symbol, ())\n"
+                "        if True:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "

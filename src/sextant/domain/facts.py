@@ -521,17 +521,35 @@ class MethodReturnFact(BaseModel):
 
 
 class FieldWriteFact(BaseModel):
-    """A constructor assigns parameter N directly to field F (D00 §5):
-    constructors only, direct traces only. A computed assignment —
+    """An INSTANCE METHOD assigns parameter N directly to field F (D00 §5), and
+    `written_by` names the method that did it. A computed assignment —
     concatenation, a default expression, anything but a bare parameter load —
-    emits no fact at all, and the field resolution ladder (2F) degrades
-    honestly rather than guessing a source."""
+    emits no fact at all, and both consumers degrade honestly rather than
+    guessing a source.
+
+    **Constructors only until 2026-10-18**, and the guard was never a soundness
+    rule: a setter's assignment is the same `ALOAD 0; ALOAD k; PUTFIELD` triple,
+    measured as CP-33 row 1, and lifting it roughly TRIPLED the writes found on
+    real code — `spring-petclinic-rest` 86 to 237, `apollo-portal` 553 to 1,638
+    (spec `2026-10-18-the-sixth-edge-design.md` §0). A static method is still
+    refused, which IS a soundness rule: slot 0 is its first parameter rather than
+    `this`.
+
+    `written_by` is OPTIONAL and absent by default, so a fact written before it
+    reads exactly as it did and no schema version moves — the property
+    `CallSiteFact.receiver_parameter` and `CallArgument.captures` established
+    (`scripts/probes/fact_additivity/run.py` proves it per release). A row
+    reaching a consumer without it names no method, and the walk's sixth edge
+    skips such a row rather than guessing which method wrote the field."""
 
     model_config = {"frozen": True}
     kind: Literal["field_write"] = "field_write"
     document_id: str
     field: str
     from_parameter: int
+    # The writing method's own symbol, in the form `call_sites.caller` carries, so a write
+    # and a call name their method identically and the walk needs no reconstruction.
+    written_by: str | None = None
 
 
 class ConstantFact(BaseModel):

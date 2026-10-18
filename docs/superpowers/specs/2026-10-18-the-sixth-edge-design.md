@@ -1,6 +1,6 @@
 # The sixth edge: a field read reaches the value written into it
 
-**Status:** design. **§4 was ruled by the user 2026-10-18**, and the ruling replaced the question rather than answering it — the rule is ENUMERABILITY, and `narrowed` was the wrong word for an exact answer.
+**Status:** BUILT 2026-10-18 (§7 carries the measured outcome). **§4 was ruled by the user 2026-10-18**, and the ruling replaced the question rather than answering it — the rule is ENUMERABILITY, and `narrowed` was the wrong word for an exact answer.
 Written 2026-10-18 after `OI-148`'s `setPathPrefixes` half proved to need exactly this edge,
 and after measuring it.
 
@@ -263,3 +263,48 @@ instruction to read. §8.2 bounds it.
 * **`measure_value_walk.py` re-run**, per §3.
 * **A fixture asserts the derived rows first** (§4.1), and a guard pins the multiplicity rule
   §4 settles.
+
+---
+
+## 7. What it moved, measured
+
+Built on `spec/sixth-edge`, 2026-10-18. Every figure is a run.
+
+**The facts.** The `<init>` guard lifted and `written_by` recorded:
+
+| corpus | `field_writes` before | after | naming their writer |
+|---|---|---|---|
+| `spring-petclinic-rest` | 86 | **237** | 237 |
+| `apollo-portal` | 553 | **1,638** | 1,638 |
+| `ruoyi` starter-web | 51 | **160** | 160 |
+
+**The walk, at positions a shipped catalog asks about.** `no_writer` fell from **226 to 110**,
+and `apollo-portal`'s from **132 to 19** — the remainder being the shapes no backend reports
+(a literal, a call's result, a static initialiser) and fields a container writes reflectively.
+
+**The document.** `fixtures/orders-fieldheld` publishes `orders-v2` AND `orders-audit`, both
+`resolved`, where it published one row with no destination — §4 case 1, a closed set
+enumerated. No field pin moved: all six still pass.
+
+**The cost** (`scripts/measure_value_walk.py`, re-run per §3): over 1,610 positions the walk
+takes **0.09s** and `resolve_site` **0.18s**, against 0.00s/0.01s before — the whole estate,
+so the absolute figures are what matter rather than the ratio. The tail moved more:
+`apollo-portal`'s worst site returns **11,913 bindings** where the worst before was 685, at
+0.05s for that site, and its worst path count went 685 to 1,481.
+
+**Still no cap, and now there is a number behind that** (§3a's "measure first", applied a
+second time): 0.05s for the worst site in the estate, 0.18s for every asked position in every
+corpus. What would change it is a consumer that does real work per binding rather than
+deduplicating them — the engines dedup — and the figure to watch is `bindings max`.
+
+**Two things the build found that the spec had not predicted:**
+
+* **The engine had to ask.** `value_edges` and `_binding` were not enough:
+  `single_call` consults the walk only where a row declares a hop, so
+  `kafkaTemplate.send(topic, …)` published nothing however well the walk answered. That is
+  `OI-143`'s cause 1 in a second guise — the concat fix of the same day covered an assembled
+  address and not a binding — so the engine now consults the walk for a `field` argument at
+  its own declared position too.
+* **`measure_value_walk.py` crashed on the full estate**, because Apollo's modules joined its
+  corpora earlier the same day and `apollo-buildtools` holds classes that produce no facts. It
+  now reports and skips such a module, as CP-37's probe already did.

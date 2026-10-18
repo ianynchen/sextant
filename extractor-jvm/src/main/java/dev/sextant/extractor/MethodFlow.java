@@ -246,8 +246,24 @@ public final class MethodFlow {
      *  pseudo-instructions filtered out first — they carry no opcode and are
      *  not computation, so their presence between the three real instructions
      *  must not count as "something intervened". */
-    public static List<String> fieldWrites(String documentId, MethodNode method) {
-        if (!"<init>".equals(method.name)) return List.of();
+    public static List<String> fieldWrites(
+            String documentId, String methodSymbol, MethodNode method) {
+        // **ANY INSTANCE METHOD, not constructors only** (spec
+        // 2026-10-18-the-sixth-edge-design.md §0). The `<init>` guard that stood here was
+        // never a soundness rule: a setter's assignment is the same instruction sequence as
+        // a constructor's, which CP-33 row 1 measured — `aload_0; aload_1; putfield`,
+        // "the triple, unchanged". Lifting it was measured too, by building this change and
+        // re-scanning: `spring-petclinic-rest` 86 field writes becomes 237 and
+        // `apollo-portal` 553 becomes 1,638, so the guard was hiding about two thirds of the
+        // writes on real code. `OI-136` had always described capability 9.19 as exactly
+        // this: "a write OUTSIDE an initialiser and a method-filter change".
+        //
+        // **Static methods stay out, and that is a soundness rule rather than a filter.**
+        // Slot 0 holds `this` for an instance method, which is what `ALOAD 0` below reads
+        // and what `parameterSlotsOf(desc, 1)` counts from; in a static method slot 0 is the
+        // FIRST PARAMETER, so the same instructions mean something else and `PUTSTATIC` is a
+        // different opcode anyway (CP-33 row 6, still unreported).
+        if ((method.access & Opcodes.ACC_STATIC) != 0) return List.of();
         int[] parameterSlots = parameterSlotsOf(method.desc, 1);
         List<AbstractInsnNode> real = new ArrayList<>();
         for (AbstractInsnNode insn : method.instructions) {
@@ -267,7 +283,7 @@ public final class MethodFlow {
             }
             int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
             if (parameterIndex < 0) continue;
-            lines.add(fieldWriteJson(documentId, put, parameterIndex));
+            lines.add(fieldWriteJson(documentId, methodSymbol, put, parameterIndex));
         }
         return lines;
     }
@@ -307,11 +323,23 @@ public final class MethodFlow {
         return -1;
     }
 
-    private static String fieldWriteJson(String documentId, FieldInsnNode field, int fromParameter) {
+    private static String fieldWriteJson(
+            String documentId, String methodSymbol, FieldInsnNode field, int fromParameter) {
         TreeMap<String, String> fact = new TreeMap<>();
         fact.put("kind", JsonOut.string("field_write"));
         fact.put("document_id", JsonOut.string(documentId));
         fact.put("field", JsonOut.string(field.owner + "#" + field.name + "."));
+        // **WHICH method wrote it**, as the caller's own symbol form — the same string
+        // `callSites` puts in `caller`, built by `ClassScanner` once per method. Without it
+        // the fact says "some method's parameter N" and a reader has to guess among the
+        // owner's methods: with the guard lifted a field commonly has several writers (a
+        // constructor AND a setter, both assigning parameter 0), and guessing would cross to
+        // the wrong method's callers and publish a value the field never held.
+        //
+        // The symbol rather than `name + desc`: the walk keys methods the way `call_edges`
+        // names them, so carrying that form makes the edge a direct read instead of a
+        // reconstruction nobody can check.
+        fact.put("written_by", JsonOut.string(methodSymbol));
         fact.put("from_parameter", String.valueOf(fromParameter));
         return JsonOut.object(fact);
     }

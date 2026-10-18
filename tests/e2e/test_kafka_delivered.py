@@ -58,12 +58,6 @@ def field_held_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, 
         workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="The walk's sixth edge is unbuilt — spec 2026-10-18-the-sixth-edge-design.md. "
-    "The fixture and this assertion come first (GUIDELINES §4.1); `strict` is what makes the "
-    "marker come off in the commit that builds the edge.",
-)
 def test_a_destination_held_in_a_constructor_assigned_field_derives_every_value(field_held_rows):
     """The walk's SIXTH EDGE (spec 2026-10-18, `OI-136`, `OI-141`), and the intention test
     for it.

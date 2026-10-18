@@ -1028,12 +1028,19 @@ FROM raw_facts WHERE kind = 'constant'
 -- contributing rows, which is the difference between G-62 fixed and G-62
 -- renamed.
 CREATE OR REPLACE VIEW field_writes AS
--- D00 §5's field_write: a constructor assigning parameter N straight to
--- field F, constructors only, direct traces only. The field resolution
--- ladder (2F) is its only consumer so far.
+-- D00 §5's field_write: an instance method assigning parameter N straight to
+-- field F, direct traces only, with `written_by` naming the method that did it.
+-- Two consumers: the field resolution ladder (2F) and — since 2026-10-18 — the
+-- walk's sixth edge, `written_by` in `value_edges.sql`.
+--
+-- `written_by` is NULL for a fact written before the extractor carried it, and
+-- for a hand-authored or third-party fact file that omits it. The edge skips
+-- such a row (a write whose method nobody named cannot be crossed); the 2F
+-- ladder never read it and is unaffected.
 SELECT document_id,
        payload ->> 'field'                     AS field,
-       (payload ->> 'from_parameter')::INTEGER AS from_parameter
+       (payload ->> 'from_parameter')::INTEGER AS from_parameter,
+       payload ->> 'written_by'                AS written_by
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
 
