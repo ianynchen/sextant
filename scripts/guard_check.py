@@ -255,6 +255,43 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "arguments.a-template-with-no-read-text-is-not-partly-known": Guard(
+        what="an assembled address publishes at `partial` only where text survives "
+        "removing its holes — `{}{}` carries nothing the code states and stays unresolved",
+        why="this is the one false positive the partly-known-address work can produce, and "
+        "it was MEASURED rather than imagined: the first run of spec 2026-10-18 published "
+        "Apollo's `parseHost(service) + path` as a partly-known address whose path is "
+        "`{}{}`. That row claims part of the address was read when nothing was, in the one "
+        "column a reader uses to decide whether an endpoint is known. Dropping the clause "
+        "is a few characters and every other partly-known row keeps working, so no "
+        "migration diff separates it from a right answer",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find='    if argument.get("kind") == EXPRESSION and _HOLE in text and text.replace(_HOLE, ""):',
+                replace='    if argument.get("kind") == EXPRESSION and _HOLE in text:',
+            ),
+        ),
+    ),
+    "arguments.an-authority-holding-a-hole-is-not-a-peer": Guard(
+        what="a partly-known address yields a peer only where the authority it would come "
+        "from carries neither a hole nor a `${…}` placeholder",
+        why="`split_url` answers an authority for anything matching `//host/path`, and a "
+        "template is written scheme-relative exactly when its authority half came from a "
+        "value (`OI-142`, ruling 2). Without the refusal, `//{}/owners` publishes `{}` in "
+        "the `peer` column — a hostname no environment ever named, joined against by the "
+        "per-environment peer resolution as though it were one. The placeholder half is "
+        "`carries_expression`'s own long-standing rule in one more notation",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="        if peer is not None and (_HOLE in peer or carries_expression(peer)):\n"
+                "            peer = None",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            peer = None",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "

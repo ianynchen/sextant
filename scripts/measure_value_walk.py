@@ -194,11 +194,22 @@ def corpora() -> tuple[list[tuple[str, Path]], list[str]]:
     `python tests/fixture_build.py` and an analysis run over `examples/`."""
     found: list[tuple[str, Path]] = []
     skipped: list[str] = []
-    for parent in (REPO / "fixtures", REPO / "examples", REPO / "examples" / "mall"):
+    # `examples/mall` and `examples/apollo` are REACTOR roots whose modules are the
+    # corpora, so each is listed beside `examples/` rather than found under it. Apollo
+    # joined on 2026-10-18 because §4 of spec 2026-10-18 asks for the multiplicity
+    # distribution "over all corpora PLUS Apollo" — it is the only corpus in the estate
+    # that reaches the operand product at all, every fixture and field pin having been
+    # assembled for something else (`nothing-in-the-corpus-is-about-the-corpus`).
+    for parent in (
+        REPO / "fixtures",
+        REPO / "examples",
+        REPO / "examples" / "mall",
+        REPO / "examples" / "apollo",
+    ):
         if not parent.is_dir():
             continue
         for root in sorted(parent.iterdir()):
-            if not root.is_dir() or root.name == "mall":
+            if not root.is_dir() or root.name in ("mall", "apollo"):
                 continue
             if (root / _FACTS).is_dir() or (root / _CLASSES).is_dir():
                 found.append((root.name, root))

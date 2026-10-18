@@ -124,6 +124,7 @@ work that takes under a millisecond.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from itertools import product
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -885,9 +886,9 @@ class _Walk:
         """The template with every hole filled from a source literal, or None to leave the
         caller carrying it verbatim.
 
-        **Every refusal below returns None rather than an `unresolved`**, and that is the
-        shape of ruling 1: not joining is not a failure, it is the behaviour §6 already
-        had, so a template this cannot fill reads exactly as it did before.
+        **Returning None is not a failure**, and that is the shape of ruling 1: not
+        joining leaves the behaviour §6 already had, so a template this cannot fill reads
+        exactly as it did before.
 
         The refusals, each because the alternative is a string nobody wrote:
 
@@ -897,16 +898,27 @@ class _Walk:
           come from the recipe's `\u0001` markers, one per runtime argument, so a
           mismatch means one of the two was misread and guessing an alignment would
           publish operands in the wrong places;
-        * **an operand that is not exactly one answer** — several enumerable answers are
-          several possible addresses, and one row per combination is ruling 1's
-          multiplicity rule applied across operands. That product is deliberately NOT
-          built here: it needs a path-merge across operands that disagree, nothing in the
-          27 measured corpora reaches it, and carrying the template under-reports rather
-          than inventing. Recorded rather than silently narrowed;
         * **an operand that is not a `string` literal** — a parameter, a `${...}`
-          expression, a symbol, an `absent`, an `unresolved`. The ruling's own boundary;
-        * **operand paths that do not cohere** — `_combine`'s rule, unchanged: two
-          operands that crossed the same context differently did not happen together.
+          expression, a symbol, an `absent`, an `unresolved` — contributes NO candidate,
+          and its hole stays a hole (§3). Where every hole is like that the answer is
+          None and the caller carries the template, which is what this arm did before it
+          filled holes at all.
+
+        **Two refusals became behaviours on 2026-10-18** (spec 2026-10-18, `OI-143`), and
+        both were wrong in the same direction — discarding what WAS read:
+
+        * *several answers for one hole* was a refusal, on the reason "nothing in the 27
+          measured corpora reaches it". `apolloconfig/apollo` reaches it 64 times at one
+          call site, and the corpora could not have contained the shape — all three field
+          pins are inbound-only. It is now the product, which is ruling 1's multiplicity
+          unchanged and already the rule for a single position;
+        * *one unresolvable operand* discarded the whole template. It now fills what it
+          can: `{}apps/{appId}` says "something, then `apps/{appId}`", which is true and
+          strictly more than `{}{}` says.
+
+        **Paths that do not cohere are still dropped** — `_combine`'s rule, unchanged: two
+        holes that crossed the same context differently did not happen together, so the
+        string they would make was never assembled by any single run.
         """
         source = argument.get("source")
         if source is None:
@@ -922,41 +934,72 @@ class _Walk:
         if len(pieces) != len(operands) + 1:
             return None
 
-        path = trail
-        values: list[str] = []
-        answers: list[Answer] = []
+        # **One candidate list per hole: every `string` literal the walk reached there, or
+        # the hole itself where it reached none** (spec 2026-10-18 §3, §4). The second half
+        # is what makes a partly-known address possible — an unresolvable hole no longer
+        # discards the holes beside it that ARE known.
+        per_hole: list[tuple[tuple[_Trail, str | None, str], ...]] = []
         for operand in operands:
             reached = self._entry(operand, method, origin, trail, frames)
-            if len(reached) != 1:
-                return None
-            (reached_path, answer) = reached[0]
-            if answer.kind != LITERAL or answer.literal_kind != STRING:
-                return None
-            merged = _combine(path, reached_path)
-            if merged is None:
-                return None
-            path = merged
-            values.append(str(answer.value))
-            answers.append(answer)
+            settled = tuple(
+                (crossed, str(answer.value), answer.yields)
+                for crossed, answer in reached
+                if answer.kind == LITERAL and answer.literal_kind == STRING
+            )
+            per_hole.append(settled or ((trail, None, _ADDRESS),))
 
-        filled = pieces[0] + "".join(
-            value + piece for value, piece in zip(values, pieces[1:], strict=True)
-        )
-        # **An AUTHORITY joined to a path is written scheme-relative**, which is how the
-        # boundary between the two survives being one string (`OI-142`, ruling 2).
-        #
-        # `getCustomerServiceUri() + "/owners"` resolves its hole to `customers-service` —
-        # who, not where — and the plain join `customers-service/owners` has no scheme, so
-        # CP-2's splitter reads the whole thing as a path and the peer column is lost.
-        # `//customers-service/owners` is RFC 3986 §4.2's scheme-relative reference: a real
-        # URI form, not an invention, and the `//` says exactly where the authority ends.
-        # `split_url` takes it from there, so no consumer needs to learn a second shape.
-        #
-        # Only where the result has no scheme of its own. `"http://" + host + "/x"` already
-        # says where the authority starts, and prefixing that would be wrong.
-        if any(answer.yields == _AUTHORITY for answer in answers) and "://" not in filled:
-            filled = f"//{filled}"
-        return _only(path, Answer(kind=LITERAL, value=filled, literal_kind=STRING))
+        # Nothing anywhere: the caller carries the template unchanged, which is what it
+        # did before this arm resolved holes at all.
+        if all(value is None for hole in per_hole for _, value, _ in hole):
+            return None
+
+        reached_out: list[_Reached] = []
+        for combination in product(*per_hole):
+            # §4: paths merged by `_combine`'s coherence rule, and an incoherent
+            # combination DROPPED rather than answered. Two holes that crossed the same
+            # context differently did not happen together, so the string they would make
+            # was never assembled by any single run.
+            merged: _Trail = trail
+            coherent = True
+            for crossed, _, _ in combination:
+                joined = _combine(merged, crossed)
+                if joined is None:
+                    coherent = False
+                    break
+                merged = joined
+            if not coherent:
+                continue
+            text = pieces[0] + "".join(
+                (value if value is not None else _HOLE) + piece
+                for (_, value, _), piece in zip(combination, pieces[1:], strict=True)
+            )
+            whole = all(value is not None for _, value, _ in combination)
+            # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
+            # ruling 2). `//customers-service/owners` is RFC 3986 §4.2's scheme-relative
+            # reference — a real URI form, not an invention — and the `//` says exactly
+            # where the authority ends, so `split_url` separates the two columns with no
+            # second shape for any consumer to learn. Only where the result carries no
+            # scheme of its own: `"http://" + host + "/x"` already says where the
+            # authority starts and prefixing that would be wrong.
+            if any(kind == _AUTHORITY for _, _, kind in combination) and "://" not in text:
+                text = f"//{text}"
+            # **`literal` only when EVERY hole was read; otherwise `expression`**, and that
+            # is the whole safety of a partial fill (§3). A half-filled template is not a
+            # value the code states, it is a statement about part of one — and
+            # `channel_of_answer` refuses an expression, so no messaging catalog can read
+            # one as a destination. A broker resolves a destination it is GIVEN and half of
+            # one is not a destination.
+            reached_out.append(
+                (
+                    merged,
+                    Answer(kind=LITERAL, value=text, literal_kind=STRING)
+                    if whole
+                    else Answer(kind=EXPRESSION, value=text),
+                )
+            )
+        # Deduplicated on (path, answer): several combinations routinely agree, and two
+        # identical answers are one answer (§1c's own rule for distinct destinations).
+        return tuple(dict.fromkeys(reached_out)) or None
 
     def _through(
         self, method: str, value: int, used_at: int | None, trail: _Trail, frames: "_Frames"
