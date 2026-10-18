@@ -149,6 +149,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import duckdb
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -527,10 +529,21 @@ def main() -> int:
             file=sys.stderr,
         )
     measured: list[Measured] = []
+    unreadable: list[str] = []
     for name, root in chosen:
         started = time.perf_counter()
         with tempfile.TemporaryDirectory() as into:
-            workspace = _workspace(root, Path(into), catalogs)
+            try:
+                workspace = _workspace(root, Path(into), catalogs)
+            except duckdb.IOException:
+                # A module with compiled classes the scanner finds nothing in — Apollo's
+                # `apollo-buildtools` is the first: it holds classes but produces no fact
+                # file, so `read_ndjson_objects` matches nothing. Reported and skipped,
+                # never silently dropped: the corpus count is a figure this report's own
+                # header depends on, and `corpora()` already prints what it did not build
+                # for the same reason.
+                unreadable.append(name)
+                continue
             one = measure(name, workspace, catalogs, arguments.all_slots)
             workspace.close()
         measured.append(one)
@@ -543,6 +556,12 @@ def main() -> int:
             flush=True,
         )
 
+    if unreadable:
+        print(
+            f"NOT MEASURED — {len(unreadable)} module(s) whose classes produced no facts: "
+            + ", ".join(unreadable),
+            file=sys.stderr,
+        )
     print(report(measured))
     print()
     asked = sum(one.pairs for one in measured)

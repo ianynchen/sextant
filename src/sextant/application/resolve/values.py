@@ -313,7 +313,7 @@ class Binding:
 
 @dataclass(frozen=True)
 class ValueIndex:
-    """The five reads the walk needs, folded once (GUIDELINES §8.7: cost is a design
+    """The six reads the walk needs, folded once (GUIDELINES §8.7: cost is a design
     input, decided before the code exists — and this walk is asked about one position at
     a time, thousands of times, over an edge query that is 59,254 rows on `mall-admin`).
 
@@ -337,6 +337,12 @@ class ValueIndex:
     # parameter to the call sites that bind it. This is the edge that crosses a method
     # boundary and the one §1c's ruling is about.
     callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
+    # `written_by`: a binding -> the method that wrote it and the PARAMETER it wrote from,
+    # one entry per writer. Several entries is several possible values, which §4 of spec
+    # 2026-10-18 rules is the exact answer where every writer is in this module rather than
+    # an ambiguity to hedge. Keyed on the binding symbol alone, which is what a `field`
+    # argument carries and all the walk has to ask with.
+    writers: dict[str, tuple[tuple[str, int], ...]]
     # What each method hands back, one entry per return instruction, in the argument
     # grammar. A void return is dropped: it can only answer a site holding no value.
     returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]]
@@ -414,17 +420,34 @@ def value_index(workspace: Workspace) -> ValueIndex:
     producers: dict[tuple[str, int], list[int]] = {}
     returns: dict[tuple[str, int], list[tuple[int, str]]] = {}
     callers: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    writers: dict[str, list[tuple[str, int]]] = {}
     for edge in workspace.query("value_edges"):
         kind = str(edge["kind"])
-        method, ordinal = str(edge["from_method"]), int(str(edge["to_ordinal"]))
+        method = str(edge["from_method"])
+        # **`to_ordinal` is parsed per BRANCH, not once above**, because not every edge is
+        # about a call site: `written_by` is about a field, and a field has no ordinal. The
+        # unconditional parse crashed the whole resolve on the first module carrying one —
+        # `invalid literal for int() with base 10: 'None'` — which is a reminder that this
+        # loop is a union of shapes rather than one shape with optional columns.
         if kind == "produced_by":
+            ordinal = int(str(edge["to_ordinal"]))
             producers.setdefault((method, int(str(edge["from_value"]))), []).append(ordinal)
         elif kind == "returned_by":
             value = (method, int(str(edge["from_value"])))
-            returns.setdefault(value, []).append((ordinal, str(edge["to_symbol"])))
+            returns.setdefault(value, []).append(
+                (int(str(edge["to_ordinal"])), str(edge["to_symbol"]))
+            )
         elif kind == "bound_to_parameter":
             parameter = (str(edge["to_symbol"]), int(str(edge["to_index"])))
-            callers.setdefault(parameter, []).append((method, ordinal))
+            callers.setdefault(parameter, []).append((method, int(str(edge["to_ordinal"]))))
+        elif kind == "written_by":
+            # The sixth edge: `binding -> (writing method, its parameter N)`. Several
+            # writers of one binding are several entries, which is what the walk then
+            # answers as several values — spec 2026-10-18 §4, where every writer in this
+            # module makes the enumeration closed and therefore exact.
+            writers.setdefault(str(edge["to_symbol"]), []).append(
+                (method, int(str(edge["to_index"])))
+            )
         # `read_from_binding` and `names_declaration` are read off the argument entry at
         # the slot instead — they carry no `to_index`, so neither can say which slot it
         # is about. The module docstring states the consequence.
@@ -454,6 +477,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         producers={key: tuple(value) for key, value in producers.items()},
         returns={key: tuple(value) for key, value in returns.items()},
         callers={key: tuple(value) for key, value in callers.items()},
+        writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
         reached=reached,
     )
@@ -639,7 +663,9 @@ class _Walk:
             return self._value(position[1], position[2], trail, frames)
         if kind == _PARAMETER:
             return self._parameter(position[1], position[2], trail, frames)
-        return self._binding(trail)
+        # `(_BINDING, symbol)` — the symbol the `field` argument carried, which the sixth
+        # edge is keyed on.
+        return self._binding(position[1], trail, frames)
 
     def _of_site(
         self, site: Mapping[str, Any], slot: int | str, trail: _Trail, frames: "_Frames"
@@ -1428,28 +1454,41 @@ class _Walk:
             reached.extend(self._resolve((_SLOT, caller, ordinal, index), merged, frames))
         return tuple(reached)
 
-    def _binding(self, trail: _Trail) -> tuple[_Reached, ...]:
+    def _binding(self, symbol: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
         """A value read out of a named mutable location (§5a: a binding, never a field —
         it is a field in one language, a module-level variable in another, a package var
         or a closure cell elsewhere).
 
-        **This is where the sixth edge is missing, and the miss is the answer.**
-        `written_by` is specified as a scanner CAPABILITY (§4, D00 9.19) rather than as
-        work on any one backend; no backend reports it, so `value_edges` emits no such row
-        and there is nothing to follow. `no_writer` is the reason §1d gives for exactly
-        this, and it is the only answer a binding read can get until the capability lands.
+        **THE SIXTH EDGE, as of 2026-10-18.** Each `written_by` entry says which method
+        wrote this binding and from which of its parameters, and the answer is that
+        parameter resolved in the writing method — `_parameter`'s own crossing, so nothing
+        new follows the edge. What this method adds is one hop, not a mechanism.
 
-        **So today it means "no writer edge exists to follow", NOT "this binding is never
-        written"** — the constant's own comment says the same, because that is where a
-        reader looks the word up. The day capability 9.19 reports binding writes, this
-        method follows the edges and the answer narrows to §1d's literal meaning; nothing
-        else here changes.
+        **Several writers are several answers**, and spec 2026-10-18 §4 rules that this is
+        exactness rather than doubt where every writer is in this module: a field assigned
+        by two constructions holds two values, both real, and one row each is what ruling 1
+        has always said about an enumerable set. Where a writer's own callers are outside
+        what was scanned, the crossing answers `external` and the row says so.
 
-        The constructor-only `field_write` fact is deliberately NOT read here: it is half
-        of that edge, and giving it a second home in the walk is how one answer becomes
-        two spellings that drift (§0a's disease, D01 §6's no-copied-fact rule).
+        **`no_writer` still means something, and it is narrower now:** no write of this
+        binding was REPORTED. The remaining shapes are the ones whose value is not a bare
+        parameter load — a literal, a call's result, a static initialiser (CP-33 rows 2, 6,
+        7, 8) — plus a container writing the field reflectively, which no bytecode can show
+        (`@Autowired` field injection, §8.2's territory, and the reason `mall-admin`
+        answers nothing here).
+
+        **The frame travels with the hop.** A binding write is resolved in the WRITING
+        method's frame, which is not this read's: the parameter index means something only
+        inside the declaration that introduced it, so handing `frames` on unchanged is what
+        lets a nested descent stay correct.
         """
-        return _only(trail, _unresolved(NO_WRITER))
+        written = self._index.writers.get(symbol, ())
+        if not written:
+            return _only(trail, _unresolved(NO_WRITER))
+        reached: list[_Reached] = []
+        for method, index in written:
+            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
+        return tuple(dict.fromkeys(reached))
 
 
 # The callee frames the walk descended through: (method, the site that called it),

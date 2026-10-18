@@ -69,6 +69,11 @@ from sextant.domain.symbols import (
 # extractor capability.
 _CONCAT = "concat"
 
+# D00 §5's argument kind for a value read out of a named mutable location, which the walk
+# calls a BINDING and §5a is careful not to name after one language's word for it. Its value
+# is reached by the sixth edge.
+_FIELD = "field"
+
 _DIRECTIONS = sorted(member.value for member in Direction)
 
 # 2I design §4, form 1's catalog key — spelled once because the run loop tests
@@ -717,13 +722,26 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # configuration. Walking `site` for either would resolve a slot of the wrong
             # call. A `concat` is never a `field`, so the 2F ladder above cannot have
             # replaced it, and this re-read is the same argument the literal read saw.
-            declared_url = method.get("url_arg")
+            # **AND THE SAME ARGUMENT FOR A VALUE HELD IN A BINDING** (spec
+            # 2026-10-18-the-sixth-edge-design.md): a `field` argument is not a hop either.
+            # The catalog named this position, the value was written into that binding
+            # somewhere in this module, and the walk's sixth edge is what reaches it — so a
+            # row declaring `channel_arg`/`url_arg` and no `channel_via` consults the walk
+            # for a field read exactly as it does for a concat. Without this the edge
+            # changes nothing a reader sees: `kafkaTemplate.send(topic, payload)` publishes
+            # no destination however well the walk can answer, because nothing asks it.
+            #
+            # **The 2F ladder still answers first**, and that ordering is what keeps every
+            # shipped row still: where `address_argument` replaced the field with its
+            # configuration expression, `url_argument` is a `string` here and neither this
+            # arm nor the concat one is reached.
+            declared_url = method.get("url_arg", method.get("channel_arg"))
             url_slot: int | str | None = (
                 declared_url if isinstance(declared_url, int | str) else None
             )
+            assembled_kinds = (_CONCAT, _FIELD)
             if (
                 url_slot is not None
-                and not _channel_declared(method)
                 # **The address must be at THIS site's declared position**, and the two
                 # exclusions are what makes that true rather than assumed. A `lambda_arg`
                 # row's address lives in a synthetic method whose frame is not this
@@ -733,7 +751,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 and _LAMBDA_ARG not in method
                 and not configured
                 and isinstance(url_argument, dict)
-                and url_argument.get("kind") == _CONCAT
+                and url_argument.get("kind") in assembled_kinds
             ):
                 if values is None:
                     values = cached_value_index(workspace)
@@ -742,9 +760,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # handing in 64 paths are 64 destinations while two paths reading the same
                 # path are one. Rows stay distinct per caller downstream — `caller` is in
                 # the dedup key (F5 §6.1, W27's fix).
+                # `channel_of_answer` for a channel row and `url_of_answer` for a url one
+                # — the same split `read_destination` makes above, and for the same reason:
+                # a destination is an opaque identity kept whole, never a URL to split.
+                read_answer = channel_of_answer if _channel_declared(method) else url_of_answer
                 walked = list(
                     dict.fromkeys(
-                        url_of_answer(binding.slots.get(url_slot))
+                        read_answer(binding.slots.get(url_slot))
                         for binding in resolve_site(workspace, site, values, ())
                     )
                 )

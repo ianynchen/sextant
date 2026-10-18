@@ -15,6 +15,7 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 RECEIVERS = FIXTURES / "orders-receivers"
 STREAMS = FIXTURES / "orders-streams"
 PEKKO = FIXTURES / "orders-pekko"
+FIELD_HELD = FIXTURES / "orders-fieldheld"
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +36,56 @@ def kafka_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, 
         }
     finally:
         workspace.close()
+
+
+@pytest.fixture(scope="module")
+def field_held_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(direction, path, resolution)` for the field-held destination fixture."""
+    workspace_dir = tmp_path_factory.mktemp("kafka_fieldheld")
+    compile_fixture(FIELD_HELD)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FIELD_HELD), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["direction"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "kafka"
+        }
+    finally:
+        workspace.close()
+
+
+def test_a_destination_held_in_a_constructor_assigned_field_derives_every_value(field_held_rows):
+    """The walk's SIXTH EDGE (spec 2026-10-18, `OI-136`, `OI-141`), and the intention test
+    for it.
+
+    `kafkaTemplate.send(topic, payload)` names nothing at the call site — the argument is a
+    field read — and the only statement of the value is the literal each construction passed:
+
+        private final String topic;
+        OrderPublisher(String topic, …) {{ this.topic = topic; }}
+        void publish(…) {{ kafkaTemplate.send(topic, payload); }}
+
+        new OrderPublisher("orders-v2", …)      new OrderPublisher("orders-audit", …)
+
+    **Measured before the edge: ONE row, `path` NULL, `unresolved`** — `_binding` answered
+    `no_writer` though `field_writes` had recorded `OrderPublisher#topic ← parameter 0` all
+    along and `value_edges.sql` read that table zero times.
+
+    **TWO rows and both resolved, which is §4's ruling rather than a hedge.** The set of
+    possible topics is CLOSED — every construction is in this module — so enumerating both is
+    the exact answer, not an ambiguity. The user's words, 2026-10-18: *"the parameter is
+    preconstructed, meaning only certain values exist — we should be able to enumerate all
+    possible values, that's exactly match."* A `narrowed` here would mark an exact answer as a
+    doubt.
+    """
+    assert field_held_rows == {
+        ("outbound", "orders-v2", "resolved"),
+        ("outbound", "orders-audit", "resolved"),
+    }
 
 
 def test_kafka_template_receive_derives_an_inbound_row_on_the_topic(kafka_rows):

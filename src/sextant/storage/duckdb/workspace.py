@@ -84,7 +84,10 @@ _NAMED_QUERIES = {
     # symbol back to the parameter it was assigned from. Ordered by `field`
     # so a field written by more than one constructor overload reads its
     # candidates together, `from_parameter` breaking the tie (NFR-1).
-    "field_writes": "SELECT field, from_parameter FROM field_writes ORDER BY field, from_parameter",
+    "field_writes": (
+        "SELECT field, from_parameter, written_by FROM field_writes "
+        "ORDER BY field, from_parameter, written_by"
+    ),
     # D00 §5's `method_return` (capability 9.18): what each method hands back,
     # one row per return instruction. 2Q's `G3` — cross-method return
     # propagation — is its consumer, and the first one: OI-15 recorded the
@@ -1098,7 +1101,9 @@ _EXPORT_QUERIES = {
     # applied here as well would be the redactor run twice over its own output.
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
-    "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
+    "field_writes": (
+        "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter, written_by"
+    ),
     # Worth carrying rather than recomputable: without it a consumer sees the
     # tagged copies in `documents` and cannot tell which one the derived rows
     # were built from.

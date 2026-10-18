@@ -23,6 +23,7 @@ import json
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
@@ -38,7 +39,16 @@ FIXTURES = sorted(
     if p.is_dir()
 )
 OUT = Path("/tmp/a1-proof")
-NEW_KEYS = frozenset({"receiver_parameter", "captures"})
+# The keys a release ADDED, which is what this harness proves additive. Each entry stays
+# after its release: the proof is re-run against an older jar whenever the next key lands,
+# and a key removed from this set would silently start counting as a difference.
+#
+# `written_by` (2026-10-18, the walk's sixth edge) is the first that also comes with a
+# BEHAVIOUR change in the same release — the `<init>` filter lifted — so the two are
+# measured apart: this harness proves the KEY additive on the lines both jars write, and the
+# new lines a lifted filter produces are counted separately, because a line the before jar
+# never wrote has nothing to be identical to.
+NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by"})
 
 
 def scan(jar: Path, classes: Path, out: Path) -> None:
@@ -88,11 +98,21 @@ def carries_a_new_key(value: object) -> bool:
     return False
 
 
-def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int]:
-    """Problems, the count of byte-identical lines, and the count of lines that
-    carry a new key and read as the before line without it."""
+def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int]:
+    """Problems, byte-identical lines, lines that carry a new key and read as the before
+    line without it, and lines the after jar wrote that the before jar did not.
+
+    **The fourth number is why this is not a two-way diff** (2026-10-18). A release that
+    adds a KEY can be proved line for line; a release that also changes WHICH FACTS ARE
+    EMITTED cannot, because a line the before jar never wrote has nothing to be identical
+    to. The `written_by` release is the first of the second kind — the `<init>` filter on
+    `fieldWrites` lifted in the same change — so ADDED lines are counted and shown rather
+    than reported as a difference, and the additivity claim is made about the lines both
+    jars wrote. An added line that is NOT the expected kind is still a problem: every one
+    is printed, so a reader checks what appeared rather than trusting a count.
+    """
     problems: list[str] = []
-    identical = keyed = 0
+    identical = keyed = added = 0
     before_files = sorted(p.relative_to(before) for p in before.rglob("*.jsonl"))
     after_files = sorted(p.relative_to(after) for p in after.rglob("*.jsonl"))
     if before_files != after_files:
@@ -101,7 +121,25 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int]:
         old = (before / relative).read_text(encoding="utf-8").splitlines()
         new = (after / relative).read_text(encoding="utf-8").splitlines()
         if len(old) != len(new):
-            problems.append(f"{relative}: {len(old)} lines before, {len(new)} after")
+            # Line counts differ, so the positional pairing is gone: compare the sets of
+            # facts with the new keys STRIPPED, which is the only comparison that can tell
+            # "this line gained a key" from "this line is new". Comparing raw text here
+            # reported every key-carrying line as lost, which is a false alarm this harness
+            # must not raise — it is the one that would be ignored next time.
+            old_facts = [
+                json.dumps(without_the_new_keys(json.loads(line)), sort_keys=True) for line in old
+            ]
+            new_facts = [
+                json.dumps(without_the_new_keys(json.loads(line)), sort_keys=True) for line in new
+            ]
+            old_counts, new_counts = Counter(old_facts), Counter(new_facts)
+            lost = +(old_counts - new_counts)
+            if lost:
+                problems.append(
+                    f"{relative}: {sum(lost.values())} fact(s) the after jar stopped writing"
+                )
+            added += sum((+(new_counts - old_counts)).values())
+            identical += sum((old_counts & new_counts).values())
             continue
         for number, (old_line, new_line) in enumerate(zip(old, new, strict=True), 1):
             if old_line == new_line:
@@ -114,7 +152,7 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int]:
                 problems.append(f"{relative}:{number}: differs beyond the two keys")
             else:
                 keyed += 1
-    return problems, identical, keyed
+    return problems, identical, keyed, added
 
 
 def label(classes: Path) -> str:
@@ -132,9 +170,12 @@ def main(before_jar: Path) -> int:
             tree.mkdir(parents=True)
         scan(before_jar, classes, before)
         scan(AFTER_JAR, classes, after)
-        found, identical, keyed = compare_trees(before, after)
-        verdict = "identical after stripping" if not found else "DIFFERS"
-        print(f"{name}: {verdict} ({identical} lines byte-identical, {keyed} carry a new key)")
+        found, identical, keyed, added = compare_trees(before, after)
+        verdict = "additive" if not found else "DIFFERS"
+        print(
+            f"{name}: {verdict} ({identical} byte-identical, {keyed} carry a new key, "
+            f"{added} newly emitted)"
+        )
         problems.extend(f"{name}: {p}" for p in found)
     for problem in problems:
         print(problem)

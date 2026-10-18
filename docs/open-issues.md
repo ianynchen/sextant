@@ -1316,7 +1316,7 @@ single source of truth for both environments). **It is CI configuration, which G
 again here, and entered in the register so it stops living in commit messages. Falsified by
 a CI run whose installed `graphql-core` matches `uv.lock`.
 
-### OI-136 — the sixth edge is deferred: 16 of 756 asked positions, and the endpoints publish either way
+### OI-136 — the sixth edge is deferred: 16 of 756 asked positions, and the endpoints publish either way · **THE EDGE LANDED 2026-10-18; capability 9.19's remaining shapes stay open**
 **Minor · entered 2026-10-17 · plan `2026-09-22-value-resolution.md` Tasks 11-12, spec §4 · probe `scripts/probes/cp33_binding_writes.md`**
 
 Capability 9.19 (`written_by` — a binding assigned outside an initialiser) and the task that
@@ -1361,14 +1361,37 @@ overrides, and a literal in a method body is a code fact like any literal at a c
 Applied consistently that argument would forbid reading call-site literals, which is most of
 what the system does.
 
+**AND THE EDGE IS NOT ONE EDGE. A BACKEND ALREADY REPORTS THE COMMONEST SHAPE, AND THE WALK
+HAS NEVER READ IT** (measured 2026-10-18, spec `2026-10-18-the-sixth-edge-design.md`). This
+entry and `value_edges.sql`'s header both say *"no fact behind it"*; that is true of a write
+OUTSIDE an initialiser and false of the edge. `MethodFlow.fieldWrites` emits `field_write`
+for every constructor that assigns a parameter straight to a field — the shape every
+constructor-injected Spring bean has — and:
+
+* `grep -c field_writes src/sextant/storage/duckdb/value_edges.sql` is **0**;
+* `values._binding` returns `no_writer` without being handed the binding's symbol at all,
+  though its own position carries one.
+
+**Measured at positions a shipped catalog asks about**, instrumented at `_binding` across
+every built corpus: **276** binding reads, of which `field_writes` already describes the
+writer for **112 (41%)** — 94 of them in `apollo-portal` alone. So wiring one arm over an
+existing fact is most of this entry's value, with no extractor change and no schema change.
+
+*`mall-admin` and `jhipster-sample-app` answer 0 of 17 and 0 of 28, and that is not a gap:
+they use `@Autowired` FIELD injection, which the container writes reflectively, so no method
+contains a write instruction to report. §8.2 bounds it and no capability reaches it.*
+
 **BOTH GROUNDS FOR THE DEFERRAL ARE WEAKER THAN THEY READ, measured 2026-10-18 on
 `YunaiV/ruoyi-vue-pro`** (spec `2026-10-18-configured-path-prefixes-design.md` §4):
 
-* *"16 of 756 asked positions"* — the denominator is positions **a shipped catalog asks
-  about**, and no catalog asks about `Map#put`'s key, which is where this case needs it. A
-  yield measured over today's questions cannot see a case that needs a new question; the same
-  shape as `OI-143`'s *"nothing in the 27 measured corpora reaches it"*, which the first real
-  production codebase hit 64 times.
+* *"16 of 756 asked positions"* — two things are wrong with it. The denominator is positions
+  **a shipped catalog asks about**, and no catalog asks about `Map#put`'s key, which is where
+  this case needs it. And the NUMERATOR was measured before `apollo-portal` joined the
+  corpora: re-measured with it in, **226** asked positions answer `no_writer`, 17× the figure
+  the deferral rests on. The same bounded-measurement mistake as `OI-143`'s *"nothing in the
+  27 measured corpora reaches it"*, which the first real production codebase hit 64 times —
+  the third instance of it, and the reason
+  [[nothing-in-the-corpus-is-about-the-corpus]] exists.
 * *"And it costs no endpoint"* — true for a DESTINATION and **false for a PREFIX**. ruoyi
   configures `/admin-api` and `/app-api` through
   `RequestMappingHandlerMapping.setPathPrefixes`, whose prefix and package pattern are
@@ -1380,7 +1403,41 @@ what the system does.
 
 So the honest statement of the yield is now "16 positions of the 756 we ask about, plus the
 prefix on every row of a module that configures one", and the honest statement of the cost is
-no longer "never an endpoint". The deferral may still be right; the two sentences it rested on
+no longer "never an endpoint".
+
+> **BUILT 2026-10-18** (spec `2026-10-18-the-sixth-edge-design.md`), and in two halves the
+> user's question forced together: *"Why does this have to be constructor? Whether it's a
+> constructor or a setter, this is a write to a field and both are the same."*
+>
+> * **The `<init>` filter lifted**, which this entry had always described as what 9.19 needs —
+>   *"a method-filter change"*. Measured: `field_writes` went 86 to **237** on
+>   `spring-petclinic-rest`, 553 to **1,638** on `apollo-portal`. The guard was hiding about
+>   two thirds of the writes on real code.
+> * **The writing METHOD recorded** (`written_by`), which the lift makes necessary rather than
+>   merely precise: a field commonly has several writers once every instance method is
+>   eligible, and crossing to the wrong one's callers would publish a value the field never
+>   held. Optional and absent by default, so no schema version moved — proved by
+>   `scripts/probes/fact_additivity/run.py` over all 23 fixture trees, every one additive.
+> * **The arm and `_binding`**, plus two things the build found: `value_index` parsed
+>   `to_ordinal` for every edge before dispatching on kind (a crash on the first module with a
+>   field write), and `single_call` had to CONSULT the walk for a `field` argument — `OI-143`'s
+>   cause 1 in a second guise, since the engine asks only where a row declares a hop.
+>
+> **Measured at asked positions: `no_writer` fell from 226 to 110**, and `apollo-portal`'s from
+> 132 to 19. `fixtures/orders-fieldheld` publishes both of its topics resolved where it
+> published one row with no destination. All six field pins unmoved; guards 167 killed / 0
+> survived.
+>
+> **Cost, since §3a's ruling was "no cap, measure first":** over 1,610 positions the walk takes
+> 0.09s and `resolve_site` 0.18s. The tail moved more than the total — `apollo-portal`'s worst
+> site returns **11,913** bindings where the worst was 685, at 0.05s for that site. Still no
+> cap, now with a figure behind it.
+>
+> **What stays open here is capability 9.19's REMAINDER**, which is narrower than this entry
+> was written for: a write whose VALUE is not a bare parameter load — a literal (`OI-141`), a
+> call's result, a static initialiser (CP-33 rows 2, 6, 7, 8). `@Autowired` field injection is
+> not on that list and never will be: the container writes it reflectively and no bytecode
+> shows it (§8.2), which is why `mall-admin` answers 0 of 17 binding reads. The deferral may still be right; the two sentences it rested on
 are not the ones to rest it on. The user ruled this case IN scope on 2026-10-18, which makes
 this edge a blocker rather than a nicety: *"the lambda is still config … I said business logic
 in the other case because the path was dependent upon the path being called, a runtime logic,
