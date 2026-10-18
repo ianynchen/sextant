@@ -1941,10 +1941,12 @@ the field corpus) live in
 
 - **A measured version means the RULES were read at it, not that a project on it was
   analysed end to end.** The field corpus (`scripts/field_check.py`) is where that is
-  proved, and it holds **five pins over four repositories** — three of them inbound-only,
-  and two added 2026-10-17 that are the first to measure the OUTBOUND half at all
+  proved, and it holds **six pins over five repositories** — three of them inbound-only,
+  two added 2026-10-17 that are the first to measure the OUTBOUND half at all
   (`petclinic-api-gateway`, `petclinic-genai-service`, from
-  `spring-petclinic-microservices`). *The three inbound-only pins are inbound-only because
+  `spring-petclinic-microservices`), and `apollo-portal` added 2026-10-18, which is the
+  first pin over a project that wraps its OWN HTTP client — the shape `OI-143` is about,
+  and the one the five before it could not contain. *The three inbound-only pins are inbound-only because
   the upstreams are: measured, `jhipster-sample-app` and `spring-petclinic-rest` contain no
   `RestTemplate`/`WebClient`/`@FeignClient` at all, and `mall`'s eleven `RestTemplate`
   occurrences are in `mall-demo` rather than the pinned `mall-admin`. So `outbound: {}` on

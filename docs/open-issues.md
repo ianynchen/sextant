@@ -309,6 +309,64 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
+### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
+**Minor · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
+
+Spec 2026-10-18 gave `single_call` and `url_of` a third answer for an assembled address:
+where the walk read part of it, the row publishes the part it read at `partial`
+(`{}/services/admin`). `fluent`'s concat arm asks the same walk one commit earlier and
+still takes only a WHOLE literal:
+
+```python
+settled = [literal for _, literal, resolution in assembled if resolution == "resolved" and literal]
+return {"kind": "string", "value": settled[0]} if len(settled) == 1 else argument
+```
+
+So `WebClient.create().uri(host + "/owners/{id}")` publishes `path` NULL where the same
+assembly through `restTemplate.exchange` now publishes `/owners/{id}`. **Two engines, two
+answers about one piece of evidence** — which is the disease the walk was built to end
+(spec 2026-09-22 §0a).
+
+**Why it was NOT widened in the same change, stated rather than quietly skipped.** `fluent`
+composes `base + path` and reads both halves with `_string_value`, so carrying an expression
+through means deciding what a partly-known base composed with a known path IS — three new
+cases (expression base, expression path, both) in a function the spec did not design. The
+cross-engine lesson of `OI-143` is to carry the QUESTION across engines, and this is it
+carried, with its answer deferred rather than guessed.
+
+**Real triggering input:** any fluent client whose address is assembled from a value and a
+literal. Not measured on a corpus yet; `apollo-portal` reaches it zero times (its wrapper is
+a `single_call` shape).
+
+### OI-145 — three field pins fail on `terminal_kinds`, and have since a terminal kind landed
+**Minor · entered 2026-10-18, found while running the field check for spec 2026-10-18 · `scripts/field-expectations/{jhipster-sample-app,mall-admin,spring-petclinic-rest}.json`**
+
+`scripts/field_check.py` fails on three of its six pins, each the same way:
+
+```
+jhipster-sample-app  expected {'persistence/database': 70, 'unresolved': 1071}
+                     got      {'persistence/database': 70, 'throws': 40, 'unresolved': 1071}
+```
+
+`mall-admin` gains `'throws': 242` and `spring-petclinic-rest` `'throws': 15`. **Endpoint
+counts and route sets agree on all six** — only the terminal classification moved.
+
+**It is a stale pin, not a regression.** `throws` became a terminal kind in `211ac499`
+(2026-09-12, G-74) and these three pins were never re-recorded against it. Verified by
+running the check at `HEAD` with the branch's own changes stashed: byte-identical failure.
+
+**Why it matters anyway.** The field check is the only thing that validates the twelve
+shipped `terminals` rules against real code, and a check that has failed for five weeks
+tells nobody anything — the next real drift in those rules arrives in a run that was already
+red. It also means every field-check run since then needed a human to decide which three
+failures were "the known ones".
+
+**Real triggering input:** running `scripts/field_check.py`, which is how the pins exist.
+
+**Fix:** re-record `terminal_kinds` on the three pins against current `main`, which
+`field_check.py`'s own docstring calls "a deliberate, reviewed act" — so it belongs in a
+commit that says what moved and why, not folded into unrelated work.
+
 ### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape
 **Major · entered 2026-10-18, measured on `apolloconfig/apollo` (530 non-test Java files, 8 modules, commit `ea35677`) · `src/sextant/application/resolve/values.py::_joined`**
 
@@ -394,14 +452,64 @@ by probing each in turn on this module:
    string; `fluent._address_of` publishes a `${…}` expression as a path with `peer` NULL and
    `single_call` has no equivalent. `Resolution.PARTIAL` exists in the closed set and is
    what a half-known address should carry.
+5. **A local REASSIGNED between the literal and the call reaches the call as a merge of two
+   producers, and no edge follows a merge.** Found by fixing 1–4 and measuring, not by
+   reading. It is what still blocks the 64, and it is below the walk — see the block at the
+   end of this entry.
 
 *A probe confirmed 2 and 3 alone are not enough: partial fill plus the product, applied
 without 1 and 4, left the module at 8 rows and 0 paths — because the walk is not asked and
 the answer could not be published if it were. Measured, then reverted.*
 
-**Closes** with all four. The host half may stay unresolved — 64 rows carrying a real path
-and no peer are worth far more than 8 carrying neither. **Falsified by** `apollo-portal`
-publishing 64 outbound rows with their paths.
+**ALL FOUR ARE FIXED, AND IT DOES NOT CLOSE** (spec
+`docs/superpowers/specs/2026-10-18-partly-known-addresses-design.md`, 2026-10-18). The
+sentence above said *"closes with all four"*; implementing them found a FIFTH cause nobody
+had looked for, measured on the same module:
+
+```java
+private <T> T execute(HttpMethod method, Env env, String path, …) {
+  if (path.startsWith("/")) {
+    path = path.substring(1);        // ← reassigned, so the call sees a MERGE
+  }
+  …
+  doExecute(method, extraHeaders, serviceDTO, path, request, responseType, uriVariables);
+```
+
+`path` is reassigned one frame above the concat, so the fact for that argument is a bare
+`{kind: unresolved}` with **no `source` at all** — one of two producers, and no edge to
+follow. The crossing reaches `execute` and stops. **The 64 rows are still not derived.**
+
+**What the four causes DID move, measured on `apollo-portal` before and after on the same
+commit:**
+
+| | rows | carrying a path |
+|---|---|---|
+| before | 8 | **0** |
+| after | 10 | **8, at `partial`** |
+
+The eight are real addresses the source states and the document never showed:
+`{}/health`, `{}/services/admin`, `{}/services/config`, `{}?env={env}` — each a
+`parseHost(service) + "/literal"` whose host is a discovered service. Two rows
+(`doExecute`, `exchangeGet`) stay addressless, and they are the 64's funnel. The count rises
+by two because `PortalManagementController#getServerAddress` and
+`SystemInfoController#getServerAddress` each make TWO calls that were indistinguishable
+while both paths were NULL.
+
+**What closing now needs** — one of two pieces of work, neither designed:
+
+* the extractor reporting a merge's CANDIDATES rather than collapsing them to
+  `{kind: unresolved}`; or
+* a transform model that knows `String#substring` returns a substring of its receiver,
+  which is `OI-142`'s identity-versus-rendering question in another form.
+
+Guessing either from here publishes a wrong address at `resolved`, which is the one failure
+this work risks. **Falsified by** `apollo-portal` publishing the 64 call sites' own paths.
+
+*A mirror left standing, named rather than quietly widened: `fluent`'s concat arm still
+takes only a WHOLE literal (`_url_argument`, `len(settled) == 1`), so a fluent chain whose
+assembled address is partly known publishes `path` NULL where `single_call` now publishes
+the half it read. It needs `_url_argument` to carry an expression through the `base`
+composition, which this spec did not design — `OI-144`.*
 
 *Carried across in passing, since it was the same cross-engine miss in the same file pair:
 `interface_implementation` and `single_call` were still calling `value_index` rather than the
