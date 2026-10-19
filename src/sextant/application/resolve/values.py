@@ -344,6 +344,11 @@ class ValueIndex:
     # treats the two identically because they ARE identical to it — a parameter, and the
     # sites that hand it a value — and a capture is one calling context like any other.
     callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
+    # `field_writes.value`: a binding -> every CONSTANT written into it, as argument-grammar
+    # entries (`OI-138` cause 2). Separate from `writers` below because there is no crossing
+    # to make: the value is in the fact, and `_binding` answers with it rather than
+    # resolving a parameter in another method's frame.
+    constants: dict[str, tuple[Mapping[str, Any], ...]]
     # `written_by`: a binding -> the method that wrote it and the PARAMETER it wrote from,
     # one entry per writer. Several entries is several possible values, which §4 of spec
     # 2026-10-18 rules is the exact answer where every writer is in this module rather than
@@ -493,6 +498,40 @@ def value_index(workspace: Workspace) -> ValueIndex:
                 for position in range(min(count, len(bound))):
                     callers.setdefault((body, position), []).append((method, maker))
 
+    # Every method something in this module calls, which the dead-write test below reads.
+    called = {
+        str(row["callee"]) for row in workspace.query("call_edges") if row["callee"] is not None
+    }
+
+    # The constants written into bindings, read straight off the fact: a write from a
+    # constant has no parameter and therefore no `written_by` edge in `value_edges`, which
+    # is why this is a read of its own rather than a seventh arm of that query.
+    #
+    # **A write by a method that cannot run is skipped**, which the parameter arm gets for
+    # free and this one has to ask for: crossing to a writer's callers answers `external`
+    # when there are none, while a constant needs no crossing and would otherwise be
+    # published however dead the write. The test is `private` AND never called — private is
+    # unreachable from outside its class, so no caller means no execution, where a public
+    # method with no caller is merely called by something unscanned (a container, a test).
+    # Found by review: `private void switchToBackup() { this.topic = "backup"; }`, called by
+    # nothing, published `backup` as a `resolved` destination.
+    private = {
+        str(row["symbol"])
+        for row in workspace.query("method_visibility")
+        if str(row["visibility"]) == "private"
+    }
+    dead = private - called
+    constants: dict[str, list[Mapping[str, Any]]] = {}
+    for row in workspace.query("field_writes"):
+        written = row.get("value")
+        if written is None or row["field"] is None:
+            continue
+        if row.get("written_by") is not None and str(row["written_by"]) in dead:
+            continue
+        entry = json.loads(str(written)) if isinstance(written, str) else written
+        if isinstance(entry, dict):
+            constants.setdefault(str(row["field"]), []).append(entry)
+
     returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
     for row in workspace.query("method_returns"):
         # DuckDB hands an explicit JSON null back as the four-character text `null`, not
@@ -507,17 +546,15 @@ def value_index(workspace: Workspace) -> ValueIndex:
             (int(str(row["ordinal"])), entry),
         )
 
-    reached = frozenset(
-        (str(row["caller"]), int(str(row["ordinal"])))
-        for row in workspace.query("call_edges")
-        if row["callee"] is not None
-    )
+    edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
+    reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
     return ValueIndex(
         sites=sites,
         receivers={key: tuple(value) for key, value in receivers.items()},
         producers={key: tuple(value) for key, value in producers.items()},
         returns={key: tuple(value) for key, value in returns.items()},
         callers={key: tuple(value) for key, value in callers.items()},
+        constants={key: tuple(value) for key, value in constants.items()},
         writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
         reached=reached,
@@ -1597,12 +1634,19 @@ class _Walk:
         has always said about an enumerable set. Where a writer's own callers are outside
         what was scanned, the crossing answers `external` and the row says so.
 
-        **`no_writer` still means something, and it is narrower now:** no write of this
-        binding was REPORTED. The remaining shapes are the ones whose value is not a bare
-        parameter load — a literal, a call's result, a static initialiser (CP-33 rows 2, 6,
-        7, 8) — plus a container writing the field reflectively, which no bytecode can show
-        (`@Autowired` field injection, §8.2's territory, and the reason `mall-admin`
-        answers nothing here).
+        **A CONSTANT write is answered without crossing anything** (`OI-138` cause 2, 2026-10-18):
+        `private String hostname = "http://visits-service/"` compiles to `ALOAD 0; LDC;
+        PUTFIELD`, the fact now carries that constant, and the answer is the literal itself.
+        Before it, the fact could only point at a parameter, so this write emitted nothing and
+        this method answered `no_writer` about a literal one line above the read — measured on
+        `spring-petclinic-microservices`, where it cost an outbound host and left the row with
+        no address at all.
+
+        **`no_writer` still means something, and it is narrower again:** no write of this
+        binding was REPORTED. The remaining shapes are a call's result and a static
+        initialiser (CP-33 rows 2, 6, 7), plus a container writing the field reflectively,
+        which no bytecode can show (`@Autowired` field injection, §8.2's territory, and the
+        reason `mall-admin` answers nothing here).
 
         **The frame travels with the hop.** A binding write is resolved in the WRITING
         method's frame, which is not this read's: the parameter index means something only
@@ -1610,9 +1654,31 @@ class _Walk:
         lets a nested descent stay correct.
         """
         written = self._index.writers.get(symbol, ())
-        if not written:
+        constants = self._index.constants.get(symbol, ())
+        if not written and not constants:
             return _only(trail, _unresolved(NO_WRITER))
         reached: list[_Reached] = []
+        for entry in constants:
+            # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
+            # fact, so the answer is that literal on the path already travelled.
+            #
+            # **An entry this walk cannot read answers `not_readable`, and never nothing.**
+            # The grammar carries kinds the walk has no literal for — `class` is one, and
+            # `private Class<Order> t = Order.class` is ordinary code — and contributing no
+            # answer there was a measured defect: with no answer and no other writer this
+            # method returned an EMPTY tuple, which `resolve_site` reads as "no path answers
+            # every slot" and drops every slot of the site. Found by review before this
+            # shipped: a `getForObject(url, responseType)` whose `url` field resolved
+            # through the sixth edge lost its ADDRESS because the response-type field beside
+            # it held a class constant. One unreadable write is one unreadable answer, which
+            # is also what the parameter arm does with a writer it cannot follow.
+            literal_kind = _LITERAL_KINDS.get(str(entry.get("kind")))
+            if literal_kind is not None and entry.get("value") is not None:
+                reached.append(
+                    (trail, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
+                )
+            else:
+                reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
         return tuple(dict.fromkeys(reached))

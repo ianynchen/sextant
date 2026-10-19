@@ -32,6 +32,38 @@ here would restate those documents rather than add anything.
   existing binding widened**, every row and shape field unchanged on all three, and no
   measurable change in analysis time. Exactly one row moves in the whole estate — the fixture's
   `/text-api/text/{id}`, the shape the edge was built for.
+- **A field written from a CONSTANT is read, so a value the code states one line above its use
+  stops being reported as coming from outside** (`OI-138` cause 2). `field_write` could say
+  only *"this field was written from argument N of that method"*, so
+  `private String hostname = "http://visits-service/"` — which javac compiles to
+  `ALOAD 0; LDC; PUTFIELD` — emitted no fact at all and the value walk answered `no_writer`
+  about a literal in the same file.
+
+  The fact now carries `value`, the constant as an argument-grammar entry, beside
+  `from_parameter`; exactly one of the two is ever set and both are optional, so every fact
+  written before reads unchanged and `FACT_SCHEMA_VERSION` does not move (proved per release
+  by `scripts/probes/fact_additivity/run.py`, re-run here: additive on every fixture, 52 lines
+  newly emitted, none changed). The walk answers such a write with the literal directly, since
+  there is no frame to cross into.
+
+  **Measured, and a pinned corpus moved:** `spring-petclinic-microservices`'s api-gateway
+  published `path` NULL for `VisitsServiceClient.getVisitsForPets` and now publishes
+  `GET /pets/visits?petId={petId}` with peer `visits-service` at `resolved` — where
+  `spring-petclinic-visits-service` serves `GET /pets/visits`. The field expectation was
+  re-recorded in the same commit and the other five pins are unchanged. Outbound addresses
+  across that system are 3 of 6, from 2.
+
+  **Sized before building:** a census over every compiled module under `examples/` — 3,568
+  classes in 56 modules — counts 25 constant field writes and one of them an address. The
+  change ships at that yield because the old answer was not "unknown" but *wrong*.
+
+  It refuses three writes that cannot produce a value, each found by review before the commit
+  and each previously published at `resolved`: a write its own basic block overwrites, a write
+  by a `private` method nothing calls, and a constant whose kind the walk cannot read (which
+  had been deleting every slot of its call site). `field_writes.value` also joined the
+  redaction pass — it had been exporting a credential in the clear beside the same literal
+  masked in `raw_facts`. `OI-151` records what the new row exposed: an outbound path carrying
+  its query string cannot compare equal to the inbound row that serves it.
 
 - **A path prefix the module declares now reaches the rows it moves, both spellings**
   (`OI-148`, spec `docs/superpowers/specs/2026-10-18-configured-path-prefixes-design.md`;

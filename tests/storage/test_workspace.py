@@ -2068,10 +2068,19 @@ def test_every_view_that_reads_class_facts_applies_multi_release_selection(tmp_p
 
 
 def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
-    """`roots.path`, `return_flows.value` and `method_returns.value` each gained
-    a redaction join in W34, and none was tested — delete any one of the three
-    and the suite stayed green. They are the columns most likely to carry an
-    address or a bytecode string constant into a published bundle.
+    """`roots.path`, `return_flows.value`, `method_returns.value` and —  since
+    2026-10-18 — `field_writes.value` each gained a redaction join, and the
+    first three were untested: delete any one and the suite stayed green. They
+    are the columns most likely to carry an address or a bytecode string
+    constant into a published bundle.
+
+    **`field_writes.value` is here because it shipped WITHOUT the join**, found
+    by review with the bundle dumped: `private String endpoint =
+    "https://alice:s3cr3t@internal.example.com/orders"` reached
+    `field_writes.parquet` in the clear while `raw_facts.parquet` carried the
+    same literal masked — both spellings in one bundle, which is exactly what
+    `constants`' own export comment warns about. A column of the argument
+    grammar is not finished until it is in this test.
     """
     facts = tmp_path / "facts"
     facts.mkdir(parents=True, exist_ok=True)
@@ -2099,7 +2108,15 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
                 method="mod com/acme/A#go(sig_1).",
                 ordinal=0,
                 value=CallArgument(kind="string", value=secret),
-            )
+            ),
+            # The same credential as a field's CONSTANT initialiser, which is how it
+            # reaches `field_writes.value` (`OI-138` cause 2).
+            FieldWriteFact(
+                document_id="doc",
+                field="com/acme/A#endpoint.",
+                value=CallArgument(kind="string", value=secret),
+                written_by="mod com/acme/A#<init>(sig_1).",
+            ),
         ],
     )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -2118,7 +2135,7 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
     )
     bundle = tmp_path / "bundle"
     workspace.export_tables(bundle, Redactor.from_rules())
-    for table in ("roots", "return_flows", "method_returns"):
+    for table in ("roots", "return_flows", "method_returns", "field_writes"):
         rows = duckdb.sql(
             f"SELECT * FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
         ).fetchall()

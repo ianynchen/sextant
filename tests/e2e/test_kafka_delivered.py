@@ -85,7 +85,62 @@ def test_a_destination_held_in_a_constructor_assigned_field_derives_every_value(
     assert field_held_rows == {
         ("outbound", "orders-v2", "resolved"),
         ("outbound", "orders-audit", "resolved"),
+        ("outbound", "orders-dead-letter", "resolved"),
+        ("outbound", "orders-overwritten", "resolved"),
+        ("outbound", "orders-live", "resolved"),
     }
+
+
+@pytest.mark.pins("values.a-binding-written-from-a-CONSTANT-answers-that-constant")
+def test_a_destination_held_in_a_field_written_from_a_CONSTANT_derives_that_value(
+    field_held_rows,
+):
+    """The other half of the same fixture, and the other kind of write (`OI-138` cause 2).
+
+    `DeadLetterPublisher` holds its topic in a field too, but the write is not from a
+    parameter:
+
+        private String topic = "orders-dead-letter";     // ldc; putfield
+        void publish(…) {{ kafkaTemplate.send(topic, payload); }}   // getfield
+
+    `field_writes` could say only *"this field was written from argument N of that method"*,
+    so a write from a CONSTANT had nothing to point at and **no fact was emitted at all** —
+    the walk then answered `no_writer` about a literal one line above the read, and the row
+    published no destination.
+
+    **Measured on real code:** `spring-petclinic-microservices` holds an outbound HOST this
+    way (`private String hostname = "http://visits-service/"`, read into
+    `hostname + "pets/visits?petId={petId}"`), and that call published `path` NULL while its
+    four siblings resolved. A census over every compiled module under `examples/` — 3,568
+    classes in 56 modules — counts 25 constant field writes and exactly one on an ADDRESS:
+    rare, because javac resolves a `final` constant-initialised field at the use site and
+    most hosts arrive by injection. A `no_writer` about a literal in the same file is a false
+    statement whatever its frequency, which is why the change ships at that yield.
+    """
+    assert ("outbound", "orders-dead-letter", "resolved") in field_held_rows
+
+
+@pytest.mark.pins("values.a-write-a-PRIVATE-uncalled-method-makes-is-not-a-value")
+def test_a_write_that_cannot_RUN_contributes_no_destination(field_held_rows):
+    """**Two writes that cannot produce a value, and the rows that must not carry them.**
+    Both were published at `resolved` by the first build of the constant read, and review
+    found them before it shipped: a value the code cannot produce is the worst answer
+    available (§8), worse than the `no_writer` it replaced.
+
+    `OverwrittenPublisher` holds `private String topic = "never-reached-default"` and its one
+    constructor overwrites it two instructions later, in the same basic block — so no read
+    can observe the initialiser, and the row is `orders-overwritten` alone.
+
+    `ResettablePublisher` holds `private String topic = "orders-live"` and a PRIVATE
+    `switchToBackup()` that nothing calls. Private means every possible caller is in that
+    class, so an uncalled one cannot run; the row is `orders-live` alone. A PUBLIC uncalled
+    method stays reported — it is called by something unscanned, which is a different
+    statement — and `OrderPublisher`'s own rows prove the parameter arm is untouched.
+    """
+    published = {path for _, path, _ in field_held_rows}
+    assert "never-reached-default" not in published
+    assert "orders-backup-nothing-calls" not in published
+    assert {"orders-overwritten", "orders-live"} <= published
 
 
 def test_kafka_template_receive_derives_an_inbound_row_on_the_topic(kafka_rows):

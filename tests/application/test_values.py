@@ -86,6 +86,10 @@ _WRITTEN = _PKG + "Written#"
 # `Closing#install` captures a literal into `Closing#body`, whose parameter 0 is that
 # capture; nothing calls `body` directly, so without the edge its parameter is `external`.
 _CLOSING = _PKG + "Closing#"
+# A binding whose only write is a constant the walk has NO literal kind for — a class
+# constant, which `private Class<Order> t = Order.class` produces. The fact is emitted (the
+# grammar has a `class` kind); the walk cannot turn it into a value.
+_UNREADABLE = _PKG + "Unreadable#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -234,6 +238,7 @@ def _facts() -> list[Fact]:
             _MUTATOR,
             _BINDER,
             _WRITTEN,
+            _UNREADABLE,
             _CLOSING,
             _ENTRY,
             _OUTSIDE,
@@ -682,6 +687,21 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        # A binding written from a CONSTANT the walk has no literal kind for.
+        _declared(_UNREADABLE, "read", "()V"),
+        _site(
+            _symbol(_UNREADABLE, "read", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_UNREADABLE + "held.")],
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_UNREADABLE + "held.",
+            value=CallArgument(kind="class", symbol="com/acme/orders/values/Order#"),
+            written_by=_symbol(_UNREADABLE, "<init>", "()V"),
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1426,6 +1446,27 @@ def test_a_lambda_body_reaches_the_value_it_closed_over(walked):
     """
     bindings = _bindings(walked, _symbol(_CLOSING, "body", _TAKES_STRING), 0)
     assert [binding.slots[0].value for binding in bindings] == ["closed-over"]
+
+
+@pytest.mark.pins("values.an-UNREADABLE-constant-answers-not_readable-never-nothing")
+def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site(walked):
+    """**An answer, never an absence.** `Unreadable#held` is written from a `class` constant
+    — `private Class<Order> t = Order.class`, ordinary code — and the walk has no literal
+    kind for one.
+
+    Contributing NOTHING there was a measured defect, found by review before the constant
+    read shipped: with no answer and no other writer, `_binding` returned an EMPTY tuple,
+    which `resolve_site` reads as "no path answers every slot" and drops **every slot of the
+    site**. On real bytecode that cost a `getForObject(url, responseType)` its ADDRESS —
+    `url` resolved through the sixth edge and was thrown away because the field beside it
+    held a class constant.
+
+    One binding, one `not_readable` answer: the write WAS reported, so `no_writer` would be
+    false, and the value is not one this walk can act on.
+    """
+    bindings = _bindings(walked, _symbol(_UNREADABLE, "read", "()V"), 0)
+    assert len(bindings) == 1, bindings
+    assert _reasons(bindings) == ["not_readable"]
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):

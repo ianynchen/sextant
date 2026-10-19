@@ -98,6 +98,55 @@ class FieldWriteScanTest {
         assertTrue(lines.get(0).contains("\"written_by\":\"" + written + "\""), lines.get(0));
     }
 
+    /** **A write from a CONSTANT carries the constant** (`OI-138` cause 2). `private String
+     *  url = "http://visits-service/"` compiles into the constructor as {@code ALOAD 0;
+     *  LDC; PUTFIELD} — no parameter anywhere — so the fact says `value` instead of
+     *  `from_parameter`, and before it said nothing at all. */
+    @Test
+    void captures_a_write_from_a_constant_and_names_no_parameter() {
+        MethodNode constructor = new MethodNode(
+            org.objectweb.asm.Opcodes.ASM9, 0, "<init>", "()V", null, null);
+        constructor.visitCode();
+        constructor.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 0);
+        constructor.visitLdcInsn("http://visits-service/");
+        constructor.visitFieldInsn(
+            org.objectweb.asm.Opcodes.PUTFIELD, OWNER, "url", "Ljava/lang/String;");
+        constructor.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        constructor.visitMaxs(2, 1);
+        constructor.visitEnd();
+
+        String written = "doc com/acme/Sample#<init>(sig_abc).";
+        List<String> lines = MethodFlow.fieldWrites("doc", written, constructor);
+        assertEquals(1, lines.size());
+        assertTrue(lines.get(0).contains("\"field\":\"" + OWNER + "#url.\""), lines.get(0));
+        assertTrue(
+            lines.get(0).contains("\"value\":{\"kind\":\"string\",\"value\":\"http://visits-service/\"}"),
+            lines.get(0));
+        // The two keys are exclusive: a constant write has no parameter to name, and a
+        // reader that found both would not know which one the value came from.
+        assertTrue(!lines.get(0).contains("from_parameter"), lines.get(0));
+    }
+
+    /** A constant D00 §5's table has no kind for emits NOTHING — not a write with an
+     *  unreadable value. A reader seeing the fact would cross to it and find no value; its
+     *  absence says "no write was reported", which is true. */
+    @Test
+    void emits_nothing_for_a_constant_the_grammar_has_no_kind_for() {
+        MethodNode constructor = new MethodNode(
+            org.objectweb.asm.Opcodes.ASM9, 0, "<init>", "()V", null, null);
+        constructor.visitCode();
+        constructor.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 0);
+        constructor.visitLdcInsn(2.5d);
+        constructor.visitFieldInsn(org.objectweb.asm.Opcodes.PUTFIELD, OWNER, "rate", "D");
+        constructor.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        constructor.visitMaxs(3, 1);
+        constructor.visitEnd();
+
+        assertEquals(
+            List.of(),
+            MethodFlow.fieldWrites("doc", "doc com/acme/Sample#<init>(sig_abc).", constructor));
+    }
+
     /** **A STATIC method still emits nothing, and that IS a soundness rule.** Slot 0 holds
      *  the first parameter rather than {@code this}, so {@code ALOAD 0; ALOAD 1; PUTFIELD}
      *  means something else entirely there — and a static field is written by

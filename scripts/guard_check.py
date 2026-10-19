@@ -524,9 +524,64 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-binding-written-from-a-CONSTANT-answers-that-constant": Guard(
+        what="a field written from a constant resolves to that constant, with no crossing — "
+        "the value is in the fact",
+        why='`private String hostname = "http://visits-service/"` compiles to `ALOAD 0; '
+        "LDC; PUTFIELD`, which names no parameter, so `field_writes` emitted nothing for it "
+        "and the walk answered `no_writer` about a literal one line above the read. Measured "
+        "on `spring-petclinic-microservices`: an outbound host held that way left "
+        '`hostname + "pets/visits?petId={petId}"` with one unfillable hole and the row '
+        "published no address at all, while its four siblings resolved. Dropping the arm "
+        "leaves the sixth edge working, so no other fixture notices",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        for entry in constants:",
+                replace="        for entry in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-write-a-PRIVATE-uncalled-method-makes-is-not-a-value": Guard(
+        what="a constant write by a `private` method nothing calls contributes no value — "
+        "private is unreachable from outside its class, so an uncalled one cannot run",
+        why="the parameter arm gets this for free (crossing to a writer's callers finds none "
+        "and answers `external`) and the constant arm has to ask, because it needs no "
+        "crossing. Without the test, `private void switchToBackup() { this.topic = "
+        '"backup"; }` — called by nothing — published `backup` as a `resolved` outbound '
+        "destination: a value the code cannot produce, which §8 rates the worst answer "
+        "available. A PUBLIC uncalled method is deliberately still reported: something "
+        "unscanned calls it, which is a different statement",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    dead = private - called",
+                replace="    dead = frozenset()  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.an-UNREADABLE-constant-answers-not_readable-never-nothing": Guard(
+        what="a constant entry the walk has no literal kind for answers `not_readable`, so "
+        "the binding still has an answer",
+        why="contributing nothing made `_binding` return an EMPTY tuple where there was no "
+        "other writer, and `resolve_site` reads that as "
+        "*no path answers every slot* — it drops EVERY SLOT of the call site. Measured on "
+        "real bytecode: `getForObject(url, responseType)` lost its ADDRESS, which the sixth "
+        "edge had resolved, because the field beside it held `Order.class`. The trigger is "
+        "`private Class<X> t = X.class`, ordinary code, and the loss is silent",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            else:\n"
+                "                reached.append((trail, _unresolved(NOT_READABLE)))",
+                replace="            elif False:  # guard disabled by scripts/guard_check.py\n"
+                "                reached.append((trail, _unresolved(NOT_READABLE)))",
+            ),
+        ),
+    ),
     "values.a-field-read-reaches-the-value-written-into-it": Guard(
-        what="a binding read resolves through the WRITER the facts name — `written_by` — and "
-        "answers `no_writer` only where no write of it was reported",
+        what="a binding read resolves through the WRITER the facts name — `written_by` — "
+        "crossing into that method rather than stopping at the field",
         why="this is the walk's sixth edge, and without it a destination held in a field "
         "publishes no address at all: measured, `kafkaTemplate.send(topic, payload)` with "
         "`topic` assigned by the constructor derived ONE row with `path` NULL where the two "
@@ -537,10 +592,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        written = self._index.writers.get(symbol, ())\n"
-                "        if not written:",
-                replace="        written = self._index.writers.get(symbol, ())\n"
-                "        if True:  # guard disabled by scripts/guard_check.py",
+                find="        for method, index in written:\n"
+                "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
+                replace="        for method, index in ():  # guard disabled by guard_check.py\n"
+                "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
             ),
         ),
     ),
@@ -2537,7 +2592,7 @@ def copy_tree(destination: Path) -> Path:
     # stops being true if the control is ever removed.
     (destination / "fixtures").mkdir()
     shutil.copy2(REPO / "fixtures" / "pom.xml", destination / "fixtures" / "pom.xml")
-    for named in ("orders-soap-client", "orders-pathprefixes"):
+    for named in ("orders-soap-client", "orders-pathprefixes", "orders-fieldheld"):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
         # synthetic can state it — the two values are paired by the path they left through,
