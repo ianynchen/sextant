@@ -19,7 +19,7 @@
       "GET /owners",
       "GET /vets",
       "POST /owners",
-      "POST /owners/{}/pets"
+      "POST /owners/{ownerId}/pets"
     ]
   }
 }
