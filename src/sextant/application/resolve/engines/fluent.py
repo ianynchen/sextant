@@ -37,7 +37,7 @@ positional slot.
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -75,11 +75,15 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
+    EXPRESSION,
+    LITERAL,
+    STRING,
+    Answer,
     ValueIndex,
     cached_value_index,
     resolve_site,
 )
-from sextant.domain.closed_sets import Direction
+from sextant.domain.closed_sets import Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
@@ -1156,15 +1160,29 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         # but unreadable, never when none was ever declared at all — "this
         # method calls something over a channel" stays true and useful on
         # its own.
-        resolution = (
-            "resolved"
-            if (verb is not None or verbless)
-            and url_resolution == "resolved"
+        # **THE ROW CARRIES THE ADDRESS'S OWN WORD**, which is `single_call`'s rule
+        # verbatim (`engines/single_call.py`, spec 2026-10-18 §5) and the other half of
+        # `OI-144`. Recomputing `resolved`/`unresolved` from it threw away the third word
+        # the address reader can answer: `partial`, for an address the walk assembled and
+        # read part of. Measured on `fixtures/orders-fluentaddress`: the path reached this
+        # line as `<host>/owners` with `partial` beside it, and the row published the path
+        # at `unresolved` — denying the half that WAS read, one engine disagreeing with the
+        # other about one piece of evidence.
+        #
+        # I1's rule is untouched and is the other half of the condition: every declared
+        # capture must still have read, so `partial` is a statement about the ADDRESS and
+        # never a licence for an unread body.
+        captures_read = (
+            (verb is not None or verbless)
             # What the captures PRODUCED, the `single_call` change one engine along
             # (`OI-77`, W43's review): a body capture that filled its column did not fail.
             and _capture_resolved("body" in captures, body_argument, request_shape)
             and _capture_resolved("response" in captures, response_argument, response_shape)
-            else "unresolved"
+        )
+        resolution = (
+            url_resolution
+            if captures_read and url_resolution != str(Resolution.UNRESOLVED)
+            else str(Resolution.UNRESOLVED)
         )
         if path is not None and (verb is not None or verbless):
             # `verb or ""` — single_call's own dedup key (`_matching_method`'s
@@ -1467,12 +1485,41 @@ def _walked_channels(
     return _walked_with(argument, context, identities)
 
 
+def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, str]:
+    """One walk answer for an assembled ADDRESS, as `(None, text, resolution)` where the text
+    is the template VERBATIM.
+
+    **Not `url_of_answer`, and the difference is one of layer rather than of rule.** That
+    function answers a finished ROW — peer and path, split, with an unread host already
+    written `<host>` — and this arm has to hand `url_of` an ARGUMENT, which it then splits
+    once. Passing the finished row back in split it twice: `<host>/owners` carries no hole,
+    so the second pass read it as not-an-address and published nothing. Measured, and the
+    reason this reader exists rather than reusing that one.
+
+    The classification is `url_of`'s own, with no address knowledge of its own: a whole
+    string literal is `resolved`, a template is `partial`, everything else is `unresolved`.
+    """
+    if answer is None:
+        return None, None, str(Resolution.UNRESOLVED)
+    if answer.kind == LITERAL and answer.literal_kind == STRING:
+        return None, str(answer.value), str(Resolution.RESOLVED)
+    if answer.kind == EXPRESSION:
+        return None, str(answer.value), str(Resolution.PARTIAL)
+    return None, None, str(Resolution.UNRESOLVED)
+
+
 def _walked_with(
     argument: dict[str, Any],
     context: _ChainContext,
     identities: Sequence[dict[str, Any]],
+    reader: "Callable[[Answer | None], tuple[str | None, str | None, str]]" = channel_of_answer,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """`_walked_channels`' walk, with the identity list decided by the caller.
+
+    `reader` turns one answer into `(peer, address, resolution)`. A CHANNEL is read with
+    `channel_of_answer`, which refuses a template — a broker needs a whole destination — and
+    an HTTP address with `url_of_answer`, which publishes the half it read (`OI-144`). The
+    default keeps every existing caller reading channels, which is what they all are.
 
     Split out so that **an EMPTY list is reachable deliberately**, which is not the same
     thing as the refusal above it. That refusal exists because handing the walk
@@ -1494,7 +1541,7 @@ def _walked_with(
         return None
     walked = list(
         dict.fromkeys(
-            channel_of_answer(binding.slots.get(slot))
+            reader(binding.slots.get(slot))
             for binding in resolve_site(context.workspace, site, context.values, identities)
         )
     )
@@ -1585,17 +1632,38 @@ def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str,
     # Consulting NO identity keeps this arm to text the code literally states, which is the
     # only thing a join may render. `OI-142` carries the finding and what it blocks.
     if isinstance(argument, dict) and argument.get("kind") == _CONCAT:
-        assembled = _walked_with(argument, context, ())
-        settled = (
-            [
+        # **Read with the URL reader, which is the whole of `OI-144`.** This arm asked
+        # `channel_of_answer` until 2026-10-19, and that reader refuses a template ON
+        # PURPOSE: a broker resolves a destination it is GIVEN, and half of one is not a
+        # destination. An HTTP address is the other case — `single_call` has published the
+        # half it read since `OI-143` — and `url_of_answer` exists for exactly it.
+        #
+        # Measured, one address written once each way: `single_call` published
+        # `<host>/owners` at `partial` while this arm published `path` NULL at `unresolved`.
+        # Two engines, two answers about one piece of evidence, which is the disease the
+        # shared walk was built to end (spec 2026-09-22 §0a).
+        assembled = _walked_with(argument, context, (), reader=_assembled_text)
+        if assembled is not None:
+            whole = {
                 literal
                 for _, literal, resolution in assembled
                 if resolution == "resolved" and literal
-            ]
-            if assembled is not None
-            else []
-        )
-        return {"kind": "string", "value": settled[0]} if len(settled) == 1 else argument
+            }
+            if len(whole) == 1:
+                return {"kind": "string", "value": whole.pop()}
+            # A partly-known address, published as the EXPRESSION kind `url_of` reads: the
+            # text is the template with its holes, and `url_of` decides peer and path from
+            # it exactly as it does for `single_call`. Only where there is one — several
+            # answers are several rows, which this engine's one-argument return cannot carry
+            # (`OI-134`'s shape), so it leaves the capture as it was rather than choosing.
+            partly = {
+                literal
+                for _, literal, resolution in assembled
+                if resolution == "partial" and literal
+            }
+            if not whole and len(partly) == 1:
+                return {"kind": EXPRESSION, "value": partly.pop()}
+        return argument
     if not forms:
         return argument
     # **The backward walk, in place of the one-hop follow** (spec §2b, Task 9), reached
