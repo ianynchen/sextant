@@ -309,7 +309,7 @@ prose or a latent shape with no live consequence.
 
 ## OPEN
 
-### OI-150 — the value walk does not cross a lambda's CAPTURE, so a value a lambda closes over is `external`
+### OI-150 — the value walk does not cross a lambda's CAPTURE, so a value a lambda closes over is `external` · **CLOSED 2026-10-18**
 **Major · entered 2026-10-18, measured on a probe module built from `ruoyi`'s own shape · `src/sextant/application/resolve/values.py::_Walk._parameter`**
 
 A lambda's body is a synthetic method whose first parameters are the values it captured. The
@@ -355,6 +355,44 @@ values the capture site hands it, and the probe above resolves both patterns. Th
 count on the lambda entry is already in the facts, so this is an edge-query and walk change
 rather than an extractor one — to be confirmed by measuring, not assumed.
 
+> **BUILT the same day — the walk's SEVENTH edge.** Measured first, as the line above asked:
+> the facts carry the whole edge, so nothing in the schema moved and the extractor was not
+> touched. A `lambda` entry names its synthetic body and how many values it captured, and the
+> value it came from was PRODUCED by the capture site, whose arguments are those values in
+> order — so **body parameter *i* is argument *i* of the capture site**, identity, measured on
+> four shapes across two modules. `value_index` folds those into `callers` beside the
+> `bound_to_parameter` edges, and the walk treats them identically because to it they ARE
+> identical: a parameter, and the sites that hand it a value.
+>
+> Parameters at or past the capture count are deliberately NOT bound — those are the lambda's
+> own arguments, handed in by whoever invokes it, and `external` is the true answer for them.
+>
+> **What it fixed:** `fixtures/orders-pathprefixes` now publishes `/text-api/text/{id}`, where
+> the declaration holds its prefix and its pattern as plain `String` parameters. The prefix
+> resolves by following the helper's callers; the pattern needs the capture crossing, so this
+> is the one row in the suite where the two halves of one declaration need two different
+> crossings. Guard `values.a-lambda-body-reaches-the-values-it-CAPTURED`, plus a unit test on
+> the hop itself in `tests/application/test_values.py`.
+>
+> **What it changes in the estate, measured by running every corpus twice — once with the
+> pass live, once with it disabled in process — and diffing every published row:**
+>
+> | corpus | call sites | parameter bindings | rows / shape fields | analyse |
+> |---|---|---|---|---|
+> | `yudao-module-system` | 39,266 | 3,678 → 3,862 (+184) | 212 / 807, unchanged | 6.3s → 6.3s |
+> | `mall-admin` | 25,057 | 10,531 → 10,541 (+10) | 160 / 629, unchanged | 5.0s → 5.0s |
+> | `apollo-portal` | 15,574 | 3,044 → 3,159 (+115) | 298 / 650, unchanged | 3.3s → 3.3s |
+>
+> **No existing binding is widened — 0 of them, in all three** — so the edge adds reach and
+> never changes an answer that already existed. **Exactly one row moves in the whole measured
+> estate**, the fixture's, and that is the honest reading: the 309 new bindings are real, and
+> no catalog asks about those particular captured values today. All six field pins are
+> unchanged, the gate is 4160 tests, and the guard registry is 176 killed / 0 survived.
+>
+> **Still unread, and it belongs to the extractor:** a closure a compiler lowers to a CLASS
+> rather than to an `invokedynamic` has no capture list in the facts at all — it arrives as an
+> `instance` entry — so there is nothing for this fold to read. Filed where it belongs if a
+> corpus ever needs it; no corpus here does.
 ### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
 

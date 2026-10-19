@@ -130,6 +130,7 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.domain.symbols import with_descriptor
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
@@ -336,6 +337,12 @@ class ValueIndex:
     # `bound_to_parameter`, indexed the way the walk asks it: BACKWARD, from a method's
     # parameter to the call sites that bind it. This is the edge that crosses a method
     # boundary and the one §1c's ruling is about.
+    #
+    # It carries one more kind of binding than the fact of that name: a lambda's CAPTURE,
+    # which binds a synthetic body's leading parameters to the arguments of the site that
+    # captured them (`value_index`, and `OI-150` for what it cost to be missing). The walk
+    # treats the two identically because they ARE identical to it — a parameter, and the
+    # sites that hand it a value — and a capture is one calling context like any other.
     callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
     # `field_writes.value`: a binding -> every CONSTANT written into it, as argument-grammar
     # entries (`OI-138` cause 2). Separate from `writers` below because there is no crossing
@@ -457,6 +464,40 @@ def value_index(workspace: Workspace) -> ValueIndex:
         # the slot instead — they carry no `to_index`, so neither can say which slot it
         # is about. The module docstring states the consequence.
 
+    # **The seventh edge: a lambda's CAPTURE** (`OI-150`). A lambda body is a synthetic
+    # method whose leading parameters are the values the enclosing method closed over, and
+    # nothing in `value_edges` binds them — `callers` held no entry for any lambda body's
+    # parameters, so the walk answered `external` for every captured value. Measured on a
+    # module shaped like `ruoyi`'s own declaration: the prefix (an argument) resolved to both
+    # its values and the pattern (captured) to nothing, so two controllers differing only by
+    # prefix collapsed onto one published path.
+    #
+    # The facts carry the whole edge already, which is why this is a fold and not a schema
+    # change: a `lambda` entry of the argument grammar names its body and how many values it
+    # captured, and the value it came from was PRODUCED by the capture site, whose arguments
+    # are those values in order. So body parameter *i* is argument *i* of the capture site —
+    # identity, measured on four shapes, and `captures` corroborates the count rather than
+    # being trusted alone.
+    #
+    # Parameters at or past the capture count are NOT bound here and must not be: those are
+    # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
+    # answer for them.
+    for (method, _), site in sites.items():
+        for captured in _captures(site["arguments"]):
+            # The entry names its body BARE, and every index here is keyed on full symbols.
+            # The body is declared in the same class as the method that captured it, so its
+            # coordinates are that method's — exact, where a bare-to-full map would be
+            # ambiguous the moment two modules declare the same descriptor.
+            body = with_descriptor(method, str(captured["symbol"]))
+            count = int(str(captured["captures"]))
+            source = captured.get("source")
+            if not count or source is None:
+                continue
+            for maker in producers.get((method, int(str(source))), ()):
+                bound = (sites.get((method, maker)) or {}).get("arguments") or []
+                for position in range(min(count, len(bound))):
+                    callers.setdefault((body, position), []).append((method, maker))
+
     # Every method something in this module calls, which the dead-write test below reads.
     called = {
         str(row["callee"]) for row in workspace.query("call_edges") if row["callee"] is not None
@@ -518,6 +559,39 @@ def value_index(workspace: Workspace) -> ValueIndex:
         returned_values=returned_values,
         reached=reached,
     )
+
+
+def _captures(arguments: Any) -> list[Mapping[str, Any]]:
+    """Every `lambda` entry in one site's arguments that captured something.
+
+    The argument grammar NESTS and recurs — an array's `elements`, a lambda handed inside a
+    varargs array — so this is a walk over the whole structure rather than a scan of the top
+    level, the way `scripts/probes/fact_additivity`'s own reader walks it.
+
+    It reads the spelling where the capture list is a fact: an entry of kind `lambda`
+    carrying `captures`. A compiler that lowers a closure to a CLASS instead emits an
+    `instance` entry with no capture list at all, so there is nothing here to read — the
+    register's `OI-150` carries that bound, which belongs to the extractor rather than to
+    this fold.
+    """
+    found: list[Mapping[str, Any]] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if (
+                value.get("kind") == "lambda"
+                and isinstance(value.get("symbol"), str)
+                and value.get("captures") is not None
+            ):
+                found.append(value)
+            for inner in value.values():
+                walk(inner)
+        elif isinstance(value, list):
+            for inner in value:
+                walk(inner)
+
+    walk(arguments)
+    return found
 
 
 def resolve_site(

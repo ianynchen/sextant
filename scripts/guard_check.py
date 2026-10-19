@@ -501,6 +501,47 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-lambda-body-reaches-the-values-it-CAPTURED": Guard(
+        what="a lambda body's leading parameters resolve through the site that CAPTURED "
+        "them, so a value closed over is read rather than answered `external`",
+        why="this is the walk's seventh edge. A lambda body is a synthetic method and the "
+        "values it closed over arrive as its first parameters; nothing in the "
+        "`bound_to_parameter` facts binds those, so before this the walk answered "
+        "`external` — *the values come from outside what was scanned* — about a literal in "
+        "the same method. Measured, a prefix declaration holding its pattern as a captured "
+        "`String` parameter resolved nothing and two controllers differing only by their "
+        "prefix collapsed onto ONE published path, which is `OI-148`'s own symptom. Removing "
+        "the pass is three lines and no other fixture notices, because every other lambda in "
+        "the estate either captures nothing a catalog asks about or captures an OBJECT whose "
+        "values the field and `<init>` edges reach instead",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    for (method, _), site in sites.items():\n"
+                '        for captured in _captures(site["arguments"]):',
+                replace="    for (method, _), site in sites.items():\n"
+                "        for captured in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-binding-written-from-a-CONSTANT-answers-that-constant": Guard(
+        what="a field written from a constant resolves to that constant, with no crossing — "
+        "the value is in the fact",
+        why='`private String hostname = "http://visits-service/"` compiles to `ALOAD 0; '
+        "LDC; PUTFIELD`, which names no parameter, so `field_writes` emitted nothing for it "
+        "and the walk answered `no_writer` about a literal one line above the read. Measured "
+        "on `spring-petclinic-microservices`: an outbound host held that way left "
+        '`hostname + "pets/visits?petId={petId}"` with one unfillable hole and the row '
+        "published no address at all, while its four siblings resolved. Dropping the arm "
+        "leaves the sixth edge working, so no other fixture notices",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        for entry in constants:",
+                replace="        for entry in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "values.a-write-a-PRIVATE-uncalled-method-makes-is-not-a-value": Guard(
         what="a constant write by a `private` method nothing calls contributes no value — "
         "private is unreachable from outside its class, so an uncalled one cannot run",
@@ -535,24 +576,6 @@ GUARDS: dict[str, Guard] = {
                 "                reached.append((trail, _unresolved(NOT_READABLE)))",
                 replace="            elif False:  # guard disabled by scripts/guard_check.py\n"
                 "                reached.append((trail, _unresolved(NOT_READABLE)))",
-            ),
-        ),
-    ),
-    "values.a-binding-written-from-a-CONSTANT-answers-that-constant": Guard(
-        what="a field written from a constant resolves to that constant, with no crossing — "
-        "the value is in the fact",
-        why='`private String hostname = "http://visits-service/"` compiles to `ALOAD 0; '
-        "LDC; PUTFIELD`, which names no parameter, so `field_writes` emitted nothing for it "
-        "and the walk answered `no_writer` about a literal one line above the read. Measured "
-        "on `spring-petclinic-microservices`: an outbound host held that way left "
-        '`hostname + "pets/visits?petId={petId}"` with one unfillable hole and the row '
-        "published no address at all, while its four siblings resolved. Dropping the arm "
-        "leaves the sixth edge working, so no other fixture notices",
-        edits=(
-            Edit(
-                path=_VALUES,
-                find="        for entry in constants:",
-                replace="        for entry in ():  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
