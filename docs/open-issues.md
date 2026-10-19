@@ -355,6 +355,9 @@ values the capture site hands it, and the probe above resolves both patterns. Th
 count on the lambda entry is already in the facts, so this is an edge-query and walk change
 rather than an extractor one — to be confirmed by measuring, not assumed.
 
+### OI-152 — a host assembled through a map, three providers and a health check is not traceable, and is now NAMED
+**Minor · entered 2026-10-18, measured on `apolloconfig/apollo` · `src/sextant/application/resolve/shapes/arguments.py::url_of`**
+
 > **BUILT the same day — the walk's SEVENTH edge.** Measured first, as the line above asked:
 > the facts carry the whole edge, so nothing in the schema moved and the extractor was not
 > touched. A `lambda` entry names its synthetic body and how many values it captured, and the
@@ -393,39 +396,43 @@ rather than an extractor one — to be confirmed by measuring, not assumed.
 > rather than to an `invokedynamic` has no capture list in the facts at all — it arrives as an
 > `instance` entry — so there is nothing for this fold to read. Filed where it belongs if a
 > corpus ever needs it; no corpus here does.
-### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
-**Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
+### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata
+**Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/application/resolve/request_requirements.py`**
 
-The two sides of one call, as published today:
+**Nothing is wrong at runtime, and the first version of this entry implied otherwise.** The
+call succeeds: the server declares `@RequestParam("petId")` and the caller sends `?petId=…`,
+which is the same contract from both ends. What disagrees is how Sextant RECORDS the two
+ends.
 
-| | row |
-|---|---|
-| `petclinic-api-gateway` calls | `GET /pets/visits?petId={petId}` · peer `visits-service` · resolved |
-| `spring-petclinic-visits-service` serves | `GET /pets/visits` · resolved |
+| | `endpoints.path` | `endpoint_metadata` |
+|---|---|---|
+| `visits-service` serves | `/pets/visits` | `inbound, GET, /pets/visits, kind=param, name=petId, required` |
+| `api-gateway` calls | `/pets/visits?petId={petId}` | *nothing* |
 
-Same peer, same path, and **they do not compare equal** — the caller's row carries a query
-string the server's never can, because on the inbound side `petId` is a `@RequestParam` and
-lands in the request-requirement columns rather than in the address. So the linking tier
-(`GAP-2`) would miss a link that is otherwise exact, and a reader diffing the two columns
-sees a mismatch that is not one.
+So the two rows cannot be compared on the address, and the linking tier (`GAP-2`) would miss
+a link that is exact in the code. A reader diffing the two columns sees a mismatch that is
+not one.
 
 `apollo-portal` carries the same shape at `partial`: `POST {}?env={env}`.
 
 **Not caused by the constant work that exposed it** — `{}?env={env}` predates it; what
 changed is that the first fully RESOLVED row of this shape now exists, which is how the
-mismatch became visible.
+disagreement became visible.
 
-**The question it raises, which is a ruling rather than a bug fix:** a path column holding
-`?x={y}` is holding something that is not a path. The candidates are to strip the query into
-its own column, to record it as a request requirement the way the inbound side does, or to
-keep it verbatim and teach the comparison to ignore it. The first two are claims about the
-model; the third is a claim about every consumer.
+**It needs no ruling, which the first version of this entry got wrong too.** The model
+already has the right home and the inbound half already uses it: `endpoint_metadata` carries
+`kind=param` rows — 299 of them across the corpora — and its `direction` column is written
+`inbound` every time, because nothing outbound writes one. The outbound side should do what
+the inbound side does: `path` without the query, plus one `param` row per query parameter,
+`value` NULL where the value is a runtime expression exactly as a declared `@RequestParam`
+records none.
 
 **Real triggering input:** ordinary — any client that passes a query parameter in the URI
 template, which is how `RestTemplate` and `WebClient` are normally used.
 
-**Closes when** a caller's address and the callee's address compare equal where the code
-means the same endpoint, with the query recorded rather than discarded.
+**Closes when** `/pets/visits?petId={petId}` publishes as `/pets/visits` plus an outbound
+`param` row named `petId`, the two sides compare equal on the address, and `apollo-portal`'s
+`{}?env={env}` does the same.
 
 ### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
 **Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**

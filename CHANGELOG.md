@@ -14,6 +14,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **An address whose HOST could not be read says so by name: `<host>/services/admin`, not
+  `{}/services/admin`** (ruled by the user, `OI-152`). A partly-known address has published the
+  read half since `OI-143`, with the unread half as a bare `{}` — which can mean a host, a path
+  segment or a query value, so a reader could neither act on it nor tell it from a defect in
+  the reader. A LEADING hole is the authority and is now named; an interior hole keeps `{}`,
+  because there it honestly means "a runtime value in this path segment".
+
+  Angle brackets rather than braces, which is not cosmetic: `{name}` is URI-template syntax in
+  every framework modelled here (`{petId}`, `{appId}` are variables the framework substitutes
+  per request) and `derive_endpoints` reads variable names out of `{…}`, so a `{host}` would be
+  indistinguishable from a path variable called `host`.
+
+  **Measured:** `apollo-portal`'s eight outbound rows — `<host>/health`,
+  `<host>/services/admin`, `<host>/services/config`, `<host>?env={env}` — and nothing else in
+  the estate moves. The field expectation was re-recorded in the same commit and the other five
+  pins are unchanged. `OI-152` records the chain behind that host, including the hop that keeps
+  it unknowable: where several meta servers are configured, Apollo picks one by periodic health
+  check.
+
 - **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
   read instead of answered "it comes from outside what was scanned". A lambda body is a
   synthetic method whose leading parameters are the captured values, and nothing bound them —

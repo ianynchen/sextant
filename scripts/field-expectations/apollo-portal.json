@@ -305,14 +305,14 @@
     "outbound": [
       "(unresolved) (unresolved)",
       "GET (unresolved)",
-      "GET {}/health",
-      "GET {}/health",
-      "GET {}/services/admin",
-      "GET {}/services/admin",
-      "GET {}/services/admin",
-      "GET {}/services/config",
-      "GET {}/services/config",
-      "POST {}?env={env}"
+      "GET <host>/health",
+      "GET <host>/health",
+      "GET <host>/services/admin",
+      "GET <host>/services/admin",
+      "GET <host>/services/admin",
+      "GET <host>/services/config",
+      "GET <host>/services/config",
+      "POST <host>?env={env}"
     ]
   }
 }
