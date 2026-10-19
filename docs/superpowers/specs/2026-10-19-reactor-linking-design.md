@@ -235,9 +235,21 @@ Counted before building, per `system analyze` over a reactor of `M` modules:
 | matching | one pass over outbound rows, indexed by `(protocol, method, path)` and by participant name — no per-candidate query |
 | writes | one insert into `participants`, one into `links` |
 
-No read is per candidate and none is per module-pair. The largest reactor measured is
-`mall-swarm` at 6 modules and 298 rows; `ruoyi-vue-pro` is the scale case at 7,244 files and
-will be measured in Task 1 before the matcher is written.
+No read is per candidate and none is per module-pair.
+
+**MEASURED 2026-10-19, Task 1, before the matcher was written** — DuckDB `ATTACH` per module
+workspace, one `UNION ALL` view over their `endpoints` tables, one scan:
+
+| reactor | modules | workspace on disk | attach | create view | one scan |
+|---|---|---|---|---|---|
+| `ruoyi-vue-pro` | 18 | 432 MB | 45 ms | 0.5 ms | **2.0 ms** (484 rows) |
+| `mall-swarm` | 6 | 160 MB | 14 ms | 0.2 ms | 1.6 ms (298 rows) |
+| `petclinic` | 8 | 80 MB | 17 ms | 0.2 ms | 1.5 ms (59 rows) |
+
+`ATTACH` is lazy — it reads a header, not a database — which is why 432 MB across 18 files
+costs 45 ms and not seconds. The whole federated read on the scale case is **under 50 ms**,
+so nothing here needs lazy materialisation, caching or a narrowed view. This replaces the
+estimate this section originally carried, which guessed rather than counted.
 
 ---
 

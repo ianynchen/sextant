@@ -143,6 +143,9 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+# The stitcher (M06), whose guards arrived with the reactor linking spec.
+_PARTICIPANTS = "sextant/application/stitch/participants.py"
+_WORKSPACE = "sextant/storage/duckdb/workspace.py"
 _COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
@@ -337,6 +340,100 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    named = authority_of(argument, caller, workspace, index, identities)",
                 replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-participant-is-MATCHED-by-its-artifact-id": Guard(
+        what="a participant's matching NAME is its module's artifactId, with the full "
+        "coordinate carried beside it",
+        why="a client names a service the way service discovery does, and on a Spring "
+        "module that is `spring.application.name`, which defaults to the artifactId — "
+        "every `lb://` in the two pinned gateways names exactly that. The coordinate is "
+        "carried too because an artifactId is not unique in principle: two groups may ship "
+        "one, and without `module_id` those are one participant in the table and a link "
+        "could be minted against the wrong half of a collision",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find='                name=module_id.rsplit(":", 1)[-1],',
+                replace="                name=module_id,  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.an-ABSENT-participant-is-a-row-not-an-omission": Guard(
+        what="a module whose graph could not be read is a `participants` ROW marked absent "
+        "with a reason, never a module left out of the table",
+        why="`M06`'s rule is that an unmatched call into a participant nobody could read is "
+        "attributed to the GAP rather than reported as an architectural finding, and a "
+        "missing row cannot carry that distinction: *nothing calls this service* and *we "
+        "could not read this service* are different statements about a system, and a reader "
+        "acting on the first while the second is true deletes a dependency that exists",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        out.append(\n            Participant(",
+                replace="        if entry.get('location') is None:  # guard disabled\n"
+                "            continue\n"
+                "        out.append(\n            Participant(",
+            ),
+        ),
+    ),
+    "stitch.a-federated-view-READS-a-participants-graph-and-copies-nothing": Guard(
+        what="the system workspace reads each participant's graph through a view over its "
+        "workspace and imports none of it",
+        why="`D01`'s system scope: two native tables, everything else federated, because "
+        '"federating them costs no import stage and cannot drift from the bundle". Copying '
+        "would reintroduce exactly the drift the rule exists to prevent, and measured it "
+        "would also be pointless — `ATTACH` reads a header, so 18 workspaces totalling "
+        "432 MB attach in 45 ms and one scan of all 484 endpoint rows takes 2 ms",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")',
+                replace="            self._connection.execute(\n"
+                '                f"CREATE OR REPLACE TABLE {view} AS SELECT * FROM ({union}) WHERE false"\n'
+                "            )  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-reactor-entry-with-no-coordinate-names-no-participant": Guard(
+        what="a reactor entry carrying no build coordinate yields no participant",
+        why="its matching name would be the empty string, and a participants row whose "
+        "name is empty claims to be a service while matching nothing meaningfully. The "
+        "same refusal every reader in this project makes about a value it cannot name",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        if not module_id:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.NO-participant-leaves-an-EMPTY-view-never-a-missing-one": Guard(
+        what="a system with no readable participant still has the views, empty",
+        why="a missing view makes a system query raise a catalog error that says nothing "
+        "about why, where an empty one answers and leaves the reason where a reader can act "
+        "on it — per participant in `participants`, with its own sentence. A reactor every "
+        "module of which was skip-listed is the live case",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="            if not aliases:",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.FEDERATING-again-replaces-the-previous-set": Guard(
+        what="federating a second set detaches the first, so one process may analyze two "
+        "reactors without the first one's participants staying readable",
+        why="a link minted against a participant that is not in THIS system is a dependency "
+        "this system does not have — the same fabrication `M06` refuses heuristics to avoid, "
+        "arriving through stale state instead of through a guess",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            self._connection.execute(f"DETACH DATABASE IF EXISTS {alias}")',
+                replace="            pass  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
