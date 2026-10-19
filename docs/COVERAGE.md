@@ -1957,10 +1957,25 @@ the field corpus) live in
   assembles an address and this analysis read some of it, the row publishes what it read at
   `partial` — and an unread HOST is written `<host>`, not a bare hole (ruled 2026-10-18,
   `OI-152`): `<host>/services/admin` says the path was read and the authority was not. An
-  interior hole stays `{}`, which there means a runtime value inside a path segment. Measured:
-  `apollo-portal`'s eight outbound rows. **A `path` holding either is a statement about PART of
-  an address and is not an exact address** — a stitcher matching it as literal text would join
-  two rows on a marker they share.
+  interior hole whose value the facts NAME is written `{ownerId}` (ruled 2026-10-18,
+  `OI-153`), which is the route's own variable and the same text the server publishes for
+  that route; one with no name to take stays `{}`, a runtime value inside a path segment.
+  Measured: `apollo-portal`'s eight outbound rows. **A `path` holding `<host>` or `{}` is a
+  statement about PART of an address and is not an exact address** — a stitcher matching it
+  as literal text would join two rows on a marker they share. A path holding only NAMED
+  holes is an exact address in the only sense a URI template is one.
+- **`partial` means something went unread, and nothing else** (ruled by the user 2026-10-19).
+  An assembled address is `resolved` when the authority was read — or named from its own
+  evidence, as a service-discovery peer is — and no piece of the path is an anonymous hole.
+  Before this, `"…/owners/" + ownerId` read `partial` while `.uri("…/owners/{ownerId}",
+  ownerId)` read `resolved`, which recorded how the programmer spelled the address rather than
+  anything about where the call goes. The two causes of `partial` are now exactly: the
+  authority went unread, or a piece of the path did.
+- **A peer is the destination of EVERY call through that site, or there is no peer.** Where
+  the host reaches the address on more than one path and they do not agree — a helper another
+  caller hands its own host, a field with two writers, a two-branch provider — the row keeps
+  `<host>` and no peer rather than naming one of them (`OI-154`, measured; `OI-157` records
+  the under-report this leaves when both destinations WERE read).
 
 - **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
   The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything

@@ -50,3 +50,23 @@ identified_by:
   # measurement behind it, is what the once-per-producer model is for.
   - { owner: java.net.URI, method: <init>, arg: 0, arity: 1,
       by: scripts/probes/a2t8_http_client_builders.md }
+
+  # **A RENDERING, and the one entry in this table that is gated on what it carries**
+  # (`OI-138` cause 3, CP-39). javac inserts `String.valueOf` around every non-`String`
+  # operand of a concatenation, so the walk meets it between `getUri()` and the template in
+  # every address a module assembles from an object — measured, it is the last hop between
+  # `petclinic-genai` and a published peer.
+  #
+  # **`OI-142` refused this entry, and was right to.** Read off the platform's own
+  # bytecode, `valueOf(Object)` returns `arg.toString()` — a RENDERING of the value, never
+  # its identity. For a JMS `Queue` whose identity is `"orders"` that text is a vendor debug
+  # string, so joining it would publish an address that never existed, at `resolved`.
+  #
+  # `preserves: authority` is what bounds it to the case where the claim is sound. An
+  # identity that yields an AUTHORITY names WHO is called; the join writes it
+  # scheme-relative and the row's claim lands in the PEER column, which is still
+  # `customers-service` whatever the instance's URL happens to be. An identity that yields
+  # an `address` is refused here and reaches no further, so the destination case `OI-142`
+  # names cannot occur. CP-39 Q3 has the two rows side by side.
+  - { owner: java.lang.String, method: valueOf, arg: 0, arity: 1,
+      preserves: authority, by: scripts/probes/cp39_rendering_preserves_authority.md }

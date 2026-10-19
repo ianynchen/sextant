@@ -16,6 +16,7 @@ inside `contracts.py` (2E-prep design §1e).
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -25,7 +26,14 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
+from sextant.application.resolve.values import (
+    EXPRESSION,
+    LITERAL,
+    STRING,
+    Answer,
+    ValueIndex,
+    resolve_site,
+)
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
@@ -95,8 +103,18 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
         return peer, path, str(Resolution.RESOLVED)
     if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
+        # **Whether the AUTHORITY went unread**, which is the first of `partial`'s two
+        # causes and cannot be read back off the path afterwards. Both arms below set it,
+        # and the second one is why it has to be a variable rather than a test on the
+        # finished text: `"http://" + host + "/orders"` with `host` a parameter the facts
+        # name assembles `http://{serviceHost}/orders`, whose peer is nulled here for
+        # carrying a hole and whose PATH is then the perfectly clean `/orders`. Judging by
+        # the path alone would publish that as a resolved RELATIVE call on a configured
+        # base url — an address the code never wrote.
+        authority_unread = False
         if peer is not None and (_holes(peer) or carries_expression(peer)):
             peer = None
+            authority_unread = True
         leading = _holes(path)[:1] if path is not None else ()
         if path is not None and leading and path.startswith(leading[0]):
             # **A LEADING hole is the HOST, and it is named `<host>`** (ruled by the user
@@ -112,7 +130,26 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
             # it. Matched through `_holes` rather than against `{}` so the two stay one rule
             # if that ever changes.
             path = _UNREADABLE_HOST + path[len(leading[0]) :]
-        return peer, path, str(Resolution.PARTIAL)
+            authority_unread = True
+        # **`resolved` means NOTHING about the destination went unread** (ruled by the user
+        # 2026-10-19), and a hole-bearing template can satisfy that. `partial` keeps exactly
+        # the two causes it was born for — the authority went unread, or a PIECE of the path
+        # did — and a NAMED hole is neither: `/owners/{ownerId}/pets` is the route's own
+        # variable, read off the signature the compiler recorded, and it is the same text
+        # `customers-service` publishes for the same route from its own `@PostMapping`.
+        #
+        # The word already behaved this way for a LITERAL template — `.uri("http://
+        # customers-service/owners/{ownerId}", ownerId)` has always read `resolved` — so
+        # before this the same address resolved or not according to whether the programmer
+        # wrote the variable inside the string or concatenated it, which is not a fact about
+        # the destination. Measured: 3 rows on real code and 4 on the fixtures move to
+        # `resolved`; nothing moves the other way, and every `<host>` row stays `partial`.
+        unread_piece = _HOLE in (path or "")
+        return (
+            peer,
+            path,
+            str(Resolution.PARTIAL if authority_unread or unread_piece else Resolution.RESOLVED),
+        )
     return None, None, str(Resolution.UNRESOLVED)
 
 
@@ -121,6 +158,13 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
 # stay separable; `test_a_hole_is_spelled_the_way_the_walk_spells_it` is the gate
 # that keeps the two spellings one.
 _HOLE = "{}"
+# D00 §5's kind for an address the code ASSEMBLES, read here by `authority_of` for the same
+# reason the engines read it: the operands are the concat site's own arguments.
+_CONCAT = "concat"
+# The walk's own word for an answer that names WHO is called rather than WHERE (`values`'
+# `_AUTHORITY`). Spelled here for the reason `_HOLE` is: the two layers stay separable, and
+# `test_a_hole_is_spelled_the_way_the_walk_spells_it`'s sibling pins the pair.
+_AUTHORITY = "authority"
 # **What an unread HOST is published as.** Ruled by the user on 2026-10-18, against a bare
 # `{}`: a hole has to say which half of the address was not read, or a reader can neither act
 # on it nor tell it from a defect in this reader.
@@ -132,6 +176,120 @@ _HOLE = "{}"
 # reader and to this repository's own passes. No framework here spells a path variable with
 # `<>`.
 _UNREADABLE_HOST = "<host>"
+# The same marker, for the engines: once the peer is known by its own evidence the path no
+# longer has an unread half, so the marker comes off (`fluent._with_authority`). Exported
+# rather than re-spelled, so the two places cannot drift.
+UNREADABLE_HOST = _UNREADABLE_HOST
+
+
+def authority_of(
+    argument: dict[str, Any] | None,
+    caller: str | None,
+    workspace: "Workspace",
+    index: "ValueIndex",
+    identities: "Sequence[Mapping[str, Any]]",
+) -> str | None:
+    """WHO an assembled address calls, asked as its own question — the peer for an address
+    whose host this analysis could not render (`OI-138` cause 3, `OI-142` ruling 2).
+
+    **Separate evidence, which is the user's ruling and not an implementation detail.** The
+    PATH comes from the join, and the join is handed NO identity entries on purpose: an
+    `identified_by` entry says what a value STANDS FOR, while a join publishes text as an
+    ADDRESS, and for a destination identified as `"orders"` the rendered text is a vendor
+    debug string — joining it would publish an address that never existed (`OI-142`, and
+    the reason it recorded this as unclosable through the join). This function asks the
+    other question instead, of the address's FIRST operand alone, and accepts only an answer
+    that yields an AUTHORITY. Nothing an identity says ever reaches the text; the peer lands
+    in the column built for it.
+
+    Measured: `discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"`
+    answers `customers-service`, so the row reads peer `customers-service`, path `/owners` —
+    which is what `petclinic-genai`'s own document was missing.
+
+    Returns None for everything else: an operand that resolves to a plain literal (the code
+    stated it, and the join has it), to several answers (several peers for one call is not a
+    peer), or to an identity that yields an `address`.
+    """
+    if argument is None or argument.get("kind") != _CONCAT:
+        return None
+    source = argument.get("source")
+    # The method the concat happened IN, which each engine knows and this cannot infer: the
+    # fluent engine captured the argument at some step of a chain (`captured_at`), while
+    # `single_call` reads it off the matched site itself. `source` is a value id, and a value
+    # id means nothing without the method it belongs to.
+    if caller is None or source is None:
+        return None
+    produced = index.producers.get((caller, int(str(source))), ())
+    if not produced:
+        return None
+    site = index.sites.get((caller, min(produced)))
+    if site is None or not (site["arguments"] or []):
+        return None
+    # The FIRST operand, which is the only position an authority can occupy: an address
+    # states who it calls before it states what it asks for, and `url_of` has already
+    # established that the leading hole is the one it could not read.
+    # **EVERY path must answer an authority, and they must all agree** — a comprehension
+    # that FILTERED to the authority answers could not refuse anything, because the paths it
+    # was meant to refuse were the ones it removed. MEASURED: a private `fetch(URI host)`
+    # called once with a discovery lookup and once with a `URI` its own caller supplied
+    # answers on two paths, and filtering published peer `customers-service` for both.
+    #
+    # One unread path is one call to somewhere this analysis cannot name, and a peer column
+    # states who is called — not who is called sometimes. So an answer that is not an
+    # authority literal refuses the whole question, which is `_through_receiver`'s rule
+    # ("EXACTLY ONE, and that single condition is what makes an entry on `List.get` safe")
+    # asked of a concat operand.
+    bindings = resolve_site(workspace, site, index, identities)
+    if not bindings:
+        return None
+    answers = set()
+    for binding in bindings:
+        answer = binding.slots.get(0)
+        if (
+            answer is None
+            or answer.kind != LITERAL
+            or answer.literal_kind != STRING
+            or answer.yields != _AUTHORITY
+        ):
+            return None
+        answers.add(str(answer.value))
+    return answers.pop() if len(answers) == 1 else None
+
+
+def with_authority(
+    address: tuple[str | None, str | None, str],
+    argument: dict[str, Any] | None,
+    caller: str | None,
+    workspace: "Workspace",
+    index: "ValueIndex",
+    identities: "Sequence[Mapping[str, Any]]",
+) -> tuple[str | None, str | None, str]:
+    """`address` with its PEER filled where the host this analysis could not render names a
+    service (`OI-138` cause 3).
+
+    Only for a row that has a path and no peer — the host went unread, which `url_of` has
+    already written `<host>`. The peer is then `authority_of`'s own answer and the path keeps
+    coming from the join, which is handed no identities at all. One copy for both engines,
+    because two engines giving two answers about one address is `OI-144`'s defect and this
+    is the same evidence.
+    """
+    peer, path, resolution = address
+    if peer is not None or path is None or not path.startswith(_UNREADABLE_HOST):
+        return address
+    named = authority_of(argument, caller, workspace, index, identities)
+    if named is None:
+        return address
+    # The host is no longer the unread half — the peer column carries WHO — so the marker
+    # comes off and the path reads as the path it is.
+    read = path.removeprefix(_UNREADABLE_HOST) or "/"
+    # **And the row says `resolved`**, because the reason it said `partial` has gone: the
+    # authority was the unread half, and it has just been read from its own evidence. The
+    # same rule `url_of` applies to a template it reads whole (2026-10-19) — `partial` only
+    # for an authority nobody read or a PIECE of the path nobody read — asked once more here,
+    # because this is the one place an authority becomes known after `url_of` has spoken.
+    # A remaining anonymous hole still answers `partial`: `{}/services/{}` names its peer
+    # and still does not state what it asks for.
+    return named, read, (resolution if _HOLE in read else str(Resolution.RESOLVED))
 
 
 # A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that

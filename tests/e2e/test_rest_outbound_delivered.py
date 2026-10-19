@@ -15,6 +15,8 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 SPRING7 = FIXTURES / "orders-spring7"
 QUARKUS = FIXTURES / "orders-quarkus"
+FLUENT_ADDRESS = FIXTURES / "orders-fluentaddress"
+DISCOVERY = FIXTURES / "orders-discovery"
 PATH_VARS = FIXTURES / "orders-pathvars"
 
 
@@ -54,13 +56,20 @@ def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows)
     fills its hole from a call's RESULT, which has no name to take; inventing one from the
     method would be naming a variable the code does not have.
 
+    **Which is why the first two rows read `resolved` and the third reads `partial`** (ruled
+    by the user 2026-10-19). `resolved` means nothing about the destination went unread, and
+    a NAMED hole is read — it is the route's own variable, the same text
+    `customers-service` publishes for the same route from its own `@PostMapping`. An
+    anonymous `{}` is a piece nobody read, and an unread authority is the other cause; the
+    third row has the first, `apollo-portal`'s eight have the second.
+
     The HOST is not named this way even when its operand has a name (`OI-152`): in the
     authority position what a reader needs is the peer's identity, which a local name does
     not give, so `<host>` stays `<host>`.
     """
     assert path_var_rows == {
-        ("customers-service", "/owners/{ownerId}/pets", "partial"),
-        ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "partial"),
+        ("customers-service", "/owners/{ownerId}/pets", "resolved"),
+        ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "resolved"),
         ("visits-service", "/pets/visits?petId={}", "partial"),
     }
 
@@ -307,3 +316,127 @@ def test_a_microprofile_rest_client_interface_derives_its_outbound_operations(qu
         for r in quarkus_endpoints
         if r["direction"] == "inbound" and r["path"].startswith("/remote/orders")
     ]
+
+
+@pytest.fixture(scope="module")
+def discovery_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-discovery`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-discovery")
+    compile_fixture(DISCOVERY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(DISCOVERY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("arguments.a-PEER-is-asked-of-its-own-evidence")
+def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_rows):
+    """`OI-138` cause 3, and `OI-142`'s ruling 2 finally landing.
+
+        discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"
+
+    Nothing in that class file is an address — the host comes from a registry while the
+    program runs — and the one thing the code states is the service NAME, three calls back
+    from the position the catalog asks about, with javac's `String.valueOf` inserted around
+    the `URI` operand.
+
+    **Measured before: `<host>/owners` with no peer.** The path was read and the peer was
+    not, so the document knew this module called SOMETHING at `/owners`.
+
+    **The peer is asked as its own question**, of the first operand alone, accepting only an
+    answer that yields an AUTHORITY — which is what makes it sound where a join would not be.
+    `OI-142` recorded the reason: an identity's TEXT is not an address (for a destination
+    identified as `"orders"`, `toString()` is a vendor debug string), while an identity's
+    AUTHORITY is a peer. So the path keeps coming from a walk handed no identities at all,
+    and the peer comes from the identity table.
+
+    On real code this is the whole point: `spring-petclinic-customers-service` serves
+    `/owners` and `/owners/{ownerId}/pets`, so these rows now match the callee's own inbound
+    rows and the document carries the arrow.
+    """
+    assert discovery_rows == {
+        ("customers-service", "/owners", "resolved"),
+        ("customers-service", "/owners/{ownerId}/pets", "resolved"),
+        ("None", "<host>/orders", "partial"),
+    }
+
+
+@pytest.mark.pins(
+    "arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one",
+    "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped",
+)
+def test_a_host_another_caller_supplies_refuses_the_peer(discovery_rows):
+    """The third row of the same fixture, and the bound on the one above it.
+
+        private String fetch(URI host) {
+            return restTemplate.getForObject(host + "/orders", String.class);
+        }
+        fetch(discoveryClient.getInstances("customers-service").get(0).getUri());
+        fetch(supplied);                                   // a URI this module was HANDED
+
+    The concat is in `fetch`, and `fetch` is two calling contexts — so its first operand
+    answers on two paths, one naming `customers-service` and one reading nothing at all. A
+    peer column states who is called, not who is called sometimes, so this row keeps
+    `<host>/orders` with no peer: exactly what it said before any of this work.
+
+    **Measured as a false fact before the refusal existed:** peer `customers-service`, and
+    at `resolved` once a named peer stopped meaning `partial`. Two layers each lost one of
+    the two paths — the `preserves` filter DROPPED the pair it could not carry instead of
+    replacing it, and the peer question then asked only the answers that survived, so
+    "several peers for one call is not a peer" was never reached. A field with two writers
+    and a two-branch helper are the same defect by two other routes, both measured.
+    """
+    assert ("None", "<host>/orders", "partial") in discovery_rows
+    assert not [row for row in discovery_rows if row[1].endswith("/orders") and row[0] != "None"]
+
+
+@pytest.fixture(scope="module")
+def fluent_address_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-fluentaddress`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-fluentaddress")
+    compile_fixture(FLUENT_ADDRESS)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FLUENT_ADDRESS), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("fluent.an-assembled-address-is-read-with-the-URL-reader")
+def test_both_engines_give_one_answer_for_one_assembled_address(fluent_address_rows):
+    """`OI-144`. One address, written once each way:
+
+        restTemplate.getForObject(base + "/owners", String.class);          // single_call
+        builder.build().get().uri(base + "/owners")…                        // fluent
+
+    **Measured before the fix: `single_call` published `<host>/owners` at `partial` and
+    `fluent` published `path` NULL at `unresolved`** — two engines, two answers about one
+    piece of evidence, which is the disease the shared walk was built to end.
+
+    The cause was the READER, not the walk. `fluent`'s assembled-address arm asked
+    `channel_of_answer`, which refuses a template on purpose — a broker resolves a
+    destination it is GIVEN and half of one is not a destination — where an HTTP address has
+    `url_of_answer` for exactly this case. So the fluent row is now the same row, and the
+    whole-literal chain beside it is untouched.
+    """
+    assert fluent_address_rows == {
+        ("None", "<host>/owners", "partial"),
+        ("vets-service", "/vets", "resolved"),
+    }

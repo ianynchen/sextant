@@ -14,7 +14,68 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-<<<<<<< HEAD
+- **`resolved` now means nothing about the destination went unread** (ruled by the user
+  2026-10-19). An outbound row whose peer and path are both known read `partial` whenever the
+  address was ASSEMBLED rather than written whole, which is a fact about how the programmer
+  spelled it and not about where the call goes:
+
+  | | before | after |
+  |---|---|---|
+  | `"http://customers-service/owners/" + ownerId + "/pets"` | `partial` | **`resolved`** |
+  | `.uri("http://customers-service/owners/{ownerId}", ownerId)` | `resolved` | `resolved` |
+  | `getInstances("customers-service")…getUri() + "/owners"` | `partial` | **`resolved`** |
+  | `parseHost(service) + "/services/admin"` | `partial` | `partial` |
+  | `"…?petId=" + String.join(",", petIds)` | `partial` | `partial` |
+
+  `partial` keeps exactly the two causes it was born for — **the authority went unread**
+  (`<host>`, or a hole inside the authority) or **a PIECE of the path went unread** (an
+  anonymous `{}`). A NAMED hole is neither: `{ownerId}` is the route's own variable, read off
+  the signature the compiler recorded, and it is the same text `customers-service` publishes
+  for that route from its own `@PostMapping`.
+
+  **The trap, which is why the test is on the authority and not on the finished path.**
+  `"http://" + host + "/orders"` with `host` a parameter the facts name assembles
+  `http://{serviceHost}/orders`; the splitter hands back a peer carrying a hole, which is
+  nulled, and the path is then the perfectly clean `/orders`. Judging by the path alone would
+  publish that as a resolved RELATIVE call on a configured base url — an address the code
+  never wrote. Measured: 3 rows on real code and 4 on the fixtures become `resolved`, and
+  nothing moves the other way.
+
+- **A peer is REFUSED where any path to the host went unread** (`OI-154`, found by review
+  before this shipped). `authority_of` promised to refuse "several peers for one call", and
+  could not: both multiplicity checks ran after the competing answers had been removed — the
+  `preserves` filter dropped the pairs it could not carry, and the peer question then asked
+  only the answers that survived. A private `fetch(URI host)` called once with a discovery
+  lookup and once with a `URI` its own caller supplies published peer `customers-service` for
+  a helper half of whose calls go somewhere the code never states, and the document drew an
+  arrow that does not exist.
+
+  A path the entry cannot carry is now **replaced** with an unresolved answer rather than
+  dropped, and the peer question **refuses unless every path answers an authority and they all
+  agree**. A field with two writers and a two-branch helper reach the same false fact by two
+  other routes; all three now publish `<host>/orders` with no peer.
+
+- **A peer resolved through SERVICE DISCOVERY is named** (`OI-138` cause 3, closing
+  `OI-142`): `discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"`
+  publishes peer `customers-service` with path `/owners`, where it published `<host>/owners`
+  with no peer and, a day earlier, nothing at all. The class file contains no address — the
+  host comes from a registry at runtime — and the one thing the code states is the service
+  NAME, three calls back.
+
+  **The peer is asked as its own question**, of the address's first operand alone, accepting
+  only an answer that yields an AUTHORITY. The path still comes from a walk handed no identity
+  entries, so nothing an identity claims ever reaches the address text — which is what
+  `OI-142` recorded as the reason this could not close through the join. The one new key is
+  `preserves: authority` on the entry over javac's inserted `String.valueOf`: it may propagate
+  an identity of that kind and mint none, because who is called does not change when a value
+  is rendered, while a destination's rendering is a vendor debug string (CP-39).
+
+  **Measured against the callee's own rows:** petclinic's genai module publishes three calls
+  to `customers-service` at `/owners`, `/owners` and `/owners/{ownerId}/pets`, and
+  `spring-petclinic-customers-service` serves `/owners` and `/owners/{ownerId}/pets` — so both
+  sides of each call name the same peer and the same path, character for character. The
+  expectation was re-recorded; the other five pins are unchanged.
+
 - **A hole in an assembled address carries the NAME of the value that fills it**
   (`OI-153`): `"/owners/" + ownerId + "/pets"` publishes `/owners/{ownerId}/pets`, where it
   published `/owners/{}/pets`. The facts named the operand all along — the parameter names the
@@ -32,7 +93,22 @@ here would restate those documents rather than add anything.
   are blocked behind `OI-144`, which this measurement raised from Minor to Major: the fluent
   engine does not read an assembled address at all, so it drops the row rather than degrading
   it, while `single_call` publishes peer and path for the identical code.
-=======
+- **Both engines now give one answer for one assembled address** (`OI-144`). A `WebClient`
+  chain whose address is built from a value and a literal published nothing at all — `path`
+  NULL, `peer` NULL, `unresolved` — while `RestTemplate` published the half it read for
+  identical code. Two engines, two answers about one piece of evidence.
+
+  The cause was the reader, not the walk: the arm asked the CHANNEL reader, which refuses a
+  template on purpose (a broker resolves a destination it is given, and half of one is not a
+  destination), and the row then recomputed `resolved`/`unresolved` and dropped `partial` even
+  when the reader answered it. It now reads the template verbatim and carries the address's own
+  word, which is `single_call`'s rule.
+
+  **Measured on a pinned corpus:** `petclinic-genai-service`'s three blank outbound rows now
+  carry their paths — `GET <host>/owners`, `POST <host>/owners`,
+  `POST <host>/owners/{ownerId}/pets` — and the other five pins are unchanged. That is what
+  this cause is worth on its own, with the host still unread; the PEER is a second cause,
+  closed in the entry above, and the re-recorded expectation holds the finished rows.
 - **An address whose HOST could not be read says so by name: `<host>/services/admin`, not
   `{}/services/admin`** (ruled by the user, `OI-152`). A partly-known address has published the
   read half since `OI-143`, with the unread half as a bare `{}` — which can mean a host, a path
@@ -51,7 +127,6 @@ here would restate those documents rather than add anything.
   pins are unchanged. `OI-152` records the chain behind that host, including the hop that keeps
   it unknowable: where several meta servers are configured, Apollo picks one by periodic health
   check.
->>>>>>> origin/main
 
 - **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
   read instead of answered "it comes from outside what was scanned". A lambda body is a

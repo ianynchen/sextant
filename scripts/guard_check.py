@@ -300,6 +300,106 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.an-assembled-address-is-read-with-the-URL-reader": Guard(
+        what="an address a fluent chain ASSEMBLES is read with the url reader, and the row "
+        "carries that reader's own word — so a partly-known address publishes the half it "
+        "read, as `single_call` already does",
+        why="`OI-144`, and it was two engines giving two answers about one piece of "
+        "evidence, which is the disease the shared walk was built to end. The arm asked "
+        "`channel_of_answer`, which refuses a template ON PURPOSE — a broker resolves a "
+        "destination it is GIVEN and half of one is not a destination — and the row then "
+        "recomputed `resolved`/`unresolved`, which threw away `partial` even when the reader "
+        "answered it. Measured on one address written once each way: `single_call` published "
+        "`<host>/owners` at `partial` while the fluent row published `path` NULL at "
+        "`unresolved`, with the peer and the path both sitting in the facts",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        assembled = _walked_with(argument, context, (), reader=_assembled_text)",
+                replace="        assembled = _walked_with(argument, context, ())  # guard disabled",
+            ),
+        ),
+    ),
+    "arguments.a-PEER-is-asked-of-its-own-evidence": Guard(
+        what="an address whose host went unread takes its PEER from the identity table, "
+        "asked of the first operand alone and only where the answer yields an AUTHORITY",
+        why='`OI-138` cause 3. `discoveryClient.getInstances("customers-service")'
+        '.get(0).getUri() + "/owners"` states no address anywhere — the host comes from a '
+        "registry at runtime — so without this the row says only that something at "
+        "`/owners` is called, and `petclinic-genai`'s three calls carry no arrow at all. "
+        "**It must stay a SEPARATE question from the join**, which is what `OI-142` "
+        "recorded as unclosable the other way: an identity's text is not an address (for a "
+        'destination identified as `"orders"` the rendering is a vendor debug string), so '
+        "the join is still handed no identities and only an AUTHORITY-yielding answer may "
+        "fill the peer column",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    named = authority_of(argument, caller, workspace, index, identities)",
+                replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one": Guard(
+        what="the peer question refuses unless EVERY path through the first operand answers "
+        "an authority literal, and they all agree — one unread path is one call to "
+        "somewhere this analysis cannot name",
+        why="the first version FILTERED to the authority answers, so it could refuse "
+        "nothing: the paths it was meant to refuse were the ones it removed, and its own "
+        'docstring\'s promise to return None for "several answers" was unreachable. '
+        "MEASURED as a false fact on the most ordinary shape there is — a private "
+        "`fetch(URI host)` whose concat is the address, called once with a discovery lookup "
+        "and once with a `URI` its own caller supplied: the row published peer "
+        "`customers-service` for a helper half of whose calls go somewhere the code never "
+        "states, and the document drew an arrow that does not exist. A field with two "
+        "writers and a two-branch helper reach it by two other routes",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="            or answer.yields != _AUTHORITY\n        ):\n            return None",
+                replace="            or answer.yields != _AUTHORITY\n        ):\n"
+                "            continue  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped": Guard(
+        what="an identity a `preserves` entry cannot carry becomes an UNRESOLVED answer on "
+        "its own path, so a reader of the result still sees that the code had two paths",
+        why="filtering the pairs let a second path vanish, and every multiplicity check "
+        "downstream then saw ONE answer where the code had two — which is how the peer "
+        "question's refusal was defeated without ever being reached. The two arms beside "
+        "this one return ALL of `identified` for the same reason",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                    (crossed, answer if answer.yields == preserved else unreadable)\n"
+                "                    for crossed, answer in identified\n",
+                replace="                    (crossed, answer)  # guard disabled\n"
+                "                    for crossed, answer in identified\n"
+                "                    if answer.yields == preserved\n",
+            ),
+        ),
+    ),
+    "values.a-RENDERING-carries-an-authority-and-nothing-else": Guard(
+        what="an identity entry declaring `preserves` propagates an identity of that kind "
+        "and mints none — so crossing `String.valueOf` carries an authority and drops an "
+        "address",
+        why="javac inserts `String.valueOf` around every non-String concat operand, so the "
+        "walk meets it in every address assembled from an object. `OI-142` refused an "
+        "identity entry over it outright, and was right about the danger: read off the "
+        "platform's own bytecode (CP-39 Q1) it returns `arg.toString()`, which for a JMS "
+        'destination identified as `"orders"` is a vendor debug string — carrying that as '
+        "an identity would publish an address that never existed, at `resolved`. The gate "
+        "is what makes the entry shippable, and without it the entry is exactly the defect "
+        "that was refused",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            preserved = self._preserved_kind(site)",
+                replace="            preserved = None  # guard disabled by guard_check.py",
+            ),
+        ),
+    ),
     "arguments.a-template-with-no-read-text-is-not-partly-known": Guard(
         what="an assembled address publishes at `partial` only where text survives "
         "removing its holes — `{}{}` carries nothing the code states and stays unresolved",
@@ -2639,6 +2739,8 @@ def copy_tree(destination: Path) -> Path:
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",
+        "orders-fluentaddress",
+        "orders-discovery",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

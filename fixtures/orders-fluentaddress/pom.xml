@@ -1,0 +1,25 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-fluentaddress</artifactId>
+  <version>1.0.0</version>
+  <!-- An address ASSEMBLED in a fluent chain (`OI-144`). `single_call` has published the
+       half it read since `OI-143`; `fluent` published nothing at all for the same code,
+       because its assembled-address arm asked the CHANNEL reader, which refuses a template
+       by design. Its own module so the two engines can be compared on one shape. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-webflux</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId><artifactId>reactor-core</artifactId><version>3.6.5</version>
+    </dependency>
+  </dependencies>
+</project>
