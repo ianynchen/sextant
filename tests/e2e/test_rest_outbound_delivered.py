@@ -15,6 +15,8 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 SPRING7 = FIXTURES / "orders-spring7"
 QUARKUS = FIXTURES / "orders-quarkus"
+FLUENT_ADDRESS = FIXTURES / "orders-fluentaddress"
+DISCOVERY = FIXTURES / "orders-discovery"
 PATH_VARS = FIXTURES / "orders-pathvars"
 
 
@@ -307,3 +309,97 @@ def test_a_microprofile_rest_client_interface_derives_its_outbound_operations(qu
         for r in quarkus_endpoints
         if r["direction"] == "inbound" and r["path"].startswith("/remote/orders")
     ]
+
+
+@pytest.fixture(scope="module")
+def discovery_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-discovery`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-discovery")
+    compile_fixture(DISCOVERY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(DISCOVERY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("arguments.a-PEER-is-asked-of-its-own-evidence")
+def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_rows):
+    """`OI-138` cause 3, and `OI-142`'s ruling 2 finally landing.
+
+        discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"
+
+    Nothing in that class file is an address — the host comes from a registry while the
+    program runs — and the one thing the code states is the service NAME, three calls back
+    from the position the catalog asks about, with javac's `String.valueOf` inserted around
+    the `URI` operand.
+
+    **Measured before: `<host>/owners` with no peer.** The path was read and the peer was
+    not, so the document knew this module called SOMETHING at `/owners`.
+
+    **The peer is asked as its own question**, of the first operand alone, accepting only an
+    answer that yields an AUTHORITY — which is what makes it sound where a join would not be.
+    `OI-142` recorded the reason: an identity's TEXT is not an address (for a destination
+    identified as `"orders"`, `toString()` is a vendor debug string), while an identity's
+    AUTHORITY is a peer. So the path keeps coming from a walk handed no identities at all,
+    and the peer comes from the identity table.
+
+    On real code this is the whole point: `spring-petclinic-customers-service` serves
+    `/owners` and `/owners/{ownerId}/pets`, so these rows now match the callee's own inbound
+    rows and the document carries the arrow.
+    """
+    assert discovery_rows == {
+        ("customers-service", "/owners", "partial"),
+        ("customers-service", "/owners/{}/pets", "partial"),
+    }
+
+
+@pytest.fixture(scope="module")
+def fluent_address_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-fluentaddress`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-fluentaddress")
+    compile_fixture(FLUENT_ADDRESS)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(FLUENT_ADDRESS), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("fluent.an-assembled-address-is-read-with-the-URL-reader")
+def test_both_engines_give_one_answer_for_one_assembled_address(fluent_address_rows):
+    """`OI-144`. One address, written once each way:
+
+        restTemplate.getForObject(base + "/owners", String.class);          // single_call
+        builder.build().get().uri(base + "/owners")…                        // fluent
+
+    **Measured before the fix: `single_call` published `<host>/owners` at `partial` and
+    `fluent` published `path` NULL at `unresolved`** — two engines, two answers about one
+    piece of evidence, which is the disease the shared walk was built to end.
+
+    The cause was the READER, not the walk. `fluent`'s assembled-address arm asked
+    `channel_of_answer`, which refuses a template on purpose — a broker resolves a
+    destination it is GIVEN and half of one is not a destination — where an HTTP address has
+    `url_of_answer` for exactly this case. So the fluent row is now the same row, and the
+    whole-literal chain beside it is untouched.
+    """
+    assert fluent_address_rows == {
+        ("None", "<host>/owners", "partial"),
+        ("vets-service", "/vets", "resolved"),
+    }

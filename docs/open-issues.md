@@ -396,7 +396,6 @@ rather than an extractor one — to be confirmed by measuring, not assumed.
 > rather than to an `invokedynamic` has no capture list in the facts at all — it arrives as an
 > `instance` entry — so there is nothing for this fold to read. Filed where it belongs if a
 > corpus ever needs it; no corpus here does.
-<<<<<<< HEAD
 ### OI-153 — a hole in an assembled address is NAMED after the value that fills it
 **Minor · entered and BUILT 2026-10-18, measured on `fixtures/orders-pathvars` and `spring-petclinic-microservices` · `src/sextant/application/resolve/values.py::_joined`**
 
@@ -439,10 +438,8 @@ then.
 
 ### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
-=======
 ### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/application/resolve/request_requirements.py`**
->>>>>>> origin/main
 
 **Nothing is wrong at runtime, and the first version of this entry implied otherwise.** The
 call succeeds: the server declares `@RequestParam("petId")` and the caller sends `?petId=…`,
@@ -758,6 +755,8 @@ a row to hang it on; this is no row at all, which a reader cannot tell from abse
 
 ### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
 **Major · raised from Minor 2026-10-18 on measurement (the row is dropped, not degraded) · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
+### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read · **CLOSED 2026-10-19**
+**Major · raised from Minor on measurement (the row is DROPPED, not degraded) · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 
 Spec 2026-10-18 gave `single_call` and `url_of` a third answer for an assembled address:
 where the walk read part of it, the row publishes the part it read at `partial`
@@ -797,7 +796,36 @@ cross-engine lesson of `OI-143` is to carry the QUESTION across engines, and thi
 carried, with its answer deferred rather than guessed.
 
 **Real triggering input:** any fluent client whose address is assembled from a value and a
-literal. Not measured on a corpus yet; `apollo-portal` reaches it zero times (its wrapper is
+literal.
+
+> **CLOSED 2026-10-19, and it was the READER rather than the walk.** Two one-line causes, each
+> measured on `fixtures/orders-fluentaddress`, where one address is written once through each
+> engine:
+>
+> 1. the assembled-address arm asked `channel_of_answer`, which refuses a template **on
+>    purpose** — a broker resolves a destination it is GIVEN and half of one is not a
+>    destination — where an HTTP address has the url reader for exactly this case. It now asks
+>    `_assembled_text`, which hands back the template VERBATIM: passing `url_of_answer`'s own
+>    output back in split the address twice and published nothing, which is why that reader
+>    exists rather than reusing the other;
+> 2. the row then recomputed `resolved`/`unresolved` from the address, throwing away `partial`
+>    even when the reader answered it. It now carries the address's own word, which is
+>    `single_call`'s rule verbatim (spec 2026-10-18 §5).
+>
+> **Measured on a PINNED corpus:** `petclinic-genai-service`'s three blank outbound rows now
+> carry their paths —
+>
+> | | before | after |
+> |---|---|---|
+> | genai → customers | `GET (unresolved)`, `POST (unresolved)` ×2 | `GET <host>/owners`, `POST <host>/owners`, `POST <host>/owners/{}/pets` |
+>
+> — and the expectation was re-recorded in the same commit. The other five pins are unchanged,
+> which is the thing to check for a change inside an engine every fluent catalog shares.
+>
+> **What is still missing from those three rows is the PEER, not the path:** their host is
+> `discoveryClient.getInstances("customers-service")…getUri()`, so the service NAME is a
+> literal nobody reads yet — `OI-138` cause 3, one catalog away. Guard
+> `fluent.an-assembled-address-is-read-with-the-URL-reader`. Not measured on a corpus yet; `apollo-portal` reaches it zero times (its wrapper is
 a `single_call` shape).
 
 ### OI-145 — three field pins fail on `terminal_kinds`, and have since a terminal kind landed · **CLOSED 2026-10-18**

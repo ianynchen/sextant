@@ -14,7 +14,6 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-<<<<<<< HEAD
 - **A hole in an assembled address carries the NAME of the value that fills it**
   (`OI-153`): `"/owners/" + ownerId + "/pets"` publishes `/owners/{ownerId}/pets`, where it
   published `/owners/{}/pets`. The facts named the operand all along — the parameter names the
@@ -32,7 +31,22 @@ here would restate those documents rather than add anything.
   are blocked behind `OI-144`, which this measurement raised from Minor to Major: the fluent
   engine does not read an assembled address at all, so it drops the row rather than degrading
   it, while `single_call` publishes peer and path for the identical code.
-=======
+- **Both engines now give one answer for one assembled address** (`OI-144`). A `WebClient`
+  chain whose address is built from a value and a literal published nothing at all — `path`
+  NULL, `peer` NULL, `unresolved` — while `RestTemplate` published the half it read for
+  identical code. Two engines, two answers about one piece of evidence.
+
+  The cause was the reader, not the walk: the arm asked the CHANNEL reader, which refuses a
+  template on purpose (a broker resolves a destination it is given, and half of one is not a
+  destination), and the row then recomputed `resolved`/`unresolved` and dropped `partial` even
+  when the reader answered it. It now reads the template verbatim and carries the address's own
+  word, which is `single_call`'s rule.
+
+  **Measured on a pinned corpus:** `petclinic-genai-service`'s three blank outbound rows now
+  carry their paths (`GET <host>/owners`, `POST <host>/owners`, `POST <host>/owners/{}/pets`);
+  the expectation was re-recorded and the other five pins are unchanged. What those rows still
+  lack is the PEER, whose service name is a literal in `getInstances("customers-service")` —
+  `OI-138` cause 3, one catalog away.
 - **An address whose HOST could not be read says so by name: `<host>/services/admin`, not
   `{}/services/admin`** (ruled by the user, `OI-152`). A partly-known address has published the
   read half since `OI-143`, with the unread half as a bare `{}` — which can mean a host, a path
@@ -51,7 +65,6 @@ here would restate those documents rather than add anything.
   pins are unchanged. `OI-152` records the chain behind that host, including the hop that keeps
   it unknowable: where several meta servers are configured, Apollo picks one by periodic health
   check.
->>>>>>> origin/main
 
 - **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
   read instead of answered "it comes from outside what was scanned". A lambda body is a

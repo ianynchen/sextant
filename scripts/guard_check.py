@@ -300,6 +300,26 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.an-assembled-address-is-read-with-the-URL-reader": Guard(
+        what="an address a fluent chain ASSEMBLES is read with the url reader, and the row "
+        "carries that reader's own word — so a partly-known address publishes the half it "
+        "read, as `single_call` already does",
+        why="`OI-144`, and it was two engines giving two answers about one piece of "
+        "evidence, which is the disease the shared walk was built to end. The arm asked "
+        "`channel_of_answer`, which refuses a template ON PURPOSE — a broker resolves a "
+        "destination it is GIVEN and half of one is not a destination — and the row then "
+        "recomputed `resolved`/`unresolved`, which threw away `partial` even when the reader "
+        "answered it. Measured on one address written once each way: `single_call` published "
+        "`<host>/owners` at `partial` while the fluent row published `path` NULL at "
+        "`unresolved`, with the peer and the path both sitting in the facts",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        assembled = _walked_with(argument, context, (), reader=_assembled_text)",
+                replace="        assembled = _walked_with(argument, context, ())  # guard disabled",
+            ),
+        ),
+    ),
     "arguments.a-template-with-no-read-text-is-not-partly-known": Guard(
         what="an assembled address publishes at `partial` only where text survives "
         "removing its holes — `{}{}` carries nothing the code states and stays unresolved",
@@ -2639,6 +2659,7 @@ def copy_tree(destination: Path) -> Path:
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",
+        "orders-fluentaddress",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
