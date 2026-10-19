@@ -20,6 +20,19 @@ staleness only. Bundles ([D06](D06-bundle-format.md)) produced by [M08](M08-expo
 This is the only edge in the design that crosses between pipeline runs, and it is why a
 bundle must be self-describing.
 
+**Amendment 2026-10-19 (user decision 1, spec `2026-10-19-reactor-linking-design.md`): THIS
+module is not the only way a participant set can be assembled, and it is not the one built
+first.** A Maven reactor is a participant set that needs no manifest to discover: the
+`<modules>` walk `module analyze` already makes names every participant, and each module's
+own workspace holds its graph. `system analyze <reactor root>` uses that, with no
+`system.yml`, no `system.state.json` and no staleness — one build has no commits to be stale
+against.
+
+**What that path gives up, stated here rather than left to be discovered:** the
+cross-repository case, which is this module's whole subject. Participants in separate
+repositories at separate commits need the manifest, the state file and the staleness rule,
+and the reactor path answers none of them. This module stays `planned` and specified.
+
 ## Output
 
 The `ParticipantSet`: every service with its bundle, resolved commit and staleness; every

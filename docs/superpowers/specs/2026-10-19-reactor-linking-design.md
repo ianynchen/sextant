@@ -91,12 +91,28 @@ So `--environment` selects one, defaulting to `default`, and every comparison us
 resolved for it — `M06`'s rule untouched: *expression → this environment's value → compare
 values*, never expression text.
 
-**It costs nothing to refuse.** Measured on `petclinic`, the gateway's eight route keys are
-identical under both environments, so no link in the corpus moves either way. The flag is
-here because the column exists, not because this corpus exercises it; if the user would
-rather not carry a flag this slice cannot demonstrate, the alternative is to refuse a
-comparison over any key whose value differs across environments, which is a smaller promise
-and also honest.
+**APPROVED by the user, 2026-10-19: the flag**, with a refusal underneath it.
+
+**It costs nothing either way on this corpus, measured.** 119 keys resolve to different
+values per environment across the estate — `apollo-portal` 24, `apollo-configservice` 19,
+`mall-admin` 23, `spring-petclinic-rest` 12, the seven `petclinic` modules 0 — and **not one
+of them is a wire identity**. They are datasource URLs, Nacos server addresses, LDAP
+attribute mappings, log levels and Eureka flags. The two places an environment could move a
+link were counted and both are zero:
+
+| | |
+|---|---|
+| gateway routes built on a placeholder (`uri: lb://${…}`, `Path=${…}/**`) | 0 |
+| outbound rows whose `peer` or `path` is still a `${…}` | 0 |
+
+So no link in the corpus moves. The flag is here for the shape that is one edit away from
+real — `uri: lb://${service.customers}` with that key differing between `dev` and `prod` —
+where a matcher ignoring the column would publish one link and could be silently wrong.
+
+**And the refusal lives underneath the flag rather than instead of it** (the user's ruling,
+both halves): where the SELECTED environment leaves a key unresolved, that route gets no
+endpoint link and a recorded reason — never a fall back to another environment's value. A
+stated environment, and no silent substitution.
 
 ### Step 1 — protocol
 
@@ -250,3 +266,7 @@ keeping it.
 
 **Decisions 2–5 were approved as scope statements**, each blocked on a component that does
 not exist; the user's chosen scope named steps 1–2 and 4 explicitly.
+
+**Decision 7 (added during review, approved 2026-10-19): `--environment NAME`, default
+`default`**, with no fall back to another environment's value where the selected one leaves a
+key unresolved. §3 step 0 carries the measurement and the reasoning.

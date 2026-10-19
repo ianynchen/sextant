@@ -55,10 +55,23 @@ Two commands run more than one module, and both compositions belong here:
 ```
 module analyze   →  M02 detector → M03 scanner → M04 resolver
 system analyze   →  M05 sync → M06 stitcher
+                 →  the REACTOR participant set → M06 stitcher
 ```
 
 `system analyze --refresh-stale` runs the service pipeline for stale participants and then
 the system pipeline. **[M05](M05-sync.md) fetches only** — it never triggers a build.
+
+**Amendment 2026-10-19 (user decision 1, spec `2026-10-19-reactor-linking-design.md`): a
+REACTOR is a second participant source, and the first one built.** `system analyze <reactor
+root>` takes its participants from the same `<modules>` walk `module analyze` uses and reads
+each module's own workspace, with no `system.yml` and no `M05`. `M05`'s manifest path stays
+specified and unbuilt; the two differ only in where the participant set comes from, and the
+stitcher is handed the same set either way.
+
+`--environment NAME` (user decision 7) selects the environment every comparison resolves
+values for, defaulting to `default`. It is the reactor form of what `system.yml`'s
+single-environment declaration will supply once it exists, so nothing is re-plumbed when it
+arrives.
 Putting that orchestration here keeps Sync testable without a JDK, and keeps a surprising
 side effect out of a module.
 

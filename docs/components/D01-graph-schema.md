@@ -717,6 +717,21 @@ materialisation where measurement demands it, not presumed everywhere.
 The system workspace does **not** copy the estate's graphs. Bundles are Parquet, and one
 query reads Parquet across many paths, so a view is enough.
 
+**Amendment 2026-10-19 (user decision 1, spec `2026-10-19-reactor-linking-design.md`): where
+the participant set is a REACTOR, the views read each module's own WORKSPACE instead of a
+bundle.** The half of this rule that matters is untouched — the system workspace still copies
+nothing, holds the same two native tables, and reads every participant's graph through a
+view. What is given up is the anti-drift half: a workspace is not the bundle, so it cannot
+claim "it IS the bundle".
+
+**That trade is sound for one build and for nothing larger.** A reactor's module workspaces
+all come from the same run of the same build, so there is no second artefact for one to drift
+from; requiring bundles there would add a `module export` per module for a guarantee the
+single build already provides. As soon as participants come from separate runs of separate
+repositories — [M05](M05-sync.md)'s actual subject — the bundle rule is the right one and
+this exception must not be carried across. The obligation below holds either way: the
+location is recorded in `participants`, and one unreachable at query time fails naming it.
+
 **This is what makes cross-service impact answerable.** Impact does not travel along call
 edges — services exchange payloads, not method calls — so the traversal is:
 

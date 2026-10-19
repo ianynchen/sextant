@@ -114,6 +114,22 @@ code. The stitcher would miss it.
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
 
+**IN PROGRESS 2026-10-19 — the REACTOR case only**, spec
+`docs/superpowers/specs/2026-10-19-reactor-linking-design.md`, plan
+`docs/superpowers/plans/2026-10-19-reactor-linking.md`. Seven decisions settled by the user;
+`M00`, `M05`, `M06` and `D01` carry the amendments, each naming its decision.
+
+**What that closes, measured before it was built: 22 of 32 outbound rows across three real
+systems gain a link** — 18 endpoint links and 9 participant links across `petclinic` and
+`mall-swarm`, 0 on `apollo`.
+
+**What it leaves open, so this entry is not read as `FR-8` delivered:** no cross-repository
+participants (`M05`, `system.yml`, `system.state.json`, staleness); no overlay or curation
+(`M01`, `D03`, `proposals.yml`, human-asserted links); no structural compatibility (`M06`
+step 3); no path-SHAPE matching; no external participants; and **no link for an address whose
+authority went unread** (decision 6, refused — the reason it costs Apollo all ten of its
+rows). `GAP-2` stays open until those land.
+
 ## GAP-3 — the async SQS client is read for one call · **1 of 28**
 
 `SqsAsyncClient.sendMessage` derives since `G-43` (closed on CI run 34669970510):
