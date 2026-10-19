@@ -509,6 +509,30 @@ URI.create("http://legacy-gateway:8080");` then the lookup. All three now publis
 `legacy-gateway` and the other `customers-service`, and the honest row for a single peer
 column is neither. Publishing one row per branch is a feature, entered as `OI-157`.*
 
+### OI-158 — two calls differing ONLY in their query string now dedup to one row
+**Minor · entered 2026-10-19 while closing `OI-151`, zero occurrences measured · `src/sextant/application/resolve/engines/single_call.py`, `src/sextant/application/resolve/engines/fluent.py` (the dedup key)**
+
+The query string leaves the address (`OI-151`), and the dedup key is built from the address.
+So one caller making two calls that differ only in their query —
+
+```java
+restTemplate.getForObject(base + "/search?env=DEV", String.class);
+restTemplate.getForObject(base + "/search?env=PROD", String.class);
+```
+
+— now publishes ONE row with two `query` entries named `env` beside it, and nothing says
+which call sent which. Before `OI-151` these were two rows, because the query was in the key.
+
+**Zero occurrences, measured rather than assumed:** exactly two rows in the six pinned
+corpora carry a query at all and they are in different modules, and no fixture has a second.
+It is an under-report with a row to hang it on — the `OI-109` shape, "fewer facts, never a
+wrong one" — rather than a false fact, which is why it is Minor and was accepted knowingly
+as part of closing a Major.
+
+**Closes when** the entries carry enough to tell the calls apart — an ordinal, or the call
+site — or when the key keeps the query while the published path does not. **Falsified by** a
+module making two such calls and the document showing one row.
+
 ### OI-155 — `preserves` is the only identity key with no closed-set validation
 **Minor · entered 2026-10-19, found by review of `spec/discovery-peer-and-fluent` · `src/sextant/ingress/catalogs/yaml_source.py::_identities`**
 
@@ -560,7 +584,7 @@ the walk's own paths already describe; nothing downstream fans a peer out that w
 *Related but not the same: `OI-154` is about a path nobody read (refusing is the only honest
 answer there). This is about two paths both read, where refusing under-reports.*
 
-### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata
+### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata · **CLOSED 2026-10-19**
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/application/resolve/request_requirements.py`**
 
 **Nothing is wrong at runtime, and the first version of this entry implied otherwise.** The
@@ -597,6 +621,43 @@ template, which is how `RestTemplate` and `WebClient` are normally used.
 **Closes when** `/pets/visits?petId={petId}` publishes as `/pets/visits` plus an outbound
 `param` row named `petId`, the two sides compare equal on the address, and `apollo-portal`'s
 `{}?env={env}` does the same.
+
+> **CLOSED 2026-10-19.** Measured on the pinned commits, both sides read from the workspace:
+>
+> | | row | entry |
+> |---|---|---|
+> | `api-gateway` calls | `GET /pets/visits` · peer `visits-service` · resolved | `outbound, query, petId, value NULL, unresolved` |
+> | `visits-service` serves | `GET /pets/visits` · resolved | `inbound, param, petId, value NULL, resolved, required` |
+>
+> The addresses the two modules share went from none to `{('GET', '/pets/visits')}`.
+> `apollo-portal`'s row is `POST <host>` with one `query` entry named `env`. Both pins were
+> re-recorded; the other four are unchanged.
+>
+> **One deviation from this entry's own prediction, and it is deliberate: `kind` is `query`,
+> not `param`.** The looser word has a stated rule — "`param` only for the two APIs that
+> cannot tell the query string from a form body" (`@RequestParam`, `params=`, the Servlet's
+> `getParameter`) — and an outbound URI template is not one of them: `?petId={petId}` is the
+> query string and nothing else, so writing `param` would say LESS than the class file does.
+> **The consequence lands on `M06`:** the two sides do not compare equal on `kind` alone, and
+> a client's `query` SATISFIES a server's `param` because `param` is the union of query and
+> form. That is a matching rule for the stitcher, recorded here and in `GAP-2` rather than
+> paid for with a looser column.
+>
+> **Three refusals, each leaving the query ON the path** rather than guessing — stripping a
+> query this cannot describe would delete evidence the row had: a parameter whose NAME
+> carries a hole or a `${…}`, one written with no `=` at all (`?debug` states a parameter
+> with no value, and neither `resolved` with a NULL value nor `unresolved` says that — no
+> corpus or fixture carries one, so the word is not invented), and an empty name.
+>
+> **It made `single_call` a FOURTH origin writing `endpoint_metadata`**, which
+> `test_every_origin_writing_endpoint_metadata_holds_a_redactor` caught: the first draft
+> built the row in a shared helper that held the only redactor, so the engine would have
+> written values it never read and the rule would have been vacuous for the next origin. The
+> address rule is shared and each engine builds and masks its own row — which is what both
+> already did for every other row they write. `?token=sk-live-…` is pinned in both fixtures.
+>
+> Guards `arguments.a-QUERY-STRING-is-not-part-of-the-address` and
+> `arguments.a-QUERY-parameters-value-is-masked-by-its-own-name`.
 
 ### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
 **Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**

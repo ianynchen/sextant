@@ -340,6 +340,46 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "arguments.a-QUERY-STRING-is-not-part-of-the-address": Guard(
+        what="an outbound row's query string is lifted off `path` into one "
+        "`endpoint_metadata` entry per parameter, so the address is the one the server "
+        "publishes for the same route",
+        why='`OI-151`. A server declaring `@RequestParam("petId")` on '
+        '`@GetMapping("pets/visits")` publishes `/pets/visits` plus an entry; a client '
+        'writing `.uri(host + "pets/visits?petId={petId}")` published '
+        "`/pets/visits?petId={petId}` and no entry at all. Nothing is wrong at runtime — it "
+        "is the same contract from both ends — but the two rows could not be compared on the "
+        "address, so the linking tier (`GAP-2`) would miss a link that is exact in the code "
+        "and a reader diffing the columns saw a mismatch that is not one. Both engines ask "
+        "one function at the same point in their own loop, BEFORE the dedup key, which is "
+        "built from the path the row publishes",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find='    if path is None or "?" not in path:\n        return path, ()',
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        return path, ()",
+            ),
+        ),
+    ),
+    "arguments.a-QUERY-parameters-value-is-masked-by-its-own-name": Guard(
+        what="a query parameter's value is redacted at the ORIGIN, keyed on the parameter's "
+        "own name, in each engine that writes the entry",
+        why="`schema.sql`'s `value` column states that a metadata value is masked at the "
+        "origin, because nothing downstream masks one and `endpoint_metadata` is exported "
+        "whole. `?access_token=sk-live-…` is an ordinary way to write an outbound call. "
+        "`OI-151` made `single_call` a writer of this table for the first time, and the "
+        "first draft built the row in a shared helper that held the only redactor — which "
+        "`test_every_origin_writing_endpoint_metadata_holds_a_redactor` refused, correctly: "
+        "it would have let an engine write values it never read",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find='"value": None if value is None else _REDACTOR.redact_value(name, value),',
+                replace='"value": value,  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
     "arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one": Guard(
         what="the peer question refuses unless EVERY path through the first operand answers "
         "an authority literal, and they all agree — one unread path is one call to "

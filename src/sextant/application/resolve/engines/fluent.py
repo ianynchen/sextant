@@ -54,6 +54,7 @@ from sextant.application.resolve.beans import (
 )
 from sextant.application.resolve.conditions import annotation_index
 from sextant.application.resolve.shapes.arguments import (
+    QUERY_KIND,
     CallFacts,
     CarrierRules,
     FieldFacts,
@@ -67,6 +68,7 @@ from sextant.application.resolve.shapes.arguments import (
     channels_of,
     declared_parameters_of,
     field_facts,
+    query_entries,
     split_url,
     supertypes_of,
     url_of,
@@ -1148,6 +1150,12 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         # would need it and would otherwise have to rediscover it.
         if path is not None and serves_urls(context.catalog.protocol, direction):
             path = canonical_http_path(path)
+        # **The query string is not part of the address** (`OI-151`), and it comes off HERE —
+        # after the canonicaliser and before the dedup key below, which is built from the
+        # path and must be built from the one the row publishes. `single_call` makes the same
+        # call at the same point in its own loop; one function answers for both, which is
+        # `OI-144`'s lesson about two engines and one piece of evidence.
+        path, query = query_entries(path)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -1219,6 +1227,24 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             context.seen.add(key)
         for entry in captures.get(_COLLECTED) or ():
             context.metadata.append(_metadata_row(entry, context, direction, verb, path))
+        # Below the dedup `continue` on purpose: a row the key already saw writes no second
+        # copy of its own query parameters either. Through `_metadata_row` like every other
+        # entry this engine writes, so the value is masked by the same redactor on the same
+        # rule — a query parameter named `access_token` is exactly the shape that matters.
+        for name, value in query:
+            context.metadata.append(
+                _metadata_row(
+                    {
+                        "kind": QUERY_KIND,
+                        "name": {"kind": "string", "value": name},
+                        "value": None if value is None else {"kind": "string", "value": value},
+                    },
+                    context,
+                    direction,
+                    verb,
+                    path,
+                )
+            )
         if source is not None:
             # Finding 4: the channel-sourced chain reached a wire — the source
             # channel's wire end is this row, an outbound `fed_by`.

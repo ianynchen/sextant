@@ -27,10 +27,17 @@ public class OwnerRestClient {
     }
 
     /** A hole with NO name to take: the operand is a call's result, so `{}` is the honest
-     *  answer and the row says the pattern is partly known. */
+     *  answer and the row says the pattern is partly known.
+     *
+     *  <p>The QUERY STRING comes off the address (`OI-151`), so the row publishes
+     *  `/pets/visits` — what `visits-service` serves — and each parameter is an
+     *  `endpoint_metadata` entry. The row stays `partial` because `petId`'s VALUE was not
+     *  read, which the entry also says. `token` is here because this engine became a writer
+     *  of that table with `OI-151` and a value it writes must be masked where it is read. */
     public String batch(java.util.List<Integer> petIds) {
         return restTemplate.getForObject(
-            "http://visits-service/pets/visits?petId=" + join(petIds), String.class);
+            "http://visits-service/pets/visits?petId=" + join(petIds) + "&token=sk-live-pv",
+            String.class);
     }
 
     private String join(java.util.List<Integer> petIds) {

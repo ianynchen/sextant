@@ -181,6 +181,90 @@ _UNREADABLE_HOST = "<host>"
 # rather than re-spelled, so the two places cannot drift.
 UNREADABLE_HOST = _UNREADABLE_HOST
 
+# **The kind a query parameter a CALL SENDS is recorded under** (`OI-151`).
+#
+# `query`, not `param`, and the difference is read rather than chosen. `request_requirements`
+# states the rule for the vaguer word: "`param` only for the two APIs that cannot tell the
+# query string from a form body" — Spring's `@RequestParam`, `params=`, and the Servlet's
+# `getParameter`. An outbound URI template is not one of those APIs: `?petId={petId}` is the
+# query string and nothing else, so recording it as `param` would say LESS than the class
+# file does.
+#
+# The consequence, stated because it is a real one and lands on `M06`: a server's
+# `@RequestParam("petId")` writes `kind=param` and an outbound row writes `kind=query`, so the
+# two sides do not compare equal on `kind` alone. A client's `query` SATISFIES a server's
+# `param` — `param` is the union of query and form — and that is a matching rule for the
+# stitcher, not a reason to write the looser word here. `GAP-2` carries the pair.
+#
+# Exported so the two engines spell it once between them.
+QUERY_KIND = "query"
+
+
+def query_entries(path: str | None) -> tuple[str | None, tuple[tuple[str, str | None], ...]]:
+    """`path` with its QUERY STRING lifted off, plus one `(name, value)` pair per parameter
+    it carried — `value` None where the parameter's value was not read (`OI-151`).
+
+    **The two sides of one call recorded the same contract two different ways.** A server
+    declaring `@RequestParam("petId")` on `@GetMapping("pets/visits")` publishes `path`
+    `/pets/visits` and an `endpoint_metadata` row naming `petId`; a client writing
+    `.uri(host + "pets/visits?petId={petId}", …)` published `/pets/visits?petId={petId}` and
+    no entry at all. Nothing is wrong at runtime — it is the same contract from both ends —
+    but the two rows could not be compared on the address, so the linking tier would miss a
+    link that is exact in the code, and a reader diffing the columns saw a mismatch that is
+    not one. The outbound side now does what the inbound side already did.
+
+        /pets/visits?petId={petId}  ->  /pets/visits  + ("petId", None)
+        <host>?env={env}            ->  <host>        + ("env",   None)
+        /x?a=1&b={y}                ->  /x            + ("a", "1"), ("b", None)
+
+    **A value is read or it is not**, which each engine turns into the word its own
+    `endpoint_metadata` rows already use: a hole-free value is the literal at `resolved`, a
+    value carrying a hole or a `${…}` is NULL at `unresolved`. *This call sends a `petId`
+    parameter whose value we could not read* is a different statement from *it sends none*.
+
+    **This answers about the ADDRESS and nothing else — it builds no row and holds no
+    redactor**, which is deliberate after a first version did both. A row's `value` must be
+    masked by whoever READ it (`schema.sql`'s own invariant, and
+    `test_every_origin_writing_endpoint_metadata_holds_a_redactor` enforces it per origin);
+    a shared builder here would have let `single_call` write values it never masked and made
+    that rule vacuous for the next origin. So the ADDRESS rule is shared — one answer about
+    one piece of evidence, `OI-144`'s lesson — and each engine builds and masks its own row,
+    which is what both already do for every other row they write.
+
+    **Three refusals, each leaving the query ON the path rather than guessing.** Stripping a
+    query this cannot describe would DELETE evidence the row had, which is worse than an
+    address that is awkward to compare:
+
+    * a parameter whose NAME carries a hole or a `${…}` — `?{}=1` names nothing, and an
+      entry with no name is not a parameter;
+    * a parameter written with no `=` at all — `?debug` states a parameter with no value,
+      and neither `resolved` with a NULL value nor `unresolved` says that. No corpus or
+      fixture carries one, so the word for it is not invented here (§8.1);
+    * an empty name — `?=1`.
+
+    Measured across the six pinned corpora and every built fixture: exactly TWO rows carry a
+    query string, `api-gateway`'s `?petId={petId}` and `apollo-portal`'s `?env={env}`, and
+    both are the first shape above. **A bounded under-report comes with it**: two calls from
+    one caller differing ONLY in their query now share one address and dedup to one row with
+    both sets of entries beside it, and nothing says which call sent which. Zero occurrences
+    today — the two live rows are in different modules — and `OI-158` carries it.
+
+    Costs nothing per `GUIDELINES` §8.7: string work on a path the engine already holds, no
+    read and no query added.
+    """
+    if path is None or "?" not in path:
+        return path, ()
+    address, _, query = path.partition("?")
+    if not query:
+        return address, ()
+    pairs: list[tuple[str, str | None]] = []
+    for pair in query.split("&"):
+        name, sign, value = pair.partition("=")
+        if not sign or not name or _holes(name) or carries_expression(name):
+            return path, ()
+        pairs.append((name, None if _holes(value) or carries_expression(value) else value))
+    return address, tuple(pairs)
+
 
 def authority_of(
     argument: dict[str, Any] | None,

@@ -14,6 +14,39 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **An outbound row's QUERY STRING leaves its address and becomes metadata** (`OI-151`), so
+  the two sides of one call finally record the same contract the same way:
+
+  | | row | entry |
+  |---|---|---|
+  | `api-gateway` calls | `GET /pets/visits` · peer `visits-service` | `outbound, query, petId, value NULL, unresolved` |
+  | `visits-service` serves | `GET /pets/visits` | `inbound, param, petId, value NULL, resolved, required` |
+
+  Nothing was wrong at runtime — the server declares `@RequestParam("petId")` and the caller
+  sends `?petId=…`, which is one contract from both ends. What disagreed is how it was
+  RECORDED: the client published `/pets/visits?petId={petId}` and no entry at all, so the two
+  rows could not be compared on the address. The addresses those two modules share went from
+  none to `{('GET', '/pets/visits')}`, which is what the linking tier needs to exist for.
+
+  **`kind` is `query`, not `param`**, because the looser word has a stated rule — `param`
+  only for the APIs that cannot tell a query string from a form body — and an outbound URI
+  template is not one of them. A client's `query` satisfies a server's `param`; that is a
+  matching rule for the stitcher rather than a reason to record less than the class file
+  says.
+
+  **Three refusals leave the query ON the path** rather than guess: a parameter whose name
+  carries a hole or a `${…}`, one written with no `=` at all, and an empty name. Stripping a
+  query this cannot describe would delete evidence the row had.
+
+  One answer for both engines — `fluent` and `single_call` ask the same function at the same
+  point in their own loop, before the dedup key — and each builds and masks its own row.
+  `single_call` became a fourth origin writing `endpoint_metadata` and grew the redactor that
+  requires, after a shared row builder held the only one and would have let it write values
+  it never read. `?token=sk-live-…` is pinned in both fixtures. Both affected pins were
+  re-recorded; the other four are unchanged. `OI-158` records the one under-report this
+  creates: two calls differing only in their query now share a row, with zero occurrences
+  measured.
+
 - **`resolved` now means nothing about the destination went unread** (ruled by the user
   2026-10-19). An outbound row whose peer and path are both known read `partial` whenever the
   address was ASSEMBLED rather than written whole, which is a fact about how the programmer
