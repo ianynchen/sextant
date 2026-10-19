@@ -43,6 +43,7 @@ from sextant.application.resolve.shapes.arguments import (
     url_of,
     url_of_answer,
     valid_via_arity,
+    with_authority,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -775,7 +776,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # this engine has always derived.
                 answered = [tuple_ for tuple_ in walked if tuple_[1] is not None]
                 if answered:
-                    destinations = answered
+                    # **The PEER is its own question** (`OI-138` cause 3). The walk above is
+                    # handed NO identities on purpose, so an address assembled from an object
+                    # answers the text the code states and nothing an identity claims. Who is
+                    # CALLED is asked separately, of the first operand alone, and only an
+                    # answer that yields an authority is taken — the user's ruling of
+                    # 2026-10-17, "peer and path from separate evidence".
+                    destinations = [
+                        with_authority(
+                            found,
+                            url_argument,
+                            str(site["caller"]),
+                            workspace,
+                            values,
+                            catalog.value_model or (),
+                        )
+                        for found in answered
+                    ]
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside

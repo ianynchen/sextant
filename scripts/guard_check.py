@@ -320,6 +320,46 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "arguments.a-PEER-is-asked-of-its-own-evidence": Guard(
+        what="an address whose host went unread takes its PEER from the identity table, "
+        "asked of the first operand alone and only where the answer yields an AUTHORITY",
+        why='`OI-138` cause 3. `discoveryClient.getInstances("customers-service")'
+        '.get(0).getUri() + "/owners"` states no address anywhere — the host comes from a '
+        "registry at runtime — so without this the row says only that something at "
+        "`/owners` is called, and `petclinic-genai`'s three calls carry no arrow at all. "
+        "**It must stay a SEPARATE question from the join**, which is what `OI-142` "
+        "recorded as unclosable the other way: an identity's text is not an address (for a "
+        'destination identified as `"orders"` the rendering is a vendor debug string), so '
+        "the join is still handed no identities and only an AUTHORITY-yielding answer may "
+        "fill the peer column",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    named = authority_of(argument, caller, workspace, index, identities)",
+                replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-RENDERING-carries-an-authority-and-nothing-else": Guard(
+        what="an identity entry declaring `preserves` propagates an identity of that kind "
+        "and mints none — so crossing `String.valueOf` carries an authority and drops an "
+        "address",
+        why="javac inserts `String.valueOf` around every non-String concat operand, so the "
+        "walk meets it in every address assembled from an object. `OI-142` refused an "
+        "identity entry over it outright, and was right about the danger: read off the "
+        "platform's own bytecode (CP-39 Q1) it returns `arg.toString()`, which for a JMS "
+        'destination identified as `"orders"` is a vendor debug string — carrying that as '
+        "an identity would publish an address that never existed, at `resolved`. The gate "
+        "is what makes the entry shippable, and without it the entry is exactly the defect "
+        "that was refused",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            preserved = self._preserved_kind(site)",
+                replace="            preserved = None  # guard disabled by guard_check.py",
+            ),
+        ),
+    ),
     "arguments.a-template-with-no-read-text-is-not-partly-known": Guard(
         what="an assembled address publishes at `partial` only where text survives "
         "removing its holes — `{}{}` carries nothing the code states and stays unresolved",
@@ -2660,6 +2700,7 @@ def copy_tree(destination: Path) -> Path:
         "orders-fieldheld",
         "orders-pathvars",
         "orders-fluentaddress",
+        "orders-discovery",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

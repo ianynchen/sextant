@@ -358,7 +358,7 @@ def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_r
     """
     assert discovery_rows == {
         ("customers-service", "/owners", "partial"),
-        ("customers-service", "/owners/{}/pets", "partial"),
+        ("customers-service", "/owners/{ownerId}/pets", "partial"),
     }
 
 

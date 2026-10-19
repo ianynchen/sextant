@@ -89,6 +89,10 @@ _CLOSING = _PKG + "Closing#"
 # A binding whose only write is a constant the walk has NO literal kind for — a class
 # constant, which `private Class<Order> t = Order.class` produces. The fact is emitted (the
 # grammar has a `class` kind); the walk cannot turn it into a value.
+# A value that reaches a concat THROUGH a rendering call — javac's own
+# `String.valueOf(Object)` around a non-String operand, which is the shape every address
+# assembled from an object has (`OI-138` cause 3, CP-39).
+_RENDERED = _PKG + "Rendered#"
 _UNREADABLE = _PKG + "Unreadable#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
@@ -238,6 +242,7 @@ def _facts() -> list[Fact]:
             _MUTATOR,
             _BINDER,
             _WRITTEN,
+            _RENDERED,
             _UNREADABLE,
             _CLOSING,
             _ENTRY,
@@ -687,6 +692,37 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        # A value rendered into a concat: `Name#of("raw-notify")` produces something an
+        # identity entry can name, `String.valueOf` renders it, and the text is joined.
+        _declared(_RENDERED, "publish", "()V"),
+        _site(
+            _symbol(_RENDERED, "publish", "()V"),
+            0,
+            (_NAME, "of", _OF_ONE),
+            arguments=[CallArgument(kind="string", value="raw-notify")],
+            result=5,
+        ),
+        _site(
+            _symbol(_RENDERED, "publish", "()V"),
+            1,
+            ("java/lang/String#", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"),
+            arguments=[CallArgument(kind="unresolved", source=5)],
+            result=9,
+        ),
+        _site(
+            _symbol(_RENDERED, "publish", "()V"),
+            2,
+            ("java/lang/invoke/StringConcatFactory#", "makeConcatWithConstants", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="unresolved", source=9)],
+            result=12,
+        ),
+        _site(
+            _symbol(_RENDERED, "publish", "()V"),
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", source=12, value="{}/orders")],
         ),
         # A binding written from a CONSTANT the walk has no literal kind for.
         _declared(_UNREADABLE, "read", "()V"),
@@ -1499,6 +1535,52 @@ def _identified(
     workspace: DuckDbWorkspace, method: str, ordinal: int, identities: list[dict[str, Any]]
 ) -> list[Binding]:
     return resolve_site(workspace, _at(workspace, method, ordinal), None, identities)
+
+
+_RENDERING_IDENTITY = {
+    "owner": "java/lang/String#",
+    "method": "valueOf",
+    "arg": 0,
+    "arity": 1,
+    "preserves": "authority",
+}
+_ADDRESS_IDENTITY = {"owner": _NAME, "method": "of", "arg": 0, "arity": 1}
+_AUTHORITY_IDENTITY = {**_ADDRESS_IDENTITY, "yields": "authority"}
+
+
+@pytest.mark.pins("values.a-RENDERING-carries-an-authority-and-nothing-else")
+def test_a_rendering_carries_an_authority_and_refuses_an_address(walked):
+    """**The gate that makes a rendering entry shippable at all** (`OI-138` cause 3, CP-39).
+
+    javac inserts `String.valueOf` around every non-String operand of a concatenation, so
+    the walk meets it in every address a module assembles from an object. `OI-142` refused
+    an identity entry over it and was right about the danger: read off the platform's own
+    bytecode, it returns `arg.toString()`, and for a destination identified as `"raw-notify"`
+    that text is a vendor debug string — carrying it would publish an address that never
+    existed, at `resolved`.
+
+    So the entry declares `preserves: authority`, and the two directions are:
+
+    * the producer yields an ADDRESS (the default) — the rendering carries nothing, the hole
+      stays a hole, and the template says exactly what it said before;
+    * the producer yields an AUTHORITY — WHO is called does not change when the value is
+      rendered, so it is carried, and the consumer files it under `peer`.
+    """
+    refused = _identified(
+        walked,
+        _symbol(_RENDERED, "publish", "()V"),
+        3,
+        [_ADDRESS_IDENTITY, _RENDERING_IDENTITY],
+    )
+    assert [binding.slots[0].value for binding in refused] == ["{}/orders"]
+
+    carried = _identified(
+        walked,
+        _symbol(_RENDERED, "publish", "()V"),
+        3,
+        [_AUTHORITY_IDENTITY, _RENDERING_IDENTITY],
+    )
+    assert [binding.slots[0].value for binding in carried] == ["//raw-notify/orders"]
 
 
 def test_a_producer_nothing_identifies_stays_the_reason_it_was(walked):

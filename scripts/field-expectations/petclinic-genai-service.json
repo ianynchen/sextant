@@ -16,10 +16,10 @@
       "POST /chatclient"
     ],
     "outbound": [
+      "GET /owners",
       "GET /vets",
-      "GET <host>/owners",
-      "POST <host>/owners",
-      "POST <host>/owners/{}/pets"
+      "POST /owners",
+      "POST /owners/{}/pets"
     ]
   }
 }

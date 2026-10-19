@@ -1,0 +1,25 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-discovery</artifactId>
+  <version>1.0.0</version>
+  <!-- A peer resolved through SERVICE DISCOVERY (`OI-138` cause 3, `OI-142`). The class file
+       contains no URL at all: the host comes from a registry while the program runs, and the
+       only thing the code states is the service NAME. `spring-petclinic-genai-service` is the
+       shape this copies, three calls of it.
+
+       `spring-cloud-commons` 4.3.2 is the version in the local repository. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-commons</artifactId><version>4.3.2</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>6.1.6</version>
+    </dependency>
+  </dependencies>
+</project>

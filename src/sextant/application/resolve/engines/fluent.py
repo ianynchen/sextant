@@ -71,6 +71,7 @@ from sextant.application.resolve.shapes.arguments import (
     supertypes_of,
     url_of,
     valid_via_arity,
+    with_authority,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
@@ -1571,7 +1572,21 @@ def _composed_address(
     carrying an expression stays whole."""
     url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
-        return url_of(url_argument)
+        if context.workspace is None or context.values is None:
+            return url_of(url_argument)
+        # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
+        # identities, so the path is text the code states, and who is CALLED is asked
+        # separately of the first operand — the user's ruling of 2026-10-17, "peer and path
+        # from separate evidence".
+        captured = (_address_read(captures.get("url"), context) or {}).get("captured_at")
+        return with_authority(
+            url_of(url_argument),
+            _address_read(captures.get("url"), context),
+            str(captured[0]) if captured else None,
+            context.workspace,
+            context.values,
+            context.catalog.value_model or (),
+        )
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
         return None, None, "unresolved"

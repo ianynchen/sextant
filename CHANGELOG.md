@@ -14,6 +14,27 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A peer resolved through SERVICE DISCOVERY is named** (`OI-138` cause 3, closing
+  `OI-142`): `discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"`
+  publishes peer `customers-service` with path `/owners`, where it published `<host>/owners`
+  with no peer and, a day earlier, nothing at all. The class file contains no address — the
+  host comes from a registry at runtime — and the one thing the code states is the service
+  NAME, three calls back.
+
+  **The peer is asked as its own question**, of the address's first operand alone, accepting
+  only an answer that yields an AUTHORITY. The path still comes from a walk handed no identity
+  entries, so nothing an identity claims ever reaches the address text — which is what
+  `OI-142` recorded as the reason this could not close through the join. The one new key is
+  `preserves: authority` on the entry over javac's inserted `String.valueOf`: it may propagate
+  an identity of that kind and mint none, because who is called does not change when a value
+  is rendered, while a destination's rendering is a vendor debug string (CP-39).
+
+  **Measured against the callee's own rows:** petclinic's genai module publishes three calls
+  to `customers-service` at `/owners`, `/owners` and `/owners/{ownerId}/pets`, and
+  `spring-petclinic-customers-service` serves `/owners` and `/owners/{ownerId}/pets` — so both
+  sides of each call name the same peer and the same path, character for character. The
+  expectation was re-recorded; the other five pins are unchanged.
+
 - **A hole in an assembled address carries the NAME of the value that fills it**
   (`OI-153`): `"/owners/" + ownerId + "/pets"` publishes `/owners/{ownerId}/pets`, where it
   published `/owners/{}/pets`. The facts named the operand all along — the parameter names the
