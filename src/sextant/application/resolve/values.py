@@ -344,6 +344,12 @@ class ValueIndex:
     # treats the two identically because they ARE identical to it — a parameter, and the
     # sites that hand it a value — and a capture is one calling context like any other.
     callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
+    # Every method's declared PARAMETER NAMES, by symbol — what a hole in a template is
+    # named after (`_joined`). The compiler records them (`local_variable_names`), the
+    # signature carries them, and a position with no recorded name is `None` rather than a
+    # guess: a jar compiled without them is a real case and an invented `arg0` would read as
+    # a name the author wrote.
+    parameters: dict[str, tuple[str | None, ...]]
     # `field_writes.value`: a binding -> every CONSTANT written into it, as argument-grammar
     # entries (`OI-138` cause 2). Separate from `writers` below because there is no crossing
     # to make: the value is in the fact, and `_binding` answers with it rather than
@@ -498,6 +504,20 @@ def value_index(workspace: Workspace) -> ValueIndex:
                 for position in range(min(count, len(bound))):
                     callers.setdefault((body, position), []).append((method, maker))
 
+    parameters: dict[str, tuple[str | None, ...]] = {}
+    for row in workspace.query("method_declarations"):
+        declared = row.get("signature")
+        if declared is None:
+            continue
+        parsed = json.loads(str(declared)) if isinstance(declared, str) else declared
+        if not isinstance(parsed, dict):
+            continue
+        named: list[str | None] = []
+        for position in parsed.get("parameters") or []:
+            found = position.get("name") if isinstance(position, dict) else None
+            named.append(str(found) if isinstance(found, str) and found else None)
+        parameters[str(row["symbol"])] = tuple(named)
+
     # Every method something in this module calls, which the dead-write test below reads.
     called = {
         str(row["callee"]) for row in workspace.query("call_edges") if row["callee"] is not None
@@ -554,6 +574,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         producers={key: tuple(value) for key, value in producers.items()},
         returns={key: tuple(value) for key, value in returns.items()},
         callers={key: tuple(value) for key, value in callers.items()},
+        parameters=parameters,
         constants={key: tuple(value) for key, value in constants.items()},
         writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
@@ -774,6 +795,10 @@ class _Walk:
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
         self._pending: set[_Position] = set()
+        # The hole spellings of the template `_joined` is assembling, one per operand. Held
+        # on the walk rather than threaded through `product` because the text is built in a
+        # comprehension whose shape the coherence rule owns.
+        self._holes: tuple[str, ...] = ()
         # The pending positions a result below has already answered `cycle` about. A
         # result that depends on one is true of THIS path and not of another that reaches
         # the same position by a different route, so it is not memoised.
@@ -1129,7 +1154,29 @@ class _Walk:
         # is what makes a partly-known address possible — an unresolvable hole no longer
         # discards the holes beside it that ARE known.
         per_hole: list[tuple[tuple[_Trail, str | None, str], ...]] = []
-        for operand in operands:
+        # **A hole nobody filled is NAMED after the value that fills it at runtime**, where
+        # the facts name that value (ruled by the user 2026-10-18, one position over from
+        # `<host>`). `"/owners/" + ownerId + "/pets"` is the most ordinary outbound address
+        # there is, and `{}` said "something here" about a parameter the signature names:
+        # `/owners/{ownerId}/pets` is both readable and the SERVER's own spelling of the
+        # same route, so the two sides of one call can finally be compared.
+        #
+        # Only a PARAMETER is named. A hole filled by a call's result — `"?petId=" +
+        # join(petIds)` — has no name to take, and naming it after the method would be
+        # inventing a variable the code does not have.
+        unfilled = [
+            # **A LEADING hole is never named, and that is the user's `<host>` ruling held
+            # one layer down** (`OI-152`). Where the template begins with a hole, that hole
+            # is the authority — `parseHost(service) + "/health"`,
+            # `metaServerAddress + "/services/admin"` — and a reader of an address needs to
+            # know WHO is called, which the local name of the value does not say. Measured
+            # on `apollo-portal`: naming it turned four rows into
+            # `{metaServerAddress}/services/admin`, which reads like a route variable and
+            # answers nothing. The address layer prints `<host>` there instead.
+            _HOLE if at == 0 and template.startswith(_HOLE) else self._named_hole(operand, method)
+            for at, operand in enumerate(operands)
+        ]
+        for operand, hole in zip(operands, unfilled, strict=True):
             reached = self._entry(operand, method, origin, trail, frames)
             settled = tuple(
                 (crossed, str(answer.value), answer.yields)
@@ -1137,10 +1184,19 @@ class _Walk:
                 if answer.kind == LITERAL and answer.literal_kind == STRING
             )
             per_hole.append(settled or ((trail, None, _ADDRESS),))
+        self._holes = tuple(unfilled)
 
         # Nothing anywhere: the caller carries the template unchanged, which is what it
         # did before this arm resolved holes at all.
-        if all(value is None for hole in per_hole for _, value, _ in hole):
+        #
+        # **"Nothing" now includes being unable to NAME a hole.** A template whose every
+        # hole is anonymous says exactly what the extractor's own `value` says, so handing
+        # it back changes nothing and the caller's existing path is shorter. But where a
+        # hole takes a name, the answer is strictly better than the fact —
+        # `/owners/{ownerId}/pets` against `/owners/{}/pets` — and the caller must be given
+        # it even though no hole was FILLED. That is why this is two tests rather than one.
+        filled = any(value is not None for hole in per_hole for _, value, _ in hole)
+        if not filled and all(hole == _HOLE for hole in unfilled):
             return None
 
         reached_out: list[_Reached] = []
@@ -1160,8 +1216,10 @@ class _Walk:
             if not coherent:
                 continue
             text = pieces[0] + "".join(
-                (value if value is not None else _HOLE) + piece
-                for (_, value, _), piece in zip(combination, pieces[1:], strict=True)
+                (value if value is not None else hole) + piece
+                for (_, value, _), hole, piece in zip(
+                    combination, self._holes, pieces[1:], strict=True
+                )
             )
             whole = all(value is not None for _, value, _ in combination)
             # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
@@ -1190,6 +1248,23 @@ class _Walk:
         # Deduplicated on (path, answer): several combinations routinely agree, and two
         # identical answers are one answer (§1c's own rule for distinct destinations).
         return tuple(dict.fromkeys(reached_out)) or None
+
+    def _named_hole(self, operand: Mapping[str, Any], method: str) -> str:
+        """What an unfilled hole PRINTS: `{name}` where the operand is a parameter the
+        facts name, `{}` otherwise.
+
+        The name is the declaration's, read off the signature the compiler recorded — never
+        synthesised. A jar built without parameter names, and an operand that is not a
+        parameter at all, both fall to the anonymous hole, which says exactly as much as it
+        did before: a runtime value belongs here.
+        """
+        if operand.get("kind") != _PARAMETER or operand.get("value") is None:
+            return _HOLE
+        declared = self._index.parameters.get(method, ())
+        position = int(str(operand["value"]))
+        if position >= len(declared) or declared[position] is None:
+            return _HOLE
+        return "{" + str(declared[position]) + "}"
 
     def _through(
         self, method: str, value: int, used_at: int | None, trail: _Trail, frames: "_Frames"

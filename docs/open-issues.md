@@ -393,6 +393,46 @@ rather than an extractor one — to be confirmed by measuring, not assumed.
 > rather than to an `invokedynamic` has no capture list in the facts at all — it arrives as an
 > `instance` entry — so there is nothing for this fold to read. Filed where it belongs if a
 > corpus ever needs it; no corpus here does.
+### OI-153 — a hole in an assembled address is NAMED after the value that fills it
+**Minor · entered and BUILT 2026-10-18, measured on `fixtures/orders-pathvars` and `spring-petclinic-microservices` · `src/sextant/application/resolve/values.py::_joined`**
+
+**Entered as a closed item because it is the user's ruling carried one position over**, after
+they asked why an interior hole should be anonymous at all:
+
+```java
+restTemplate.getForObject("http://customers-service/owners/" + ownerId + "/pets", …);
+```
+
+| | published |
+|---|---|
+| before | `/owners/{}/pets` · peer `customers-service` · partial |
+| after | `/owners/{ownerId}/pets` · peer `customers-service` · partial |
+
+The facts named the operand the whole time — `signature.parameters[0].name == "ownerId"`,
+from the parameter names the compiler records — so `{}` said *something here* about a value
+this analysis could read. And the named form is **the server's own spelling of the same
+route**: `@GetMapping("/owners/{ownerId}/pets")` publishes `/owners/{ownerId}/pets`, so the
+two sides of one call finally read as one address (`OI-151`'s goal, from the other end).
+
+**Three refusals, each measured rather than reasoned:**
+
+* **A LEADING hole is never named.** It is the authority, and `<host>` is what a reader needs
+  there (`OI-152`, the user's own ruling). Measured on `apollo-portal`: naming it turned four
+  rows into `{metaServerAddress}/services/admin`, which reads like a route variable and
+  answers nothing about who is called.
+* **A hole with no name to take keeps `{}`.** `"?petId=" + join(petIds)` fills from a call's
+  RESULT; naming it after the method would invent a variable the code does not have.
+* **A jar built without parameter names keeps `{}`** — the signature then records none, and
+  `arg0` is not a name the author wrote.
+
+**What it is worth today, stated rather than implied: no row in the pinned corpora moves.**
+The estate's outbound rows either carry a URI template already (`/owners/{ownerId}`) or hold
+a leading host hole (`apollo-portal`'s eight). The shape this fixes is the most ordinary
+outbound path there is — `spring-petclinic-microservices`'s genai module builds three of its
+four addresses that way — and those three rows are blocked behind `OI-144`, which is the next
+item. So the yield lands when `OI-144` does, and the fixture is what holds the behaviour until
+then.
+
 ### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
 
@@ -705,7 +745,7 @@ the row with its first queue — *"fewer queues, never a wrong one"*. That is an
 a row to hang it on; this is no row at all, which a reader cannot tell from absence.*
 
 ### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
-**Minor · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
+**Major · raised from Minor 2026-10-18 on measurement (the row is dropped, not degraded) · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 
 Spec 2026-10-18 gave `single_call` and `url_of` a third answer for an assembled address:
 where the walk read part of it, the row publishes the part it read at `partial`
@@ -725,7 +765,22 @@ answers about one piece of evidence** — which is the disease the walk was buil
 **Why it was NOT widened in the same change, stated rather than quietly skipped.** `fluent`
 composes `base + path` and reads both halves with `_string_value`, so carrying an expression
 through means deciding what a partly-known base composed with a known path IS — three new
-cases (expression base, expression path, both) in a function the spec did not design. The
+cases (expression base, expression path, both) in a function the spec did not design.
+
+**Re-measured 2026-10-18, and it is worse than this entry said: the row is DROPPED, not
+degraded.** One address through the two engines:
+
+```java
+restTemplate.getForObject("http://customers-service/owners/" + ownerId + "/pets", …);  // single_call
+builder.build().get().uri("http://customers-service/owners/" + ownerId + "/pets");      // fluent
+```
+```
+single_call:  path='/owners/{ownerId}/pets'  peer='customers-service'  partial
+fluent:       path=NULL                      peer=NULL                unresolved
+```
+
+`customers-service` and the path pattern are both in the facts, and the fluent row publishes
+neither. That is three of `spring-petclinic-microservices`'s four genai calls. The
 cross-engine lesson of `OI-143` is to carry the QUESTION across engines, and this is it
 carried, with its answer deferred rather than guessed.
 

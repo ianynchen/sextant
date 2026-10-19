@@ -93,9 +93,9 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     if argument.get("kind") == "string":
         peer, path = split_url(text)
         return peer, path, str(Resolution.RESOLVED)
-    if argument.get("kind") == EXPRESSION and _HOLE in text and text.replace(_HOLE, ""):
+    if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
-        if peer is not None and (_HOLE in peer or carries_expression(peer)):
+        if peer is not None and (_holes(peer) or carries_expression(peer)):
             peer = None
         return peer, path, str(Resolution.PARTIAL)
     return None, None, str(Resolution.UNRESOLVED)
@@ -106,6 +106,25 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
 # stay separable; `test_a_hole_is_spelled_the_way_the_walk_spells_it` is the gate
 # that keeps the two spellings one.
 _HOLE = "{}"
+# A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that
+# fills it (`{ownerId}` — ruled by the user 2026-10-18, `values._named_hole`). Both are
+# holes, and the distinction that matters here is against a CONFIGURATION placeholder:
+# `${billing.host}` also ends in `}` and is NOT a hole but a deployment value the config
+# join resolves per environment. So the `$` is excluded rather than matched, which is
+# `carries_expression`'s own rule in the one notation a regex can state.
+_HOLES = re.compile(r"(?<!\$)\{[^{}]*\}")
+
+
+def _holes(text: str) -> tuple[str, ...]:
+    """Every hole in `text`, in order, as written."""
+    return tuple(_HOLES.findall(text))
+
+
+def _without_holes(text: str) -> str:
+    """`text` with every hole removed — what must survive for a template to be saying
+    anything at all (spec 2026-10-18 §3). `{}{}` states no address, and neither does
+    `{a}{b}`: two runtime values and nothing the code wrote."""
+    return _HOLES.sub("", text)
 
 
 def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]:

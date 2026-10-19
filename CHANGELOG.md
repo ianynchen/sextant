@@ -14,6 +14,24 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A hole in an assembled address carries the NAME of the value that fills it**
+  (`OI-153`): `"/owners/" + ownerId + "/pets"` publishes `/owners/{ownerId}/pets`, where it
+  published `/owners/{}/pets`. The facts named the operand all along — the parameter names the
+  compiler records — and the named form is the SERVER's own spelling of the same route, so the
+  caller's row and the callee's row finally read as one address.
+
+  Three refusals, each measured: a LEADING hole is never named, because it is the authority and
+  `<host>` is what a reader needs there (naming it turned four `apollo-portal` rows into
+  `{metaServerAddress}/services/admin`); a hole filled from a call's result keeps `{}`, having
+  no name to take; and a jar compiled without parameter names keeps `{}` rather than inventing
+  `arg0`.
+
+  **No row in the pinned corpora moves.** The shape is the most ordinary outbound path there
+  is — petclinic's genai module builds three of its four addresses that way — but those rows
+  are blocked behind `OI-144`, which this measurement raised from Minor to Major: the fluent
+  engine does not read an assembled address at all, so it drops the row rather than degrading
+  it, while `single_call` publishes peer and path for the identical code.
+
 - **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
   read instead of answered "it comes from outside what was scanned". A lambda body is a
   synthetic method whose leading parameters are the captured values, and nothing bound them —
