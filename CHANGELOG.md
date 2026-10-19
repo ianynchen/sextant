@@ -14,6 +14,7 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+<<<<<<< HEAD
 - **A hole in an assembled address carries the NAME of the value that fills it**
   (`OI-153`): `"/owners/" + ownerId + "/pets"` publishes `/owners/{ownerId}/pets`, where it
   published `/owners/{}/pets`. The facts named the operand all along — the parameter names the
@@ -31,6 +32,26 @@ here would restate those documents rather than add anything.
   are blocked behind `OI-144`, which this measurement raised from Minor to Major: the fluent
   engine does not read an assembled address at all, so it drops the row rather than degrading
   it, while `single_call` publishes peer and path for the identical code.
+=======
+- **An address whose HOST could not be read says so by name: `<host>/services/admin`, not
+  `{}/services/admin`** (ruled by the user, `OI-152`). A partly-known address has published the
+  read half since `OI-143`, with the unread half as a bare `{}` — which can mean a host, a path
+  segment or a query value, so a reader could neither act on it nor tell it from a defect in
+  the reader. A LEADING hole is the authority and is now named; an interior hole keeps `{}`,
+  because there it honestly means "a runtime value in this path segment".
+
+  Angle brackets rather than braces, which is not cosmetic: `{name}` is URI-template syntax in
+  every framework modelled here (`{petId}`, `{appId}` are variables the framework substitutes
+  per request) and `derive_endpoints` reads variable names out of `{…}`, so a `{host}` would be
+  indistinguishable from a path variable called `host`.
+
+  **Measured:** `apollo-portal`'s eight outbound rows — `<host>/health`,
+  `<host>/services/admin`, `<host>/services/config`, `<host>?env={env}` — and nothing else in
+  the estate moves. The field expectation was re-recorded in the same commit and the other five
+  pins are unchanged. `OI-152` records the chain behind that host, including the hop that keeps
+  it unknowable: where several meta servers are configured, Apollo picks one by periodic health
+  check.
+>>>>>>> origin/main
 
 - **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
   read instead of answered "it comes from outside what was scanned". A lambda body is a

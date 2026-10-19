@@ -258,6 +258,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "arguments.an-unreadable-HOST-is-NAMED-not-a-bare-hole": Guard(
+        what="a partly-known address whose LEADING hole is the unread authority publishes "
+        "`<host>`, not a bare `{}`",
+        why="ruled by the user on 2026-10-18, against the bare hole this shipped with: *"
+        "\"I don't think it should be a general purpose holder as {}, since this can mean "
+        "anything. It probably should be specific, like {host}, indicating we can't find the "
+        'host rather than something else"*. A reader seeing `{}/services/admin` cannot tell '
+        "which half was unread, nor tell the hole from a defect in this reader — and "
+        "`apollo-portal` publishes eight such rows. Angle brackets rather than braces "
+        "because `{name}` is URI-template syntax in every framework modelled here and "
+        "`derive_endpoints` reads variable names out of `{…}`, so a `{host}` would be "
+        "indistinguishable from a path variable called host",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="        leading = _holes(path)[:1] if path is not None else ()\n"
+                "        if path is not None and leading and path.startswith(leading[0]):",
+                replace="        leading = ()  # guard disabled by scripts/guard_check.py\n"
+                "        if False:",
+            ),
+        ),
+    ),
     "values.a-hole-is-NAMED-after-the-value-that-fills-it": Guard(
         what="a hole the walk could not fill prints the NAME of the parameter that fills it "
         "at runtime, where the facts name one",

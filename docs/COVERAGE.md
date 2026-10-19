@@ -1953,6 +1953,15 @@ the field corpus) live in
   those three is the truth and not a gap — but it also meant **no field pin exercised an
   outbound address until now**, and any "what would this capability buy" figure measured
   over this corpus was weighted toward inbound (`OI-138`).*
+- **A published address may be PARTLY known, and says which half it read.** Where the code
+  assembles an address and this analysis read some of it, the row publishes what it read at
+  `partial` — and an unread HOST is written `<host>`, not a bare hole (ruled 2026-10-18,
+  `OI-152`): `<host>/services/admin` says the path was read and the authority was not. An
+  interior hole stays `{}`, which there means a runtime value inside a path segment. Measured:
+  `apollo-portal`'s eight outbound rows. **A `path` holding either is a statement about PART of
+  an address and is not an exact address** — a stitcher matching it as literal text would join
+  two rows on a marker they share.
+
 - **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
   The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything
   else Spring is 6.1.6 and later.

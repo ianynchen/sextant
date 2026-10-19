@@ -97,6 +97,21 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
         peer, path = split_url(text)
         if peer is not None and (_holes(peer) or carries_expression(peer)):
             peer = None
+        leading = _holes(path)[:1] if path is not None else ()
+        if path is not None and leading and path.startswith(leading[0]):
+            # **A LEADING hole is the HOST, and it is named `<host>`** (ruled by the user
+            # 2026-10-18). `parseHost(service) + "/health"` leaves nothing before the first
+            # `/`, so the unread half is the authority — and a bare `{}` there can mean
+            # anything, which is why the ruling was to say WHICH half is missing.
+            #
+            # An INTERIOR hole is named too, but after the VALUE that fills it
+            # (`/owners/{ownerId}/pets` — `OI-153`, `values._named_hole`), because there the
+            # name is the route's own variable and makes the caller's row comparable with the
+            # server's. In the authority position a local name says nothing about WHO is
+            # called, which is why the walk leaves a leading hole anonymous and this renames
+            # it. Matched through `_holes` rather than against `{}` so the two stay one rule
+            # if that ever changes.
+            path = _UNREADABLE_HOST + path[len(leading[0]) :]
         return peer, path, str(Resolution.PARTIAL)
     return None, None, str(Resolution.UNRESOLVED)
 
@@ -106,6 +121,19 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
 # stay separable; `test_a_hole_is_spelled_the_way_the_walk_spells_it` is the gate
 # that keeps the two spellings one.
 _HOLE = "{}"
+# **What an unread HOST is published as.** Ruled by the user on 2026-10-18, against a bare
+# `{}`: a hole has to say which half of the address was not read, or a reader can neither act
+# on it nor tell it from a defect in this reader.
+#
+# **Angle brackets, not braces, and that is not cosmetic.** `{name}` is URI-template syntax
+# in every framework modelled here — `{petId}`, `{ownerId}`, `{appId}` are variables the
+# FRAMEWORK substitutes per request — and `derive_endpoints` reads variable names out of
+# `{…}`. A `{host}` would be indistinguishable from a path variable called `host`, to a
+# reader and to this repository's own passes. No framework here spells a path variable with
+# `<>`.
+_UNREADABLE_HOST = "<host>"
+
+
 # A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that
 # fills it (`{ownerId}` — ruled by the user 2026-10-18, `values._named_hole`). Both are
 # holes, and the distinction that matters here is against a CONFIGURATION placeholder:
