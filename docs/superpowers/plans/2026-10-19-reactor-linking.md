@@ -2,12 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status: BLOCKED on the six decisions in the spec's §7.** Tasks 2 onward must not start
-before they are approved — each one builds a mechanism those decisions shape.
+**Status: decisions settled 2026-10-19.** 1–5 approved; **6 REFUSED** — a call whose
+authority went unread is not linked by path alone. The measured target is therefore **22
+links, not 27**: 18 endpoint plus 9 participant across `petclinic` and `mall-swarm`, and 0 on
+`apollo`, whose five rows stay unmatched with their reason.
 
 **Goal:** Join the two sides of a cross-service call. Sextant reads that `genai` calls
 `POST /owners/{ownerId}/pets` at `customers-service` and that `customers-service` serves
-exactly that, and nothing connects them. Measured target: **27 of 32 outbound rows across
+exactly that, and nothing connects them. Measured target: **22 of 32 outbound rows across
 three real systems gain a link**, from 0 today.
 
 **The deliverable is the document and the `links` table, not a COVERAGE cell.** No cell in
@@ -84,12 +86,14 @@ measured), §4 (a gateway route is a path prefix, and why these links are `resol
 ## Task 1 — the participant set, and the cost measurement the spec promised
 
 - [ ] `stitch/participants.py`: the reactor's non-BOM modules from the same `<modules>` walk
-      `analyze` uses, each with its bundle; a module with no bundle is `absent` with that
-      reason.
-- [ ] `participants` in `schema.sql` per `D01`: service or external, name, aliases, bundle
+      `analyze` uses, each with its module WORKSPACE (the user's choice — not bundles); a
+      module with no workspace is `absent` with that reason.
+- [ ] `participants` in `schema.sql` per `D01`: service or external, name, aliases, workspace
       location, commit.
-- [ ] The federated `endpoints` view over the bundles' Parquet — one view over `M` paths, no
-      import, and a bundle unreachable at query time fails naming it (`D01`'s obligation).
+- [ ] The federated `endpoints` view over the module workspaces — the system workspace copies
+      nothing, and a workspace unreachable at query time fails naming it (`D01`'s obligation,
+      which survives the deviation). The spec's §2 states what reading workspaces gives up
+      against `D01`'s bundle rule and why it does not generalise past one build.
 - [ ] **Measure `ruoyi-vue-pro`**, the scale case at 7,244 files, and record reads and wall
       time in the spec's §6 beside the counted figures. §8.7 says the number is a design
       input, and this is the one place this design guessed.
@@ -98,14 +102,17 @@ measured), §4 (a gateway route is a path prefix, and why these links are `resol
 ## Task 2 — steps 1, 2 and 4
 
 - [ ] `stitch/links.py`: protocol equality, the discovery-name key, the verb-and-path key,
-      and `M06`'s step 4 tier rule. Decision 6's path-only key only if approved.
+      and `M06`'s step 4 tier rule. **Decision 6's path-only key is NOT built** — a row whose
+      path begins with the unread-authority marker is unmatched with that as its reason.
+- [ ] A guard for the refusal: a `<host>`-bearing row must mint no link even where exactly
+      one participant serves the path. Apollo is the live case and the fixture carries one.
 - [ ] `links` in `schema.sql` per `D01`: outbound endpoint, inbound endpoint, trust fields,
       candidates.
 - [ ] `fixtures/reactor-twoservice`: two modules, one calling an address the other serves, so
       the mechanism has a fixture that does not depend on `examples/` being cloned.
-- [ ] **Re-run the spec's §1 yield table.** The 18 endpoint links and 9 participant links are
-      the acceptance measure; a number below them is a defect in this task, not a new
-      baseline.
+- [ ] **Re-run the spec's §1 yield table.** 18 endpoint links and 9 participant links are the
+      acceptance measure, and **0 on `apollo`** is the other half of it: a link there means
+      decision 6 crept in. A number below is a defect in this task, not a new baseline.
 - [ ] Guards for: a link is never minted where the protocols differ; several survivors are
       `narrowed` with every candidate and never a pick; an unmatched call into an `absent`
       participant is attributed to the gap.
@@ -162,5 +169,6 @@ Stated here so no reader takes `FR-8` as delivered:
 - **no structural compatibility** — `M06` step 3, and its open decision 4;
 - **no path-shape matching** — `/v1/orders/42` against `/v1/orders/{id}`;
 - **no external participants**;
+- **no path-only link for an unread authority** — decision 6, refused;
 - **no message, gRPC or SOAP keys** beyond what protocol equality and wire identity already
   give; `M06`'s open decisions 2 and 3 are untouched.

@@ -53,14 +53,26 @@ participant set is those modules.
 sextant system analyze examples/spring-petclinic-microservices --environment default
 ```
 
-**Participants are read from BUNDLES, not from workspaces**, which keeps `D01`'s storage
-claim intact: the system workspace holds two native tables and federates the rest as views
-over the bundles' Parquet. A module whose bundle is missing is a participant marked
-`absent` with that reason, and `M06`'s rule applies — an unmatched call into an absent
-participant is attributed to the gap, not reported as an architectural finding.
+**Participants are read from the module WORKSPACES `analyze` already wrote** (the user's
+choice, 2026-10-19), not from exported bundles. A module whose workspace is missing is a
+participant marked `absent` with that reason, and `M06`'s rule applies — an unmatched call
+into an absent participant is attributed to the gap, not reported as an architectural
+finding.
 
-So `system analyze` requires `module export` to have run per module. That is `M05`'s own
-division of labour said in one reactor's terms: *it fetches, it does not build*.
+**This is a deviation from `D01` and it is declared rather than reasoned around.** `D01`'s
+system-scope rule says the estate's graphs are *"views over the bundles"* and that federating
+Parquet *"cannot drift from the bundle, because it IS the bundle"*. Reading workspaces keeps
+the half of that rule which matters — **the system workspace still copies nothing**, it holds
+two native tables and reads the module workspaces through a view — and gives up the
+anti-drift half.
+
+Why that trade is right HERE and nowhere else: a reactor is one build, so every module
+workspace comes from the same run, and there is no second artefact for one to drift from.
+Requiring bundles instead would add a `module export` per module before `system analyze`
+could say anything, for an anti-drift guarantee that a single build already provides. When
+`M05` arrives and participants come from separate runs of separate repositories, the bundle
+rule is the right one and this one does not generalise — which is exactly what the `D01`
+amendment must say.
 
 ---
 
@@ -68,15 +80,23 @@ division of labour said in one reactor's terms: *it fetches, it does not build*.
 
 ### Step 0 — environment
 
-**Not a no-op, and an earlier draft of this design had it wrong.** A module's bundle declares
-its environments (`petclinic`'s are `default` and `docker`) and `resolved_config` carries an
-`environment` column. `--environment` selects one, defaulting to `default`, and every
-comparison uses the values resolved for it. `M06`'s rule is untouched: *expression → this
-environment's value → compare values*, never expression text.
+**An addition to the approved scope, declared.** The scope the user approved said *"no
+environments"*, and that was right about `system.yml`'s single-environment declaration, which
+this slice does not build. It is wrong about the mechanism: a module's manifest declares its
+environments (`petclinic`'s are `default` and `docker`) and `resolved_config` carries an
+`environment` column, so a comparison that ignored it would be comparing values from whatever
+environment happened to be in the row.
 
-Measured on `petclinic`: the gateway's eight route keys are identical under both
-environments, so this changes no link there today. The flag exists because the mechanism is
-real, not because this corpus exercises it.
+So `--environment` selects one, defaulting to `default`, and every comparison uses the values
+resolved for it — `M06`'s rule untouched: *expression → this environment's value → compare
+values*, never expression text.
+
+**It costs nothing to refuse.** Measured on `petclinic`, the gateway's eight route keys are
+identical under both environments, so no link in the corpus moves either way. The flag is
+here because the column exists, not because this corpus exercises it; if the user would
+rather not carry a flag this slice cannot demonstrate, the alternative is to refuse a
+comparison over any key whose value differs across environments, which is a smaller promise
+and also honest.
 
 ### Step 1 — protocol
 
@@ -209,16 +229,24 @@ will be measured in Task 1 before the matcher is written.
 
 | # | decision | amendment if approved |
 |---|---|---|
-| 1 | **The participant set may be a reactor**, discovered from `<modules>`, not only `M05`'s manifest | `M05` Inputs, `M06` Inputs, `M00`'s `system analyze` |
+| 1 | **APPROVED.** The participant set may be a reactor, discovered from `<modules>`, not only `M05`'s manifest — and read from the module **workspaces** of that one build, not from bundles | `M05` Inputs, `M06` Inputs, `M00`'s `system analyze`, and `D01`'s system-scope rule (§2 states what the workspace reading gives up and why it does not generalise past one build) |
 | 2 | **Step 3 (structural compatibility) is not in this slice** | `M06` Behaviour — a note that steps 1–2 and 4 ship first |
 | 3 | **Path templates match by STRING, not by shape, in this slice** | `M06` step 2 — the shape rule stays specified, unbuilt |
 | 4 | **No `proposals.yml`**; a `narrowed` link is recorded in `links` with its candidates and nowhere else | `M06` "Ambiguity goes to a person" — blocked on `D03`/`M01` |
 | 5 | **No external participants**; a call matching nothing is unmatched, not a link to a declared external host | `M06` External participants — blocked on `system.yml` |
 | 6 | **An unread authority may still match by path alone.** `<host>/services/admin` links to the one module serving `/services/admin`. It is `name_match` and `M06` permits path-only matching, but it is the one key built on an address half nobody read — and it is worth 5 of Apollo's 10 rows, 0 elsewhere | `M06` step 2 — a fourth row in the key table |
 
-**Decision 6 is the one I am least sure of and it is a false-positive risk**, so it is stated
-rather than folded in: the real target of a call whose host went unread may be a service
-outside the reactor, and uniqueness inside the reactor cannot see that. For Apollo it is
-correct — the portal does ask the meta service for config-service addresses — which is
-evidence for it and not proof of it. Approving 1–5 and refusing 6 costs the five Apollo links
-and nothing else.
+**Decision 6 was REFUSED by the user, 2026-10-19.** A call whose authority went unread is not
+linked by path alone: the real target may be a service outside the reactor, and uniqueness
+inside the reactor cannot see that. For Apollo the link would have been correct — the portal
+does ask the meta service for config-service addresses — which is evidence for the rule and
+not proof of it, and `M06` calls a wrong link fabrication rather than imprecision.
+
+**So the third key in §3's table is NOT built**, and Apollo's five rows stay unmatched with
+their reason. The yield this design is measured against is therefore **22 links, not 27**:
+18 endpoint links and 9 participant links across `petclinic` and `mall-swarm`, and 0 on
+`apollo`. The §1 table's Apollo row records what refusing costs, which is the point of
+keeping it.
+
+**Decisions 2–5 were approved as scope statements**, each blocked on a component that does
+not exist; the user's chosen scope named steps 1–2 and 4 explicitly.
