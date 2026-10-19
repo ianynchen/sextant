@@ -55,8 +55,8 @@
       "(unresolved) lb://genai-service",
       "(unresolved) lb://vets-service",
       "(unresolved) lb://visits-service",
-      "GET (unresolved)",
-      "GET /owners/{ownerId}"
+      "GET /owners/{ownerId}",
+      "GET /pets/visits?petId={petId}"
     ]
   }
 }

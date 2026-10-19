@@ -546,10 +546,36 @@ class FieldWriteFact(BaseModel):
     kind: Literal["field_write"] = "field_write"
     document_id: str
     field: str
-    from_parameter: int
+    # **Exactly one of these two says where the value came from.** `from_parameter` is the
+    # write the fact was born for — `this.f = parameter` — and `value` is the one added on
+    # 2026-10-18 (`OI-138` cause 2): `private String f = "literal"`, which javac compiles
+    # into the constructor as `ALOAD 0; LDC; PUTFIELD`. That write has no parameter to point
+    # at, so it emitted NO fact and the walk answered `no_writer` about a literal one line
+    # above the read. Both are optional, so a fact written before either reads exactly as it
+    # did and no schema version moves.
+    from_parameter: int | None = None
+    value: CallArgument | None = None
     # The writing method's own symbol, in the form `call_sites.caller` carries, so a write
     # and a call name their method identically and the walk needs no reconstruction.
     written_by: str | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "FieldWriteFact":
+        """EXACTLY ONE of `from_parameter` and `value`, enforced rather than described.
+
+        Both keys are optional so the fact stays additive, which made "exactly one" a
+        sentence in a docstring that nothing checked: neither set, and both set, each
+        validated. A fact with neither says a write happened and names no source; a fact with
+        both leaves a reader to guess which source the value came from. GUIDELINES §8's rule
+        about architecture rules applies to a fact-stream contract (§7) — it is enforceable,
+        so it is enforced.
+        """
+        if (self.from_parameter is None) == (self.value is None):
+            raise ValueError(
+                "field_write names exactly one source: `from_parameter` for "
+                "`this.f = parameter`, or `value` for `this.f = <constant>`"
+            )
+        return self
 
 
 class ConstantFact(BaseModel):

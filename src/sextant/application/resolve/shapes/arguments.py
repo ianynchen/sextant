@@ -571,6 +571,14 @@ def field_declarations(workspace: Workspace) -> FieldDeclarations:
     `method_declarations` and `fields` — the builder `Workspace.once` keys on."""
     written_from_parameter: dict[str, int] = {}
     for row in workspace.query("field_writes"):
+        # **A write from a CONSTANT carries no parameter** (`OI-138` cause 2), and this rung
+        # is about parameters alone: it joins a `field`-kind argument back to the constructor
+        # position it was assigned from. A constant write is answered by the value walk
+        # instead, off the same fact's `value`, so skipping it here loses nothing — and
+        # reading it as an int raised `invalid literal for int(): 'None'` on the whole
+        # resolve, which is how this line came to be guarded.
+        if row["from_parameter"] is None:
+            continue
         # First write wins, in the query's own (field, from_parameter) order:
         # two constructors assigning one field from different positions are
         # two candidate answers, and a deterministic first is the only honest

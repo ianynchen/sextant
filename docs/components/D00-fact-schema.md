@@ -349,7 +349,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
-| `field_write` | Constructor symbol, the assigned field's symbol, the source parameter's ordinal | The field resolution ladder (2F) |
+| `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the constant it was written from | The field resolution ladder (2F) |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
 | `config_entry` | `key_raw`, `key_path`, `value`, source document, `doc_index` (§5c) | Configuration resolution |
@@ -1135,16 +1135,40 @@ joins a `method_return` to the caller's own `result` id; the fact ships ahead of
 that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
 carries it as `OI-15`.
 
-**`field_write` is a fact of its own, constructors only, direct traces only** — a
-constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside
-`<init>` whose value traces straight to a parameter produces `{kind: field_write, field:
-<symbol>, from_parameter: N}`; a computed assignment — concatenation, a default
-expression, anything but a direct load of the parameter — emits nothing, and the
-resolution that would have followed it degrades honestly rather than guessing a source.
-Setter injection is deliberately out of this fact's reach — a named gap, not an
-omission.
+**`field_write` is a fact of its own, ANY instance method, direct traces only** — a method
+assigns a parameter, or a constant, directly to field F. The JVM mapping: a `PUTFIELD` whose
+receiver is `this` and whose value is either a bare parameter load or an `LDC` constant,
+producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus **exactly
+one** of `from_parameter: N` or `value: <argument-grammar entry>`. A computed assignment —
+concatenation, a default expression, a call's result, anything but those two — emits nothing,
+and the resolution that would have followed it degrades honestly rather than guessing a
+source.
 
-**The widening is specified as capability 9.19 and is DEFERRED, not built** (spec
+Three things it deliberately does not report, each because reporting them would be a claim
+nobody can check:
+
+* a write a LATER write in the same basic block overwrites, which no read can observe
+  (`private String f = "default"` beside `this.f = parameter` in one constructor). A later
+  write behind a BRANCH leaves the earlier live, so that one is reported;
+* a `PUTSTATIC`, and a write whose receiver is another object — `other.f = …` loads that
+  object rather than `this`, so the receiver check excludes it;
+* a constant whose kind the §5 argument grammar has no entry for (a `float`, a method handle).
+
+**History, because the fact's reach changed twice in one week:** constructors only until
+2026-10-18, when the `<init>` filter came off and the writes found on real code roughly
+tripled (`spring-petclinic-rest` 86 → 237, `apollo-portal` 553 → 1,638, spec
+`2026-10-18-the-sixth-edge-design.md` §0); then `value` on 2026-10-18 (`OI-138` cause 2),
+which is how a field holding a literal host became readable at all. Both keys are OPTIONAL,
+so a fact written before either reads exactly as it did and no schema version moved.
+
+**Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-18**, in two
+steps: the walk's sixth edge reads `written_by` and crosses into the writing method (PR #47),
+and `value` carries a constant write (`OI-138` cause 2). What follows describes the state
+before that and is kept because the measurement in it is still the baseline every later
+figure is compared against. The remaining unread shapes are a write from a call's RESULT and
+from a static initialiser (CP-33 rows 2, 6, 7).
+
+**Originally specified as capability 9.19 and deferred** (spec
 `docs/superpowers/specs/2026-09-22-value-resolution-design.md` §4; ruled 2026-10-17,
 `OI-136`). The backward value walk ships with five of its six edge kinds, and `no_writer`
 is the honest answer where a binding is written outside an initialiser — 16 of the 756

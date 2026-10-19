@@ -21,4 +21,11 @@ public class PublisherWiring {
     public OrderPublisher auditPublisher(KafkaTemplate<String, String> kafkaTemplate) {
         return new OrderPublisher("orders-audit", kafkaTemplate);
     }
+
+    /** The field whose constant initialiser its own constructor overwrites: the row is
+     *  `orders-overwritten`, and `never-reached-default` is a value no read can observe. */
+    @Bean
+    public OverwrittenPublisher overwrittenPublisher(KafkaTemplate<String, String> kafkaTemplate) {
+        return new OverwrittenPublisher("orders-overwritten", kafkaTemplate);
+    }
 }

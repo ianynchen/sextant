@@ -1,7 +1,9 @@
 package dev.sextant.extractor;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.TreeMap;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
@@ -11,9 +13,14 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
+import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TableSwitchInsnNode;
+import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
@@ -269,23 +276,134 @@ public final class MethodFlow {
         for (AbstractInsnNode insn : method.instructions) {
             if (insn.getOpcode() >= 0) real.add(insn);
         }
+        int[] block = basicBlocks(method, real);
         List<String> lines = new ArrayList<>();
         for (int i = 0; i + 2 < real.size(); i++) {
             if (!(real.get(i) instanceof VarInsnNode receiverLoad)
                     || receiverLoad.getOpcode() != Opcodes.ALOAD || receiverLoad.var != 0) {
                 continue;
             }
-            if (!(real.get(i + 1) instanceof VarInsnNode valueLoad) || !isLoad(valueLoad.getOpcode())) {
-                continue;
-            }
             if (!(real.get(i + 2) instanceof FieldInsnNode put) || put.getOpcode() != Opcodes.PUTFIELD) {
                 continue;
             }
-            int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
-            if (parameterIndex < 0) continue;
-            lines.add(fieldWriteJson(documentId, methodSymbol, put, parameterIndex));
+            // **A write the SAME BASIC BLOCK overwrites never happens, and reporting it
+            // publishes a value nothing can read.** `private String topic = "default";`
+            // plus `this.topic = topic;` in the one constructor puts both writes in one
+            // straight line — `ldc; putfield; aload_1; putfield`, measured — and the
+            // initialiser is dead on every path. Found by review before this shipped, where
+            // the dead literal was published as a `resolved` destination.
+            //
+            // **Only within one block, which is sound in the under-reporting direction.**
+            // A later write behind a branch (`if (p) this.f = "b";`) leaves the earlier one
+            // live when the branch is not taken, so it is kept. The case this therefore
+            // still over-reports is an initialiser overwritten on EVERY branch of an
+            // if/else, which needs post-dominance rather than a block comparison; the
+            // register carries it rather than this comment pretending otherwise.
+            if (overwrittenInBlock(real, block, i, put)) continue;
+            AbstractInsnNode written = real.get(i + 1);
+            // **Two kinds of write, and the second was invisible until 2026-10-18**
+            // (`OI-138` cause 2). `this.f = parameter` loads the value from a local slot;
+            // `private String f = "literal"` loads it from the CONSTANT POOL, which javac
+            // compiles into the constructor as `ALOAD 0; LDC; PUTFIELD`. The fact could only
+            // say "from parameter N", so a constant write had nothing to point at and no
+            // fact was emitted — the walk then answered `no_writer` about a literal one line
+            // above the read. Measured on `spring-petclinic-microservices`, where an outbound
+            // HOST is held that way and the published row carried no address at all.
+            if (written instanceof VarInsnNode valueLoad && isLoad(valueLoad.getOpcode())) {
+                int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
+                if (parameterIndex < 0) continue;
+                lines.add(fieldWriteJson(documentId, methodSymbol, put, parameterIndex, null));
+            } else if (written instanceof LdcInsnNode constant) {
+                // The declared type is handed over for the shared mapping's sake; for a
+                // FIELD write it never decides anything, because javac has no `LDC` for an
+                // int small enough to be a boolean. It is the call-site caller that needs
+                // it.
+                String value = literalEntry(constant.cst, Type.getType(put.desc));
+                // A constant with no kind in D00 §5's table emits NOTHING rather than a
+                // write whose value nobody can read.
+                //
+                // **The small-integer opcodes (`ICONST_*`, `BIPUSH`, `SIPUSH`) are not read
+                // here, and the honest reason is not frequency.** A census over every
+                // compiled module under `examples/` (3,568 classes, 56 modules) counts 7
+                // `LDC` writes against 6 small-constant ones (`denyAll:Z`, `callCount:I`,
+                // `accumulatedCallTime:J`), so "no measured input" would be false — what is
+                // true is that none of the six is an ADDRESS or a destination, which is what
+                // a consumer of this fact reads it for. An int arm would be a mechanism with
+                // measured input and no measured consumer.
+                if (value != null) {
+                    lines.add(fieldWriteJson(documentId, methodSymbol, put, -1, value));
+                }
+            }
         }
         return lines;
+    }
+
+    /** Whether a LATER write to the same field sits in the same basic block as the write at
+     *  {@code i}, which makes that write dead.
+     *
+     *  <p>Same field means same owner and name: a write to another object's field of the
+     *  same name is a different field, and the {@code ALOAD 0} check above has already
+     *  established that both of these write {@code this}.
+     */
+    private static boolean overwrittenInBlock(
+            List<AbstractInsnNode> real, int[] block, int i, FieldInsnNode put) {
+        for (int j = i + 3; j < real.size(); j++) {
+            if (block[j] != block[i + 2]) return false;
+            if (real.get(j) instanceof FieldInsnNode later
+                    && later.getOpcode() == Opcodes.PUTFIELD
+                    && later.owner.equals(put.owner)
+                    && later.name.equals(put.name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A block number per REAL instruction: two instructions share one when control cannot
+     *  enter or leave between them.
+     *
+     *  <p>A boundary is a jump or switch (control leaves), a {@code return}/{@code throw}
+     *  (likewise), or a label something jumps to or a handler covers (control enters). A
+     *  label javac emits only to anchor a line number is NOT a boundary — treating it as one
+     *  would put every statement in its own block, which is how a first attempt at this left
+     *  the dead-write case unfixed.
+     */
+    private static int[] basicBlocks(MethodNode method, List<AbstractInsnNode> real) {
+        Set<LabelNode> entered = new HashSet<>();
+        for (AbstractInsnNode insn : method.instructions) {
+            if (insn instanceof JumpInsnNode jump) {
+                entered.add(jump.label);
+            } else if (insn instanceof TableSwitchInsnNode table) {
+                entered.add(table.dflt);
+                entered.addAll(table.labels);
+            } else if (insn instanceof LookupSwitchInsnNode lookup) {
+                entered.add(lookup.dflt);
+                entered.addAll(lookup.labels);
+            }
+        }
+        if (method.tryCatchBlocks != null) {
+            for (TryCatchBlockNode handler : method.tryCatchBlocks) {
+                entered.add(handler.handler);
+                entered.add(handler.start);
+                entered.add(handler.end);
+            }
+        }
+        int[] block = new int[real.size()];
+        int current = 0;
+        int at = 0;
+        for (AbstractInsnNode insn : method.instructions) {
+            if (insn instanceof LabelNode label && entered.contains(label)) current++;
+            if (insn.getOpcode() < 0) continue;
+            block[at++] = current;
+            int opcode = insn.getOpcode();
+            boolean leaves = insn instanceof JumpInsnNode
+                    || insn instanceof TableSwitchInsnNode
+                    || insn instanceof LookupSwitchInsnNode
+                    || (opcode >= Opcodes.IRETURN && opcode <= Opcodes.RETURN)
+                    || opcode == Opcodes.ATHROW;
+            if (leaves) current++;
+        }
+        return block;
     }
 
     /** One of the five {@code xLOAD} opcodes — {@code ILOAD} through {@code
@@ -324,7 +442,8 @@ public final class MethodFlow {
     }
 
     private static String fieldWriteJson(
-            String documentId, String methodSymbol, FieldInsnNode field, int fromParameter) {
+            String documentId, String methodSymbol, FieldInsnNode field, int fromParameter,
+            String value) {
         TreeMap<String, String> fact = new TreeMap<>();
         fact.put("kind", JsonOut.string("field_write"));
         fact.put("document_id", JsonOut.string(documentId));
@@ -340,7 +459,14 @@ public final class MethodFlow {
         // names them, so carrying that form makes the edge a direct read instead of a
         // reconstruction nobody can check.
         fact.put("written_by", JsonOut.string(methodSymbol));
-        fact.put("from_parameter", String.valueOf(fromParameter));
+        // **Exactly one of the two**, and which one says what kind of write it was: a
+        // parameter index, or the constant itself as an argument-grammar entry. `value` is
+        // additive and absent by default, so every fact written before it reads unchanged
+        // and `FACT_SCHEMA_VERSION` does not move — the property `written_by` and
+        // `receiver_parameter` established, proved per release by
+        // `scripts/probes/fact_additivity/run.py`.
+        if (fromParameter >= 0) fact.put("from_parameter", String.valueOf(fromParameter));
+        if (value != null) fact.put("value", value);
         return JsonOut.object(fact);
     }
 
@@ -556,30 +682,10 @@ public final class MethodFlow {
                 : argument("parameter", String.valueOf(index), null, null);
         }
         if (producer instanceof LdcInsnNode constant) {
-            Object literal = constant.cst;
-            if (literal instanceof String text) return argument("string", JsonOut.string(text), null, null);
-            if (literal instanceof Integer number) {
-                return declaredType.getSort() == Type.BOOLEAN
-                    ? argument("boolean", String.valueOf(number.intValue() != 0), null, null)
-                    : argument("int", String.valueOf(number), null, null);
-            }
-            if (literal instanceof Long number) return argument("long", String.valueOf(number), null, null);
-            // An LDC of a Type is a class constant *only* for the two sorts a
-            // class constant can have. ASM models a MethodType constant — legal
-            // in any class file since Java 7, and what a method-handle-shaped
-            // call site loads — as a Type of sort METHOD, on which
-            // `descriptorName`'s fallback calls `getClassName()` and ASM throws
-            // an AssertionError. That is an Error, not an Exception, so it
-            // escapes Main's catch and takes the whole extraction down: no fact
-            // files, no "extractor failed:" line, one class file's constant pool
-            // silently costing every other class its facts.
-            if (literal instanceof Type type
-                    && (type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY)) {
-                return argument("class", null, JsonOut.string(TypeRefs.descriptorName(type)), null);
-            }
+            String entry = literalEntry(constant.cst, declaredType);
             // A float, a double, a method type, a method handle, a condy: no kind
             // in D00 §5's table, and inventing one is worse than saying so.
-            return argument("unresolved", null, null, null);
+            return entry != null ? entry : argument("unresolved", null, null, null);
         }
         if (producer instanceof IntInsnNode push
                 && (push.getOpcode() == Opcodes.BIPUSH || push.getOpcode() == Opcodes.SIPUSH)) {
@@ -973,6 +1079,41 @@ public final class MethodFlow {
         entry.put("source", source);
         entry.put("captures", String.valueOf(captures));
         return JsonOut.object(entry);
+    }
+
+    /** One {@code LDC} constant as an argument-grammar entry, or {@code null} for a
+     *  constant D00 §5's table has no kind for.
+     *
+     *  <p>Two callers read the same mapping — a call site's argument and a FIELD WRITE from
+     *  a constant ({@code fieldWrites}) — so it lives here once. Returning {@code null}
+     *  rather than an {@code unresolved} entry is what lets them differ where they must: an
+     *  argument slot must be filled whatever was found, because an absent slot renumbers its
+     *  neighbours, while a field write with no readable value is better not emitted at all.
+     *
+     *  <p>{@code declaredType} is the type the CONSUMER declares, and it decides one case:
+     *  the JVM has no boolean constant, so {@code LDC 1} is a {@code boolean} where the
+     *  field or parameter is one and an {@code int} otherwise.
+     */
+    private static String literalEntry(Object literal, Type declaredType) {
+        if (literal instanceof String text) return argument("string", JsonOut.string(text), null, null);
+        if (literal instanceof Integer number) {
+            return declaredType != null && declaredType.getSort() == Type.BOOLEAN
+                ? argument("boolean", String.valueOf(number.intValue() != 0), null, null)
+                : argument("int", String.valueOf(number), null, null);
+        }
+        if (literal instanceof Long number) return argument("long", String.valueOf(number), null, null);
+        // An LDC of a Type is a class constant *only* for the two sorts a class constant can
+        // have. ASM models a MethodType constant — legal in any class file since Java 7, and
+        // what a method-handle-shaped call site loads — as a Type of sort METHOD, on which
+        // `descriptorName`'s fallback calls `getClassName()` and ASM throws an AssertionError.
+        // That is an Error, not an Exception, so it escapes Main's catch and takes the whole
+        // extraction down: no fact files, no "extractor failed:" line, one class file's
+        // constant pool silently costing every other class its facts.
+        if (literal instanceof Type type
+                && (type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY)) {
+            return argument("class", null, JsonOut.string(TypeRefs.descriptorName(type)), null);
+        }
+        return null;
     }
 
     private static String argument(String kind, String value, String symbol, String source) {

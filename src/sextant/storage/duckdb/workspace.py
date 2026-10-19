@@ -84,9 +84,16 @@ _NAMED_QUERIES = {
     # symbol back to the parameter it was assigned from. Ordered by `field`
     # so a field written by more than one constructor overload reads its
     # candidates together, `from_parameter` breaking the tie (NFR-1).
+    # `value` beside them since 2026-10-18 (`OI-138` cause 2): a write from a CONSTANT
+    # carries the constant and no parameter, so `from_parameter` is NULL on those rows and
+    # the ladder's own reader skips them. NULLS LAST keeps the parameter writes — the rung
+    # that reads this — ahead of the constant ones in the tie-break order (NFR-1).
     "field_writes": (
-        "SELECT field, from_parameter, written_by FROM field_writes "
-        "ORDER BY field, from_parameter, written_by"
+        "SELECT field, from_parameter, value, written_by FROM field_writes "
+        # `value` is in the key as well: one method can write one field from several
+        # constants, and the other three columns are equal on those rows, so without it the
+        # order between them is whatever the engine happens to produce (NFR-1).
+        "ORDER BY field, from_parameter NULLS LAST, value::VARCHAR, written_by"
     ),
     # D00 §5's `method_return` (capability 9.18): what each method hands back,
     # one row per return instruction. 2Q's `G3` — cross-method return
@@ -1101,9 +1108,20 @@ _EXPORT_QUERIES = {
     # applied here as well would be the redactor run twice over its own output.
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
-    "field_writes": (
-        "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter, written_by"
-    ),
+    # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
+    # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
+    # take, by the same join. Exporting it clear while `raw_facts` ships the same literal
+    # masked would put both spellings in one bundle, which is what review caught here:
+    # `private String endpoint = "https://alice:s3cr3t@internal.example.com/orders"` reached
+    # `field_writes.parquet` in the clear while `raw_facts.parquet` carried it masked.
+    "field_writes": f"""
+        SELECT w.document_id, w.field, w.from_parameter,
+               coalesce(j.masked::JSON, w.value) AS value, w.written_by
+        FROM field_writes w
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = w.value::VARCHAR
+        ORDER BY w.document_id, w.field, w.from_parameter NULLS LAST, w.value::VARCHAR,
+                 w.written_by
+    """,
     # Worth carrying rather than recomputable: without it a consumer sees the
     # tagged copies in `documents` and cannot tell which one the derived rows
     # were built from.
@@ -1781,17 +1799,28 @@ class DuckDbWorkspace:
         )
 
         # One map for one GRAMMAR: `call_sites.arguments`, `annotations.args`,
-        # `return_flows.value` and `method_returns.value` are all entries of
-        # D00 §5's argument shape, built from the same string constants read
-        # out of bytecode — so one hardcoded `https://user:pass@host` reaches
-        # a bundle through any of the four, and all four take the same pass.
+        # `return_flows.value`, `method_returns.value`, `constants.value` and
+        # `field_writes.value` are all entries of D00 §5's argument shape,
+        # built from the same string constants read out of bytecode — so one
+        # hardcoded `https://user:pass@host` reaches a bundle through any of
+        # the six, and all six take the same pass.
+        #
+        # **`field_writes.value` joined the grammar on 2026-10-18 and this
+        # union did not, which shipped a credential in the clear beside the
+        # same literal masked in `raw_facts`** — found by review, with the
+        # bundle dumped, before the change was committed. The lesson is the
+        # one `constants` already carried in its own export comment: a new
+        # column of this grammar is not added until it is in this list, and
+        # `tests/storage/test_workspace.py::test_the_three_unpinned_redaction_joins_actually_mask`
+        # carries a row per column so the next one cannot ship untested.
         json_rows = self._connection.execute(
             "SELECT DISTINCT arguments::VARCHAR AS original FROM call_sites "
             "WHERE arguments IS NOT NULL "
             "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,

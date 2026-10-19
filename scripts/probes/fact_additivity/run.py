@@ -48,7 +48,16 @@ OUT = Path("/tmp/a1-proof")
 # measured apart: this harness proves the KEY additive on the lines both jars write, and the
 # new lines a lifted filter produces are counted separately, because a line the before jar
 # never wrote has nothing to be identical to.
-NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by"})
+#
+# `value` (2026-10-18, `OI-138` cause 2) is of that second kind and nothing else: a write
+# from a constant emitted NO fact before, so every line carrying it is a line the before jar
+# never wrote, and no line it did write changes. The expected reading is therefore "0 carry a
+# new key, N newly emitted" on a fixture that holds such a write, and byte-identical
+# everywhere else. **`value` is also a key the ARGUMENT grammar has always used**, so a
+# `receiver_parameter`-style strip would hide a real difference inside a call site's
+# arguments; `without_the_new_keys` strips by key NAME at every depth, which is why the two
+# halves of this proof are read together — the identical count must stay as high as it was.
+NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by", "value"})
 
 
 def scan(jar: Path, classes: Path, out: Path) -> None:
@@ -98,9 +107,17 @@ def carries_a_new_key(value: object) -> bool:
     return False
 
 
-def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int]:
+def _canonical(fact: object) -> str:
+    """One fact as a comparable string, key order normalised."""
+    return json.dumps(fact, sort_keys=True)
+
+
+def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int, Counter[str]]:
     """Problems, byte-identical lines, lines that carry a new key and read as the before
     line without it, and lines the after jar wrote that the before jar did not.
+
+    The fifth value is WHICH kinds were added, because a count alone cannot tell a release
+    that adds one fact kind from one that quietly adds another.
 
     **The fourth number is why this is not a two-way diff** (2026-10-18). A release that
     adds a KEY can be proved line for line; a release that also changes WHICH FACTS ARE
@@ -108,11 +125,16 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int]:
     to. The `written_by` release is the first of the second kind — the `<init>` filter on
     `fieldWrites` lifted in the same change — so ADDED lines are counted and shown rather
     than reported as a difference, and the additivity claim is made about the lines both
-    jars wrote. An added line that is NOT the expected kind is still a problem: every one
-    is printed, so a reader checks what appeared rather than trusting a count.
+    jars wrote. Their KINDS are printed beside the count, so a reader checks what appeared
+    rather than trusting a number.
     """
     problems: list[str] = []
     identical = keyed = added = 0
+    # **WHICH facts are new, not just how many.** The docstring used to claim every added
+    # line is printed and nothing printed any; a count alone cannot tell a release that adds
+    # one fact kind from one that quietly adds another, which is the thing a reader of this
+    # output is checking.
+    added_kinds: Counter[str] = Counter()
     before_files = sorted(p.relative_to(before) for p in before.rglob("*.jsonl"))
     after_files = sorted(p.relative_to(after) for p in after.rglob("*.jsonl"))
     if before_files != after_files:
@@ -121,25 +143,37 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int]:
         old = (before / relative).read_text(encoding="utf-8").splitlines()
         new = (after / relative).read_text(encoding="utf-8").splitlines()
         if len(old) != len(new):
-            # Line counts differ, so the positional pairing is gone: compare the sets of
-            # facts with the new keys STRIPPED, which is the only comparison that can tell
-            # "this line gained a key" from "this line is new". Comparing raw text here
-            # reported every key-carrying line as lost, which is a false alarm this harness
-            # must not raise — it is the one that would be ignored next time.
-            old_facts = [
-                json.dumps(without_the_new_keys(json.loads(line)), sort_keys=True) for line in old
-            ]
-            new_facts = [
-                json.dumps(without_the_new_keys(json.loads(line)), sort_keys=True) for line in new
-            ]
-            old_counts, new_counts = Counter(old_facts), Counter(new_facts)
-            lost = +(old_counts - new_counts)
+            # Line counts differ, so the positional pairing is gone and the comparison
+            # becomes a matching: every BEFORE fact must still be written, either verbatim
+            # or with a new key added, and whatever is left over is a line the after jar
+            # newly emitted.
+            #
+            # **Only the AFTER side is stripped, and that is the whole correctness of this
+            # branch.** Stripping both sides blinds it on exactly the files this harness is
+            # run for: `value` is a key the ARGUMENT grammar has always used, so a call
+            # site whose address silently CHANGED would have that change stripped from both
+            # sides and match. Measured on a synthetic pair — one call site's
+            # `https://real.example/pay` becoming `https://WRONG.example/pay` alongside one
+            # newly emitted fact — the two-sided strip reported `additive` and this
+            # one-sided match reports the before fact as no longer written.
+            remaining = Counter(_canonical(json.loads(line)) for line in old)
+            for line in new:
+                fact = json.loads(line)
+                verbatim = _canonical(fact)
+                if remaining[verbatim] > 0:
+                    remaining[verbatim] -= 1
+                    identical += 1
+                    continue
+                stripped = _canonical(without_the_new_keys(fact))
+                if remaining[stripped] > 0:
+                    remaining[stripped] -= 1
+                    keyed += 1
+                    continue
+                added += 1
+                added_kinds[str(fact.get("kind"))] += 1
+            lost = sum(count for count in remaining.values() if count > 0)
             if lost:
-                problems.append(
-                    f"{relative}: {sum(lost.values())} fact(s) the after jar stopped writing"
-                )
-            added += sum((+(new_counts - old_counts)).values())
-            identical += sum((old_counts & new_counts).values())
+                problems.append(f"{relative}: {lost} fact(s) the after jar stopped writing")
             continue
         for number, (old_line, new_line) in enumerate(zip(old, new, strict=True), 1):
             if old_line == new_line:
@@ -152,7 +186,7 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int]:
                 problems.append(f"{relative}:{number}: differs beyond the two keys")
             else:
                 keyed += 1
-    return problems, identical, keyed, added
+    return problems, identical, keyed, added, added_kinds
 
 
 def label(classes: Path) -> str:
@@ -170,11 +204,12 @@ def main(before_jar: Path) -> int:
             tree.mkdir(parents=True)
         scan(before_jar, classes, before)
         scan(AFTER_JAR, classes, after)
-        found, identical, keyed, added = compare_trees(before, after)
+        found, identical, keyed, added, added_kinds = compare_trees(before, after)
         verdict = "additive" if not found else "DIFFERS"
+        kinds = ", ".join(f"{kind} x{count}" for kind, count in sorted(added_kinds.items()))
         print(
             f"{name}: {verdict} ({identical} byte-identical, {keyed} carry a new key, "
-            f"{added} newly emitted)"
+            f"{added} newly emitted{': ' + kinds if kinds else ''})"
         )
         problems.extend(f"{name}: {p}" for p in found)
     for problem in problems:

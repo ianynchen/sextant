@@ -355,6 +355,40 @@ values the capture site hands it, and the probe above resolves both patterns. Th
 count on the lambda entry is already in the facts, so this is an edge-query and walk change
 rather than an extractor one — to be confirmed by measuring, not assumed.
 
+### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
+**Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
+
+The two sides of one call, as published today:
+
+| | row |
+|---|---|
+| `petclinic-api-gateway` calls | `GET /pets/visits?petId={petId}` · peer `visits-service` · resolved |
+| `spring-petclinic-visits-service` serves | `GET /pets/visits` · resolved |
+
+Same peer, same path, and **they do not compare equal** — the caller's row carries a query
+string the server's never can, because on the inbound side `petId` is a `@RequestParam` and
+lands in the request-requirement columns rather than in the address. So the linking tier
+(`GAP-2`) would miss a link that is otherwise exact, and a reader diffing the two columns
+sees a mismatch that is not one.
+
+`apollo-portal` carries the same shape at `partial`: `POST {}?env={env}`.
+
+**Not caused by the constant work that exposed it** — `{}?env={env}` predates it; what
+changed is that the first fully RESOLVED row of this shape now exists, which is how the
+mismatch became visible.
+
+**The question it raises, which is a ruling rather than a bug fix:** a path column holding
+`?x={y}` is holding something that is not a path. The candidates are to strip the query into
+its own column, to record it as a request requirement the way the inbound side does, or to
+keep it verbatim and teach the comparison to ignore it. The first two are claims about the
+model; the third is a claim about every consumer.
+
+**Real triggering input:** ordinary — any client that passes a query parameter in the URI
+template, which is how `RestTemplate` and `WebClient` are normally used.
+
+**Closes when** a caller's address and the callee's address compare equal where the code
+means the same endpoint, with the query recorded rather than discarded.
+
 ### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
 **Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**
 
@@ -1334,6 +1368,65 @@ the whole obstacle. **Closes** by `field_write` carrying a constant value beside
 parameter ordinal — strictly smaller than lifting the `<init>` guard. With cause 1, this
 yields `http://visits-service/pets/visits?petId={petId}` from code facts alone, which
 matches `spring-petclinic-visits-service`'s own inbound rows.
+
+> **BUILT 2026-10-18, and cause 1 was already closed before it.** `field_write` now carries
+> `value` — the constant as an argument-grammar entry — beside `from_parameter`, exactly one
+> of the two per fact, both optional, so `FACT_SCHEMA_VERSION` does not move. `value_index`
+> folds those constants and `_binding` answers with the literal directly: a constant write
+> needs no crossing, because the value is in the fact. Guard
+> `values.a-binding-written-from-a-CONSTANT-answers-that-constant`, pinned by
+> `fixtures/orders-fieldheld`'s `DeadLetterPublisher`, whose field is non-`final` for a
+> reason the fixture states (a `final` constant-initialised String field is a *constant
+> variable*, JLS 4.12.4, and javac resolves reads of one at the use site).
+>
+> **Cause 1 needed nothing: it closed on 2026-10-18 in `#43`**, the day after this entry was
+> written. `_joined` fills every hole it can read and a fully-read template becomes a
+> `literal` — the code says so in as many words. Verified by probe rather than by reading:
+> `.uri(base + "pets/visits")` with `base` a local holding a literal publishes
+> `peer=visits-service, path=/pets/visits, resolved` through the fluent engine. The entry's
+> *"a concatenation is never evaluated, even when every operand resolves"* was true when
+> written and stale within a day.
+>
+> **Measured, the pinned corpus moved:** `petclinic-api-gateway`'s
+> `VisitsServiceClient.getVisitsForPets` published `path` NULL and now publishes
+> `GET /pets/visits?petId={petId}` with `peer='visits-service'` at `resolved` — and
+> `spring-petclinic-visits-service` serves `GET /pets/visits`, so the two sides agree on the
+> peer and on the path. The field expectation was re-recorded in the same commit
+> (`GET (unresolved)` → `GET /pets/visits?petId={petId}`), the other five pins unchanged.
+> **Outbound across the system is now 3 of 6**, not 1: the two literal-addressed calls plus
+> this one. The three left are cause 3's.
+>
+> **The yield is one row, measured before building rather than claimed after.** A census over
+> every compiled module under `examples/` — 3,568 classes in 56 modules, 9 corpora — counts
+> **25** constant field writes (23 String, 2 long) and exactly one of them an ADDRESS: javac
+> resolves a `final` constant-initialised field at the use site, and most hosts arrive by
+> injection or configuration. The change ships anyway because `no_writer` about a literal in
+> the same file is a FALSE statement at any frequency, and the fixtures gained 44 new facts
+> on the same shape.
+>
+> **Review found four wrong rows before this was committed, all four fixed in it.** Each
+> published a value at `resolved` that the code cannot produce, and none was reachable by any
+> test in the suite:
+>
+> | what published a wrong value | the fix |
+> |---|---|
+> | a constant a LATER write in the same basic block overwrites (`private String topic = "default";` beside `this.topic = topic;` in one constructor) | the extractor drops a write its own block overwrites; a later write behind a BRANCH leaves the earlier live, so that one is still reported |
+> | a constant written by a `private` method nothing calls — a reset helper, a test hook | the fold skips a write whose method is private AND uncalled: private is unreachable from outside its class, so no caller means no execution. A public uncalled method is merely called by something unscanned, and is kept |
+> | a `class` constant (`private Class<Order> t = Order.class;`) made `_binding` return an EMPTY tuple, which dropped **every slot of the site** — losing an address the sixth edge had resolved | an entry the walk cannot read answers `not_readable`, never nothing |
+> | `field_writes.value` exported **unredacted**: `private String endpoint = "https://alice:s3cr3t@…"` reached the bundle in the clear beside the same literal masked in `raw_facts` | the column joined the redaction union and the export's masking join, and `test_the_three_unpinned_redaction_joins_actually_mask` carries a row for it |
+>
+> Two more came with them: the additivity harness had been blinded on exactly the files this
+> change touches (`value` is also an ARGUMENT-grammar key, so stripping it from BOTH sides
+> let a silently changed address read as additive — it now strips only the after side and
+> prints which KINDS were added), and `docs/components/D00-fact-schema.md` still described
+> the fact as constructors-only with "anything but a parameter load emits nothing".
+>
+> **Still over-reported, and narrower than what was fixed:** an initialiser overwritten on
+> EVERY branch of an if/else (`f = "a"; if (p) f = "b"; else f = "c";` publishes three values
+> where two are live). Dropping it needs post-dominance rather than a block comparison.
+> **Still under-reported:** an inherited field, where javac spells the subclass's write
+> against the subclass symbol while the superclass's read names its own — so the two do not
+> join. That shape applied to parameter writes before this change too.
 
 **3. `DiscoveryClient` is catalogued nowhere.** Affects **4 of 6**.
 `discoveryClient.getInstances("customers-service").get(0).getUri()` answers `external` —

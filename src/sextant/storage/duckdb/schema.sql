@@ -1040,6 +1040,12 @@ CREATE OR REPLACE VIEW field_writes AS
 SELECT document_id,
        payload ->> 'field'                     AS field,
        (payload ->> 'from_parameter')::INTEGER AS from_parameter,
+       -- The CONSTANT a field was written from, as an argument-grammar entry (`OI-138`
+       -- cause 2). NULL for a write from a parameter, and exactly one of the two is ever
+       -- set. Kept as JSON text rather than split into kind and value: it is the same
+       -- grammar `call_sites.arguments` carries, and the walk reads it with the same
+       -- reader, so a second spelling here would be a second thing to keep in step.
+       payload -> 'value'                      AS value,
        payload ->> 'written_by'                AS written_by
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
