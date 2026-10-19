@@ -16,6 +16,58 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 SPRING7 = FIXTURES / "orders-spring7"
 QUARKUS = FIXTURES / "orders-quarkus"
 FLUENT_ADDRESS = FIXTURES / "orders-fluentaddress"
+DISCOVERY = FIXTURES / "orders-discovery"
+
+
+@pytest.fixture(scope="module")
+def discovery_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-discovery`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-discovery")
+    compile_fixture(DISCOVERY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(DISCOVERY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("arguments.a-PEER-is-asked-of-its-own-evidence")
+def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_rows):
+    """`OI-138` cause 3, and `OI-142`'s ruling 2 finally landing.
+
+        discoveryClient.getInstances("customers-service").get(0).getUri() + "/owners"
+
+    Nothing in that class file is an address — the host comes from a registry while the
+    program runs — and the one thing the code states is the service NAME, three calls back
+    from the position the catalog asks about, with javac's `String.valueOf` inserted around
+    the `URI` operand.
+
+    **Measured before: `<host>/owners` with no peer.** The path was read and the peer was
+    not, so the document knew this module called SOMETHING at `/owners`.
+
+    **The peer is asked as its own question**, of the first operand alone, accepting only an
+    answer that yields an AUTHORITY — which is what makes it sound where a join would not be.
+    `OI-142` recorded the reason: an identity's TEXT is not an address (for a destination
+    identified as `"orders"`, `toString()` is a vendor debug string), while an identity's
+    AUTHORITY is a peer. So the path keeps coming from a walk handed no identities at all,
+    and the peer comes from the identity table.
+
+    On real code this is the whole point: `spring-petclinic-customers-service` serves
+    `/owners` and `/owners/{ownerId}/pets`, so these rows now match the callee's own inbound
+    rows and the document carries the arrow.
+    """
+    assert discovery_rows == {
+        ("customers-service", "/owners", "partial"),
+        ("customers-service", "/owners/{}/pets", "partial"),
+    }
 
 
 @pytest.fixture(scope="module")

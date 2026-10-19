@@ -1362,6 +1362,32 @@ class _Walk:
         slot = self._identified(site)
         if slot is not None:
             identified = self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            # **A RENDERING carries one KIND of identity and stamps none** (`OI-138` cause
+            # 3, CP-39). `String.valueOf(x)` returns `x.toString()` — the TEXT of whatever
+            # `x` stands for — so an entry over it may propagate an identity and must never
+            # mint one. `OI-142` refused such an entry outright and was right about the
+            # danger: for a JMS `Queue` identified as `"orders"` the text is a vendor debug
+            # string, and carrying it would publish an address that never existed.
+            #
+            # `preserves: authority` is the bound. An identity that yields an AUTHORITY
+            # names WHO is called, and who is called does not change when the value is
+            # rendered; an identity that yields an `address` is dropped here and reaches no
+            # further. Where nothing survives, the answer is the one a site with no entry
+            # gets — for a JDK method `external`, its body being outside what was scanned,
+            # which stays true.
+            preserved = self._preserved_kind(site)
+            if preserved is not None:
+                carried = tuple(
+                    (crossed, answer)
+                    for crossed, answer in identified
+                    if answer.yields == preserved
+                )
+                if carried:
+                    return carried
+                return _only(
+                    trail,
+                    _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL),
+                )
             # The ENTRY says what kind of thing this producer yields, so it is stamped here
             # rather than carried by the slot's own answer: argument 0 of
             # `getInstances("customers-service")` is an ordinary string literal, and what
@@ -1560,6 +1586,20 @@ class _Walk:
             if isinstance(entry.get("arg"), int):
                 return str(entry.get(_YIELDS, _ADDRESS))
         return _ADDRESS
+
+    def _preserved_kind(self, site: tuple[str, int]) -> str | None:
+        """The `preserves` word of the entry that answers for `site`, or None.
+
+        Read off the SAME entry `_identified` picks — the first in the table's order with an
+        integer `arg` — so the two cannot disagree about which entry is in force. An entry
+        declaring `preserves` propagates an identity of that kind and mints none, which is
+        what makes a rendering call safe to cross (`_value`, CP-39 Q3).
+        """
+        for entry in self._identity_matches(site):
+            if isinstance(entry.get("arg"), int):
+                preserved = entry.get("preserves")
+                return None if preserved is None else str(preserved)
+        return None
 
     def _preserves_receiver(self, site: tuple[str, int]) -> bool:
         """Whether a matching entry says this call's result stands for whatever its

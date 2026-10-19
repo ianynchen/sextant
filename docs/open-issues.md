@@ -990,7 +990,7 @@ worth naming** — 0.05s on `mall-admin`, 0.02s on `apollo-portal`, because one 
 lazily once per run and the other only fires for catalogs that reach the walk. Kept for
 consistency, and recorded as no speed-up rather than claimed as one.*
 
-### OI-142 — a service name five calls back resolves; publishing it as a PEER does not
+### OI-142 — a service name five calls back resolves; publishing it as a PEER does not · **CLOSED 2026-10-19**
 **Minor · entered 2026-10-17, HALF BUILT the same day · `src/sextant/catalogs/value-models/spring-cloud.yml`, `src/sextant/application/resolve/values.py`, probe `scripts/probes/cp36_discovery_client.md`**
 
 > **The grammar half is built and measured. The publishing half is not, and it needs
@@ -1069,6 +1069,21 @@ consistency, and recorded as no speed-up rather than claimed as one.*
 > third property on an answer, not a fourth identity form, and it is design work rather
 > than a key. **Falsified by** those three rows publishing peer `customers-service` with
 > paths `/owners` and `/owners/{}/pets`.
+>
+> **CLOSED 2026-10-19 BY ITS OWN FALSIFIER**: those three rows publish peer
+> `customers-service` with paths `/owners` and `/owners/{}/pets`, and
+> `spring-petclinic-customers-service` serves exactly those. `OI-138` cause 3 carries what was
+> built.
+>
+> **The closure line above predicted the wrong mechanism, which is worth more than the three
+> rows.** It asked for a third property on an answer so that *a join may use the rendering and
+> a peer the identity*. What the ruling actually needed was not to make the join carry the peer
+> at all: the join still gets no identities, and the PEER is asked as its own question of the
+> address's first operand, accepting only an answer that yields an authority — "peer and path
+> from separate evidence" taken literally rather than as a property threaded through one value.
+> The only new key is `preserves: authority` on the one rendering entry, which bounds
+> `String.valueOf` to the case this entry's own objection does not reach. That objection was
+> right, which is why the gate exists rather than the entry shipping bare.
 
 #### How it was first measured, 2026-10-17 — and the words that were missing then
 *This was filed as a second entry under the number `OI-142`, which made every citation of
@@ -1510,6 +1525,50 @@ architecture document wants. Only Spring Cloud Gateway's `lb://` form is modelle
 (`spring-cloud-gateway-outbound.yml`). **Closes** with one catalog reading
 `getInstances(String)`/`DiscoveryClient` into `peer` — tier A, one YAML and a probe.
 
+
+> **BUILT 2026-10-19, and cause 3's own closure line was wrong — it is not "one YAML and a
+> probe".** The catalog half shipped a day earlier (`OI-142`: `from_receiver`,
+> `yields: authority`, three entries in `value-models/spring-cloud.yml`). Measured on the
+> genai module with the whole identity table passed, the chain still answered `{}/owners`:
+> two things blocked it, and `OI-142` had named one of them.
+>
+> **1. javac's `String.valueOf`.** It sits between `getUri()` and the template, inserted
+> around every non-`String` concat operand (CP-39 row 2). `OI-142` refused an identity entry
+> over it, correctly: read off the platform's own bytecode it returns `arg.toString()`, so for
+> a destination identified as `"orders"` the text is a vendor debug string and carrying it
+> would publish an address that never existed. The entry now declares `preserves: authority`
+> — it may propagate an identity of that kind and may mint none — which bounds it to the case
+> where the claim is sound, because WHO is called does not change when a value is rendered.
+> Guard `values.a-RENDERING-carries-an-authority-and-nothing-else`.
+>
+> **2. The join is handed no identities, deliberately.** That is what keeps it honest
+> (`OI-142`'s own note), so the peer could never come through it. It does not: **the peer is
+> asked as its OWN question** — `arguments.authority_of`, of the address's first operand
+> alone, accepting only an answer that yields an authority — which is the user's ruling of
+> 2026-10-17, *"peer and path from separate evidence"*, implemented literally. The path still
+> comes from a walk with no identities at all, so nothing an identity says ever reaches the
+> text. Guard `arguments.a-PEER-is-asked-of-its-own-evidence`, one copy shared by both
+> engines because two engines disagreeing about one address is `OI-144`.
+>
+> **Measured, on the pinned corpus and against the callee's own rows:**
+>
+> | | before | after |
+> |---|---|---|
+> | genai → customers ×3 | `GET <host>/owners`, `POST <host>/owners`, `POST <host>/owners/{}/pets` · peer NULL | peer **`customers-service`** · `/owners`, `/owners`, `/owners/{}/pets` |
+>
+> and `spring-petclinic-customers-service` serves `/owners` and `/owners/{ownerId}/pets` — so
+> the two sides of each call now name the same peer and the same path, which is the arrow the
+> document exists for. The expectation was re-recorded; the other five pins are unchanged.
+>
+> **`OI-142` closes with this**, by a route its own closure line did not predict: it asked for
+> a third property on an answer distinguishing identity from rendering, and what the ruling
+> actually needed was to ask the peer separately rather than to make the join carry it.
+>
+> **Open question this leaves, deliberately unanswered:** the rows read `partial` while
+> carrying a peer and a path with no marker left in them. `partial` is true of the address
+> TEXT — the host was never rendered — but a reader seeing peer and path filled may read it as
+> a defect. Whether a row whose peer and path are both known is `resolved` is a resolution
+> question for the user, not one to settle in passing.
 **4. The field corpus could not see any of this.** **Closed by this entry** (two pins above).
 
 **What happens today:** a Spring Boot service that holds a peer's base URL in a field or

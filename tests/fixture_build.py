@@ -58,6 +58,7 @@ PRIMED_FIXTURES = (
     "orders-fieldheld",
     "orders-pathprefixes",
     "orders-fluentaddress",
+    "orders-discovery",
     "spring-integration-probe",
     "orders-micronaut",
     "orders-quarkus",
