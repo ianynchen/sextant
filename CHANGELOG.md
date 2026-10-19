@@ -14,6 +14,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The value walk crosses a lambda's CAPTURE** (`OI-150`), so a value a closure closes over is
+  read instead of answered "it comes from outside what was scanned". A lambda body is a
+  synthetic method whose leading parameters are the captured values, and nothing bound them —
+  measured, a path-prefix declaration holding its pattern as a captured `String` parameter
+  resolved nothing, and two controllers differing only by their prefix collapsed onto one
+  published path.
+
+  The facts already carried the edge, so nothing in the schema moved and the extractor was not
+  touched: a `lambda` entry names its body and its capture count, and the value it came from
+  was produced by the capture site, whose arguments are those values in order. `value_index`
+  folds them into the same `callers` map the `bound_to_parameter` edges use, because to the
+  walk they are the same thing — a parameter, and the sites that hand it a value.
+
+  **Measured by analysing every corpus twice and diffing every published row:** +184, +10 and
+  +115 new parameter bindings on `yudao-module-system`, `mall-admin` and `apollo-portal`, **no
+  existing binding widened**, every row and shape field unchanged on all three, and no
+  measurable change in analysis time. Exactly one row moves in the whole estate — the fixture's
+  `/text-api/text/{id}`, the shape the edge was built for.
+
 - **A path prefix the module declares now reaches the rows it moves, both spellings**
   (`OI-148`, spec `docs/superpowers/specs/2026-10-18-configured-path-prefixes-design.md`;
   COVERAGE §5.1 gains a row per spelling and the Actuator base-path boundary is narrowed to

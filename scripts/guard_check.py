@@ -501,6 +501,29 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-lambda-body-reaches-the-values-it-CAPTURED": Guard(
+        what="a lambda body's leading parameters resolve through the site that CAPTURED "
+        "them, so a value closed over is read rather than answered `external`",
+        why="this is the walk's seventh edge. A lambda body is a synthetic method and the "
+        "values it closed over arrive as its first parameters; nothing in the "
+        "`bound_to_parameter` facts binds those, so before this the walk answered "
+        "`external` — *the values come from outside what was scanned* — about a literal in "
+        "the same method. Measured, a prefix declaration holding its pattern as a captured "
+        "`String` parameter resolved nothing and two controllers differing only by their "
+        "prefix collapsed onto ONE published path, which is `OI-148`'s own symptom. Removing "
+        "the pass is three lines and no other fixture notices, because every other lambda in "
+        "the estate either captures nothing a catalog asks about or captures an OBJECT whose "
+        "values the field and `<init>` edges reach instead",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    for (method, _), site in sites.items():\n"
+                '        for captured in _captures(site["arguments"]):',
+                replace="    for (method, _), site in sites.items():\n"
+                "        for captured in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "values.a-field-read-reaches-the-value-written-into-it": Guard(
         what="a binding read resolves through the WRITER the facts name — `written_by` — and "
         "answers `no_writer` only where no write of it was reported",

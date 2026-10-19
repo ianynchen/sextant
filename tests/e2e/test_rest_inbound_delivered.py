@@ -445,12 +445,20 @@ def test_a_prefix_installed_by_package_reaches_the_rows_it_moves(path_prefix_row
     inline entries are `put` on a `LinkedHashMap`-TYPED variable (so no `java/util/Map#put`
     site exists for them), and `/admin-api` and `/app-api` are installed on the framework
     class while `/internal-api` and `/ops-api` are installed on the subclass.
+
+    **`/text-api` is the walk's SEVENTH edge** (`OI-150`): `putTextPrefix` holds the prefix
+    and the pattern as plain `String` parameters, so the lambda CAPTURES the pattern and
+    reaching it means crossing from the lambda's synthetic body into the site that captured
+    it. The prefix needs no such crossing — it is an argument of `put` — so this row is the
+    one place in the suite where the two halves of a declaration need two different
+    crossings, and without the capture edge it published `/text/{id}`.
     """
     assert path_prefix_rows == {
         ("GET", "/admin-api/orders/{id}", "resolved"),
         ("GET", "/app-api/orders/{id}", "resolved"),
         ("GET", "/internal-api/orders/{id}", "resolved"),
         ("GET", "/ops-api/orders/{id}", "resolved"),
+        ("GET", "/text-api/text/{id}", "resolved"),
         ("GET", "/audit-logs/{id}", "resolved"),
         ("GET", "/ext/{id}", "resolved"),
         ("GET", "/fn/items", "resolved"),
