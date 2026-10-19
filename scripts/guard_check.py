@@ -340,6 +340,46 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one": Guard(
+        what="the peer question refuses unless EVERY path through the first operand answers "
+        "an authority literal, and they all agree — one unread path is one call to "
+        "somewhere this analysis cannot name",
+        why="the first version FILTERED to the authority answers, so it could refuse "
+        "nothing: the paths it was meant to refuse were the ones it removed, and its own "
+        'docstring\'s promise to return None for "several answers" was unreachable. '
+        "MEASURED as a false fact on the most ordinary shape there is — a private "
+        "`fetch(URI host)` whose concat is the address, called once with a discovery lookup "
+        "and once with a `URI` its own caller supplied: the row published peer "
+        "`customers-service` for a helper half of whose calls go somewhere the code never "
+        "states, and the document drew an arrow that does not exist. A field with two "
+        "writers and a two-branch helper reach it by two other routes",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="            or answer.yields != _AUTHORITY\n        ):\n            return None",
+                replace="            or answer.yields != _AUTHORITY\n        ):\n"
+                "            continue  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped": Guard(
+        what="an identity a `preserves` entry cannot carry becomes an UNRESOLVED answer on "
+        "its own path, so a reader of the result still sees that the code had two paths",
+        why="filtering the pairs let a second path vanish, and every multiplicity check "
+        "downstream then saw ONE answer where the code had two — which is how the peer "
+        "question's refusal was defeated without ever being reached. The two arms beside "
+        "this one return ALL of `identified` for the same reason",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                    (crossed, answer if answer.yields == preserved else unreadable)\n"
+                "                    for crossed, answer in identified\n",
+                replace="                    (crossed, answer)  # guard disabled\n"
+                "                    for crossed, answer in identified\n"
+                "                    if answer.yields == preserved\n",
+            ),
+        ),
+    ),
     "values.a-RENDERING-carries-an-authority-and-nothing-else": Guard(
         what="an identity entry declaring `preserves` propagates an identity of that kind "
         "and mints none — so crossing `String.valueOf` carries an authority and drops an "

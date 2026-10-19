@@ -1452,17 +1452,31 @@ class _Walk:
             # which stays true.
             preserved = self._preserved_kind(site)
             if preserved is not None:
-                carried = tuple(
-                    (crossed, answer)
+                # **A path this entry cannot carry is REPLACED, never dropped**, and that
+                # distinction is the whole soundness of the key. Filtering the pairs let a
+                # second path vanish, and a reader of the result then saw ONE answer where
+                # the code had two — which is how `authority_of`'s "several peers for one
+                # call is not a peer" refusal was defeated without ever being reached.
+                #
+                # MEASURED, on the most ordinary shape there is: a private helper
+                # `fetch(URI host)` whose concat is the address, called once with a
+                # discovery lookup and once with a `URI` its own caller supplied. The
+                # parameter is two calling contexts, so the operand answers on two paths —
+                # `customers-service` yielding an authority, and `external` from the
+                # unbound parameter. The filter kept the first, and the row published peer
+                # `customers-service` for a helper half of whose calls go somewhere the
+                # code never states.
+                #
+                # `external` is the right word for the replacement and not a stand-in: an
+                # identity that yields an `address` says the TEXT of this value is a vendor
+                # string rather than a destination, so what this rendering produces is a
+                # value no fact in the workspace reads — which is what `_unresolved` says.
+                # The same word the no-answer case below used, now said per path.
+                unreadable = _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL)
+                return tuple(
+                    (crossed, answer if answer.yields == preserved else unreadable)
                     for crossed, answer in identified
-                    if answer.yields == preserved
-                )
-                if carried:
-                    return carried
-                return _only(
-                    trail,
-                    _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL),
-                )
+                ) or _only(trail, unreadable)
             # The ENTRY says what kind of thing this producer yields, so it is stamped here
             # rather than carried by the slot's own answer: argument 0 of
             # `getInstances("customers-service")` is an ordinary string literal, and what

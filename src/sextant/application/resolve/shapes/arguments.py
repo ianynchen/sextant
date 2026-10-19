@@ -103,8 +103,18 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
         return peer, path, str(Resolution.RESOLVED)
     if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
+        # **Whether the AUTHORITY went unread**, which is the first of `partial`'s two
+        # causes and cannot be read back off the path afterwards. Both arms below set it,
+        # and the second one is why it has to be a variable rather than a test on the
+        # finished text: `"http://" + host + "/orders"` with `host` a parameter the facts
+        # name assembles `http://{serviceHost}/orders`, whose peer is nulled here for
+        # carrying a hole and whose PATH is then the perfectly clean `/orders`. Judging by
+        # the path alone would publish that as a resolved RELATIVE call on a configured
+        # base url — an address the code never wrote.
+        authority_unread = False
         if peer is not None and (_holes(peer) or carries_expression(peer)):
             peer = None
+            authority_unread = True
         leading = _holes(path)[:1] if path is not None else ()
         if path is not None and leading and path.startswith(leading[0]):
             # **A LEADING hole is the HOST, and it is named `<host>`** (ruled by the user
@@ -120,7 +130,26 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
             # it. Matched through `_holes` rather than against `{}` so the two stay one rule
             # if that ever changes.
             path = _UNREADABLE_HOST + path[len(leading[0]) :]
-        return peer, path, str(Resolution.PARTIAL)
+            authority_unread = True
+        # **`resolved` means NOTHING about the destination went unread** (ruled by the user
+        # 2026-10-19), and a hole-bearing template can satisfy that. `partial` keeps exactly
+        # the two causes it was born for — the authority went unread, or a PIECE of the path
+        # did — and a NAMED hole is neither: `/owners/{ownerId}/pets` is the route's own
+        # variable, read off the signature the compiler recorded, and it is the same text
+        # `customers-service` publishes for the same route from its own `@PostMapping`.
+        #
+        # The word already behaved this way for a LITERAL template — `.uri("http://
+        # customers-service/owners/{ownerId}", ownerId)` has always read `resolved` — so
+        # before this the same address resolved or not according to whether the programmer
+        # wrote the variable inside the string or concatenated it, which is not a fact about
+        # the destination. Measured: 3 rows on real code and 4 on the fixtures move to
+        # `resolved`; nothing moves the other way, and every `<host>` row stays `partial`.
+        unread_piece = _HOLE in (path or "")
+        return (
+            peer,
+            path,
+            str(Resolution.PARTIAL if authority_unread or unread_piece else Resolution.RESOLVED),
+        )
     return None, None, str(Resolution.UNRESOLVED)
 
 
@@ -199,14 +228,31 @@ def authority_of(
     # The FIRST operand, which is the only position an authority can occupy: an address
     # states who it calls before it states what it asks for, and `url_of` has already
     # established that the leading hole is the one it could not read.
-    answers = {
-        str(answer.value)
-        for binding in resolve_site(workspace, site, index, identities)
-        if (answer := binding.slots.get(0)) is not None
-        and answer.kind == LITERAL
-        and answer.literal_kind == STRING
-        and answer.yields == _AUTHORITY
-    }
+    # **EVERY path must answer an authority, and they must all agree** — a comprehension
+    # that FILTERED to the authority answers could not refuse anything, because the paths it
+    # was meant to refuse were the ones it removed. MEASURED: a private `fetch(URI host)`
+    # called once with a discovery lookup and once with a `URI` its own caller supplied
+    # answers on two paths, and filtering published peer `customers-service` for both.
+    #
+    # One unread path is one call to somewhere this analysis cannot name, and a peer column
+    # states who is called — not who is called sometimes. So an answer that is not an
+    # authority literal refuses the whole question, which is `_through_receiver`'s rule
+    # ("EXACTLY ONE, and that single condition is what makes an entry on `List.get` safe")
+    # asked of a concat operand.
+    bindings = resolve_site(workspace, site, index, identities)
+    if not bindings:
+        return None
+    answers = set()
+    for binding in bindings:
+        answer = binding.slots.get(0)
+        if (
+            answer is None
+            or answer.kind != LITERAL
+            or answer.literal_kind != STRING
+            or answer.yields != _AUTHORITY
+        ):
+            return None
+        answers.add(str(answer.value))
     return answers.pop() if len(answers) == 1 else None
 
 
@@ -235,7 +281,15 @@ def with_authority(
         return address
     # The host is no longer the unread half — the peer column carries WHO — so the marker
     # comes off and the path reads as the path it is.
-    return named, path.removeprefix(_UNREADABLE_HOST) or "/", resolution
+    read = path.removeprefix(_UNREADABLE_HOST) or "/"
+    # **And the row says `resolved`**, because the reason it said `partial` has gone: the
+    # authority was the unread half, and it has just been read from its own evidence. The
+    # same rule `url_of` applies to a template it reads whole (2026-10-19) — `partial` only
+    # for an authority nobody read or a PIECE of the path nobody read — asked once more here,
+    # because this is the one place an authority becomes known after `url_of` has spoken.
+    # A remaining anonymous hole still answers `partial`: `{}/services/{}` names its peer
+    # and still does not state what it asks for.
+    return named, read, (resolution if _HOLE in read else str(Resolution.RESOLVED))
 
 
 # A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that

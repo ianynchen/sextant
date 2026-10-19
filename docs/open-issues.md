@@ -428,16 +428,118 @@ two sides of one call finally read as one address (`OI-151`'s goal, from the oth
 * **A jar built without parameter names keeps `{}`** — the signature then records none, and
   `arg0` is not a name the author wrote.
 
-**What it is worth today, stated rather than implied: no row in the pinned corpora moves.**
-The estate's outbound rows either carry a URI template already (`/owners/{ownerId}`) or hold
-a leading host hole (`apollo-portal`'s eight). The shape this fixes is the most ordinary
-outbound path there is — `spring-petclinic-microservices`'s genai module builds three of its
-four addresses that way — and those three rows are blocked behind `OI-144`, which is the next
-item. So the yield lands when `OI-144` does, and the fixture is what holds the behaviour until
-then.
+**What it was worth the day it shipped: no row in the pinned corpora moved.** The estate's
+outbound rows either carried a URI template already (`/owners/{ownerId}`) or held a leading
+host hole (`apollo-portal`'s eight), and the shape this fixes — the most ordinary outbound
+path there is, three of `spring-petclinic-microservices`'s four genai addresses — was blocked
+behind `OI-144`.
 
-### OI-151 — an outbound path carries its QUERY STRING, so it cannot match the inbound row that serves it
-**Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/domain/paths.py::canonical_http_path`**
+**`OI-144` then closed, and the yield landed with it (2026-10-19):** genai publishes
+`POST /owners/{ownerId}/pets`, and `spring-petclinic-customers-service` serves
+`@PostMapping("/owners/{ownerId}/pets")` — the two sides of one call, character for character.
+The pin was re-recorded; it had been asserting the older `{}` text against correct output.
+
+### OI-154 — a peer was published for a helper whose host ANOTHER caller supplies · **CLOSED 2026-10-19**
+**Major · entered and closed 2026-10-19, found by review of `spec/discovery-peer-and-fluent` before it merged, measured on a probe and then on `fixtures/orders-discovery` · `src/sextant/application/resolve/shapes/arguments.py::authority_of`, `src/sextant/application/resolve/values.py::_Walk._value`**
+
+`authority_of`'s own docstring promised to refuse "several answers (several peers for one call
+is not a peer)". It could not keep that promise, and the reason is worth stating exactly:
+**both multiplicity checks ran AFTER the competing answers had already been removed.**
+
+```java
+private String fetch(URI host) {                        // the concat is HERE
+    return restTemplate.getForObject(host + "/orders", String.class);
+}
+public String viaDiscovery() {
+    return fetch(discoveryClient.getInstances("customers-service").get(0).getUri());
+}
+public String viaCallersHost(URI supplied) {            // nothing in the facts reads this
+    return fetch(supplied);
+}
+```
+
+| | published for `fetch` |
+|---|---|
+| `main` | peer NULL · `<host>/orders` · partial — true |
+| the branch, as reviewed | peer **`customers-service`** · `/orders` · **resolved** |
+| after this fix | peer NULL · `<host>/orders` · partial |
+
+A parameter is one path per calling context, so operand 0 answered twice: `customers-service`
+yielding an authority, and `external` from the unbound parameter. Then
+
+1. the `preserves` filter in `_value` kept the pairs whose `yields` matched and **dropped the
+   rest**, where the two arms beside it return all of `identified`; and
+2. the peer question collected only the authority-yielding answers, so `len(answers) == 1`
+   was true of a set it had just made singular.
+
+Either layer alone hid the second path, so the fix is both: a path the entry cannot carry is
+**replaced** with an unresolved answer rather than dropped, and the peer question **refuses
+unless every path answers an authority and they all agree**.
+
+**Two other routes to the same false fact, both measured on probes:** a field written once in
+the constructor from a lookup and once by a `reconfigure(URI)` setter ("several writers are
+several answers"), and a helper with two returns — `if (legacy) return
+URI.create("http://legacy-gateway:8080");` then the lookup. All three now publish
+`<host>/orders` with no peer. Guards
+`arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one` and
+`values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped`, both pinned by
+`test_a_host_another_caller_supplies_refuses_the_peer` on a fixture class added for it.
+
+*The two-branch shape is an UNDER-report once refused, and deliberately so: one branch names
+`legacy-gateway` and the other `customers-service`, and the honest row for a single peer
+column is neither. Publishing one row per branch is a feature, entered as `OI-157`.*
+
+### OI-155 — `preserves` is the only identity key with no closed-set validation
+**Minor · entered 2026-10-19, found by review of `spec/discovery-peer-and-fluent` · `src/sextant/ingress/catalogs/yaml_source.py::_identities`**
+
+`yields` is validated against `("address", "authority")`, with the stated reason that "a typo
+is a refusal rather than a silent `address`". The sibling key added three lines away gets
+nothing: `preserves: address` on `java.lang.String#valueOf` loads cleanly and would carry a
+JMS destination's vendor `toString()` into a joined address at `resolved` — the exact defect
+`OI-142` refused and that CP-39 and guard
+`values.a-RENDERING-carries-an-authority-and-nothing-else` exist to forbid.
+
+**Logged rather than fixed, by the rule for it:** it takes a catalog edit to trigger, not real
+input. A misspelling (`preserves: authoirty`) fails safe — everything becomes unresolved — so
+only the `address` spelling is dangerous, and only a shipped catalog could carry it.
+
+### OI-156 — `authority_of` reads operand 0 as the authority without checking it is the one `<host>` names
+**Minor · entered 2026-10-19, found by review of `spec/discovery-peer-and-fluent`, no triggering input found · `src/sextant/application/resolve/shapes/arguments.py::authority_of`**
+
+`_joined` refuses an operand/piece count mismatch outright, on the ground that "guessing an
+alignment would publish operands in the wrong places". The peer question makes that guess: it
+reads slot 0, and `with_authority` fires on nothing but `path.startswith("<host>")`. Two ways
+slot 0 is not the `<host>` hole:
+
+* `url_of` writes `<host>` for ANY leading hole, not only an authority one. `scheme + "://" +
+  host + "/owners"` does not match `_ABSOLUTE_URL` (the optional scheme group cannot begin
+  with `{`), so the path becomes `<host>://{}/owners` and the peer is asked of the **scheme**;
+* a recipe/operand count mismatch, where `_joined` falls back to the raw template and the
+  holes no longer correspond positionally.
+
+**No shipped entry mints an authority for a scheme or an index**, so neither reaches a false
+peer today. Logged as the one place this work asserts a positional correspondence it does not
+check — and the fix, if it is ever needed, is to carry the hole's own index rather than assume
+zero.
+
+### OI-157 — a destination that differs per BRANCH publishes one row or none, never one row per branch
+**Minor · entered 2026-10-19, measured on a probe while closing `OI-154` · `src/sextant/application/resolve/shapes/arguments.py::authority_of`**
+
+```java
+private URI host() {
+    if (legacy) { return URI.create("http://legacy-gateway:8080"); }
+    return discoveryClient.getInstances("customers-service").get(0).getUri();
+}
+```
+
+Two destinations, both stated in the code, both read by the walk — and the row publishes
+`<host>/orders` with no peer, because a single peer column cannot hold two peers and `OI-154`
+ruled that guessing one of them is a false fact. The honest answer is TWO rows, which is what
+the walk's own paths already describe; nothing downstream fans a peer out that way yet.
+
+*Related but not the same: `OI-154` is about a path nobody read (refusing is the only honest
+answer there). This is about two paths both read, where refusing under-reports.*
+
 ### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/application/resolve/request_requirements.py`**
 
@@ -753,8 +855,6 @@ separate, already-stated COVERAGE item.
 the row with its first queue — *"fewer queues, never a wrong one"*. That is an under-report with
 a row to hang it on; this is no row at all, which a reader cannot tell from absence.*
 
-### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read
-**Major · raised from Minor 2026-10-18 on measurement (the row is dropped, not degraded) · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 ### OI-144 — `fluent` takes a whole assembled address or nothing, where `single_call` now takes the half it read · **CLOSED 2026-10-19**
 **Major · raised from Minor on measurement (the row is DROPPED, not degraded) · entered 2026-10-18 while implementing spec 2026-10-18 · `src/sextant/application/resolve/engines/fluent.py::_url_argument`**
 
@@ -815,18 +915,18 @@ literal.
 > **Measured on a PINNED corpus:** `petclinic-genai-service`'s three blank outbound rows now
 > carry their paths —
 >
-> | | before | after |
-> |---|---|---|
-> | genai → customers | `GET (unresolved)`, `POST (unresolved)` ×2 | `GET <host>/owners`, `POST <host>/owners`, `POST <host>/owners/{}/pets` |
+> | | before | after this cause | after `OI-138` cause 3 |
+> |---|---|---|---|
+> | genai → customers | `GET (unresolved)`, `POST (unresolved)` ×2 | `GET <host>/owners`, `POST <host>/owners`, `POST <host>/owners/{ownerId}/pets` | `GET customers-service /owners`, `POST customers-service /owners`, `POST customers-service /owners/{ownerId}/pets` |
 >
-> — and the expectation was re-recorded in the same commit. The other five pins are unchanged,
-> which is the thing to check for a change inside an engine every fluent catalog shares.
+> — and the expectation was re-recorded. The other five pins are unchanged, which is the thing
+> to check for a change inside an engine every fluent catalog shares.
 >
-> **What is still missing from those three rows is the PEER, not the path:** their host is
-> `discoveryClient.getInstances("customers-service")…getUri()`, so the service NAME is a
-> literal nobody reads yet — `OI-138` cause 3, one catalog away. Guard
-> `fluent.an-assembled-address-is-read-with-the-URL-reader`. Not measured on a corpus yet; `apollo-portal` reaches it zero times (its wrapper is
-a `single_call` shape).
+> **The third column is a SECOND cause, closed in the next commit on the same branch**, and
+> the middle column is what this one is worth on its own: the path, with the host still
+> unread. `OI-138` cause 3 then read the host's service NAME out of
+> `discoveryClient.getInstances("customers-service")…getUri()`, so the rows now name the peer
+> too. Guard `fluent.an-assembled-address-is-read-with-the-URL-reader`.
 
 ### OI-145 — three field pins fail on `terminal_kinds`, and have since a terminal kind landed · **CLOSED 2026-10-18**
 **Minor · entered 2026-10-18, found while running the field check for spec 2026-10-18 · `scripts/field-expectations/{jhipster-sample-app,mall-admin,spring-petclinic-rest}.json`**

@@ -56,13 +56,20 @@ def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows)
     fills its hole from a call's RESULT, which has no name to take; inventing one from the
     method would be naming a variable the code does not have.
 
+    **Which is why the first two rows read `resolved` and the third reads `partial`** (ruled
+    by the user 2026-10-19). `resolved` means nothing about the destination went unread, and
+    a NAMED hole is read — it is the route's own variable, the same text
+    `customers-service` publishes for the same route from its own `@PostMapping`. An
+    anonymous `{}` is a piece nobody read, and an unread authority is the other cause; the
+    third row has the first, `apollo-portal`'s eight have the second.
+
     The HOST is not named this way even when its operand has a name (`OI-152`): in the
     authority position what a reader needs is the peer's identity, which a local name does
     not give, so `<host>` stays `<host>`.
     """
     assert path_var_rows == {
-        ("customers-service", "/owners/{ownerId}/pets", "partial"),
-        ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "partial"),
+        ("customers-service", "/owners/{ownerId}/pets", "resolved"),
+        ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "resolved"),
         ("visits-service", "/pets/visits?petId={}", "partial"),
     }
 
@@ -357,9 +364,39 @@ def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_r
     rows and the document carries the arrow.
     """
     assert discovery_rows == {
-        ("customers-service", "/owners", "partial"),
-        ("customers-service", "/owners/{ownerId}/pets", "partial"),
+        ("customers-service", "/owners", "resolved"),
+        ("customers-service", "/owners/{ownerId}/pets", "resolved"),
+        ("None", "<host>/orders", "partial"),
     }
+
+
+@pytest.mark.pins(
+    "arguments.a-PEER-is-refused-where-ANY-path-did-not-answer-one",
+    "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped",
+)
+def test_a_host_another_caller_supplies_refuses_the_peer(discovery_rows):
+    """The third row of the same fixture, and the bound on the one above it.
+
+        private String fetch(URI host) {
+            return restTemplate.getForObject(host + "/orders", String.class);
+        }
+        fetch(discoveryClient.getInstances("customers-service").get(0).getUri());
+        fetch(supplied);                                   // a URI this module was HANDED
+
+    The concat is in `fetch`, and `fetch` is two calling contexts — so its first operand
+    answers on two paths, one naming `customers-service` and one reading nothing at all. A
+    peer column states who is called, not who is called sometimes, so this row keeps
+    `<host>/orders` with no peer: exactly what it said before any of this work.
+
+    **Measured as a false fact before the refusal existed:** peer `customers-service`, and
+    at `resolved` once a named peer stopped meaning `partial`. Two layers each lost one of
+    the two paths — the `preserves` filter DROPPED the pair it could not carry instead of
+    replacing it, and the peer question then asked only the answers that survived, so
+    "several peers for one call is not a peer" was never reached. A field with two writers
+    and a two-branch helper are the same defect by two other routes, both measured.
+    """
+    assert ("None", "<host>/orders", "partial") in discovery_rows
+    assert not [row for row in discovery_rows if row[1].endswith("/orders") and row[0] != "None"]
 
 
 @pytest.fixture(scope="module")
