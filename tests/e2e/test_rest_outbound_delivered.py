@@ -15,6 +15,54 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 SPRING7 = FIXTURES / "orders-spring7"
 QUARKUS = FIXTURES / "orders-quarkus"
+PATH_VARS = FIXTURES / "orders-pathvars"
+
+
+@pytest.fixture(scope="module")
+def path_var_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(peer, path, resolution)` for every outbound row of `fixtures/orders-pathvars`."""
+    workspace_dir = tmp_path_factory.mktemp("rest-pathvars")
+    compile_fixture(PATH_VARS)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(PATH_VARS), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["peer"]), str(row["path"]), str(row["resolution"]))
+            for row in workspace.query("endpoints")
+            if str(row["direction"]) == "outbound"
+        }
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("values.a-hole-is-NAMED-after-the-value-that-fills-it")
+def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows):
+    """**The most ordinary outbound path there is**, and the hole in it now carries a name.
+
+        restTemplate.getForObject("http://customers-service/owners/" + ownerId + "/pets", …)
+
+    The walk assembles `http://customers-service/owners/{}/pets` and the facts name the
+    operand — `signature.parameters[0].name == "ownerId"` — so the published path is
+    `/owners/{ownerId}/pets`, which is how the SERVER states the same route
+    (`@GetMapping("/owners/{ownerId}/pets")`). An anonymous `{}` said "something here" about
+    a value the facts name, and two rows for the same endpoint could not be compared.
+
+    **The third row keeps `{}` and that is the point of it.** `"?petId=" + join(petIds)`
+    fills its hole from a call's RESULT, which has no name to take; inventing one from the
+    method would be naming a variable the code does not have.
+
+    The HOST is not named this way even when its operand has a name (`OI-152`): in the
+    authority position what a reader needs is the peer's identity, which a local name does
+    not give, so `<host>` stays `<host>`.
+    """
+    assert path_var_rows == {
+        ("customers-service", "/owners/{ownerId}/pets", "partial"),
+        ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "partial"),
+        ("visits-service", "/pets/visits?petId={}", "partial"),
+    }
 
 
 @pytest.fixture(scope="module")

@@ -273,8 +273,30 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ARGUMENTS,
-                find="        if path is not None and path.startswith(_HOLE):",
-                replace="        if False:  # guard disabled by scripts/guard_check.py",
+                find="        leading = _holes(path)[:1] if path is not None else ()\n"
+                "        if path is not None and leading and path.startswith(leading[0]):",
+                replace="        leading = ()  # guard disabled by scripts/guard_check.py\n"
+                "        if False:",
+            ),
+        ),
+    ),
+    "values.a-hole-is-NAMED-after-the-value-that-fills-it": Guard(
+        what="a hole the walk could not fill prints the NAME of the parameter that fills it "
+        "at runtime, where the facts name one",
+        why="ruled by the user on 2026-10-18, one position over from `<host>`: a bare `{}` "
+        'says *something here* about a value the signature names. `"/owners/" + ownerId + '
+        '"/pets"` is the most ordinary outbound address there is, and `/owners/{}/pets` '
+        "cannot be compared with the SERVER's own row for the same route, which is "
+        "`/owners/{ownerId}/pets` — the two sides of one call read as different addresses. "
+        "A hole with no name to take (a call's result) still prints `{}`, which is why this "
+        "guard disables the NAMING rather than the hole",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if operand.get("kind") != _PARAMETER or operand.get("value") is None:\n'
+                "            return _HOLE",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            return _HOLE",
             ),
         ),
     ),
@@ -291,8 +313,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ARGUMENTS,
-                find='    if argument.get("kind") == EXPRESSION and _HOLE in text and text.replace(_HOLE, ""):',
-                replace='    if argument.get("kind") == EXPRESSION and _HOLE in text:',
+                find='    if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):',
+                replace='    if argument.get("kind") == EXPRESSION and _holes(text):',
             ),
         ),
     ),
@@ -308,7 +330,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ARGUMENTS,
-                find="        if peer is not None and (_HOLE in peer or carries_expression(peer)):\n"
+                find="        if peer is not None and (_holes(peer) or carries_expression(peer)):\n"
                 "            peer = None",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n"
                 "            peer = None",
@@ -2612,7 +2634,12 @@ def copy_tree(destination: Path) -> Path:
     # stops being true if the control is ever removed.
     (destination / "fixtures").mkdir()
     shutil.copy2(REPO / "fixtures" / "pom.xml", destination / "fixtures" / "pom.xml")
-    for named in ("orders-soap-client", "orders-pathprefixes", "orders-fieldheld"):
+    for named in (
+        "orders-soap-client",
+        "orders-pathprefixes",
+        "orders-fieldheld",
+        "orders-pathvars",
+    ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
         # synthetic can state it — the two values are paired by the path they left through,

@@ -93,18 +93,25 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     if argument.get("kind") == "string":
         peer, path = split_url(text)
         return peer, path, str(Resolution.RESOLVED)
-    if argument.get("kind") == EXPRESSION and _HOLE in text and text.replace(_HOLE, ""):
+    if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
-        if peer is not None and (_HOLE in peer or carries_expression(peer)):
+        if peer is not None and (_holes(peer) or carries_expression(peer)):
             peer = None
-        if path is not None and path.startswith(_HOLE):
-            # **A LEADING hole is the HOST, and it is named** (ruled by the user
+        leading = _holes(path)[:1] if path is not None else ()
+        if path is not None and leading and path.startswith(leading[0]):
+            # **A LEADING hole is the HOST, and it is named `<host>`** (ruled by the user
             # 2026-10-18). `parseHost(service) + "/health"` leaves nothing before the first
             # `/`, so the unread half is the authority — and a bare `{}` there can mean
-            # anything, which is why the ruling was to say WHICH half is missing. An INTERIOR
-            # hole keeps `{}`: it is a runtime value inside a path segment, and that is what
-            # `{}` honestly says.
-            path = _UNREADABLE_HOST + path[len(_HOLE) :]
+            # anything, which is why the ruling was to say WHICH half is missing.
+            #
+            # An INTERIOR hole is named too, but after the VALUE that fills it
+            # (`/owners/{ownerId}/pets` — `OI-153`, `values._named_hole`), because there the
+            # name is the route's own variable and makes the caller's row comparable with the
+            # server's. In the authority position a local name says nothing about WHO is
+            # called, which is why the walk leaves a leading hole anonymous and this renames
+            # it. Matched through `_holes` rather than against `{}` so the two stay one rule
+            # if that ever changes.
+            path = _UNREADABLE_HOST + path[len(leading[0]) :]
         return peer, path, str(Resolution.PARTIAL)
     return None, None, str(Resolution.UNRESOLVED)
 
@@ -125,6 +132,27 @@ _HOLE = "{}"
 # reader and to this repository's own passes. No framework here spells a path variable with
 # `<>`.
 _UNREADABLE_HOST = "<host>"
+
+
+# A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that
+# fills it (`{ownerId}` — ruled by the user 2026-10-18, `values._named_hole`). Both are
+# holes, and the distinction that matters here is against a CONFIGURATION placeholder:
+# `${billing.host}` also ends in `}` and is NOT a hole but a deployment value the config
+# join resolves per environment. So the `$` is excluded rather than matched, which is
+# `carries_expression`'s own rule in the one notation a regex can state.
+_HOLES = re.compile(r"(?<!\$)\{[^{}]*\}")
+
+
+def _holes(text: str) -> tuple[str, ...]:
+    """Every hole in `text`, in order, as written."""
+    return tuple(_HOLES.findall(text))
+
+
+def _without_holes(text: str) -> str:
+    """`text` with every hole removed — what must survive for a template to be saying
+    anything at all (spec 2026-10-18 §3). `{}{}` states no address, and neither does
+    `{a}{b}`: two runtime values and nothing the code wrote."""
+    return _HOLES.sub("", text)
 
 
 def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]:

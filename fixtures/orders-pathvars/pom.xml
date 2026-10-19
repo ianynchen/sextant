@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-pathvars</artifactId>
+  <version>1.0.0</version>
+  <!-- An outbound address whose path segment is built from a VARIABLE, which is the most
+       ordinary outbound shape there is: `"/owners/" + ownerId + "/pets"`. Both client
+       styles, because they reach two different engines and gave two different answers
+       (`OI-144`).
+
+       Its own module, and small, because what it pins is one spelling of one address. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-webflux</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId><artifactId>reactor-core</artifactId><version>3.6.5</version>
+    </dependency>
+  </dependencies>
+</project>
