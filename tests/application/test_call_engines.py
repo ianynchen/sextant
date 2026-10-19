@@ -191,7 +191,7 @@ def test_an_assembled_url_publishes_the_path_half_it_states(tmp_path: Path):
     [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
     workspace.close()
 
-    assert (endpoint["method"], endpoint["path"]) == ("GET", "{}/health")
+    assert (endpoint["method"], endpoint["path"]) == ("GET", "<host>/health")
     # The authority was never read, so the peer column stays empty rather than carrying a
     # hole dressed as a hostname (§5).
     assert endpoint["peer"] is None
@@ -1061,14 +1061,24 @@ def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
 # --- Spec 2026-10-18: a partly-known address publishes at `partial` --------
 
 
+@pytest.mark.pins("arguments.an-unreadable-HOST-is-NAMED-not-a-bare-hole")
 def test_a_template_with_a_hole_and_read_text_publishes_at_partial():
     """`OI-143`'s whole point. `parseHost(service) + "/health"` assembles an address whose
     host nobody can read and whose PATH the source states, and until 2026-10-18 the row
     carried `path` NULL — "this method calls something over HTTP", and nothing more. The
-    path was in the bytecode the entire time."""
+    path was in the bytecode the entire time.
+
+    **The hole is NAMED `<host>`, not left as `{}`** (ruled by the user 2026-10-18). A bare
+    `{}` can mean anything — a host, a path segment, a query value — so a reader cannot act
+    on it and cannot tell it from a bug in this reader. `<host>` says which half was not
+    read. Angle brackets rather than braces because `{name}` is URI-template syntax in every
+    framework here: `{petId}` is a variable the FRAMEWORK substitutes per request, and a
+    `{host}` would be indistinguishable from a path variable called host — to a reader and
+    to `derive_endpoints`, which reads variable names out of `{…}`.
+    """
     assert url_of({"kind": "expression", "value": "{}/health"}) == (
         None,
-        "{}/health",
+        "<host>/health",
         "partial",
     )
 
@@ -1078,6 +1088,9 @@ def test_a_template_whose_authority_was_read_keeps_its_peer():
     is not in doubt and only the path half is partly known."""
     assert url_of({"kind": "expression", "value": "http://host/{}/orders"}) == (
         "host",
+        # The INTERIOR hole stays `{}`: it is a runtime value in a path segment, which is
+        # what `{}` honestly says. Only a LEADING hole is the host, because that is the only
+        # position where the authority can have gone unread.
         "/{}/orders",
         "partial",
     )
@@ -1140,7 +1153,7 @@ def test_url_of_answer_reads_the_walk_s_two_url_kinds_and_refuses_the_rest():
     )
     assert url_of_answer(Answer(kind=EXPRESSION, value="{}/orders")) == (
         None,
-        "{}/orders",
+        "<host>/orders",
         "partial",
     )
     assert url_of_answer(Answer(kind=LITERAL, value="com/acme/Worker#", literal_kind="symbol")) == (
