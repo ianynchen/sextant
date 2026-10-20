@@ -312,7 +312,7 @@
       "GET <host>/services/admin",
       "GET <host>/services/config",
       "GET <host>/services/config",
-      "POST <host>?env={env}"
+      "POST <host>"
     ]
   }
 }

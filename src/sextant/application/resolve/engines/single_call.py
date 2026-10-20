@@ -22,6 +22,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
+    QUERY_KIND,
     CallFacts,
     CarrierRules,
     FieldFacts,
@@ -39,6 +40,7 @@ from sextant.application.resolve.shapes.arguments import (
     field_facts,
     parameter_index,
     peer_of,
+    query_entries,
     supertypes_of,
     url_of,
     url_of_answer,
@@ -55,6 +57,7 @@ from sextant.application.resolve.shapes.rooting import (
 from sextant.application.resolve.values import ValueIndex, cached_value_index, resolve_site
 from sextant.domain.closed_sets import Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_parameter_types,
@@ -63,6 +66,19 @@ from sextant.domain.symbols import (
     parameter_types,
     returned_type,
 )
+
+# The redactor every ORIGIN writer of `endpoint_metadata` holds, built as
+# `engines/fluent.py`, `resolve/endpoint_attributes.py` and `resolve/request_requirements.py`
+# build theirs: the built-ins alone, because no redactor reaches a resolve engine from the
+# composition root (`OI-71`).
+#
+# `schema.sql`'s `value` column states the invariant — a metadata value is masked AT THE
+# ORIGIN, because nothing downstream masks one and `endpoint_metadata` is exported whole.
+# This engine became a fourth origin with `OI-151`'s query parameters and had no redactor;
+# `test_every_origin_writing_endpoint_metadata_holds_a_redactor` is what said so, and it said
+# so because the first draft built the row in a shared helper, which would have satisfied
+# that rule for nobody.
+_REDACTOR = Redactor.from_rules()
 
 # D00 §5's argument kind for a string the code ASSEMBLES — javac's
 # `makeConcatWithConstants` recipe, read by the extractor into `pieces` and a
@@ -394,6 +410,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         owners, default_address, call_sites, by_caller, field_sources, supertypes
     )
     rows: list[dict[str, Any]] = []
+    # `endpoint_metadata` entries this engine mints, written AFTER the endpoints below
+    # for `fluent`'s stated reason: an entry names the endpoint it belongs to by that
+    # row's own columns, so the row has to exist for the pair to mean anything to a
+    # reader joining them. This engine had no metadata of its own until `OI-151`.
+    metadata: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here: two calls whose paths
     # nobody could read carry nothing to compare, and SQL's `NULL = NULL` is
     # unknown rather than true, so each stays its own row (D02 §2's
@@ -849,6 +870,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # the one being minted.
             if path is not None and serves_urls(catalog.protocol, row_direction):
                 path = canonical_http_path(path)
+            # **The query string is not part of the address** (`OI-151`), off HERE: after the
+            # canonicaliser and before the dedup key, which is built from the path and must be
+            # built from the one the row publishes. `fluent` makes the same call at the same
+            # point in its own loop, through the same function — `OI-144`'s lesson about two
+            # engines and one piece of evidence.
+            path, query = query_entries(path)
             # Checkpoint ruling I1: any DECLARED capture that failed to
             # resolve drops the *row's* resolution, even when the url itself
             # read fine — `path` still carries the known template regardless
@@ -917,6 +944,37 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 if key in seen:
                     continue
                 seen.add(key)
+            # Below the dedup `continue`: a row the key already saw writes no second copy
+            # of its own query parameters either. **Masked HERE, where the value is read**,
+            # which is `schema.sql`'s invariant and the reason `query_entries` hands back
+            # pairs rather than rows — `?access_token=sk-live-…` is an ordinary way to write
+            # an outbound call, the redactor keys on the parameter's own name, and this table
+            # is exported whole.
+            for name, value in query:
+                metadata.append(
+                    {
+                        "protocol": catalog.protocol,
+                        "direction": row_direction,
+                        "method": verb,
+                        "path": path,
+                        "caller": caller,
+                        "kind": QUERY_KIND,
+                        "name": name,
+                        "value": None if value is None else _REDACTOR.redact_value(name, value),
+                        # An unread value is `unresolved` and not a missing entry: *this call
+                        # sends a `petId` parameter whose value we could not read* is a
+                        # different statement from *it sends none*, which is the distinction
+                        # the trust columns exist for (`fluent._metadata_row`).
+                        "resolution": str(
+                            Resolution.UNRESOLVED if value is None else Resolution.RESOLVED
+                        ),
+                        "evidence": "compiler",
+                        # An entry a call SENDS enforces nothing (spec 2026-09-19 §5a), and
+                        # the key is present because a row missing a declared struct key takes
+                        # the per-value retry route the pipeline test forbids.
+                        "requirement": None,
+                    }
+                )
             rows.append(
                 {
                     "protocol": catalog.protocol,
@@ -938,6 +996,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             )
 
     workspace.derive("call_endpoints", rows=rows)
+    # After the endpoints, never before, and empty writes nothing — `fluent`'s rule and
+    # `record_open_questions`' discipline. The RESET is the pipeline's, once per resolve:
+    # several passes write this table and a reset owned by any one of them would erase
+    # whichever ran first.
+    if metadata:
+        workspace.derive("endpoint_metadata_insert", rows=metadata)
 
 
 def _matching_method(

@@ -56,7 +56,7 @@
       "(unresolved) lb://vets-service",
       "(unresolved) lb://visits-service",
       "GET /owners/{ownerId}",
-      "GET /pets/visits?petId={petId}"
+      "GET /pets/visits"
     ]
   }
 }

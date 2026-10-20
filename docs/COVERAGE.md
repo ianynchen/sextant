@@ -1523,6 +1523,16 @@ what each does NOT read is stated on its row. `M06` compares a client's outbound
 against a server's `required` ones when the stitcher is built; nothing reads the column today
 beyond the export, which carries the table whole.
 
+**The outbound half of that comparison now EXISTS** (`OI-151`, 2026-10-19). A client's query
+string leaves its address and becomes one entry per parameter, so
+`.uri(host + "pets/visits?petId={petId}")` publishes `/pets/visits` — the address
+`visits-service` serves — plus `kind=query, name=petId`. Before this the client side wrote no
+entry at all and the two rows could not be compared on the address. **`kind` is `query` where
+the server's `@RequestParam` writes `param`**, and that asymmetry is read rather than chosen:
+`param` is the union of query and form, used only by the APIs that cannot tell them apart, so
+a client's `query` SATISFIES a server's `param` and `M06` carries that rule. Both engines
+write these entries; `single_call` became this table's fourth origin doing so.
+
 ### 3a-vi. Two handlers a framework would refuse to register (F5 §6.1)
 
 D01 has said since it was written that two handlers declaring one wire contract "is a

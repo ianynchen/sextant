@@ -86,10 +86,30 @@ payload contracts; DR-5 already specifies the matching rule (protocol equality,
 wire identity, directional payload compatibility). What is missing is the tier
 that runs it across bundles.
 
-**Nothing in the corpora demonstrates it either way.** All three pinned repositories
+~~**Nothing in the corpora demonstrates it either way.** All three pinned repositories
 are single REST applications with genuinely zero outbound calls.
 `examples/spring-petclinic-microservices` has nine modules and real cross-service
-traffic, and has never been used for this.
+traffic, and has never been used for this.~~
+
+**CORRECTED 2026-10-19 — both sentences were true when written and neither is now.** There
+are six pinned corpora, three of them carry outbound calls, and
+`examples/spring-petclinic-microservices` is cloned, built and pinned twice
+(`petclinic-api-gateway`, `petclinic-genai-service`). The two sides of a real cross-service
+call are both published and both `resolved`:
+
+| | published |
+|---|---|
+| `genai` outbound | `POST /owners/{ownerId}/pets` · peer `customers-service` · resolved |
+| `customers-service` inbound | `POST /owners/{ownerId}/pets` · `@PostMapping` · resolved |
+
+A reader joins those by eye; nothing in Sextant joins them. **So the corpus blocker named
+here is gone and the tier is what is missing** — which changes this entry from "unreachable"
+to "the next thing between Spring Boot and end-to-end".
+
+**One prerequisite, measured:** `OI-151`. `api-gateway` calls
+`/pets/visits?petId={petId}` and `visits-service` serves `/pets/visits` with the parameter as
+`endpoint_metadata`, so `DR-5`'s rule fails on the address for a call that is exact in the
+code. The stitcher would miss it.
 
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
@@ -489,6 +509,30 @@ URI.create("http://legacy-gateway:8080");` then the lookup. All three now publis
 `legacy-gateway` and the other `customers-service`, and the honest row for a single peer
 column is neither. Publishing one row per branch is a feature, entered as `OI-157`.*
 
+### OI-158 — two calls differing ONLY in their query string now dedup to one row
+**Minor · entered 2026-10-19 while closing `OI-151`, zero occurrences measured · `src/sextant/application/resolve/engines/single_call.py`, `src/sextant/application/resolve/engines/fluent.py` (the dedup key)**
+
+The query string leaves the address (`OI-151`), and the dedup key is built from the address.
+So one caller making two calls that differ only in their query —
+
+```java
+restTemplate.getForObject(base + "/search?env=DEV", String.class);
+restTemplate.getForObject(base + "/search?env=PROD", String.class);
+```
+
+— now publishes ONE row with two `query` entries named `env` beside it, and nothing says
+which call sent which. Before `OI-151` these were two rows, because the query was in the key.
+
+**Zero occurrences, measured rather than assumed:** exactly two rows in the six pinned
+corpora carry a query at all and they are in different modules, and no fixture has a second.
+It is an under-report with a row to hang it on — the `OI-109` shape, "fewer facts, never a
+wrong one" — rather than a false fact, which is why it is Minor and was accepted knowingly
+as part of closing a Major.
+
+**Closes when** the entries carry enough to tell the calls apart — an ordinal, or the call
+site — or when the key keeps the query while the published path does not. **Falsified by** a
+module making two such calls and the document showing one row.
+
 ### OI-155 — `preserves` is the only identity key with no closed-set validation
 **Minor · entered 2026-10-19, found by review of `spec/discovery-peer-and-fluent` · `src/sextant/ingress/catalogs/yaml_source.py::_identities`**
 
@@ -540,7 +584,7 @@ the walk's own paths already describe; nothing downstream fans a peer out that w
 *Related but not the same: `OI-154` is about a path nobody read (refusing is the only honest
 answer there). This is about two paths both read, where refusing under-reports.*
 
-### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata
+### OI-151 — an outbound row keeps its query string in `path`, where the inbound row records the same parameter as metadata · **CLOSED 2026-10-19**
 **Major · entered 2026-10-18, measured on `spring-petclinic-microservices` and `apollo-portal` · `src/sextant/application/resolve/shapes/arguments.py::url_of`, `src/sextant/application/resolve/request_requirements.py`**
 
 **Nothing is wrong at runtime, and the first version of this entry implied otherwise.** The
@@ -577,6 +621,43 @@ template, which is how `RestTemplate` and `WebClient` are normally used.
 **Closes when** `/pets/visits?petId={petId}` publishes as `/pets/visits` plus an outbound
 `param` row named `petId`, the two sides compare equal on the address, and `apollo-portal`'s
 `{}?env={env}` does the same.
+
+> **CLOSED 2026-10-19.** Measured on the pinned commits, both sides read from the workspace:
+>
+> | | row | entry |
+> |---|---|---|
+> | `api-gateway` calls | `GET /pets/visits` · peer `visits-service` · resolved | `outbound, query, petId, value NULL, unresolved` |
+> | `visits-service` serves | `GET /pets/visits` · resolved | `inbound, param, petId, value NULL, resolved, required` |
+>
+> The addresses the two modules share went from none to `{('GET', '/pets/visits')}`.
+> `apollo-portal`'s row is `POST <host>` with one `query` entry named `env`. Both pins were
+> re-recorded; the other four are unchanged.
+>
+> **One deviation from this entry's own prediction, and it is deliberate: `kind` is `query`,
+> not `param`.** The looser word has a stated rule — "`param` only for the two APIs that
+> cannot tell the query string from a form body" (`@RequestParam`, `params=`, the Servlet's
+> `getParameter`) — and an outbound URI template is not one of them: `?petId={petId}` is the
+> query string and nothing else, so writing `param` would say LESS than the class file does.
+> **The consequence lands on `M06`:** the two sides do not compare equal on `kind` alone, and
+> a client's `query` SATISFIES a server's `param` because `param` is the union of query and
+> form. That is a matching rule for the stitcher, recorded here and in `GAP-2` rather than
+> paid for with a looser column.
+>
+> **Three refusals, each leaving the query ON the path** rather than guessing — stripping a
+> query this cannot describe would delete evidence the row had: a parameter whose NAME
+> carries a hole or a `${…}`, one written with no `=` at all (`?debug` states a parameter
+> with no value, and neither `resolved` with a NULL value nor `unresolved` says that — no
+> corpus or fixture carries one, so the word is not invented), and an empty name.
+>
+> **It made `single_call` a FOURTH origin writing `endpoint_metadata`**, which
+> `test_every_origin_writing_endpoint_metadata_holds_a_redactor` caught: the first draft
+> built the row in a shared helper that held the only redactor, so the engine would have
+> written values it never read and the rule would have been vacuous for the next origin. The
+> address rule is shared and each engine builds and masks its own row — which is what both
+> already did for every other row they write. `?token=sk-live-…` is pinned in both fixtures.
+>
+> Guards `arguments.a-QUERY-STRING-is-not-part-of-the-address` and
+> `arguments.a-QUERY-parameters-value-is-masked-by-its-own-name`.
 
 ### OI-149 — a nested aggregator's modules are invisible, so 323 endpoints' response contracts are open
 **Major · entered 2026-10-18, measured on `YunaiV/ruoyi-vue-pro` (Spring Boot 2.7.18, 7,244 non-test Java files) · `src/sextant/application/resolve/../ingress/detect/maven.py::_reactor_modules`**
@@ -1136,6 +1217,27 @@ while both paths were NULL.
 Guessing either from here publishes a wrong address at `resolved`, which is the one failure
 this work risks. **Falsified by** `apollo-portal` publishing the 64 call sites' own paths.
 
+> **STILL OPEN, re-measured 2026-10-19, and the parenthetical remnant is the only part that
+> closed.** The mirror this entry left standing — *"`fluent`'s concat arm still takes only a
+> WHOLE literal, so a fluent chain whose assembled address is partly known publishes `path`
+> NULL"* — closed as `OI-144`. That is a cross-engine fix and not this entry's own subject.
+>
+> **The 64 are still not derived.** `apollo-portal` publishes ten outbound rows, and reading
+> their callers says exactly which ten they are:
+>
+> | rows | caller | published |
+> |---|---|---|
+> | 8 | `SystemInfoController`, `PortalManagementController`, `AdminServiceAddressLocator`, `ConfigReleaseWebhookNotifier` | `<host>/health`, `<host>/services/admin`, `<host>/services/config`, `<host>?env={env}` — at `partial` |
+> | 2 | `RetryableRestTemplate#exchangeGet`, `#doExecute` | `path` NULL, `unresolved` |
+>
+> The eight are calls a controller makes on `restTemplate` DIRECTLY. The two addressless rows
+> are the wrapper, and they are the 64's funnel — which is what this entry said when it was
+> written and is still what blocks it. So the eight pathful rows are evidence that `partial`
+> works, not that this closed; counting them as the 64 would be reading the row total instead
+> of the callers.
+>
+> *Checked because the remnant's closure made the entry look closable. It is not.*
+
 *A mirror left standing, named rather than quietly widened: `fluent`'s concat arm still
 takes only a WHOLE literal (`_url_argument`, `len(settled) == 1`), so a fluent chain whose
 assembled address is partly known publishes `path` NULL where `single_call` now publishes
@@ -1481,7 +1583,7 @@ distinguishes them, since `resolution` is `resolved` while `format_resolution` i
 `petclinic-api-gateway` field pin both record today's text verbatim), so it is a task of its
 own rather than a fix in passing.
 
-### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing
+### OI-139 — a chain of imported BOMs is not followed, so a gateway's whole route table derives nothing · **CLOSED 2026-10-19**
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` · `src/sextant/ingress/detect/` Maven version resolution, `src/sextant/catalogs/spring-cloud-gateway-properties.yml` `detect.coordinates`**
 
 **Measured on Spring's own reference microservice app.** `spring-petclinic-api-gateway`
@@ -1567,6 +1669,29 @@ follows `<parent>` links and `<scope>import</scope>` entries to a depth of 16, a
 
 **Falsified by** that module deriving four inbound and four outbound rows for its declared
 routes.
+
+> **CLOSED 2026-10-19 — and it closed in the code on 2026-10-17, with nothing written here.**
+> Both causes are implemented and carry their own dated comments: `maven.py` defines Maven's
+> `project.*` built-ins per pom (`"project.version": version`, with the BOM's own scope getting
+> the version the import names), and the catalog lists
+> `org.springframework.cloud:spring-cloud-starter-gateway-server-webflux` beside the three it
+> had. Re-measured today on the pinned commit:
+>
+> | | entered 2026-10-17 | 2026-10-19 |
+> |---|---|---|
+> | `dependencies_not_resolved` | 4 | **0** |
+> | `spring-cloud-gateway-properties` skipped | yes | **no** |
+> | rows for the four declared routes | 0 | **4 outbound `lb://…`, 32 inbound** |
+>
+> The inbound count is 32 rather than 4 and that is the shipped rule, not a surprise: a
+> `Path=` predicate names no method, so Spring accepts every method and each is its own row
+> (8 verbs x 4 routes). The whole service-to-service topology this entry said the document
+> showed none of is in the document.
+>
+> **The register went two days saying a fixed Major was open**, which is the failure its own
+> header names — and it mattered: this entry was still being counted against Spring Boot
+> while the work it describes was already shipped. Found by re-reading the register's open
+> Majors against measurement rather than against itself.
 
 ### OI-138 — outbound addresses are 1 of 6 on a real multi-service Spring Boot system
 **Major · entered 2026-10-17, measured on `spring-petclinic-microservices` at `c649978a` · `src/sextant/application/resolve/shapes/arguments.py::channel_of_answer`, spec `2026-09-22-value-resolution-design.md` §6, `docs/components/D00-fact-schema.md` §5's `field_write`**

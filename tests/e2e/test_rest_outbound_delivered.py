@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.redaction import REDACTED
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 SPRING7 = FIXTURES / "orders-spring7"
@@ -52,9 +53,11 @@ def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows)
     (`@GetMapping("/owners/{ownerId}/pets")`). An anonymous `{}` said "something here" about
     a value the facts name, and two rows for the same endpoint could not be compared.
 
-    **The third row keeps `{}` and that is the point of it.** `"?petId=" + join(petIds)`
-    fills its hole from a call's RESULT, which has no name to take; inventing one from the
-    method would be naming a variable the code does not have.
+    **The third row's hole has no name to take.** `"?petId=" + join(petIds)` fills from a
+    call's RESULT; inventing a name from the method would be naming a variable the code does
+    not have. Its QUERY STRING is now lifted off the address (`OI-151`), so the row publishes
+    `/pets/visits` — which is what `visits-service` serves — and the parameter is an
+    `endpoint_metadata` entry beside it.
 
     **Which is why the first two rows read `resolved` and the third reads `partial`** (ruled
     by the user 2026-10-19). `resolved` means nothing about the destination went unread, and
@@ -63,6 +66,13 @@ def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows)
     anonymous `{}` is a piece nobody read, and an unread authority is the other cause; the
     third row has the first, `apollo-portal`'s eight have the second.
 
+    **Lifting the query does NOT promote that row, and the distinction is the hole
+    convention's own.** `petId`'s value was not read, so the row keeps `partial` and the
+    entry keeps `unresolved`. The row this shape mirrors on real code —
+    `api-gateway`'s `.uri(hostname + "pets/visits?petId={petId}", …)` — reads `resolved`
+    because `{petId}` is URI-template text the programmer WROTE, not a hole the walk left.
+    Same published address, two different facts about the value, and the two words say which.
+
     The HOST is not named this way even when its operand has a name (`OI-152`): in the
     authority position what a reader needs is the peer's identity, which a local name does
     not give, so `<host>` stays `<host>`.
@@ -70,7 +80,7 @@ def test_a_path_segment_built_from_a_variable_names_that_variable(path_var_rows)
     assert path_var_rows == {
         ("customers-service", "/owners/{ownerId}/pets", "resolved"),
         ("visits-service", "/owners/{ownerId}/pets/{petId}/visits", "resolved"),
-        ("visits-service", "/pets/visits?petId={}", "partial"),
+        ("visits-service", "/pets/visits", "partial"),
     }
 
 
@@ -419,6 +429,104 @@ def fluent_address_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[s
         workspace.close()
 
 
+@pytest.fixture(scope="module")
+def query_entry_rows(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, set[tuple[str, str, str, str, str]]]:
+    """`endpoint_metadata` query entries and outbound addresses, per ENGINE.
+
+    Two fixtures because the two engines mint their rows in different files and `OI-151`
+    had to be answered in both — `orders-fluentaddress`'s `WebClient` chain is `fluent`,
+    `orders-pathvars`' `RestTemplate` call is `single_call`.
+    """
+    out: dict[str, set[tuple[str, str, str, str, str]]] = {}
+    for engine, fixture in (("fluent", FLUENT_ADDRESS), ("single_call", PATH_VARS)):
+        workspace_dir = tmp_path_factory.mktemp(f"rest-query-{engine}")
+        compile_fixture(fixture)
+        result = CliRunner().invoke(
+            cli, ["module", "analyze", str(fixture), "--workspace", str(workspace_dir)]
+        )
+        assert result.exit_code == 0, result.output
+        workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+        try:
+            out[engine] = {
+                (
+                    str(row["direction"]),
+                    str(row["path"]),
+                    str(row["kind"]),
+                    str(row["name"]),
+                    str(row["resolution"]),
+                )
+                for row in workspace.query("endpoint_metadata")
+            }
+            out[f"{engine}:value"] = {
+                (str(row["name"]), str(row["value"]), "", "", "")
+                for row in workspace.query("endpoint_metadata")
+            }
+        finally:
+            workspace.close()
+    return out
+
+
+@pytest.mark.pins("arguments.a-QUERY-STRING-is-not-part-of-the-address")
+def test_a_query_string_leaves_the_address_and_becomes_an_entry(query_entry_rows):
+    """`OI-151`, in BOTH engines — the two sides of one call recorded the same contract two
+    different ways.
+
+        @GetMapping("pets/visits")                              // visits-service serves
+        public Visits read(@RequestParam("petId") List<Integer> petIds)
+
+        .uri(hostname + "pets/visits?petId={petId}", joinIds(petIds))   // api-gateway calls
+
+    Nothing is wrong at runtime: that is the same contract from both ends. What disagreed is
+    how it was RECORDED. The server published `path` `/pets/visits` with the parameter as an
+    `endpoint_metadata` row; the client published `/pets/visits?petId={petId}` and no entry
+    at all, so the two rows could not be compared on the address — the linking tier (`GAP-2`)
+    would miss a link that is exact in the code, and a reader diffing the columns saw a
+    mismatch that is not one.
+
+    **`kind` is `query`, not `param`, and that is read rather than chosen.** The vaguer word
+    has a stated rule — "`param` only for the two APIs that cannot tell the query string from
+    a form body" (`@RequestParam`, `params=`, the Servlet's `getParameter`) — and an outbound
+    URI template is not one of them. A client's `query` SATISFIES a server's `param`; that is
+    a matching rule for `M06`, not a reason to write the looser word.
+
+    **A value is read or it is not.** `page=2` is a literal at `resolved`; `petId`'s value is
+    a runtime value at `unresolved`, because *this call sends a `petId` parameter whose value
+    we could not read* is a different statement from *it sends none*. `requirement` is NULL
+    throughout — an entry a call SENDS enforces nothing.
+    """
+    for engine in ("fluent", "single_call"):
+        assert ("outbound", "/pets/visits", "query", "petId", "unresolved") in query_entry_rows[
+            engine
+        ], engine
+        assert not [row for row in query_entry_rows[engine] if "?" in row[1]], (
+            f"{engine} left a query on an address"
+        )
+    assert ("outbound", "/pets/visits", "query", "page", "resolved") in query_entry_rows["fluent"]
+
+
+@pytest.mark.pins("arguments.a-QUERY-parameters-value-is-masked-by-its-own-name")
+def test_a_credential_in_a_query_string_is_masked_at_the_origin(query_entry_rows):
+    """`schema.sql`'s `value` column: a metadata value is masked AT THE ORIGIN, because
+    nothing downstream masks one and `endpoint_metadata` is exported whole.
+
+        .uri("http://visits-service/pets/visits?petId=" + petId + "&page=2&token=sk-live-xyz")
+
+    `?access_token=…` is an ordinary way to write an outbound call, and `OI-151` made both
+    engines writers of this table — `single_call` for the first time, which is why it grew a
+    redactor of its own rather than borrowing a shared row builder that would have masked on
+    nobody's behalf.
+
+    The redactor keys on the parameter's OWN name, which is the shape it was built for:
+    `token` is a built-in key pattern, `page` is not.
+    """
+    for engine in ("fluent", "single_call"):
+        values = query_entry_rows[f"{engine}:value"]
+        assert ("token", REDACTED, "", "", "") in values, engine
+    assert ("page", "2", "", "", "") in query_entry_rows["fluent:value"]
+
+
 @pytest.mark.pins("fluent.an-assembled-address-is-read-with-the-URL-reader")
 def test_both_engines_give_one_answer_for_one_assembled_address(fluent_address_rows):
     """`OI-144`. One address, written once each way:
@@ -439,4 +547,5 @@ def test_both_engines_give_one_answer_for_one_assembled_address(fluent_address_r
     assert fluent_address_rows == {
         ("None", "<host>/owners", "partial"),
         ("vets-service", "/vets", "resolved"),
+        ("visits-service", "/pets/visits", "resolved"),
     }
