@@ -16,7 +16,7 @@ machinery for a shape it does not have yet.
 
 from collections.abc import Sequence
 
-from sextant.application.stitch import Link, Participant, Uncalled, Unmatched
+from sextant.application.stitch import Link, Participant, Refusal, Uncalled, Unmatched
 from sextant.domain.closed_sets import Resolution
 
 
@@ -25,6 +25,7 @@ def render_system_document(
     links: "Sequence[Link]",
     unmatched: "Sequence[Unmatched]",
     uncalled_endpoints: "Sequence[Uncalled]",
+    route_refusals: "Sequence[Refusal]",
     *,
     environment: str,
 ) -> str:
@@ -43,6 +44,7 @@ def render_system_document(
     lines += _links(links)
     lines += _unmatched(unmatched, absent)
     lines += _uncalled(uncalled_endpoints)
+    lines += _refusals(route_refusals)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -174,3 +176,30 @@ def _link_order(link: "Link") -> tuple[str, str, str, str]:
         link.from_method or "",
         link.to_path or "",
     )
+
+
+def _refusals(route_refusals: "Sequence[Refusal]") -> list[str]:
+    """Gateway routes whose prefix could not be composed with the service's paths.
+
+    A SECTION rather than a silence, because the route still produced a participant-level
+    link above: the dependency is stated and only the claim about which endpoints it reaches
+    is withheld. Without this a reader comparing the two sections would see one gateway route
+    with endpoint links and another with none, and have nothing to explain the difference.
+    """
+    if not route_refusals:
+        return []
+    lines = [
+        "## Gateway routes whose prefix was not composed",
+        "",
+        (
+            "Each of these names its destination above and keeps that link; what is "
+            "withheld is which of that service's endpoints the route reaches."
+        ),
+        "",
+        "| Participant | Route | Why |",
+        "|---|---|---|",
+    ]
+    for refusal in sorted(route_refusals, key=lambda r: (r.participant, r.route)):
+        lines.append(f"| `{refusal.participant}` | `{refusal.route}` | {refusal.reason} |")
+    lines.append("")
+    return lines

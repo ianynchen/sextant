@@ -17,6 +17,7 @@ to open the spec to know the shape:
 * an address whose AUTHORITY went unread is never matched by path alone.
 """
 
+from sextant.application.stitch.gateway import Refusal, RouteModel, gateway_links, route_model
 from sextant.application.stitch.links import Link, Uncalled, Unmatched, match, uncalled
 from sextant.application.stitch.participants import (
     Participant,
@@ -27,10 +28,14 @@ from sextant.application.stitch.participants import (
 __all__ = [
     "Link",
     "Participant",
+    "Refusal",
+    "RouteModel",
     "Uncalled",
     "Unmatched",
+    "gateway_links",
     "match",
     "participants_of",
+    "route_model",
     "uncalled",
     "with_registered_names",
 ]

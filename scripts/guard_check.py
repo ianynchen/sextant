@@ -147,6 +147,7 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
 _SYSTEM_RENDER = "sextant/egress/render/system.py"
+_GATEWAY = "sextant/application/stitch/gateway.py"
 _WORKSPACE = "sextant/storage/duckdb/workspace.py"
 _COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
@@ -342,6 +343,55 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    named = authority_of(argument, caller, workspace, index, identities)",
                 replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-gateway-ROUTE-PREFIX-joins-the-paths-the-service-serves": Guard(
+        what="a gateway route's literal prefix is joined to each inbound path of the service "
+        "its `uri` names, publishing the gateway's own address for that route",
+        why="a route declaring `Path=/api/customer/**` in front of `customers-service`'s "
+        "`GET /owners/{ownerId}` serves `GET /api/customer/owners/{ownerId}`, and nothing "
+        "joined those two halves — the gateway's dependencies read as a destination with no "
+        "routes. It is the same join a class-level `@RequestMapping` in front of a method "
+        "path already makes, with the halves in two MODULES. Measured: `petclinic`'s four "
+        "routes publish 13 endpoint links and `mall-swarm`'s five publish 245, every one "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="        for row in served.get(target, ()):",
+                replace="        for row in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-STRIP-that-disagrees-with-the-prefix-REFUSES-the-composition": Guard(
+        what="the composition is refused unless the route's strip count equals its prefix's "
+        "segment count",
+        why="`StripPrefix=N` must remove exactly the prefix being composed. With "
+        "`Path=/a/b/**` and `StripPrefix=1` a request to `/a/b/orders` arrives as "
+        "`/b/orders`, which the service does not serve — so composing anyway publishes an "
+        "address no request takes, which is `M06`'s fabrication rather than imprecision. "
+        "Measured off the jar (CP-40, two releases either side of the module rename): the "
+        "filter keeps every segment whose index is >= `parts`. The dependency is not lost by "
+        "refusing — the `lb://` row still links the two participants",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="        if strip is None or strip != len(segments):",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-refused-route-composes-NO-endpoint-link": Guard(
+        what="a route the gate refused contributes no endpoint link at all",
+        why="the refusal has to BE a refusal: a route whose prefix cannot be composed must "
+        "leave the participant-level link standing and add nothing, rather than publish a "
+        "composed address beside a note saying it could not be composed",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="            continue\n        for row in served.get(target, ()):",
+                replace="        for row in served.get(target, ()):  # guard disabled",
             ),
         ),
     ),
@@ -3008,6 +3058,8 @@ def copy_tree(destination: Path) -> Path:
         # participant set is read from the `modules.json` an analysis at a reactor ROOT
         # writes, so a single module cannot state the shape at all.
         "reactor-twoservice",
+        # The gateway reactor CP-40's gate is measured on.
+        "reactor-gateway",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

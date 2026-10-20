@@ -132,10 +132,16 @@ from sextant.application.stages import enrich as enrich_stage
 from sextant.application.stages.analyze import AnalyzeResult as _StageAnalyzeResult
 from sextant.application.stages.analyze import analyze as _analyze_stage
 from sextant.application.stitch import (
+    gateway_links as _gateway_links,
+)
+from sextant.application.stitch import (
     match as _match_links,
 )
 from sextant.application.stitch import (
     participants_of as _participants_of,
+)
+from sextant.application.stitch import (
+    route_model as _route_model,
 )
 from sextant.application.stitch import (
     uncalled as _uncalled_endpoints,
@@ -279,6 +285,10 @@ class SystemResult:
     links: int
     unmatched: int
     uncalled: int
+    # Gateway routes whose prefix could not be composed with the service's paths. Counted
+    # beside the links because a run with many is one whose gateway the document describes
+    # less completely than its link count suggests.
+    route_refusals: int
 
 
 @dataclass(frozen=True)
@@ -1563,16 +1573,34 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         config = workspace.query("system_config", environment=environment)
         # WHICH key holds a module's registered name is framework knowledge, so a catalog
         # declares it and this only asks for the answer (`participant_name_key`).
+        _catalogs = YamlCatalogSource(catalogs_dir()).load()
         key = next(
-            (
-                catalog.participant_name_key
-                for catalog in YamlCatalogSource(catalogs_dir()).load()
-                if catalog.participant_name_key
-            ),
+            (catalog.participant_name_key for catalog in _catalogs if catalog.participant_name_key),
             None,
         )
         participants = _with_registered_names(participants, config, key)
         links, unmatched = _match_links(participants, endpoints)
+        # **A gateway route's prefix, joined to the paths the service it names serves.** It
+        # runs after the matcher and adds to it rather than replacing anything: the
+        # participant-level link the `lb://` row already produced stays, because the
+        # dependency is real whether or not the composition is licensed, and the routes it
+        # could not compose are REFUSALS rather than silence.
+        names = {
+            name: participant.name
+            for participant in participants
+            if participant.present
+            for name in participant.answers_to()
+        }
+        model = next(
+            (
+                found
+                for catalog in _catalogs
+                if (found := _route_model(catalog.matches)) is not None
+            ),
+            None,
+        )
+        composed, refusals = _gateway_links(config, endpoints, model, names)
+        links = (*links, *composed)
         uncalled = _uncalled_endpoints(endpoints, links)
         workspace.derive("participants_reset")
         workspace.derive("participants_insert", rows=[p.row() for p in participants])
@@ -1586,7 +1614,9 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     render_dir.mkdir(parents=True, exist_ok=True)
     document = render_dir / _SYSTEM_DOCUMENT
     document.write_text(
-        render_system_document(participants, links, unmatched, uncalled, environment=environment),
+        render_system_document(
+            participants, links, unmatched, uncalled, refusals, environment=environment
+        ),
         encoding="utf-8",
     )
     return SystemResult(
@@ -1596,6 +1626,7 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         links=len(links),
         unmatched=len(unmatched),
         uncalled=len(uncalled),
+        route_refusals=len(refusals),
     )
 
 
