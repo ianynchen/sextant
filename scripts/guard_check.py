@@ -145,6 +145,7 @@ _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
+_LINKS = "sextant/application/stitch/links.py"
 _WORKSPACE = "sextant/storage/duckdb/workspace.py"
 _COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
@@ -340,6 +341,70 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    named = authority_of(argument, caller, workspace, index, identities)",
                 replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-PEER-the-client-states-settles-who-before-the-path-picks-the-route": Guard(
+        what="a peer the client states resolves through the participants' names AND aliases, "
+        "settling WHO is called before any path is compared",
+        why="`M06`'s key table calls a stated service name the strong HTTP case, and it is "
+        "what makes a second module serving the same path harmless. The alias half is "
+        "load-bearing and measured: of the distinct names clients state, "
+        "`spring-petclinic-microservices` matches 4 of 4 by the registered name and 0 by the "
+        "artifactId, while `mall-swarm` matches 5 of 5 the other way — neither source alone "
+        "covers both systems, and without aliases petclinic links nothing at all",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        for name in participant.answers_to():",
+                replace="        for name in (participant.name,):  # guard disabled",
+            ),
+        ),
+    ),
+    "stitch.a-peer-OUTSIDE-the-system-is-a-finding-not-a-fallback": Guard(
+        what="a client naming a service this system does not contain produces NO link — "
+        "never a fall through to matching the path instead",
+        why="the dangerous failure is not refusing, it is falling through: a module serving "
+        "that path would be linked to a call that does not reach it, which is `M06`'s "
+        'fabrication rather than imprecision — "and an agent will then reason from it". '
+        "The honest row is `M06`'s own finding: a service outside the system, a participant "
+        "nobody added, or a dependency nobody documented",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='            return refuse(f"the client names {peer!r}, which is not a participant")',
+                replace="            target = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.an-UNREAD-authority-is-never-matched-by-path-alone": Guard(
+        what="an outbound row whose authority went unread mints no link, even where exactly "
+        "one participant serves that path",
+        why="the user's decision 6, refused 2026-10-19. Uniqueness INSIDE the participant set "
+        "cannot rule out a target outside it, so the only key that would link such a row "
+        "rests on the half of the address nobody read. Measured cost: 5 of "
+        "`apollo-portal`'s 10 outbound rows and 0 elsewhere — and for Apollo the link would "
+        "have been correct, which is evidence for the rule rather than proof of it",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="    if path.startswith(UNREADABLE_HOST):",
+                replace="    if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not": Guard(
+        what="a module's registered service name becomes an alias, and one equal to the "
+        "artifactId does not",
+        why="a build coordinate is not a service name — `spring-petclinic-customers-service` "
+        "against the `customers-service` every client writes — and the registered name is "
+        "what closes that gap. An alias equal to the name says nothing and would restate "
+        "every participant beside itself; `mall-swarm`'s six modules are all that case",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        if registered.get(participant.name, participant.name) == participant.name",
+                replace="        if True  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -2878,6 +2943,11 @@ def copy_tree(destination: Path) -> Path:
         "orders-pathvars",
         "orders-fluentaddress",
         "orders-discovery",
+        # The two-module REACTOR the stitcher's guards are measured on. It is the only
+        # fixture here that is a reactor rather than a module, and it has to be: the
+        # participant set is read from the `modules.json` an analysis at a reactor ROOT
+        # writes, so a single module cannot state the shape at all.
+        "reactor-twoservice",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

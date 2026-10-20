@@ -380,6 +380,12 @@ class YamlCatalogSource:
                     format_fixed=raw.get("format_fixed", {}),
                     media_formats=raw.get("media_formats", {}),
                     format_any=bool(raw.get("format_any", False)),
+                    # The reactor-linking spec, 2026-10-19 — optional, and checked
+                    # where the system tier reads it rather than here, like every
+                    # other block above. A plain string: it is one key name, and a
+                    # catalog declaring several would be claiming a module registers
+                    # under more than one name, which no framework here does.
+                    participant_name_key=raw.get("participant_name_key"),
                     json_default_markers=raw.get("json_default_markers", []),
                     parse_calls=raw.get("parse_calls", {}),
                     # 2H design §6 — optional, checked where the pass reads it

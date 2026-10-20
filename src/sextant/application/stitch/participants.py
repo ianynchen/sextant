@@ -12,7 +12,8 @@ returns rows. The reading belongs to the adapter above it (GUIDELINES' layering:
 never reaches for a path of its own).
 """
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # What `participants.kind` carries. Only the first is written on the reactor path: a declared
@@ -40,6 +41,13 @@ class Participant:
     commit_id: str | None
     present: bool
     absent_reason: str | None
+    # Every OTHER name this participant answers to — the name it registers in discovery,
+    # which is what a client states. See `with_registered_names`.
+    aliases: tuple[str, ...] = ()
+
+    def answers_to(self) -> "tuple[str, ...]":
+        """Every name a client could state for this participant: its own and its aliases."""
+        return (self.name, *self.aliases)
 
     def row(self) -> dict[str, object]:
         """This participant as `participants` takes it (D01's system scope)."""
@@ -47,6 +55,9 @@ class Participant:
             "name": self.name,
             "kind": SERVICE,
             "module_id": self.module_id,
+            # NULL rather than `[]` where there is no alias, for `links.candidates`'
+            # reason: an empty array reads as a statement, and there is none to make.
+            "aliases": json.dumps(list(self.aliases)) if self.aliases else None,
             "location": None if self.location is None else str(self.location),
             "commit_id": self.commit_id,
             "present": self.present,
@@ -110,3 +121,48 @@ def _absent_reason(entry: "dict[str, object]") -> str | None:
     if not entry.get("analyzed"):
         return "the module was not analyzed; run `sextant module analyze` at the reactor root"
     return "the module was analyzed but its workspace is no longer there"
+
+
+def with_registered_names(
+    participants: "tuple[Participant, ...]",
+    config: "list[dict[str, object]]",
+    key: str | None,
+) -> "tuple[Participant, ...]":
+    """`participants`, each carrying the name it REGISTERS as an alias.
+
+    **A build coordinate is not a service name**, and the gap is the whole reason this
+    exists. The artifactId is `spring-petclinic-customers-service`; every client in that
+    system states `customers-service`, which is the name the module registers in discovery
+    and declares in its own configuration. MEASURED: on the artifactId alone that corpus
+    produces 0 links, because the matcher correctly refuses a peer it cannot find; with the
+    registered name it produces 10.
+
+    `key` is the configuration key holding it, which a CATALOG declares
+    (`participant_name_key` — on the family's base catalog, where `config_model` and
+    `terminals` live for the same reason). Which key it is, is framework knowledge; this
+    function only knows that some key answers the question, and `None` means no loaded
+    catalog declared one, in which case every participant keeps its artifactId.
+
+    `config` is the federated `system_config` view already filtered to ONE environment by
+    the caller (`M06` step 0, user decision 7). So the alias is read per environment and
+    never filled from another environment's value — a module that registers one name under
+    `prod` and another under `dev` is two different systems, and this answers about the one
+    asked for.
+
+    **An alias equal to the artifactId adds nothing and is dropped**, which keeps the column
+    NULL for the common case rather than restating the name beside itself — `mall-swarm`'s
+    six modules are all this case, because their artifactIds already are their service names.
+    """
+    if key is None:
+        return participants
+    registered: dict[str, str] = {}
+    for row in config:
+        if str(row.get("key")) != key or row.get("value") is None:
+            continue
+        registered[str(row["participant"])] = str(row["value"])
+    return tuple(
+        participant
+        if registered.get(participant.name, participant.name) == participant.name
+        else replace(participant, aliases=(registered[participant.name],))
+        for participant in participants
+    )

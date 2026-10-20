@@ -4,7 +4,7 @@
 
 **Status: decisions settled 2026-10-19.** 1–5 approved; **6 REFUSED** — a call whose
 authority went unread is not linked by path alone. The measured target is therefore **22
-links, not 27**: 18 endpoint plus 9 participant across `petclinic` and `mall-swarm`, and 0 on
+links, not 27**: 13 endpoint plus 9 participant across `petclinic` and `mall-swarm`, and 0 on
 `apollo`, whose five rows stay unmatched with their reason.
 
 **Goal:** Join the two sides of a cross-service call. Sextant reads that `genai` calls
@@ -110,7 +110,7 @@ measured), §4 (a gateway route is a path prefix, and why these links are `resol
       candidates.
 - [ ] `fixtures/reactor-twoservice`: two modules, one calling an address the other serves, so
       the mechanism has a fixture that does not depend on `examples/` being cloned.
-- [ ] **Re-run the spec's §1 yield table.** 18 endpoint links and 9 participant links are the
+- [ ] **Re-run the spec's §1 yield table.** 13 endpoint links and 9 participant links are the
       acceptance measure, and **0 on `apollo`** is the other half of it: a link there means
       decision 6 crept in. A number below is a defect in this task, not a new baseline.
 - [ ] Guards for: a link is never minted where the protocols differ; several survivors are

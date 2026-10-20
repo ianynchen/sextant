@@ -7,12 +7,13 @@
 -- it and one run writes each participant once. The guard on `insert_endpoint_metadata`
 -- exists because three passes reach it; one pass reaches this.
 INSERT INTO participants (
-    name, kind, module_id, location, commit_id, present, absent_reason
+    name, kind, module_id, aliases, location, commit_id, present, absent_reason
 )
-SELECT r.name, r.kind, r.module_id, r.location, r.commit_id, r.present, r.absent_reason
+SELECT r.name, r.kind, r.module_id, r.aliases, r.location, r.commit_id, r.present,
+       r.absent_reason
 FROM (SELECT UNNEST(
     $rows::STRUCT(
-        name VARCHAR, kind VARCHAR, module_id VARCHAR, location VARCHAR,
-        commit_id VARCHAR, present BOOLEAN, absent_reason VARCHAR
+        name VARCHAR, kind VARCHAR, module_id VARCHAR, aliases VARCHAR,
+        location VARCHAR, commit_id VARCHAR, present BOOLEAN, absent_reason VARCHAR
     )[]
 ) AS r);

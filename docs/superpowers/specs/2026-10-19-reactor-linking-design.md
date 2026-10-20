@@ -114,6 +114,26 @@ both halves): where the SELECTED environment leaves a key unresolved, that route
 endpoint link and a recorded reason — never a fall back to another environment's value. A
 stated environment, and no silent substitution.
 
+**A participant answers to its artifactId AND to the name it registers** (built 2026-10-19,
+Task 2, after the first matcher scored ZERO on `petclinic`). A build coordinate is not a
+service name: the artifactId is `spring-petclinic-customers-service` and every client in that
+system states `customers-service`. `D01`'s `participants.aliases` and `M05`'s "alias index"
+both specify this and **this spec omitted the column**, which is how the gap reached a running
+matcher. Counting the distinct names clients state:
+
+| | names stated | matched by the registered name | matched by the artifactId |
+|---|---|---|---|
+| `spring-petclinic-microservices` | 4 | **4** | 0 |
+| `mall-swarm` | 5 | 0 | **5** |
+
+Neither source alone covers both systems. The key holding the registered name is framework
+knowledge, so a CATALOG declares it (`participant_name_key`, on the family's base catalog
+where `config_model` and `terminals` live for the same reason) and the matcher only ever asks
+"what is this participant's registered name?". Approved by the user as decision 8.
+
+**And it makes `--environment` load-bearing rather than undemonstrated**: the registered name
+is read per environment, so step 0 now decides something on this corpus after all.
+
 ### Step 1 — protocol
 
 Equality. `http` to `http`, `soap` to `soap`.
@@ -122,18 +142,18 @@ Equality. `http` to `http`, `soap` to `soap`.
 
 | key | what it compares | measured yield |
 |---|---|---|
-| the discovery name the client states | `peer` against each participant's module name | the 4 + 5 participant links (gateway forwards) |
+| the discovery name the client states | `peer`, and a gateway's `lb://name`, against every name a participant ANSWERS TO | the 4 + 5 participant links, and every petclinic link |
 | verb and path template | `(protocol, method, path)` | the 6 + 7 endpoint links |
 | path alone, unread authority dropped | `path` with a leading `<host>` removed | Apollo's 5 (decision 6) |
 
 Path templates match by string equality in this slice, not by shape. `M06` specifies shape
-matching — *"`/v1/orders/42` matches `/v1/orders/{id}`"* — and every one of the 18 endpoint
+matching — *"`/v1/orders/42` matches `/v1/orders/{id}`"* — and every one of the 13 endpoint
 links measured above matches on the string, because both sides derive the template rather
 than a concrete address. **Shape matching is therefore not in this slice** and is decision 3.
 
 ### Step 3 — structural compatibility
 
-**Not in this slice.** Decision 2. On this corpus it would change nothing: all 18 endpoint
+**Not in this slice.** Decision 2. On this corpus it would change nothing: all 13 endpoint
 links are already unique on wire identity, so there is no candidate for a payload test to
 discriminate between. It also carries `M06`'s open decision 4 (shapes across serialisation
 formats), which this design does not settle.
@@ -272,7 +292,7 @@ not proof of it, and `M06` calls a wrong link fabrication rather than imprecisio
 
 **So the third key in §3's table is NOT built**, and Apollo's five rows stay unmatched with
 their reason. The yield this design is measured against is therefore **22 links, not 27**:
-18 endpoint links and 9 participant links across `petclinic` and `mall-swarm`, and 0 on
+13 endpoint links and 9 participant links across `petclinic` and `mall-swarm`, and 0 on
 `apollo`. The §1 table's Apollo row records what refusing costs, which is the point of
 keeping it.
 

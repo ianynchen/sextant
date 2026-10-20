@@ -356,6 +356,39 @@ config_model:
   # import, not a value this pass can ever resolve from files alone.
   remote_prefixes: ["configserver:", "optional:configserver:"]
 
+# **The key under which a module registers the name OTHER modules call it by** (the
+# reactor-linking spec 2026-10-19; `D01`'s `participants.aliases`, `M05`'s "alias index").
+#
+# **On this file for the reason `config_model` and `terminals` are** — the family's base
+# catalog carries what is true across the family, a declaration-only file cannot be a catalog
+# (`style` and `matches` are required and this declares no boundary), and every catalog is
+# loaded regardless of gating, so the declaration reaches every module.
+#
+# **A build coordinate is not a service name, and the gap is not cosmetic.** The artifactId is
+# `spring-petclinic-customers-service`; every client in that system states `customers-service`,
+# which is the name the module registers in discovery and declares in its own configuration.
+#
+# **MEASURED as a correspondence on real code, which is the right evidence for this claim and
+# is stated rather than replaced by a bytecode probe.** The claim is that the value at this key
+# is the name other modules call this one by. Counting the distinct names clients actually
+# state across two multi-module systems, against what each module declares:
+#
+# | | names stated by clients | matched by this key's value | matched by the artifactId |
+# |---|---|---|---|
+# | `spring-petclinic-microservices` | 4 | **4** | 0 |
+# | `mall-swarm` | 5 | 0 | **5** |
+#
+# Nothing in either system is matched by neither, and NEITHER source alone covers both: the
+# artifactId misses every one of petclinic's, and petclinic's registered names are exactly
+# what its clients write. So a participant answers to both, and the link yield is 0 without
+# this key on that corpus and 10 with it. `mall-swarm`'s modules register names identical to
+# their artifactIds, which is why they carry no alias at all.
+#
+# One key, not a list: a module registers under one name, and declaring several would claim
+# otherwise. A module declaring no value keeps its artifactId, which is `petclinic`'s config
+# server — 1 of its 8 modules.
+participant_name_key: spring.application.name
+
 # D02 §2j (F7 §8.2, W30). What a call REACHES, where the call is a terminal — D00 §4's
 # `terminal_kind`, which that schema declared and nothing produced for two phases. Its own
 # note said why, and the note was right: "a data-access call is `persistence` only to

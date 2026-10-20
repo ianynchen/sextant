@@ -582,6 +582,16 @@ CREATE TABLE IF NOT EXISTS participants (
     -- The build coordinate, so two modules whose artifactId collides across groups
     -- are still two participants. `modules.json`'s own `module_id`.
     module_id     TEXT,
+    -- **Every other name this participant answers to**, as a JSON array (D01's system
+    -- scope names this column; `M05`'s output calls it the alias index).
+    --
+    -- A build coordinate is not a service name. The artifactId is
+    -- `spring-petclinic-customers-service` and every client states `customers-service` —
+    -- the name the module registers in discovery, read from the configuration key a
+    -- catalog declares (`participant_name_key`). Without it a client naming a service by
+    -- its registered name matches no participant at all, which is measured: that corpus
+    -- scores 0 links on the artifactId alone.
+    aliases       TEXT,
     -- Where this participant's graph is read FROM, and the obligation D01 attaches
     -- to recording it: one unreachable at query time fails naming it, never a
     -- shorter answer. A module workspace on the reactor path, a bundle under M05.

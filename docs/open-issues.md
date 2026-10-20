@@ -120,7 +120,7 @@ completeness plan, which is why finishing that plan did not produce it.
 `M00`, `M05`, `M06` and `D01` carry the amendments, each naming its decision.
 
 **What that closes, measured before it was built: 22 of 32 outbound rows across three real
-systems gain a link** — 18 endpoint links and 9 participant links across `petclinic` and
+systems gain a link** — 13 endpoint links and 9 participant links across `petclinic` and
 `mall-swarm`, 0 on `apollo`.
 
 **What it leaves open, so this entry is not read as `FR-8` delivered:** no cross-repository
