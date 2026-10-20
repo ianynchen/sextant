@@ -25,8 +25,9 @@ def system_document(tmp_path_factory: pytest.TempPathFactory) -> str:
     pointing them at `fixtures/` would have two tests racing in one tree under xdist.
     `copytree` keeps `target/` and the stamp's mtime, so neither command runs `mvn`.
     """
-    compile_fixture(REACTOR / "orders-api")
-    compile_fixture(REACTOR / "billing-api")
+    # The REACTOR root, not its modules one by one: `mvn compile` there builds
+    # every module, which is also how CI primes it (`fixture_build`'s own list).
+    compile_fixture(REACTOR)
     reactor = tmp_path_factory.mktemp("system") / "reactor-twoservice"
     shutil.copytree(REACTOR, reactor)
     runner = CliRunner()

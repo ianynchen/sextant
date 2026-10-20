@@ -33,8 +33,9 @@ def linked(tmp_path_factory: pytest.TempPathFactory):
     this reads rather than re-walks.
     """
     workspace_root = tmp_path_factory.mktemp("reactor")
-    compile_fixture(REACTOR / "orders-api")
-    compile_fixture(REACTOR / "billing-api")
+    # The REACTOR root, not its modules one by one: `mvn compile` there builds
+    # every module, which is also how CI primes it (`fixture_build`'s own list).
+    compile_fixture(REACTOR)
     # **A private COPY, because analysing a reactor writes into the reactor.** `modules.json`
     # and every module workspace land under the root being analysed, so two tests pointing at
     # `fixtures/` would race under xdist — the shared-tree failure GUIDELINES §13.9 records

@@ -31,7 +31,9 @@ def gateway_document(tmp_path_factory: pytest.TempPathFactory) -> str:
     A private copy: both commands write into the root they are given, so pointing them at
     `fixtures/` would race another test under xdist.
     """
-    compile_fixture(REACTOR / "orders")
+    # The REACTOR root, not its modules one by one: `mvn compile` there builds
+    # every module, which is also how CI primes it (`fixture_build`'s own list).
+    compile_fixture(REACTOR)
     reactor = tmp_path_factory.mktemp("gateway") / "reactor-gateway"
     shutil.copytree(REACTOR, reactor)
     runner = CliRunner()
