@@ -10,6 +10,7 @@ both its artifactId and the name it registers under.
 """
 
 import json
+import shutil
 
 import pytest
 from click.testing import CliRunner
@@ -34,12 +35,18 @@ def linked(tmp_path_factory: pytest.TempPathFactory):
     workspace_root = tmp_path_factory.mktemp("reactor")
     compile_fixture(REACTOR / "orders-api")
     compile_fixture(REACTOR / "billing-api")
-    result = CliRunner().invoke(cli, ["module", "analyze", str(REACTOR)])
+    # **A private COPY, because analysing a reactor writes into the reactor.** `modules.json`
+    # and every module workspace land under the root being analysed, so two tests pointing at
+    # `fixtures/` would race under xdist — the shared-tree failure GUIDELINES §13.9 records
+    # three occurrences of. `copytree` keeps `target/` and the stamp's mtime, so no `mvn` runs.
+    reactor = workspace_root / "reactor-twoservice"
+    shutil.copytree(REACTOR, reactor)
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
     assert result.exit_code == 0, result.output
 
-    entries = json.loads((REACTOR / ".sextant" / "modules.json").read_text())["modules"]
+    entries = json.loads((reactor / ".sextant" / "modules.json").read_text())["modules"]
     for entry in entries:
-        candidate = REACTOR / str(entry.get("dir") or "") / ".sextant" / "workspace.duckdb"
+        candidate = reactor / str(entry.get("dir") or "") / ".sextant" / "workspace.duckdb"
         entry["location"] = candidate if candidate.exists() else None
         entry["commit_id"] = None
     people = participants_of(entries)

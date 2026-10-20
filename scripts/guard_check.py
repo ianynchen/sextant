@@ -146,6 +146,7 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
+_SYSTEM_RENDER = "sextant/egress/render/system.py"
 _WORKSPACE = "sextant/storage/duckdb/workspace.py"
 _COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
@@ -341,6 +342,65 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    named = authority_of(argument, caller, workspace, index, identities)",
                 replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.the-SYSTEM-DOCUMENT-carries-the-link-not-only-the-table": Guard(
+        what="every link reaches the system document, naming the caller, the service, the "
+        "route and how much the match is worth",
+        why="**the document is the result, not the table** (user ruling 2026-10-17). A green "
+        "`links` table behind a blank document is a failed delivery, and this tier exists "
+        "entirely to state something no module document can: that one module's "
+        "`POST /owners/{ownerId}/pets` reaches another's `@PostMapping` of the same route",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='        lines.append(f"| {source} | `{link.to_participant}` | {endpoint} | {resolution} |")',
+                replace="        pass  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.the-document-names-every-REFUSAL-with-its-reason": Guard(
+        what="an outbound endpoint that matched nothing is in the document WITH the reason "
+        "it matched nothing",
+        why="`M06`'s honesty obligation, and a count alone cannot carry it: a client naming "
+        "a service outside the system is a dependency leaving it, while an address whose "
+        "authority went unread is a limit of this analysis. A reader who cannot tell those "
+        "apart cannot act on either",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='            lines.append(f"| `{u.participant}` | {call} | {u.reason} |")',
+                replace='            lines.append(f"| `{u.participant}` | {call} | |")',
+            ),
+        ),
+    ),
+    "stitch.UNCALLED-inbound-endpoints-are-a-section-of-their-own": Guard(
+        what="an inbound endpoint a link reaches is NOT reported as uncalled",
+        why="`M06` requires unmatched outbound and uncalled inbound reported separately "
+        "because they are different questions. Reporting a reached endpoint among them "
+        "makes the section an inventory rather than a finding, and a reader chasing dead "
+        "routes would be handed live ones",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        if key in reached:\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            continue",
+            ),
+        ),
+    ),
+    "stitch.the-document-names-the-ENVIRONMENT-it-resolved-for": Guard(
+        what="the system document states which environment its comparisons resolved "
+        "configuration values for",
+        why="a module's registered name and a gateway's routes are both configuration, so "
+        "every link is a statement about ONE environment (`M06` step 0). A document that "
+        "did not say which becomes unreadable the first time two environments disagree, and "
+        "silently wrong rather than visibly partial",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='            f"resolving configuration for the `{environment}` environment."',
+                replace='            "resolving configuration."  # guard disabled',
             ),
         ),
     ),

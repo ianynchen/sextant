@@ -320,3 +320,66 @@ def _verb(row: "dict[str, object]") -> str | None:
     reading `endpoints`' own dedup key takes.
     """
     return None if row.get("method") is None else str(row["method"])
+
+
+@dataclass(frozen=True)
+class Uncalled:
+    """An inbound endpoint no link points at.
+
+    `M06`'s other finding that is not an error: such an endpoint is "either dead, or called
+    from outside". Both readings are useful and this module cannot tell them apart — which is
+    why it reports the row and makes no claim about which it is.
+    """
+
+    participant: str
+    protocol: str
+    method: str | None
+    path: str
+    handler: str | None
+
+
+def uncalled(
+    endpoints: "list[dict[str, object]]", links: "tuple[Link, ...]"
+) -> "tuple[Uncalled, ...]":
+    """Every inbound endpoint no link reaches.
+
+    **A PARTICIPANT-level link reaches all of them.** A gateway forwarding to
+    `lb://customers-service` names the service and no route, so every route that service
+    serves is reachable through it — and calling one of them "uncalled" would be a false
+    finding about a dependency this analysis did read. So a participant named by any link
+    has none of its endpoints reported here.
+
+    Ordered for NFR-1, and deduplicated: two catalogs describing one handler produce one
+    endpoint row each only if they differ, and a finding stated twice is noise.
+    """
+    reached: set[tuple[str, str, str | None, str]] = set()
+    whole: set[str] = set()
+    for link in links:
+        if link.to_path is None:
+            whole.add(link.to_participant)
+        else:
+            reached.add((link.to_participant, str(link.to_protocol), link.to_method, link.to_path))
+    out = set()
+    for row in endpoints:
+        if str(row["direction"]) != "inbound" or row["path"] is None:
+            continue
+        participant = str(row["participant"])
+        if participant in whole:
+            continue
+        key = (participant, str(row["protocol"]), _verb(row), str(row["path"]))
+        if key in reached:
+            continue
+        out.add(
+            Uncalled(
+                participant=participant,
+                protocol=str(row["protocol"]),
+                method=_verb(row),
+                path=str(row["path"]),
+                handler=None if row.get("handler") is None else str(row["handler"]),
+            )
+        )
+    return tuple(
+        sorted(
+            out, key=lambda u: (u.participant, u.protocol, u.path, u.method or "", u.handler or "")
+        )
+    )

@@ -131,6 +131,18 @@ from sextant.application.resolve.pipeline import ResolveReport, coverage_of
 from sextant.application.stages import enrich as enrich_stage
 from sextant.application.stages.analyze import AnalyzeResult as _StageAnalyzeResult
 from sextant.application.stages.analyze import analyze as _analyze_stage
+from sextant.application.stitch import (
+    match as _match_links,
+)
+from sextant.application.stitch import (
+    participants_of as _participants_of,
+)
+from sextant.application.stitch import (
+    uncalled as _uncalled_endpoints,
+)
+from sextant.application.stitch import (
+    with_registered_names as _with_registered_names,
+)
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
@@ -146,6 +158,7 @@ from sextant.egress.render.document import (
 )
 from sextant.egress.render.html import html_document
 from sextant.egress.render.metadata import write_metadata
+from sextant.egress.render.system import render_system_document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.gradle import GradleDetector
 from sextant.ingress.detect.maven import MavenDetector
@@ -249,6 +262,23 @@ class RenderResult:
 
     markdown: Path
     html: Path
+
+
+@dataclass(frozen=True)
+class SystemResult:
+    """`system_analyze`'s own outcome: the document it wrote and what it found.
+
+    The counts are the ones a reader checks the run by — `links` against the participants
+    they expected to see connected, and `unmatched` against the calls they know leave the
+    system. `document` is the primary artifact: the table is intermediary and a blank
+    document is a failed run however green the table is (user ruling, 2026-10-17)."""
+
+    document: Path
+    workspace: Path
+    participants: int
+    links: int
+    unmatched: int
+    uncalled: int
 
 
 @dataclass(frozen=True)
@@ -1467,6 +1497,106 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
         index=index_files,
     )
     return ExportResult(bundle=bundle)
+
+
+# --------------------------------------------------------------------------
+# system analyze
+# --------------------------------------------------------------------------
+
+# The system scope's own files, beside the module layout `analyze` writes. A reactor root
+# may itself be a module, so neither name collides with one: `modules.json` already lives
+# here and this is its tier's workspace and document.
+_SYSTEM_WORKSPACE = "system.duckdb"
+_SYSTEM_DOCUMENT = "system.md"
+
+# The environment every comparison resolves values for where the caller names none (`M06`
+# step 0, user decision 7). `default` is the profile a Spring module has with none activated,
+# which is also what `config_model`'s own `default_profile` calls it.
+DEFAULT_ENVIRONMENT = "default"
+
+
+def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> SystemResult:
+    """Link the modules of the reactor at `path` to each other — the library equivalent of
+    `sextant system analyze`.
+
+    **It analyses nothing.** `M05`'s own division of labour, which this path keeps for one
+    reactor: the participant set is the `modules.json` that `module analyze` already wrote,
+    and each participant's graph is the workspace it already left. A module with no workspace
+    is a participant marked absent with that reason, never a module quietly left out —
+    `M06` attributes an unmatched call into an absent participant to the gap rather than to
+    the architecture, and it can only do that if the participant has a row.
+
+    Raises `NotAnalyzedError` where the reactor root carries no `modules.json` at all, which
+    is the same refusal `render` makes for the same reason: there is nothing to read, and
+    saying "no links" would be a claim about the system rather than about the run.
+    """
+    root = path.resolve()
+    modules_json = _modules_json_path(root)
+    if not modules_json.exists():
+        raise NotAnalyzedError(
+            f"no analysis found at {root}: `system analyze` reads the `modules.json` that "
+            f"`module analyze` writes at a reactor root. Run "
+            f"`sextant module analyze {root}` first."
+        )
+    entries = cast(
+        list[dict[str, Any]], json.loads(modules_json.read_text(encoding="utf-8"))["modules"]
+    )
+    for entry in entries:
+        module_root = root / str(entry.get("dir") or "")
+        candidate = module_root / ".sextant" / "workspace.duckdb"
+        entry["location"] = candidate if candidate.exists() else None
+        entry["commit_id"] = _module_commit_of(module_root) if candidate.exists() else None
+    participants = _participants_of(entries)
+
+    system_dir = root / ".sextant"
+    system_dir.mkdir(parents=True, exist_ok=True)
+    workspace_path = system_dir / _SYSTEM_WORKSPACE
+    # Rebuilt per run rather than reopened: the two native tables are replaced whole anyway,
+    # and a stale ATTACH set is the one piece of state a reset cannot reach.
+    workspace_path.unlink(missing_ok=True)
+    workspace = DuckDbWorkspace(workspace_path)
+    try:
+        workspace.federate(
+            {p.name: p.location for p in participants if p.present and p.location is not None}
+        )
+        endpoints = workspace.query("system_endpoints")
+        config = workspace.query("system_config", environment=environment)
+        # WHICH key holds a module's registered name is framework knowledge, so a catalog
+        # declares it and this only asks for the answer (`participant_name_key`).
+        key = next(
+            (
+                catalog.participant_name_key
+                for catalog in YamlCatalogSource(catalogs_dir()).load()
+                if catalog.participant_name_key
+            ),
+            None,
+        )
+        participants = _with_registered_names(participants, config, key)
+        links, unmatched = _match_links(participants, endpoints)
+        uncalled = _uncalled_endpoints(endpoints, links)
+        workspace.derive("participants_reset")
+        workspace.derive("participants_insert", rows=[p.row() for p in participants])
+        workspace.derive("links_reset")
+        if links:
+            workspace.derive("links_insert", rows=[link.row() for link in links])
+    finally:
+        workspace.close()
+
+    render_dir = system_dir / "render"
+    render_dir.mkdir(parents=True, exist_ok=True)
+    document = render_dir / _SYSTEM_DOCUMENT
+    document.write_text(
+        render_system_document(participants, links, unmatched, uncalled, environment=environment),
+        encoding="utf-8",
+    )
+    return SystemResult(
+        document=document,
+        workspace=workspace_path,
+        participants=len(participants),
+        links=len(links),
+        unmatched=len(unmatched),
+        uncalled=len(uncalled),
+    )
 
 
 def export(path: Path) -> ExportResult:
