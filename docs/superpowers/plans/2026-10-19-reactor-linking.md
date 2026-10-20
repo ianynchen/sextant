@@ -1,6 +1,6 @@
 # Reactor linking — implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Status: decisions settled 2026-10-19.** 1–5 approved; **6 REFUSED** — a call whose
 authority went unread is not linked by path alone. The measured target is therefore **22
@@ -74,88 +74,88 @@ measured), §4 (a gateway route is a path prefix, and why these links are `resol
 
 ---
 
-## Task 0 — the approved amendments, and nothing else
+## Task 0 — the approved amendments, and nothing else · **DONE**
 
-- [ ] Apply **only** the amendments the user approved in the spec's §7, each naming the
+- [x] Apply **only** the amendments the user approved in the spec's §7, each naming the
       decision it implements. A refused decision leaves its document untouched and the
       corresponding task below is removed from this plan rather than quietly narrowed.
-- [ ] `docs/open-issues.md`: `GAP-2` records which case this closes and which it leaves —
+- [x] `docs/open-issues.md`: `GAP-2` records which case this closes and which it leaves —
       the register must not read as if `FR-8` were done.
-- [ ] Gate. No code yet, so this is the docs tests only.
+- [x] Gate. No code yet, so this is the docs tests only.
 
-## Task 1 — the participant set, and the cost measurement the spec promised
+## Task 1 — the participant set, and the cost measurement the spec promised · **DONE**
 
-- [ ] `stitch/participants.py`: the reactor's non-BOM modules from the same `<modules>` walk
+- [x] `stitch/participants.py`: the reactor's non-BOM modules from the same `<modules>` walk
       `analyze` uses, each with its module WORKSPACE (the user's choice — not bundles); a
       module with no workspace is `absent` with that reason.
-- [ ] `participants` in `schema.sql` per `D01`: service or external, name, aliases, workspace
+- [x] `participants` in `schema.sql` per `D01`: service or external, name, aliases, workspace
       location, commit.
-- [ ] The federated `endpoints` view over the module workspaces — the system workspace copies
+- [x] The federated `endpoints` view over the module workspaces — the system workspace copies
       nothing, and a workspace unreachable at query time fails naming it (`D01`'s obligation,
       which survives the deviation). The spec's §2 states what reading workspaces gives up
       against `D01`'s bundle rule and why it does not generalise past one build.
-- [ ] **Measure `ruoyi-vue-pro`**, the scale case at 7,244 files, and record reads and wall
+- [x] **Measure `ruoyi-vue-pro`**, the scale case at 7,244 files, and record reads and wall
       time in the spec's §6 beside the counted figures. §8.7 says the number is a design
       input, and this is the one place this design guessed.
-- [ ] Gate.
+- [x] Gate.
 
-## Task 2 — steps 1, 2 and 4
+## Task 2 — steps 1, 2 and 4 · **DONE**
 
-- [ ] `stitch/links.py`: protocol equality, the discovery-name key, the verb-and-path key,
+- [x] `stitch/links.py`: protocol equality, the discovery-name key, the verb-and-path key,
       and `M06`'s step 4 tier rule. **Decision 6's path-only key is NOT built** — a row whose
       path begins with the unread-authority marker is unmatched with that as its reason.
-- [ ] A guard for the refusal: a `<host>`-bearing row must mint no link even where exactly
+- [x] A guard for the refusal: a `<host>`-bearing row must mint no link even where exactly
       one participant serves the path. Apollo is the live case and the fixture carries one.
-- [ ] `links` in `schema.sql` per `D01`: outbound endpoint, inbound endpoint, trust fields,
+- [x] `links` in `schema.sql` per `D01`: outbound endpoint, inbound endpoint, trust fields,
       candidates.
-- [ ] `fixtures/reactor-twoservice`: two modules, one calling an address the other serves, so
+- [x] `fixtures/reactor-twoservice`: two modules, one calling an address the other serves, so
       the mechanism has a fixture that does not depend on `examples/` being cloned.
-- [ ] **Re-run the spec's §1 yield table.** 13 endpoint links and 9 participant links are the
+- [x] **Re-run the spec's §1 yield table.** 13 endpoint links and 9 participant links are the
       acceptance measure, and **0 on `apollo`** is the other half of it: a link there means
       decision 6 crept in. A number below is a defect in this task, not a new baseline.
-- [ ] Guards for: a link is never minted where the protocols differ; several survivors are
+- [x] Guards for: a link is never minted where the protocols differ; several survivors are
       `narrowed` with every candidate and never a pick; an unmatched call into an `absent`
       participant is attributed to the gap.
-- [ ] Gate, guards, field pins.
+- [x] Gate, guards, field pins.
 
-## Task 3 — `system analyze`, and the system document
+## Task 3 — `system analyze`, and the system document · **DONE**
 
-- [ ] `system analyze <reactor-root> [--environment NAME]` in `cli/app.py`, per `M00`'s
+- [x] `system analyze <reactor-root> [--environment NAME]` in `cli/app.py`, per `M00`'s
       `system` verb set. `--environment` defaults to `default` and selects the
       `resolved_config` values every comparison uses (`M06` step 0).
-- [ ] The system document: participants, links, and the honesty lists —
+- [x] The system document: participants, links, and the honesty lists —
       **unmatched outbound and uncalled inbound separately**, absent participants apart from
       real findings.
-- [ ] **The document is the result, not the table** (user ruling, 2026-10-17). A green `links`
+- [x] **The document is the result, not the table** (user ruling, 2026-10-17). A green `links`
       table with a blank document is a failed task.
-- [ ] Gate.
+- [x] Gate.
 
-## Task 4 — the gateway route as a path prefix
+## Task 4 — the gateway route as a path prefix · **DONE**
 
-- [ ] `scripts/probes/cp40_strip_prefix/`: what `StripPrefix` removes from a path, read off
+- [x] `scripts/probes/cp40_strip_prefix/`: what `StripPrefix` removes from a path, read off
       `spring-cloud-gateway-server-webflux`'s own class with `javap`, version stated, §5.4
       provenance. Answer first: does it strip before or after the predicate matched; what on a
       path with fewer than `N` segments; what happens to a trailing slash.
-- [ ] `spring-cloud-gateway-properties.yml`: the filters this reads and **the refusal list** —
+- [x] `spring-cloud-gateway-properties.yml`: the filters this reads and **the refusal list** —
       `RewritePath`, `SetPath`, `PrefixPath` and anything else unmeasured publish the
       participant link only.
-- [ ] `stitch/gateway.py`: the route's literal prefix joined to each inbound row of the named
+- [x] `stitch/gateway.py`: the route's literal prefix joined to each inbound row of the named
       service, **gated** on `N` equalling the prefix's segment count. Where it does not, the
       participant link and a recorded refusal naming both numbers.
-- [ ] Measured acceptance: `petclinic`'s four routes publish 13 endpoint links
+- [x] Measured acceptance: `petclinic`'s four routes publish 13 endpoint links
       (`customers` 8, `visits` 3, `vets` 1, `genai` 1); `mall-gateway`'s five publish theirs;
       **every one `resolved`, none `narrowed`** — the spec's §4 states why, and a `narrowed`
       here means the implementation took the wrong reading.
-- [ ] A fixture route whose `StripPrefix` disagrees with its prefix, proving the refusal.
-- [ ] Gate, guards, field pins.
+- [x] A fixture route whose `StripPrefix` disagrees with its prefix, proving the refusal.
+- [x] Gate, guards, field pins.
 
-## Task 5 — close-out
+## Task 5 — close-out · **DONE**
 
-- [ ] `GAP-2` and the register updated with what shipped and what did not, per decision.
-- [ ] `COVERAGE.md`: the linking tier's boundary stated — which cases link, which do not, and
+- [x] `GAP-2` and the register updated with what shipped and what did not, per decision.
+- [x] `COVERAGE.md`: the linking tier's boundary stated — which cases link, which do not, and
       that `M05`'s cross-repository participant set is still unbuilt.
-- [ ] CHANGELOG.
-- [ ] Full gate, full guard sweep, all six field pins, and the §1 yield table re-run and
+- [x] CHANGELOG.
+- [x] Full gate, full guard sweep, all six field pins, and the §1 yield table re-run and
       recorded.
 
 ---

@@ -114,14 +114,29 @@ code. The stitcher would miss it.
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
 
-**IN PROGRESS 2026-10-19 — the REACTOR case only**, spec
+**BUILT 2026-10-20 — the REACTOR case only**, spec
 `docs/superpowers/specs/2026-10-19-reactor-linking-design.md`, plan
-`docs/superpowers/plans/2026-10-19-reactor-linking.md`. Seven decisions settled by the user;
+`docs/superpowers/plans/2026-10-19-reactor-linking.md`. Eight decisions settled by the user;
 `M00`, `M05`, `M06` and `D01` carry the amendments, each naming its decision.
 
-**What that closes, measured before it was built: 22 of 32 outbound rows across three real
-systems gain a link** — 13 endpoint links and 9 participant links across `petclinic` and
-`mall-swarm`, 0 on `apollo`.
+**Measured through `sextant system analyze` on two real systems:**
+
+| | participants | links | unmatched | uncalled |
+|---|---|---|---|---|
+| `spring-petclinic-microservices` | 8 | **23** | 0 | 36 |
+| `mall-swarm` | 9 | **258** | 0 | 40 |
+
+The link a reader wanted all along:
+
+| From | Calls | Endpoint |
+|---|---|---|
+| `genai-service` POST `/owners/{ownerId}/pets` | `customers-service` | POST `/owners/{ownerId}/pets` |
+
+Of those, 22 come from the outbound rows (13 endpoint, 9 participant) and the rest from the
+gateway prefix join: `petclinic` 13, `mall-swarm` 245. **Zero narrowed on either system** —
+`M06`'s claim that uniqueness needs no threshold, measured rather than reasoned. `apollo`
+scores 0, which is decision 6 working: all ten of its outbound rows have an unread authority
+or no address at all.
 
 **What it leaves open, so this entry is not read as `FR-8` delivered:** no cross-repository
 participants (`M05`, `system.yml`, `system.state.json`, staleness); no overlay or curation

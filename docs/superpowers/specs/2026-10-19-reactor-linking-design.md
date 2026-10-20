@@ -25,6 +25,25 @@ would publish today.
 **27 of 32 outbound rows gain a link.** Two things in that measurement are worth stating
 because neither was predicted:
 
+> **BUILT 2026-10-20 — what it actually closed, measured through `sextant system analyze`:**
+>
+> | | participants | links | narrowed | unmatched |
+> |---|---|---|---|---|
+> | `spring-petclinic-microservices` | 8 | **23** | 0 | 0 |
+> | `mall-swarm` | 9 | **258** | 0 | 0 |
+> | `apollo` | — | — | — | refused, 10 rows |
+>
+> Higher than the 22 this section predicted, because the prediction counted only the
+> OUTBOUND rows: Task 4's gateway prefix join adds 13 on `petclinic` and 245 on `mall-swarm`,
+> which are links no outbound row produces. The 22 is still the right number for what the
+> prediction measured — 13 endpoint plus 9 participant links from outbound rows — and the
+> table above is the whole result.
+>
+> **The prediction that was WRONG, and it was wrong in my favour:** `petclinic`'s 6 links
+> were measured with a substring test (`peer in module_name`), which the shipped matcher
+> correctly refuses. Without the alias index that §3 now describes, `petclinic` scored 0.
+> See §3's note.
+
 **`M06`'s claim that uniqueness needs no threshold holds on real code.** Zero narrowed links
 on two of the three systems, one on the third. The spec says *"uniqueness across the system
 does the work, and there is no parameter to tune"*; this is that claim measured rather than
