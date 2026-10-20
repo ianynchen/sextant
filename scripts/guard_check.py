@@ -346,6 +346,37 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "stitch.a-route-restricted-to-some-VERBS-composes-only-those": Guard(
+        what="a gateway route declaring a `Method` predicate composes links only for those "
+        "verbs; one declaring none forwards every verb",
+        why="MEASURED as a false fact in the review of PR #56: `Method=GET` in front of a "
+        "service serving `GET` and `POST /orders` composed BOTH, and `POST /o/orders` is an "
+        "address the gateway rejects before it forwards. The catalog declares the predicate "
+        "for exactly this and the first version ignored it",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find='            if verbs and str(row["method"]).upper() not in verbs:',
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-COLLIDING-artifact-id-is-named-by-its-coordinate": Guard(
+        what="two modules sharing an artifactId are named by their full coordinates, with "
+        "the bare artifactId an alias on both",
+        why="MEASURED as silent data loss in the review of PR #56: the federation is a map "
+        "keyed by `name`, so two participants both called `svc` collapsed to one and the "
+        "other's graph was never attached — with nothing to say so. Unique names key the "
+        "federation; the shared alias makes a client stating `svc` hit the ambiguity "
+        "refusal instead of being linked to whichever the dict kept",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        unique = module_id if short in collided else short",
+                replace="        unique = short  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "stitch.a-gateway-ROUTE-PREFIX-joins-the-paths-the-service-serves": Guard(
         what="a gateway route's literal prefix is joined to each inbound path of the service "
         "its `uri` names, publishing the gateway's own address for that route",
@@ -513,8 +544,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PARTICIPANTS,
-                find="        if registered.get(participant.name, participant.name) == participant.name",
-                replace="        if True  # guard disabled by scripts/guard_check.py",
+                find="        if name is None or name in participant.answers_to():",
+                replace="        if name is None:  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -530,8 +561,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PARTICIPANTS,
-                find='                name=module_id.rsplit(":", 1)[-1],',
-                replace="                name=module_id,  # guard disabled by scripts/guard_check.py",
+                find='    bare = [module_id.rsplit(":", 1)[-1] for module_id in ids]',
+                replace="    bare = list(ids)  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),

@@ -48,6 +48,10 @@ class RouteModel:
     prefix: str
     predicates_field: str
     path_predicate: str
+    # The predicate that RESTRICTS a route to some verbs (`Method=GET,POST`). A route
+    # declaring none forwards every method; one declaring it forwards only those, and a
+    # composed link for any other verb is an address the gateway rejects.
+    method_predicate: str
     destination_field: str
     filters_field: str
     strip_filter: str
@@ -81,15 +85,17 @@ def route_model(matches: "Mapping[str, object]") -> "RouteModel | None":
     if not isinstance(item, dict) or not isinstance(prefix, str):
         return None
     path = item.get("path")
+    method = item.get("method")
     peer = item.get("peer")
     strip = item.get("strip")
     predicates = item.get("predicates")
-    if not all(isinstance(block, dict) for block in (path, peer, strip, predicates)):
+    if not all(isinstance(block, dict) for block in (path, method, peer, strip, predicates)):
         return None
     return RouteModel(
         prefix=prefix,
         predicates_field=str(predicates["field"]),  # type: ignore[index]
         path_predicate=str(path["name"]),  # type: ignore[index]
+        method_predicate=str(method["name"]),  # type: ignore[index]
         destination_field=str(peer["field"]),  # type: ignore[index]
         filters_field=str(strip["field"]),  # type: ignore[index]
         strip_filter=str(strip["name"]),  # type: ignore[index]
@@ -130,7 +136,7 @@ def gateway_links(
     links: list[Link] = []
     refusals: list[Refusal] = []
     for participant, index, route in _routes(config, model):
-        prefix, destination, strip = route
+        prefix, destination, strip, verbs = route
         if prefix is None or destination is None:
             # A route this analysis could not read whole. The `peer` rule of the catalog's
             # own engine already published the destination as an outbound row, so the
@@ -158,6 +164,14 @@ def gateway_links(
             )
             continue
         for row in served.get(target, ()):
+            # **A route restricted to some verbs reaches only those.** `Method=GET` in front
+            # of a service serving `GET` and `POST /orders` composes ONE link, not two: the
+            # gateway rejects a `POST /o/orders` before it ever forwards, so a link for it
+            # would be an address no request takes. MEASURED as a false fact before this
+            # check existed. A route declaring no `Method` forwards every verb, which is
+            # what an empty set means here.
+            if verbs and str(row["method"]).upper() not in verbs:
+                continue
             path = str(row["path"])
             links.append(
                 Link(
@@ -183,7 +197,7 @@ def gateway_links(
 
 def _routes(
     config: "Sequence[Mapping[str, object]]", model: "RouteModel"
-) -> "list[tuple[str, int, tuple[str | None, str | None, int | None]]]":
+) -> "list[tuple[str, int, tuple[str | None, str | None, int | None, frozenset[str]]]]":
     """Every route in the configuration, as `(participant, index, (prefix, destination,
     strip))`.
 
@@ -211,8 +225,9 @@ def _routes(
 
 def _one(
     fields: "Mapping[str, str]", model: "RouteModel"
-) -> "tuple[str | None, str | None, int | None]":
-    """One route's `(literal prefix, destination name, strip count)`.
+) -> "tuple[str | None, str | None, int | None, frozenset[str]]":
+    """One route's `(literal prefix, destination name, strip count, verbs)` — `verbs` empty
+    where the route declares no `Method` predicate and so forwards every one.
 
     Each is None where the configuration does not state it readably: a `Path=` predicate
     without a `/**` tail prefixes nothing (it names one exact address, which the catalog's own
@@ -222,6 +237,7 @@ def _one(
     prefix = None
     destination = None
     strip = None
+    verbs: set[str] = set()
     for field, value in fields.items():
         if field.startswith(f"{model.predicates_field}["):
             shortcut = _SHORTCUT.match(value)
@@ -229,6 +245,12 @@ def _one(
                 pattern = shortcut.group("args")
                 if pattern.endswith(_WILDCARD):
                     prefix = pattern[: -len(_WILDCARD)]
+            elif shortcut and shortcut.group("name") == model.method_predicate:
+                verbs.update(
+                    verb.strip().upper()
+                    for verb in shortcut.group("args").split(",")
+                    if verb.strip()
+                )
         elif field.startswith(f"{model.filters_field}["):
             shortcut = _SHORTCUT.match(value)
             if shortcut and shortcut.group("name") == model.strip_filter:
@@ -240,4 +262,4 @@ def _one(
             # absolute `http://host:port`) names a host, not a participant of this build.
             if value.startswith("lb://"):
                 destination = value[len("lb://") :]
-    return prefix, destination, strip
+    return prefix, destination, strip, frozenset(verbs)

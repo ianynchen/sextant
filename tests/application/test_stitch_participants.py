@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from sextant.application.stitch import participants_of
+from sextant.application.stitch import participants_of, with_registered_names
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -74,12 +74,16 @@ def test_a_participants_name_is_the_artifact_id_a_client_would_state(tmp_path):
     """The name a link is matched BY, and why it is the artifactId.
 
         uri: lb://customers-service          # what the gateway states
-        <artifactId>spring-petclinic-customers-service</artifactId>
+        <artifactId>customers-service</artifactId>
 
     A client names a service the way service discovery does, and on a Spring module that is
     `spring.application.name`, which defaults to the artifactId. So the artifactId is the
-    name, and the full coordinate travels beside it — two groups may ship one artifactId, and
-    `module_id` is what keeps those two participants apart when they do.
+    name, and the full coordinate travels beside it.
+
+    **This test used to assert two groups sharing one artifactId BOTH carried it as their
+    name** — which was the defect the collision test below now pins: two participants with
+    one name collapsed to one in the federation. The non-colliding case is what this test
+    states now; the colliding one has its own.
     """
     found = participants_of(
         [
@@ -87,12 +91,12 @@ def test_a_participants_name_is_the_artifact_id_a_client_would_state(tmp_path):
                 "org.springframework.samples.petclinic.customers:customers-service",
                 location=tmp_path / "a",
             ),
-            _module("com.acme:customers-service", location=tmp_path / "b"),
+            _module("com.acme:billing", location=tmp_path / "b"),
         ]
     )
-    assert [p.name for p in found] == ["customers-service", "customers-service"]
+    assert [p.name for p in found] == ["billing", "customers-service"]
     assert [p.module_id for p in found] == [
-        "com.acme:customers-service",
+        "com.acme:billing",
         "org.springframework.samples.petclinic.customers:customers-service",
     ]
 
@@ -207,3 +211,63 @@ def test_federating_a_second_time_replaces_the_first_set(tmp_path: Path):
         assert {str(r["participant"]) for r in system.query("system_endpoints")} == {"second"}
     finally:
         system.close()
+
+
+@pytest.mark.pins("stitch.a-COLLIDING-artifact-id-is-named-by-its-coordinate")
+def test_two_modules_sharing_an_artifact_id_keep_two_names(tmp_path):
+    """**Measured as silent data loss in review:** two modules both called `svc`, in two
+    groups, produced two participants with one `name` — and the federation is a map keyed by
+    name, so one module's graph was never attached and nothing said so. The code's own
+    docstring claimed `module_id` kept them apart; it kept them apart in the table and
+    nowhere else.
+
+    Now a colliding artifactId names each participant by its FULL coordinate and leaves the
+    bare artifactId as an alias on both. Two consequences, both required: every participant
+    keys the federation uniquely, and a client stating `svc` hits the ambiguity refusal
+    rather than being linked to whichever one the dict kept.
+    """
+    found = participants_of(
+        [
+            _module("com.a:svc", location=tmp_path / "a"),
+            _module("com.b:svc", location=tmp_path / "b"),
+            _module("com.c:other", location=tmp_path / "c"),
+        ]
+    )
+    names = [p.name for p in found]
+    assert names == ["com.a:svc", "com.b:svc", "other"]
+    assert len({p.name for p in found}) == 3
+    by_name = {p.name: p for p in found}
+    assert by_name["com.a:svc"].aliases == ("svc",)
+    assert by_name["com.b:svc"].aliases == ("svc",)
+    # The un-collided participant is untouched: bare name, no alias.
+    assert by_name["other"].aliases == ()
+
+
+@pytest.mark.pins("stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not")
+def test_a_registered_name_equal_to_the_artifact_id_adds_no_alias(tmp_path):
+    """`mall-swarm`'s shape, which the reactor fixtures cannot state: every one of its six
+    modules registers under exactly its artifactId (`mall-admin` is `mall-admin`). An alias
+    equal to the name says nothing and would restate every such participant beside itself,
+    so it is dropped — while a module registering a DIFFERENT name keeps it.
+
+    A unit test rather than the fixture because the guard survived on the fixture: both of
+    its modules register names unlike their artifactIds, so the dedup never fired there and
+    disabling it changed nothing the fixture could see.
+    """
+    found = participants_of(
+        [
+            _module("com.acme:mall-admin", location=tmp_path / "a"),
+            _module("com.acme:spring-petclinic-customers-service", location=tmp_path / "b"),
+        ]
+    )
+    config = [
+        {"participant": "mall-admin", "key": "k", "value": "mall-admin"},
+        {
+            "participant": "spring-petclinic-customers-service",
+            "key": "k",
+            "value": "customers-service",
+        },
+    ]
+    by_name = {p.name: p for p in with_registered_names(found, config, "k")}
+    assert by_name["mall-admin"].aliases == ()
+    assert by_name["spring-petclinic-customers-service"].aliases == ("customers-service",)

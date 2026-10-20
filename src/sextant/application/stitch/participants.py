@@ -83,22 +83,33 @@ def participants_of(modules: "list[dict[str, object]]") -> tuple[Participant, ..
     Ordered by name, then `module_id`, so the set is the same on every run (NFR-1) and two
     modules sharing an artifactId still order deterministically.
     """
+    ids = [str(entry.get("module_id") or "") for entry in modules]
+    bare = [module_id.rsplit(":", 1)[-1] for module_id in ids]
+    # **A name two modules share is not a name.** `participants.name` is what the
+    # federation, the links and the document key on, and a dict keyed by it collapsed two
+    # participants into one — MEASURED: of two modules both called `svc`, one's graph was
+    # never attached and nothing said so. So where artifactIds collide, each participant
+    # is named by its FULL coordinate and the bare artifactId becomes an alias on both —
+    # which makes a client stating `svc` hit the ambiguity refusal, as it must, while each
+    # participant's own rows still carry a name that is theirs alone.
+    collided = {name for name in bare if bare.count(name) > 1}
     out = []
-    for entry in modules:
-        module_id = str(entry.get("module_id") or "")
+    for entry, module_id, short in zip(modules, ids, bare, strict=True):
         if not module_id:
             # A reactor entry with no coordinate names no participant. `modules.json`
             # always carries one; this is the refusal rather than a row whose `name` would
             # be the empty string and whose matches would be nonsense.
             continue
+        unique = module_id if short in collided else short
         out.append(
             Participant(
-                name=module_id.rsplit(":", 1)[-1],
+                name=unique,
                 module_id=module_id,
                 location=entry.get("location"),  # type: ignore[arg-type]
                 commit_id=None if entry.get("commit_id") is None else str(entry["commit_id"]),
                 present=entry.get("location") is not None,
                 absent_reason=_absent_reason(entry),
+                aliases=(short,) if unique != short else (),
             )
         )
     return tuple(sorted(out, key=lambda p: (p.name, p.module_id)))
@@ -160,9 +171,11 @@ def with_registered_names(
         if str(row.get("key")) != key or row.get("value") is None:
             continue
         registered[str(row["participant"])] = str(row["value"])
-    return tuple(
-        participant
-        if registered.get(participant.name, participant.name) == participant.name
-        else replace(participant, aliases=(registered[participant.name],))
-        for participant in participants
-    )
+    out = []
+    for participant in participants:
+        name = registered.get(participant.name)
+        if name is None or name in participant.answers_to():
+            out.append(participant)
+        else:
+            out.append(replace(participant, aliases=(*participant.aliases, name)))
+    return tuple(out)

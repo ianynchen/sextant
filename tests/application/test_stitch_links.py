@@ -163,13 +163,17 @@ def test_an_inbound_endpoint_nobody_calls_produces_no_link(linked):
     assert [link for link in links if link.to_path == "/ledgers"] == []
 
 
-@pytest.mark.pins("stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not")
 def test_a_module_registering_a_different_name_carries_it_as_an_alias(linked):
-    """What the alias index holds, and what it declines to hold.
+    """What the alias index holds, end to end: `billing-api` registers as `billing`, so it
+    answers to both.
 
-    `billing-api` registers as `billing`, so it answers to both. A module whose registered
-    name EQUALS its artifactId carries no alias at all — restating the name beside itself
-    says nothing, and `mall-swarm`'s six modules are all that case.
+    **No `pins` marker, and it carried one until the sweep said otherwise.** Both of this
+    fixture's modules register names unlike their artifactIds, so the rule that an EQUAL name
+    adds no alias never fires here and disabling it changes nothing this test can see — the
+    harness reported exactly that. The rule is pinned where it can be exercised, by
+    `test_stitch_participants.test_a_registered_name_equal_to_the_artifact_id_adds_no_alias`
+    on synthetic rows; this test is the end-to-end evidence that the alias index is read
+    from a real module's configuration.
     """
     _links, _unmatched, people = linked
     by_name = {p.name: p for p in people}
