@@ -62,6 +62,17 @@ public final class CallSample {
         sink(null);
     }
 
+    /** Capability 9.19's shape: the parameter is REASSIGNED on one branch, so the value
+     *  reaching {@code sink} has two producers — the parameter marker and the
+     *  {@code substring} call's result. Apollo's {@code RetryableRestTemplate#execute}
+     *  verbatim, minus the HTTP. */
+    public void reassignedOnABranch(String path) {
+        if (path.startsWith("/")) {
+            path = path.substring(1);
+        }
+        sink(path);
+    }
+
     public void variableArgument(String supplied) {
         sink(supplied);
     }

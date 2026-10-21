@@ -108,7 +108,7 @@ coordinates named (`OI-149`'s own walk). From that root:
 ```
 mvn -o -q -B [compile] dependency:build-classpath
     -Dmdep.outputFile=target/sextant-classpath.txt
-    -Dmdep.includeScope=compile
+    -Dmdep.includeScope=compile -Dmdep.regenerateFile=true
     [-pl <module, relative to the root> -am]
 ```
 

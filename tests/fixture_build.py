@@ -171,6 +171,7 @@ def compile_and_stamp(root: Path, *, offline: bool) -> Path:
             "dependency:build-classpath",
             "-Dmdep.outputFile=target/sextant-classpath.txt",
             "-Dmdep.includeScope=compile",
+            "-Dmdep.regenerateFile=true",
         ],
         cwd=root,
         check=True,

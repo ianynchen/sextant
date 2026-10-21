@@ -1,7 +1,9 @@
 package dev.sextant.extractor;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
@@ -666,9 +668,41 @@ public final class MethodFlow {
     private static String argumentJson(SourceValue value, Type declaredType, InsnList instructions,
                                        int[] parameterSlots, Frame<SourceValue>[] frames,
                                        int invokeIndex) {
-        AbstractInsnNode producer = singleSource(value);
-        if (producer == null) return argument("unresolved", null, null, null);
+        if (value == null || value.insns.isEmpty()) return argument("unresolved", null, null, null);
+        if (value.insns.size() == 1) {
+            return producerJson(value.insns.iterator().next(), declaredType, instructions,
+                                parameterSlots, frames, invokeIndex);
+        }
+        // **Capability 9.19: a value with SEVERAL producers writes them all as candidates**
+        // (spec 2026-10-21-merged-values-design.md §3a). `path = path.substring(1)` on one
+        // branch leaves the consuming call with the parameter OR the call's result, and
+        // this used to collapse to a bare `unresolved` with no `source` — a wall the value
+        // walk could not see past, measured as 68 outgoing calls on `apollo-portal` whose
+        // written paths reached no row. Nothing is chosen here: each producer is rendered
+        // exactly as it would be alone, in instruction order (the parameter marker, which
+        // indexes nothing, first), and the fact says "one of these" — strictly more than
+        // `unresolved` said and exactly as true. Identical candidates are one: two branches
+        // producing the same literal are no ambiguity at all, and the single survivor is
+        // written as itself rather than as a merge of one.
+        List<AbstractInsnNode> producers = new ArrayList<>(value.insns);
+        producers.sort(Comparator.comparingInt(instructions::indexOf));
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        for (AbstractInsnNode producer : producers) {
+            candidates.add(producerJson(producer, declaredType, instructions, parameterSlots,
+                                        frames, invokeIndex));
+        }
+        if (candidates.size() == 1) return candidates.iterator().next();
+        TreeMap<String, String> merge = new TreeMap<>();
+        merge.put("kind", JsonOut.string("merge"));
+        merge.put("candidates", JsonOut.array(new ArrayList<>(candidates)));
+        return JsonOut.object(merge);
+    }
 
+    /** One PRODUCER rendered in the argument grammar — the body `argumentJson` applies to a
+     *  single-producer value and, since 9.19, to each candidate of a merged one. */
+    private static String producerJson(AbstractInsnNode producer, Type declaredType,
+                                       InsnList instructions, int[] parameterSlots,
+                                       Frame<SourceValue>[] frames, int invokeIndex) {
         // The only VarInsnNode that can ever be a producer is the parameter
         // marker CopyTransparentSourceInterpreter.newParameterValue mints: a
         // real load moves a value without producing it. The slot it names is a

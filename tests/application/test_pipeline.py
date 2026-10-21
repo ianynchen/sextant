@@ -1091,7 +1091,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `accept(JSON) { }` at the top of `coRouter { }`, `(None, /**)`, one row; the servlet
     # twin's row (191 above) moves from `unresolved`/path NULL to `(None, /ktmvc/**)`
     # resolved — a changed row, not a new one.
-    assert len(report.endpoints) == 213
+    # 214 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): `send`'s `exchange(baseUrl + path, …)`,
+    # one outbound http row — path NULL until the walk resolves the merge (Task 2).
+    assert len(report.endpoints) == 214
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -2021,7 +2023,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         # the two handlers carrying every parameter-annotation form the binder rule reads.
         # 118 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
         # the two handlers carrying every `params=`/`headers=` expression form.
-        "http": 119,
+        # 120 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values): the wrapper's one outbound `exchange`.
+        "http": 120,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2069,7 +2072,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 213
+    assert sum(counts.values()) == len(report.endpoints) == 214
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3562,7 +3565,9 @@ def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contrac
     # would under-count exactly the rows this measures.
     rows = [row for row in written if row["catalog_id"] in single_call]
     carried = sum(1 for row in rows if row["request_shape"])
-    assert (carried, len(rows)) == (21, 26), (
+    # (21, 27) since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): `exchange(…, OrderView.class)` is one
+    # more `single_call` row and its request payload is `null`, so `carried` is unmoved.
+    assert (carried, len(rows)) == (21, 27), (
         "the outbound payload count moved — re-measure rather than re-pinning, because a "
         "handful of rows carrying a contract was the defect and this number is what closed it"
     )
@@ -3826,7 +3831,9 @@ def test_the_format_ladder_answers_every_live_row(
     # /ktparams/search` returns a `String`, which the ladder answers differently.
     # + 2 (spec 2026-09-19 §5c): `GET /v1/conditions/orders` and `/v1/conditions/legacy`, both
     # returning `OrderView` with no media declared — the same rung 5 default.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 80
+    # + 1 (`clients/NormalisingBillingClient` (spec 2026-10-21 merged values)): `send`'s `exchange(…, OrderView.class)`, an
+    # outbound row returning `OrderView` with no media declared — the same rung 5 default.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 81
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

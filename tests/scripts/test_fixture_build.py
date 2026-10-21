@@ -70,6 +70,7 @@ def maven(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
             "dependency:build-classpath",
             "-Dmdep.outputFile=target/sextant-classpath.txt",
             "-Dmdep.includeScope=compile",
+            "-Dmdep.regenerateFile=true",
         ]
         roots.append(cwd)
         (cwd / "target" / "classes").mkdir(parents=True, exist_ok=True)

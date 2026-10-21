@@ -76,6 +76,10 @@ public final class Capabilities {
         // 9,164 parameter names come from here and from nowhere else.
         "local_variable_names",
         // Capability 9.18: the value each return instruction hands back.
+        // Capability 9.19: a call-site argument whose value has SEVERAL producers (a local
+        // reassigned on one branch) reads as `{kind: merge, candidates: [...]}` rather than
+        // as one sourceless `unresolved` — the fact says "one of these" and chooses none.
+        "merge_candidates",
         "method_returns",
         // Capability 9.16: an annotation-valued annotation argument, read
         // recursively rather than dropped with no key at all.

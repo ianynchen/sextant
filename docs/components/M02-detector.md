@@ -74,7 +74,7 @@ model builder for source-set precision, making it this mechanism plus a dependen
 **The Maven mechanism is `dependency:build-classpath`, built 2026-10-21**
 (spec `2026-10-21-maven-classpath-design.md`): one `mvn -o -q -B [compile]
 dependency:build-classpath -Dmdep.outputFile=target/sextant-classpath.txt
--Dmdep.includeScope=compile [-pl <module> -am]` per analysis, from the reactor root, with
+-Dmdep.includeScope=compile -Dmdep.regenerateFile=true [-pl <module> -am]` per analysis, from the reactor root, with
 `compile` attached only inside a reactor (the goal resolves a sibling only as a built artifact
 of the same session) and `-pl` when `analyze` was handed one module. The file it leaves beside
 each module's classes is re-used while it is newer than every POM that module is read from,

@@ -118,6 +118,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "MvcInvoiceRoutes.jsonl",
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
+        "NormalisingBillingClient.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -274,7 +275,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 140 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
     # 141 since spec 2026-09-21 §7a: `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend
     # lambda class of `coRouter { accept(JSON) { } }`.
-    assert report.documents == 141
+    # 142 since spec 2026-10-21 (merged values, capability 9.19): `clients/
+    # NormalisingBillingClient`, the wrapper that reassigns `path` on one branch — one
+    # class file.
+    assert report.documents == 142
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -369,6 +373,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "MvcInvoiceRoutes.jsonl",
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
+        "NormalisingBillingClient.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -550,6 +555,13 @@ def test_scanner_declares_the_call_site_capabilities_phase_2c_implements():
         "string_constants",
         "chain_reconstruction",
     } <= AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_merge_candidates_capability():
+    """Capability 9.19 (spec 2026-10-21-merged-values-design.md): a value with several
+    producers reads as `{kind: merge, candidates: [...]}`. Declared so the walk's merge
+    branch is reachable only where the scanner that wrote the facts says it writes them."""
+    assert "merge_candidates" in AsmScanner(JAR).capabilities()
 
 
 def test_scanner_declares_the_implemented_interfaces_capability():
