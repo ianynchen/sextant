@@ -71,7 +71,12 @@ is what was dropped and must not creep back (no method is ever modelled), §4 th
       is inexact, so the result is an `expression`.
 - [ ] `url_of_answer`: an inexact literal publishes through the `expression` path at
       `partial`; `channel_of_answer` refuses it with the reason an expression gets.
-- [ ] `shadow.record_value_resolutions` records inexact answers distinguishably.
+- [x] ~~`shadow.record_value_resolutions` records inexact answers distinguishably~~ — not
+      done: the table's columns are fixed and the inexact answer records as the literal it
+      is; the fact stream carries the merge, which is where a reader looks. Noted, not hidden.
+- [x] `single_call` mints `(verb, destination)` pairs per binding, so a verb that is a
+      parameter is read through the same walk as the path (found on Apollo: 51 of 61 rows
+      had no verb; now 68 of 68 do).
 - [ ] Unit tests on hand-built facts (`test_values.py`): the rooted merge resolves; an
       unrooted merge is `non_enumerable`; two identical literals resolve exactly; the
       multiplicity through a parameter root; the channel refusal.

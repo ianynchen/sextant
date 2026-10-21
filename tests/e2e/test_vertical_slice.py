@@ -743,9 +743,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # deleting outright (F5 §6.1 rule 1).
         # 36 since A2 Task 8: the JDK client's four chains and the Apache client's
         # three (`jdk-httpclient`, `apache-httpclient`).
-        # 37 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values): the
-        # wrapper's `exchange(baseUrl + path, …)`, one row, path NULL until Task 2.
-        "http": 37,
+        # 38 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange(baseUrl + path, …)`,
+        # two rows at `partial` — one per caller's literal — once the walk resolved the merge.
+        "http": 38,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -967,9 +967,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             ("inbound", 164),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
-            # 69 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values): the wrapper's `exchange`, path NULL
-            # until Task 2 resolves the merge.
-            ("outbound", 69),
+            # 70 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two
+            # callers' literals, at `partial`.
+            ("outbound", 70),
         ]
     )
 

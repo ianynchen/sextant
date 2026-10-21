@@ -120,6 +120,15 @@ For Apollo: `GET <host>/apps/{appId}`, `POST <host>/apps/{appId}/clusters/{clust
 row carries the literal the developer wrote and says the rendering is not exact, rather than
 asserting either spelling.
 
+**The verb rides the same binding.** Found by building it: Apollo's `exchange(parseHost +
+path, method, …)` takes its VERB as a parameter too, and `single_call` read that argument
+verbatim — so the first run published the 68 with their paths and 51 of them with no verb
+(`unresolved`, since a declared verb capture had failed). The walk resolves every slot of a
+site per binding, so the verb's answer sits in the same binding as the path's: the enum the
+wrapper's own `post()`/`put()`/`delete()` handed to `execute`, on the same calling path as
+the literal. The engine now mints `(verb, destination)` pairs from the bindings instead of
+one verb for every destination. No new mechanism — the same walk, one more slot read.
+
 ### 3c. Dropped, on the user's reasoning
 
 The first draft proposed (2) judging agreement between candidates as a *path* (leading `/`,
@@ -163,6 +172,13 @@ fan-out the data shows to matter arrives as a reason word with the measurement b
 | 3 | a `substring` transform or identity entry | **dropped** — one parser per string manipulation is not enumerable |
 
 ## 7. What it closes, predicted and to be checked at the end
+
+> **BUILT 2026-10-21 (Tasks 1–2), measured through `analyze` on `apollo-portal`:** the two
+> addressless wrapper rows became **68 rows, every one at `partial` with its verb** — GET 39,
+> POST 14, DELETE 8, PUT 7; 65 distinct verb + path pairs. `OI-143`'s own falsifier was
+> "`apollo-portal` publishing the 64 call sites' own paths"; at this commit the module has 68
+> and publishes 68. The first build published 61 with 51 verbs missing, which is how §3b's
+> last paragraph was found. Full corpus measurement and the pins are Task 4.
 
 `apollo-portal`: the two addressless wrapper rows become the 68 call sites' own addresses at
 `partial`, one row per (caller, verb, path) as `single_call` dedups — between 32 and 68,

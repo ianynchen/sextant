@@ -119,6 +119,11 @@ _DIAMOND = _PKG + "Diamond#"
 _ORDER_WORKER = _PKG + "OrderWorker#"
 _BILLING_WORKER = _PKG + "BillingWorker#"
 _REGISTRY_IMPL = _PKG + "RegistryImpl#"
+# Capability 9.19 (spec 2026-10-21 merged values): a wrapper that reassigns its parameter on
+# one branch before the consuming call, and a class whose merges have no root.
+_WRAPPER = _PKG + "Wrapper#"
+_FORKED = _PKG + "Forked#"
+_SUBSTRING = ("java/lang/String#", "substring", "(I)Ljava/lang/String;")
 
 
 def _symbol(owner: str, name: str, jvm: str) -> str:
@@ -1131,6 +1136,98 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+    ]
+    # --- Capability 9.19: a merged value (spec 2026-10-21 merged values) ------------------
+    # `Wrapper#send(path)`: `if (path.startsWith("/")) path = path.substring(1); one(path)`.
+    # Site 0 is the `substring` call ON the parameter (its result is value 10); site 1 is the
+    # consumer, whose argument is the MERGE of the parameter and that result — Apollo's
+    # `RetryableRestTemplate#execute`, as the extractor now writes it (CP-41). Two callers
+    # hand `send` their literals, one with the slash the wrapper strips and one without.
+    # `Forked` holds the two merges that have NO root: two literals, and a parameter beside a
+    # call that is not on it.
+    facts += [
+        _type(_WRAPPER),
+        _type(_FORKED),
+        _declared(_WRAPPER, "send", _TAKES_STRING),
+        _void(_WRAPPER, "send", _TAKES_STRING),
+        _site(
+            _symbol(_WRAPPER, "send", _TAKES_STRING),
+            0,
+            _SUBSTRING,
+            kind="virtual",
+            receiver_parameter=0,
+            result=10,
+            arguments=[CallArgument(kind="int", value=1)],
+        ),
+        _site(
+            _symbol(_WRAPPER, "send", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="parameter", value=0),
+                        CallArgument(kind="unresolved", source=10),
+                    ],
+                )
+            ],
+        ),
+        _declared(_WRAPPER, "ledger", "()V"),
+        _site(
+            _symbol(_WRAPPER, "ledger", "()V"),
+            0,
+            (_WRAPPER, "send", _TAKES_STRING),
+            kind="virtual",
+            arguments=[CallArgument(kind="string", value="/a")],
+        ),
+        _declared(_WRAPPER, "entry", "()V"),
+        _site(
+            _symbol(_WRAPPER, "entry", "()V"),
+            0,
+            (_WRAPPER, "send", _TAKES_STRING),
+            kind="virtual",
+            arguments=[CallArgument(kind="string", value="b")],
+        ),
+        _declared(_FORKED, "pick", _TAKES_STRING),
+        _site(
+            _symbol(_FORKED, "pick", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                )
+            ],
+        ),
+        _declared(_FORKED, "other", _TAKES_STRING),
+        _site(
+            _symbol(_FORKED, "other", _TAKES_STRING),
+            0,
+            (_NAMES, "make", _MAKES_STRING),
+            result=20,
+        ),
+        _site(
+            _symbol(_FORKED, "other", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="parameter", value=0),
+                        CallArgument(kind="unresolved", source=20),
+                    ],
+                )
+            ],
         ),
     ]
     return facts
@@ -2333,3 +2430,52 @@ def test_shadow_mode_asks_about_a_position_no_catalog_names_and_records_nothing(
         shadow=True,
     )
     assert walked.query("value_resolutions") == []
+
+
+# --- Capability 9.19: a merged value with a common root (spec 2026-10-21) ---------------
+
+
+def test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexactly(walked):
+    """§3b. `send`'s consumer sees the parameter OR `substring`'s result, and `substring`'s
+    own site says its receiver IS that parameter — so both candidates are the same value,
+    possibly re-rendered. The walk answers the parameter, crosses to both callers (ruling
+    1's multiplicity: two bindings, one literal each) and marks every answer INEXACT,
+    because what `substring` did to the text was never read. Nothing here knows what
+    `substring` is; the same facts with `trim` in its place answer identically."""
+    bindings = _bindings(walked, _symbol(_WRAPPER, "send", _TAKES_STRING), 1)
+    answers = sorted((str(b.slots[0].value), b.slots[0].inexact) for b in bindings)
+    assert answers == [("/a", True), ("b", True)]
+    assert all(b.slots[0].kind == "literal" for b in bindings)
+
+
+def test_a_merge_of_two_literals_has_no_root_and_stays_non_enumerable(walked):
+    """Ruling 1, unchanged: two literals on two branches are two possible values and no
+    single one. The candidates are in the fact for a reader; the walk picks neither."""
+    assert _reasons(_bindings(walked, _symbol(_FORKED, "pick", _TAKES_STRING), 0)) == [
+        "non_enumerable"
+    ]
+
+
+def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
+    """The root check reads the producing site's receiver and arguments and nothing else:
+    `make()` takes nothing and is called on nothing, so its result is not a rendering of
+    the parameter beside it, and the merge is a genuine fork."""
+    assert _reasons(_bindings(walked, _symbol(_FORKED, "other", _TAKES_STRING), 1)) == [
+        "non_enumerable"
+    ]
+
+
+def test_an_inexact_address_publishes_at_partial_and_an_inexact_channel_is_refused():
+    """What `inexact` does downstream (§3b): a url reader publishes the text at `partial`
+    — the word the resolution set has for "part of this address was read" — and a channel
+    reader refuses it, because a broker resolves a destination it is GIVEN and a name some
+    call may have re-rendered is not one."""
+    from sextant.application.resolve.shapes.arguments import channel_of_answer, url_of_answer
+    from sextant.application.resolve.values import Answer
+
+    inexact = Answer(kind="literal", value="/billing/ledger", literal_kind="string", inexact=True)
+    exact = Answer(kind="literal", value="/billing/ledger", literal_kind="string")
+    assert url_of_answer(inexact) == (None, "/billing/ledger", "partial")
+    assert url_of_answer(exact) == (None, "/billing/ledger", "resolved")
+    assert channel_of_answer(inexact) == (None, None, "unresolved")
+    assert channel_of_answer(exact) == (None, "/billing/ledger", "resolved")

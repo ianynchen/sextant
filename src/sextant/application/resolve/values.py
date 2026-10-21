@@ -291,6 +291,13 @@ class Answer:
     # stands for a service still stands for one after an accessor hands it on. A consumer
     # reads it to decide which COLUMN the value belongs in; see `_joined`.
     yields: str = _ADDRESS
+    # **"Derived from this value; its exact rendering was not read"** (spec 2026-10-21
+    # merged values, §3b). Set only by `_merged`, when a merge's candidates share a root —
+    # `x` beside a call ON `x` — and the walk answers `x` without knowing what the call did
+    # to it. Carried through every hop after, like `yields`; `url_of_answer` publishes an
+    # inexact address at `partial`, `channel_of_answer` refuses one, and `_joined` makes a
+    # template filled from one an `expression`. Never set on an exact answer.
+    inexact: bool = False
 
 
 @dataclass(frozen=True)
@@ -985,6 +992,8 @@ class _Walk:
             return self._resolve((_PARAMETER, method, int(str(index))), trail, frames)
         if kind == "array":
             return self._elements(argument, method, origin, trail, frames)
+        if kind == "merge":
+            return self._merged(argument, method, origin, trail, frames)
         if kind == "lambda":
             # It carries a `source` and a body `symbol`, so it would fit both shapes
             # above, and it is left out of both on MEANING (`value_edges.sql`'s
@@ -1000,6 +1009,102 @@ class _Walk:
         if source is None:
             return _only(trail, _unresolved(NOT_READABLE))
         return self._through(method, int(str(source)), _used_at(origin), trail, frames)
+
+    def _merged(
+        self,
+        argument: Mapping[str, Any],
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """Capability 9.19's `merge`: a value with several producers, each a candidate in
+        the argument grammar (spec 2026-10-21 merged values, §3b).
+
+        **A merge whose candidates share a ROOT resolves to the root, inexactly.** Look at
+        what the facts say about the candidates without knowing what any call does: in
+        `if (path.startsWith("/")) path = path.substring(1);` the candidates are parameter 2
+        and the result of call site 41, and call site 41's own fact says its RECEIVER is
+        parameter 2. So the merge is `x` or `f(x)` for the same `x` and an unknown `f` —
+        both branches are the same value, possibly re-rendered. That is read off two
+        existing facts, never off the method's semantics (ruling 3, dropped: no `substring`
+        entry anywhere, nor one per string manipulation). The root is answered through every
+        edge the walk already has — a parameter root crosses `bound_to_parameter` to every
+        caller, ruling 1's multiplicity — and every answer is marked `inexact`, which
+        `url_of_answer` publishes at `partial` and `channel_of_answer` refuses.
+
+        **A merge with no root is `non_enumerable`**: two literals on two branches, two
+        unrelated calls. Picking one would be a fact about code that may never run — the
+        Phase 2G ruling, unchanged; the candidates stay in the fact for a reader.
+        """
+        candidates = argument.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        root = self._root_of(candidates, method)
+        if root is None:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        return tuple(
+            (
+                crossed,
+                replace(answer, inexact=True) if answer.kind in (LITERAL, EXPRESSION) else answer,
+            )
+            for crossed, answer in self._entry(root, method, origin, trail, frames)
+        )
+
+    def _root_of(
+        self, candidates: "list[Mapping[str, Any]]", method: str
+    ) -> "Mapping[str, Any] | None":
+        """The candidate every other candidate is a call ON — or None.
+
+        `x` is a root when each other candidate `c` is either `x` spelled again or a value
+        some call in this method produced (`c.source`) whose receiver, or one of whose
+        arguments, is `x`. A root is a PARAMETER (matched by the site's `receiver_parameter`
+        or an argument naming the same index) or a value with its own id (matched by the
+        site's `receiver` or an argument carrying the same `source`); a bare literal has no
+        id to be matched on, and two different literals are no root at all — the extractor
+        already folds two identical ones.
+        """
+        for root in candidates:
+            if all(
+                other == root or self._is_a_call_on(other, root, method) for other in candidates
+            ):
+                return root
+        return None
+
+    def _is_a_call_on(
+        self, candidate: Mapping[str, Any], root: Mapping[str, Any], method: str
+    ) -> bool:
+        source = candidate.get("source")
+        if source is None:
+            return False
+        producers = self._index.producers.get((method, int(str(source))), ())
+        if not producers:
+            return False
+        site = self._index.sites.get((method, min(producers)))
+        if site is None:
+            return False
+        if root.get("kind") == _PARAMETER and root.get("value") is not None:
+            index = int(str(root["value"]))
+            if (
+                site.get("receiver_parameter") is not None
+                and int(str(site["receiver_parameter"])) == index
+            ):
+                return True
+            return any(
+                argument.get("kind") == _PARAMETER
+                and argument.get("value") is not None
+                and int(str(argument["value"])) == index
+                for argument in site.get("arguments") or []
+            )
+        if root.get("source") is not None:
+            root_id = int(str(root["source"]))
+            if site.get("receiver") is not None and int(str(site["receiver"])) == root_id:
+                return True
+            return any(
+                argument.get("source") is not None and int(str(argument["source"])) == root_id
+                for argument in site.get("arguments") or []
+            )
+        return False
 
     def _elements(
         self,
@@ -1153,7 +1258,7 @@ class _Walk:
         # the hole itself where it reached none** (spec 2026-10-18 §3, §4). The second half
         # is what makes a partly-known address possible — an unresolvable hole no longer
         # discards the holes beside it that ARE known.
-        per_hole: list[tuple[tuple[_Trail, str | None, str], ...]] = []
+        per_hole: list[tuple[tuple[_Trail, str | None, str, bool], ...]] = []
         # **A hole nobody filled is NAMED after the value that fills it at runtime**, where
         # the facts name that value (ruled by the user 2026-10-18, one position over from
         # `<host>`). `"/owners/" + ownerId + "/pets"` is the most ordinary outbound address
@@ -1178,12 +1283,16 @@ class _Walk:
         ]
         for operand, hole in zip(operands, unfilled, strict=True):
             reached = self._entry(operand, method, origin, trail, frames)
+            # An INEXACT literal fills its hole like an exact one — the text is the value the
+            # code states, read through a merge whose root it is — and taints the result
+            # below: a template filled from one is never `literal`, because part of what
+            # was sent (what the call on the root did to it) was not read.
             settled = tuple(
-                (crossed, str(answer.value), answer.yields)
+                (crossed, str(answer.value), answer.yields, answer.inexact)
                 for crossed, answer in reached
                 if answer.kind == LITERAL and answer.literal_kind == STRING
             )
-            per_hole.append(settled or ((trail, None, _ADDRESS),))
+            per_hole.append(settled or ((trail, None, _ADDRESS, False),))
         self._holes = tuple(unfilled)
 
         # Nothing anywhere: the caller carries the template unchanged, which is what it
@@ -1195,7 +1304,7 @@ class _Walk:
         # hole takes a name, the answer is strictly better than the fact —
         # `/owners/{ownerId}/pets` against `/owners/{}/pets` — and the caller must be given
         # it even though no hole was FILLED. That is why this is two tests rather than one.
-        filled = any(value is not None for hole in per_hole for _, value, _ in hole)
+        filled = any(value is not None for hole in per_hole for _, value, _, _ in hole)
         if not filled and all(hole == _HOLE for hole in unfilled):
             return None
 
@@ -1207,7 +1316,7 @@ class _Walk:
             # was never assembled by any single run.
             merged: _Trail = trail
             coherent = True
-            for crossed, _, _ in combination:
+            for crossed, _, _, _ in combination:
                 joined = _combine(merged, crossed)
                 if joined is None:
                     coherent = False
@@ -1217,11 +1326,12 @@ class _Walk:
                 continue
             text = pieces[0] + "".join(
                 (value if value is not None else hole) + piece
-                for (_, value, _), hole, piece in zip(
+                for (_, value, _, _), hole, piece in zip(
                     combination, self._holes, pieces[1:], strict=True
                 )
             )
-            whole = all(value is not None for _, value, _ in combination)
+            whole = all(value is not None for _, value, _, _ in combination)
+            inexact = any(inexact for _, _, _, inexact in combination)
             # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
             # ruling 2). `//customers-service/owners` is RFC 3986 §4.2's scheme-relative
             # reference — a real URI form, not an invention — and the `//` says exactly
@@ -1229,7 +1339,7 @@ class _Walk:
             # second shape for any consumer to learn. Only where the result carries no
             # scheme of its own: `"http://" + host + "/x"` already says where the
             # authority starts and prefixing that would be wrong.
-            if any(kind == _AUTHORITY for _, _, kind in combination) and "://" not in text:
+            if any(kind == _AUTHORITY for _, _, kind, _ in combination) and "://" not in text:
                 text = f"//{text}"
             # **`literal` only when EVERY hole was read; otherwise `expression`**, and that
             # is the whole safety of a partial fill (§3). A half-filled template is not a
@@ -1240,9 +1350,9 @@ class _Walk:
             reached_out.append(
                 (
                     merged,
-                    Answer(kind=LITERAL, value=text, literal_kind=STRING)
+                    Answer(kind=LITERAL, value=text, literal_kind=STRING, inexact=inexact)
                     if whole
-                    else Answer(kind=EXPRESSION, value=text),
+                    else Answer(kind=EXPRESSION, value=text, inexact=inexact),
                 )
             )
         # Deduplicated on (path, answer): several combinations routinely agree, and two
