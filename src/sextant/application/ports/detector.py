@@ -134,6 +134,15 @@ class ModuleModel:
     # source is, and refusing the whole analysis over it would answer a
     # question nobody asked.
     libraries_not_resolved: tuple[str, ...] = ()
+    # **Every dependency whose jar resolved on this machine**, as `LibraryRoot`s — not only
+    # the ones a person opted into with `extract_libraries` (`library_roots`). The two
+    # answer different questions and must not be merged: an opted-in library is SCANNED
+    # (every class, every body, its rows become this module's); a dependency here only has
+    # the HEADER of each type this module refers to read (`type_header`, D00 §5) — what it
+    # extends, implements and is annotated with, nothing below the class level. The
+    # extractor is handed this list as its classpath. Empty where nothing resolved, which
+    # leaves the scan exactly as it was.
+    dependency_archives: tuple[LibraryRoot, ...] = ()
 
 
 @dataclass(frozen=True)

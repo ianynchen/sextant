@@ -851,6 +851,11 @@ SELECT document_id,
        -- own and none of the four reactor siblings it scans.
        payload ->> 'origin_entry'    AS origin_entry,
        (payload ->> 'partial')::BOOLEAN AS partial,
+       -- D00 §2 (2026-10-21): true on the ONE synthetic document per module that holds
+       -- every `type_header` fact. Not a class file this module built, so `coverage`
+       -- leaves it out of `documents`; false on every real document, where the key is
+       -- absent and `coalesce` says so.
+       coalesce((payload ->> 'header_only')::BOOLEAN, false) AS header_only,
        -- JEP 238 (W3): which copy of an overlaid class this document holds, and
        -- the name the JVM knows that class by. Projected so `selected_documents`
        -- below can group copies without re-reading the payload, and so a reader

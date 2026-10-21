@@ -14,6 +14,37 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A dependency type's place in the hierarchy is read from its class-file header**
+  (`type_header`, D00 §5; user decision A, 2026-10-21). An engine proving a type is a
+  throwable walks `extends` facts to a declared root, and those facts existed only for classes
+  the module compiled — so `MethodArgumentNotValidException extends BindException extends
+  Exception`, two jars deep, stopped the walk at the first and a handler taking that parameter
+  derived nothing from it. The extractor now reads the HEADER of every type the module's own
+  classes refer to and did not compile — superclass, interfaces, class-level annotations, never
+  a member — from the jars on the resolved classpath, following `extends` up to the JDK.
+
+  **Both `@ControllerAdvice` rows COVERAGE carried as ◐ for a month are ✅**, measured on
+  `fixtures/orders-advice`: a bare-handler parameter proven through two jars, and a
+  `@ResponseStatus(CONFLICT)` sitting on an exception class in a dependency jar the module did
+  not opt into reaching the handler's `status`. The cell reads `✅ full 5/5`.
+
+  **A fact kind of its own, deliberately.** Were these `symbol`/`annotation` facts, the
+  engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as
+  this module's (measured risk). Only the type lattice reads them — `superclasses`,
+  `implementations`, and `error_advice`'s class-annotation lookup — and `declared_symbols`
+  still omits them, so `type_hierarchy.scanned` and `method_resolution` keep saying,
+  truthfully, that a dependency type's methods were never read. One synthetic document per
+  module holds every header fact and is excluded from `coverage.documents`; `type_headers`
+  counts it instead.
+
+  **Measured cost and measured yield, and the second is the honest headline.** The read adds
+  nothing visible to analyse time (1.3 s and 1.7 s whole runs on the two small pins). But on
+  Maven the classpath is the module's DIRECT declarations, and Spring Boot's starters put nearly
+  every type one hop behind a classless starter jar: `genai` 9 headers against 73 unscanned
+  owners, `spring-petclinic-rest` 13 against 234, `yudao-module-system` **0** against 2,146.
+  `OI-167` records it with what closes it (Maven's transitive closure from local POMs); Gradle
+  has no such gap. All six field pins are unchanged.
+
 - **The two sides of a cross-service call are joined** (`GAP-2`, the reactor case;
   `sextant system analyze <reactor root>`). Sextant read that one module calls
   `POST /owners/{ownerId}/pets` at `customers-service` and that another serves exactly that,

@@ -564,6 +564,43 @@ as part of closing a Major.
 site — or when the key keeps the query while the published path does not. **Falsified by** a
 module making two such calls and the document showing one row.
 
+### OI-167 — on Maven the header read sees only DIRECT declarations, and Spring Boot's starters put every type one hop behind
+**Major · entered 2026-10-21, measured while building the `type_header` read (user decision A) · `src/sextant/ingress/detect/maven.py` (`dependency_archives`), `extractor-jvm/.../TypeHeaders.java`**
+
+The `type_header` read (D00 §5) looks up every dependency type a module refers to in the
+jars on its classpath. On Maven that classpath is built from `dependency_versions` — the
+module's **direct** declarations — because the POM parse records direct declarations only
+(the boundary `Data REST — a module whose build declares the framework only TRANSITIVELY`
+already states for one catalog). A Spring Boot module declares `spring-boot-starter-web`, a
+jar with no classes, and gets `spring-web`, `spring-context`, `spring-beans` as that starter's
+transitives — none of which is on the list this reads.
+
+**Measured, and it is the whole yield:**
+
+| module | direct deps | jars on the classpath | headers read | unscanned owners |
+|---|---|---|---|---|
+| `spring-petclinic-genai-service` | 24 | 20 | **9** | 73 |
+| `spring-petclinic-rest` | 25 | 25 | **13** | 234 |
+| `yudao-module-system` | 1 (a sibling) | **0** | **0** | 2,146 |
+
+So the mechanism works to the framework's rule where a type's jar is declared directly
+(`fixtures/orders-advice` declares `spring-context` for exactly this reason, and says so),
+and reaches almost nothing on the corpus it was built for — Maven-built Spring Boot — until
+the classpath is the RESOLVED one. Gradle has no such gap: its init script reports
+`compileClasspath`'s resolved artifacts with their files.
+
+**Real triggering input:** every Maven module using a starter, which is every Spring Boot
+module in the pinned corpora. **Not a false fact** — a type that is not found gets no fact and
+the walk stops where it always did — but it caps the two `@ControllerAdvice` rows this read
+closed at "true where declared directly".
+
+**Closes by** resolving Maven's transitive closure from the local repository's own POMs
+(`_local_repository_pom` already reads them for BOM imports): each direct dependency's POM
+names its compile/runtime dependencies and `dependencyManagement`, and the walk is the one
+Maven itself performs — scopes, `optional`, exclusions — which is why it is its own item and
+not a line in this one. **Falsified by** `genai` reading headers for the Spring types its
+handlers and clients name, and `yudao-module-system` reading more than zero.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

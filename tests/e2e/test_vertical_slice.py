@@ -334,7 +334,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `<init>`, `create`, both `invoke`s and `invokeSuspend`), six of them into this module
     # (the handler class's own constructor/`create`/`invoke`/`invokeSuspend` chain and its
     # call to `listOrders`). Still 29%.
-    assert "Calls whose callee body this workspace read: 533 of 1812 (29%)" in document
+    # 533 of 1813 since the `type_header` read (2026-10-21): `ConflictingOrderException`,
+    # the second class in the opted-in `orders-soap-client` jar, whose constructor's one
+    # `RuntimeException.<init>` is an edge to the platform. The numerator is unmoved —
+    # nothing in this module calls it; `orders-advice` is the module that does. Still 29%.
+    assert "Calls whose callee body this workspace read: 533 of 1813 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -379,7 +383,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `owner_not_scanned` below are unchanged.
     # 1810 since spec 2026-09-21 §7a (`dsl-media-route`): the `accept(JSON) { }` line's
     # fifteen edges (comment above), all `resolved`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1810." in document
+    # 1811 since the `type_header` read (2026-10-21): `ConflictingOrderException.<init>`'s
+    # one `RuntimeException.<init>` in the opted-in library jar, `resolved` — the compiler
+    # names a super-constructor exactly. `owner_not_scanned` below is unchanged: the
+    # platform owner was already counted.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1811." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -1719,7 +1727,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
         "SELECT origin, count(*) FROM read_parquet("
         f"'{bundle / 'graph' / 'documents.parquet'}') GROUP BY origin ORDER BY origin"
     ).fetchall()
-    assert (COORDINATE, 1) in origins
+    # 2 since the `type_header` read (2026-10-21): `ConflictingOrderException` joined
+    # `BillingPort` in the jar, so the opted-in scan reads two class files and records the
+    # same coordinate on both — which is the claim: EVERY document from the jar carries it.
+    assert (COORDINATE, 2) in origins
     # 105 + 2: 2O Task 3's generic-superinterface fixture (`Repository<T, ID>`,
     # `OrderRepository`) — module-output documents, same reason `test_app.py`'s
     # count moved.
@@ -1769,7 +1780,16 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 152: + `MappingConditionsController`, the mapping-expression fixture (spec 2026-09-19 §5c).
     # 153: + `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend lambda class of
     # `coRouter { accept(JSON) { } }` (spec 2026-09-21 §7a).
-    assert (None, 153) in origins
+    # 154 since the `type_header` read (2026-10-21): the ONE header-only document, which
+    # holds facts from every jar on the classpath and so names no single `origin` — each
+    # fact carries its own. It is NOT module output, and the bundle says so by the two
+    # columns pinned beneath, which is what keeps this count readable.
+    assert (None, 154) in origins
+    header = duckdb.sql(
+        "SELECT origin_tier, origin FROM read_parquet("
+        f"'{bundle / 'graph' / 'documents.parquet'}') WHERE header_only"
+    ).fetchall()
+    assert header == [("dependency", None)]
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

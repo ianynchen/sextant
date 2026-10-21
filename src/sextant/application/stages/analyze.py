@@ -246,6 +246,11 @@ def analyze(
             version=module.version,
             classes_dir=module.output_dirs[0],
             out_dir=fact_root,
+            # The module's OWN scan reads the headers of the dependency types its classes
+            # refer to (D00 §5 `type_header`). The opted-in library scans below are handed
+            # none: a library is scanned whole, and its own references are not this
+            # module's question.
+            dependency_archives=module.dependency_archives,
         )
     )
     # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through

@@ -353,7 +353,13 @@ def _annotation_universe(workspace: Workspace, catalog: Catalog) -> list[dict[st
             "annotation": str(row["annotation"]),
             "args": json.loads(str(row["args"])) if row["args"] is not None else {},
         }
-        for row in workspace.query("annotations")
+        # Both sources in one shape. The second is the class-level annotations of the
+        # dependency types this module refers to (`type_header`, D00 §5) — what lets
+        # `@ResponseStatus` on an exception class in a jar reach a handler's `status`,
+        # which COVERAGE recorded as NULL for exactly that case. Only this engine reads
+        # them: an endpoint engine must never see a library's `@RestController` here.
+        for query in ("annotations", "type_header_annotations")
+        for row in workspace.query(query)
     ]
     scanned = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     seeds = {

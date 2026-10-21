@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.selection import NoAdapterError
 
 
@@ -21,6 +22,11 @@ class ScanRequest:
     # output, which is what a scan has always been, so an unset origin leaves
     # a document exactly as it was.
     origin: str | None = None
+    # The resolved dependency jars (`ModuleModel.dependency_archives`), for the HEADER read
+    # of every type this scan's classes refer to and did not compile (D00 §5
+    # `type_header`). Empty for a library scan and wherever nothing resolved, and then the
+    # scan is byte-for-byte what it was before the read existed.
+    dependency_archives: "tuple[LibraryRoot, ...]" = ()
 
 
 class ScanError(RuntimeError):

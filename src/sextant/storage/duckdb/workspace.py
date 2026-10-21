@@ -149,6 +149,10 @@ _NAMED_QUERIES = {
         FROM raw_facts
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
           AND document_id IN (SELECT document_id FROM selected_documents)
+        UNION ALL
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
+        FROM raw_facts
+        WHERE kind = 'type_header' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol
     """,
     # Capability 9.13's own erased-superclass carrier (2O design §1b, Task 5):
@@ -172,11 +176,26 @@ _NAMED_QUERIES = {
     # `(kind = 'symbol' AND payload) ->> 'superclass' IS NOT NULL` and fails
     # casting the JSON `payload` column to a boolean — reproduced directly
     # against `raw_facts` before this fix landed, not a guess.
+    # **`type_header` facts are unioned in here and in `implementations`, and NOWHERE
+    # else** (D00 §5, 2026-10-21). They are the superclass, interfaces and class-level
+    # annotations of every DEPENDENCY type this module refers to, read from the class file's
+    # header in the resolved classpath — so a module exception extending a library exception
+    # reaches `Throwable`, and `type_hierarchy`'s walk no longer stops at the first class in
+    # a jar. They are a kind of their own rather than `symbol` facts precisely so that the
+    # engines minting endpoint rows from declarations (`symbols`, `annotations`) cannot see
+    # a library's `@RestController` or `CrudRepository` through them: a header-read type is
+    # in the LATTICE and nowhere else, and `declared_symbols` still does not list it, which
+    # keeps `type_hierarchy.scanned` and `method_resolution` saying — truthfully — that its
+    # methods were never read.
     "superclasses": """
         SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
         FROM raw_facts
         WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
           AND document_id IN (SELECT document_id FROM selected_documents)
+        UNION ALL
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
+        FROM raw_facts
+        WHERE kind = 'type_header' AND (payload ->> 'superclass') IS NOT NULL
         ORDER BY symbol
     """,
     # Every static body a compiler-emitted holder of an interface's default
@@ -433,6 +452,21 @@ _NAMED_QUERIES = {
     # One column, because existence is the whole question. Ordered by symbol
     # for NFR-1, like every other projection here.
     "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
+    # The class-level annotations a `type_header` carries, flattened to the `annotations`
+    # view's own columns so a consumer can treat the two sources alike. Read by
+    # `error_advice` alone, for `@ResponseStatus` on a handled exception's class — the one
+    # engine that asks a TYPE question of an annotation rather than minting a row from it.
+    # Deliberately not folded into the `annotations` view: that view is what every endpoint
+    # engine scans for declarations, and a dependency's class-level annotations must not
+    # appear there (the `superclasses` note above says why).
+    "type_header_annotations": """
+        SELECT payload ->> 'symbol'          AS target,
+               use ->> 'annotation'          AS annotation,
+               use ->  'args'                AS args
+        FROM raw_facts, UNNEST(from_json(payload -> 'annotations', '["JSON"]')) AS t(use)
+        WHERE kind = 'type_header'
+        ORDER BY target, annotation
+    """,
     # W4b: JVMS 4.7.28's `NestHost` — the TOP-LEVEL type whose nest a nested type
     # belongs to, which three engines had been deriving by splitting a binary name
     # on `$`. Only a nested type above a certain class-file version carries it, so
@@ -492,9 +526,13 @@ _NAMED_QUERIES = {
         FROM raw_facts WHERE kind = 'module'
         ORDER BY module_id
     """,
+    # `documents` counts class files this module BUILT; the one synthetic document holding
+    # every `type_header` fact is not one, so it is left out here and counted on its own as
+    # `type_headers` — the number of dependency types whose header was read.
     "coverage": """
-        SELECT count(*) AS documents,
-               sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
+        SELECT count(*) FILTER (WHERE NOT header_only)                AS documents,
+               sum(CASE WHEN partial AND NOT header_only THEN 1 ELSE 0 END) AS partial_documents,
+               (SELECT count(*) FROM raw_facts WHERE kind = 'type_header') AS type_headers
         FROM documents
     """,
     # FR-17 clause 3 (F8 §9.5, W38). How much was UNDERSTOOD, beside how many files were
@@ -1218,6 +1256,10 @@ _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 _FACT_ONLY = frozenset(
     {
         "documents",
+        # The class-level annotations of header-read dependency types (D00 §5
+        # `type_header`): a read over `raw_facts` alone, so cached per load like every
+        # other fact query — the cache rule test is what said so.
+        "type_header_annotations",
         # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
         # every other declaration (the merge of the delivery branch added the query).
         "default_bodies",

@@ -2,6 +2,7 @@ package dev.sextant.extractor;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
@@ -66,6 +67,13 @@ public final class Main {
             int documents = 0;
             int facts = 0;
             List<String> uncovered = new ArrayList<>();
+            // The resolved classpath, where one was handed over: every type the module's
+            // own classes refer to and did not compile is looked up here for its HEADER
+            // (`TypeHeaders`). Absent, the scan is byte-for-byte what it was.
+            String classpathFile = options.get("classpath-file");
+            java.util.Set<String> referenced = new java.util.HashSet<>();
+            java.util.Set<String> ownTypes = new java.util.HashSet<>();
+            int typeHeaders = 0;
             try (ClassSource source = ClassSource.of(classes)) {
                 List<String> classFiles = source.names();
                 // The silent-success hole, closed (2I Task 6). A `--classes`
@@ -214,9 +222,34 @@ public final class Main {
                                   withoutVersionPrefix(classRelative));
                     documents++;
                     facts += lines.size();
+                    if (classpathFile != null && bytes.length > 0 && partialReason == null) {
+                        ownTypes.add(withoutVersionPrefix(replaceSuffix(classRelative, ".class", "")));
+                        TypeHeaders.collectReferences(bytes, referenced);
+                    }
                 }
             }
-            System.out.println(report(documents, facts, uncovered));
+            if (classpathFile != null) {
+                // ONE synthetic document for every header fact, not one per dependency
+                // class: D00 §2's "one class file is one document" is about files this
+                // module's build produced, and a header read of 2,000 referenced types would
+                // otherwise report as 2,000 documents opened. The document says what it is
+                // (`header_only`) so every count that means "class files read" can leave it
+                // out, and carries the dependency tier because nothing in it is this
+                // module's output.
+                String headerDocumentId = sha256("type-headers:" + options.get("module-id"));
+                TypeHeaders.Result headers = TypeHeaders.resolve(
+                    referenced, ownTypes,
+                    TypeHeaders.readClasspathFile(Path.of(classpathFile)), headerDocumentId);
+                if (!headers.factLines().isEmpty()) {
+                    writeTypeHeaderDocument(out.resolve("__type_headers__.jsonl"),
+                                            headerDocumentId, options,
+                                            sha256(Files.readString(Path.of(classpathFile))),
+                                            headers.factLines());
+                    typeHeaders = headers.headers();
+                    facts += headers.factLines().size();
+                }
+            }
+            System.out.println(report(documents, facts, uncovered, typeHeaders));
         } catch (Exception failure) {
             System.err.println("extractor failed: " + failure);
             System.exit(1);
@@ -359,6 +392,39 @@ public final class Main {
         @Override public void close() throws IOException {
             zip.close();
         }
+    }
+
+    /** The one document the `type_header` facts live in (D00 §2, amended): the dependency
+     *  tier, `header_only: true`, no `origin` of its own because each fact names the jar it
+     *  came from, and a `relative_path` that is a label rather than a file, because there is
+     *  no file — the content hash is of the classpath that was read. */
+    private static void writeTypeHeaderDocument(Path target, String documentId,
+                                                Map<String, String> options, String contentHash,
+                                                List<String> factLines) throws IOException {
+        Files.createDirectories(target.getParent());
+        TreeMap<String, String> document = new TreeMap<>();
+        document.put("kind", JsonOut.string("document"));
+        document.put("document_id", JsonOut.string(documentId));
+        document.put("relative_path", JsonOut.string("<classpath>"));
+        document.put("module_id", JsonOut.string(options.get("module-id")));
+        document.put("language", JsonOut.string("java"));
+        document.put("sextant_version", JsonOut.string(required(options, "sextant-version")));
+        document.put("fact_schema_version", String.valueOf(factSchemaVersion(options)));
+        document.put("scanner_id", JsonOut.string(SCANNER_ID));
+        document.put("content_hash", JsonOut.string("sha256:" + contentHash));
+        document.put("origin_entry", JsonOut.string("<classpath>"));
+        document.put("origin_tier", JsonOut.string("dependency"));
+        document.put("header_only", "true");
+        document.put("redaction_set_hash", JsonOut.string(options.getOrDefault("redaction-hash", "sha256:none")));
+        document.put("partial", "false");
+        document.put("partial_reason", "null");
+        document.put("class_major", "0");
+        document.put("class_release", JsonOut.string("base"));
+        document.put("class_name", JsonOut.string(""));
+        List<String> all = new ArrayList<>();
+        all.add(JsonOut.object(document));
+        all.addAll(factLines);
+        Files.write(target, all, StandardCharsets.UTF_8);
     }
 
     private static void writeFactFile(Path target, String relative, String documentId,
@@ -583,13 +649,17 @@ public final class Main {
         return classRelative.substring(classRelative.indexOf('/', VERSIONS_PREFIX.length()) + 1);
     }
 
-    private static String report(int documents, int facts, List<String> uncovered)
-            throws IOException {
+    private static String report(int documents, int facts, List<String> uncovered,
+                                 int typeHeaders) throws IOException {
         List<String> quoted = new ArrayList<>();
         for (String source : uncovered) quoted.add(JsonOut.string(source));
         TreeMap<String, String> fields = new TreeMap<>();
         fields.put("documents", String.valueOf(documents));
         fields.put("facts", String.valueOf(facts));
+        // How many dependency types had their header read (`TypeHeaders`). Reported
+        // beside `documents` and not inside it: a header is not a class file this module
+        // built, and the figure a reader wants here is "how many did the classpath give".
+        fields.put("type_headers", String.valueOf(typeHeaders));
         fields.put("scanner_id", JsonOut.string(SCANNER_ID));
         // What actually read the class files, with the versions Gradle
         // RESOLVED — provenance a consumer can act on, in place of the literal
