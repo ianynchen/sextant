@@ -564,8 +564,33 @@ as part of closing a Major.
 site — or when the key keeps the query while the published path does not. **Falsified by** a
 module making two such calls and the document showing one row.
 
-### OI-167 — on Maven the header read sees only DIRECT declarations, and Spring Boot's starters put every type one hop behind
-**Major · entered 2026-10-21, measured while building the `type_header` read (user decision A) · `src/sextant/ingress/detect/maven.py` (`dependency_archives`), `extractor-jvm/.../TypeHeaders.java`**
+### OI-167 — on Maven the header read sees only DIRECT declarations, and Spring Boot's starters put every type one hop behind · **CLOSED 2026-10-21**
+**Major · entered and closed 2026-10-21 (spec `2026-10-21-maven-classpath-design.md`, rulings a/b/c) · `src/sextant/ingress/detect/maven.py` (`dependency_archives`), `extractor-jvm/.../TypeHeaders.java`**
+
+**Closed by asking Maven itself** — `mvn -o dependency:build-classpath` once per analysis from
+the reactor root, re-used while no POM is newer, the POM-declared set kept as a LABELLED
+fallback (`dependency_source: declared`, with Maven's reason) where Maven cannot be asked. Not
+by the resolver the entry below proposed: the detector's own comment calls that "a resolver,
+not a parse", and a wrong archive here is a wrong hierarchy fact. **Measured through `analyze`
+itself after the build:**
+
+| module | before: headers / in no archive | after | dependency set |
+|---|---|---|---|
+| `spring-petclinic-genai-service` | 9 / 80 | **94 / 29** | Maven's, 286 coordinates |
+| `spring-petclinic-rest` | 13 / 186 | **197 / 61** | Maven's, 150 |
+| `yudao-module-system` | 0 / 445 | **335 / 176** | Maven's, 278 |
+| `mall-admin` | — | 233 / 113 | **declared** — Maven refused offline: the dependency plugin version its POM pins is not in the local repository; `--allow-resolve` fetches it |
+| `spring-petclinic-api-gateway` | — | 0 / 64 | **declared** — Maven refused offline on a TEST-scoped artifact `mvn compile` never fetched (spec §2, fact 1); same escape |
+
+The two fallbacks are the ruling working as ruled: the weaker set, named as such, in the
+document's own coverage line. The "in no archive" that remains on Maven's answer is the
+platform's own types, which the walk stops at on purpose. Both `@ControllerAdvice` rows now
+produce on the field corpus, and the same file answers `resolve/dependencies.py`'s gate — on
+`orders-service`, Spring Integration was on the compile classpath through `spring-cloud-stream`
+and its catalog was SKIPPED for a month; it runs.
+
+*The entry as written when it was opened:*
+
 
 The `type_header` read (D00 §5) looks up every dependency type a module refers to in the
 jars on its classpath. On Maven that classpath is built from `dependency_versions` — the

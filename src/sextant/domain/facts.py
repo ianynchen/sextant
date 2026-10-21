@@ -173,6 +173,10 @@ class Document(BaseModel):
     # that means "class files read" leaves it out. Absent on disk, and so false,
     # for every real document.
     header_only: bool = False
+    # On the header-only document: how many dependency types this module names were
+    # found in NO archive on its classpath (spec 2026-10-21 §3e) — the JDK's, and every
+    # one a classpath that is not the real one leaves out. 0 on every other document.
+    type_headers_unlocated: int = 0
 
 
 class ModuleFact(BaseModel):
@@ -206,6 +210,12 @@ class ModuleFact(BaseModel):
     # that an opted-in library's SOAP operation DOES reach the endpoint table. Consent is
     # the whole difference, and it is not readable from the tier — both are `dependency`.
     sibling_coordinates: list[str] = Field(default_factory=list)
+    # Who answered for `dependency_coordinates`/`dependency_versions` and why the build
+    # tool did not, when it did not (`ModuleModel`'s own fields, spec 2026-10-21 §3c).
+    # On the fact because its readers run at RESOLVE: `dependencies.py` must say
+    # "could not tell" for a transitive only while the source is `declared`.
+    dependency_source: str = "declared"
+    dependency_source_reason: str | None = None
     # The `groupId:artifactId` coordinates the module's BUILD declares (2O
     # design §2a, ruling R9), sorted. Its own field rather than `classpath`
     # above, because the two answer different questions and only this one can

@@ -465,22 +465,26 @@ module today produces:
   and any embedded payload the interpreter could not read (`descriptors_not_interpreted`);
   and `open_questions` is one of the bundle's tables.
 - **The module's resolved dependency set, with a version each** (F1) — on the `module` fact
-  and in `metadata.json`'s `module.dependencies`. **Reach differs by build system and the
-  difference is not smoothed over.** Gradle reports its own RESOLVED compile classpath,
-  transitives included, with the version its conflict resolution actually chose. Maven is
-  read from pom FILES — the module's own, every ancestor reachable through
-  `<relativePath>` or already unpacked in the local Maven repository, and every BOM those
-  import — because `mvn` may not be installed and running a build as a side effect of
-  ANALYSING one is not a thing an analyser may do. That reaches inheritance,
-  `<dependencyManagement>`, imported BOMs and `${…}` interpolation, and it reaches no
-  transitive at all. Four consequences are stated rather than left to be discovered:
-  a coordinate arriving only as another artifact's own dependency is absent on Maven and
-  present on Gradle; **`<scope>` is not read on the Maven side**, so a `test`-scoped
-  dependency is in the set where Gradle's compile classpath excludes it; a version range
-  is carried verbatim, since choosing within it is mediation; and the local Maven
-  repository is one of this analysis's INPUTS, so a machine that never built the module
-  resolves fewer versions — every shortfall named, with its reason, in
-  `metadata.json`'s `dependencies_not_resolved` rather than silently shortening the map.
+  and in `metadata.json`'s `module.dependencies`, with **who answered** beside it
+  (`dependency_source`). **Reach follows the answerer and the difference is not smoothed
+  over.** Both build tools now answer from their own RESOLVED compile classpath, transitives
+  included, with the version their conflict resolution actually chose: Gradle through its init
+  script, Maven through `dependency:build-classpath` asked once per analysis from the reactor
+  root and re-used while no POM is newer (spec `2026-10-21-maven-classpath-design.md`; measured
+  1.0–2.4s per fresh repository, zero after). **Maven alone has a fallback, and it is
+  labelled**: where `mvn` is not on `PATH`, nothing is built, or Maven refuses offline and
+  `--allow-resolve` is not set, the set is read from pom FILES — the module's own, every
+  ancestor reachable through `<relativePath>` or already unpacked in the local Maven
+  repository, and every BOM those import — as `dependency_source: declared` with Maven's own
+  reason. That reaches inheritance, `<dependencyManagement>`, imported BOMs and `${…}`
+  interpolation, and it reaches no transitive at all. Its consequences are stated rather than
+  left to be discovered: a coordinate arriving only as another artifact's own dependency is
+  absent from the declared set; **`<scope>` is not read on that side**, so a `test`-scoped
+  dependency is in the set where a resolved compile classpath excludes it; a version range is
+  carried verbatim, since choosing within it is mediation; and the local Maven repository is
+  one of this analysis's INPUTS, so a machine that never built the module resolves fewer
+  versions — every shortfall named, with its reason, in `metadata.json`'s
+  `dependencies_not_resolved` rather than silently shortening the map.
 
 What a run does **not** give you, each entry named in the output's own gap list rather
 than silently absent:
@@ -498,7 +502,7 @@ than silently absent:
 | The HTTP address a GraphQL or STOMP service listens on | the `path` column carries the OPERATION, because that is what the identity is; no engine derives `/graphql` or the STOMP endpoint registration ([D01](components/D01-graph-schema.md) §3) | undecided |
 | Cross-service links or a system document | linking is a system-scope pass over bundles; no `participants`/`links` exist yet | linking phase |
 | A handler symbol for a Kotlin WebFlux functional route | Kotlin compiles every DSL handler to an `instance`-kind argument naming a generated class, never a method | undecided |
-| A Maven dependency that is neither declared nor inherited — a TRANSITIVE, or one declared inside a `<profile>` | F1 resolves the pom chain: a parent's own `<dependencies>`, `<dependencyManagement>`, imported BOMs and `${…}` properties all reach the recorded set with a version each. Another artifact's OWN dependencies do not, because following them means implementing Maven's mediation — nearest-wins, scopes, exclusions, ranges — which is a resolver rather than a parse, and a wrong one silently ADDS coordinates the build does not have. Profiles are unread for the same reason one level up: which profile is active is a property of an invocation this analysis never makes (`maven_profile_and_transitive_resolution_not_implemented`) | undecided |
+| A Maven dependency inside a `<profile>`, or any dependency where Maven could not be asked (`dependency_source: declared`) | Maven's own `dependency:build-classpath` answers for the resolved set, transitives included (spec 2026-10-21-maven-classpath-design.md), so a transitive is no longer the gap it was; what remains out of reach is a `<profile>`-scoped declaration (the goal runs with no profile activated) and every module on the labelled fallback — `mvn` absent, nothing built, offline refusal without `--allow-resolve` — where F1's pom-chain parse is the answer and reaches no transitive. The declared set is published as the weaker claim it is, never assembled by guessing | the document's coverage line names which set a reader holds |
 | A payload bound from a parse more than one delegation hop from its handler | a flow followed further than it was observed is an assumption; the parse is found at hop two and ledgered as an open question instead, and past hop two it is not found at all (`payload_parsed_beyond_horizon`, §4.2) | the enrichment tier |
 | A payload bound where one channel's bytes reach two different parses | two answers about one wire is a question for a reader, not a coin toss to publish (`payload_parse_ambiguous`) | the enrichment tier |
 | Anything declared inside a dependency jar nobody named | a jar's own bytecode is scanned only where `.sextant.yml` opts it in, per library; the dependency tree is never walked, because scanning everything reachable publishes every framework's annotated types as this module's endpoints ([D04](components/D04-config-and-exclusion.md) §2a) | opt-in, per library |
@@ -2325,7 +2329,7 @@ arrive there.
 | Spring @HttpExchange (server side) | ✅ full | 2/2 | 3 stated boundaries |
 | Spring error handling (@ControllerAdvice) | ✅ full | 5/5 | 3 stated boundaries |
 | Spring Boot Actuator | ✅ full | 1/1 | 5 stated boundaries |
-| Spring Data REST | ◐ partial | 7/8 | not shipped: 1 at C; 7 stated boundaries |
+| Spring Data REST | ◐ partial | 8/9 | not shipped: 1 at C; 6 stated boundaries |
 | Spring Cloud Gateway | ✅ full | 3/3 | — |
 | Jakarta / javax Servlet | ◐ partial | 10/11 | not shipped: 1 at C; 9 stated boundaries |
 | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ✅ full | 6/6 | 3 stated boundaries |
@@ -2401,7 +2405,7 @@ arrive there.
 | Java | Spring Data REST | Data REST — a derived query method whose NAME collides with a CRUD method, e.g. `findAll(String tenantId)` | Spring Data's base-method lookup compares a method's name, its parameter COUNT and its parameter TYPES — a signature (JLS 8.4.2) — through `MethodLookups$RepositoryAwareMethodLookup` (CP-13 Q2), so such a method IS a query method and `/orders/search/findAll` is served | `derived_resource` | **Boundary — UNDER-reports, silently** (`A-M14`, still open). Our exclusion is `if name in crud_methods`, 25 bare identifiers, and the catalog's comment cites CP-2's observed 404 for an override of `findAll(Pageable)` — the SAME signature, generalised to the name alone. Closing it needs `crud_methods` to carry parameter types per contract per store AND the type-variable resolution the framework does through `getMostSpecificMethod`; the fact stream supports neither, so it is stated rather than half-built (§8.1 rule 4). **Falsified by** any repository declaring a derived query method with a CRUD name |
 | Java | Spring Data REST | Data REST — a `static` helper on a repository interface | not a query method at all: it is bound to the type, never to the repository's instance contract | `derived_resource` | ✅ shipped — the `static` modifier is projected by the `method_visibility` query and such methods derive **nothing** (fix round 3, I-3) |
 | Java | Spring Data REST | Data REST — a repository reached through a module-local `@NoRepositoryBean` base | within-module closure walk over `generic_interfaces` | `derived_resource` | ✅ shipped. **Boundary:** a chain through ANOTHER JAR is invisible (no facts here to walk), and a base that PERMUTES its type parameters would be read wrongly — no hop's type-parameter list is in the facts to check against |
-| Java | Spring Data REST | Data REST — a module whose build declares the framework only TRANSITIVELY, on Maven | the POM parse records direct declarations only | `derived_resource` | **Boundary — reported SKIPPED with its reason**, never derived and never silent. Gradle's resolved classpath has no such gap |
+| Java | Spring Data REST | Data REST — a module whose build declares the framework only TRANSITIVELY, on Maven | the dependency set is what Maven itself resolved, transitives included (spec 2026-10-21 §3b) | `derived_resource` | ✅ **the gate reads Maven's own answer since 2026-10-21** — `orders-service`'s `spring-integration` catalog, SKIPPED for a month on a framework that was on its compile classpath through `spring-cloud-stream`, now runs. **The boundary moved, not vanished:** on the labelled fallback (`dependency_source: declared` — `mvn` absent, nothing built, offline refusal without `--allow-resolve`) a transitive is still absent and the skip still says "could not tell"; where Maven answered, the skip says "not in the resolved set" instead |
 | Java | Spring Data REST | Data REST — a NESTED entity type (`Order.Item`) | what the framework serves for one was not probed | `derived_resource` | **Boundary — derives nothing** rather than composing a path segment no probe covered |
 | Java | Spring Data REST | Data REST — REACTIVE repository contracts (`ReactiveCrudRepository`…) | Data REST is built on Spring MVC; no reactive store was probed | — | **Boundary — not enumerated**, so nothing derives. Absent evidence, produce nothing |
 | Java | Spring Data REST | Data REST — projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers, QueryDSL web support | each changes the representation or adds routes | — | **C — stated boundaries** (2O design §2c) |
@@ -2409,7 +2413,7 @@ arrive there.
 | Java | Spring error handling (@ControllerAdvice) | `@ControllerAdvice` / `@RestControllerAdvice` + `@ExceptionHandler` | defines the error contract of every endpoint | `error_advice` | ✅ **shipped** (2O Task 8) — into `error_handlers`, its own table, never `endpoints`: an error handler is not a boundary anyone can address. Advice class, `declared_by`, scope attributes verbatim, exception type, status and response shape |
 | Java | Spring error handling (@ControllerAdvice) | `@ExceptionHandler` declared inside a CONTROLLER | Spring scopes such a handler to that controller alone, where an advice class declaring no attributes applies to every controller | `error_advice` | ✅ shipped — the two are told apart by `declared_by`, because both carry a NULL `scope` and reading `scope` alone would widen one controller's contract across the application |
 | Java | Spring error handling (@ControllerAdvice) | Error handling — a module-local stereotype composed from `@ControllerAdvice` (or from `@Controller`/`@RestController`) | the framework's own container test is meta-annotation aware, the same `AnnotatedElementUtils` rule the handler gate above uses | `error_advice` | ✅ shipped — through the composition pre-pass. A composed annotation whose TYPE lives in an unscanned jar is the pre-pass's own stated boundary, unchanged here |
-| Java | Spring error handling (@ControllerAdvice) | Error handling — the exception type taken from the handler's PARAMETER, where `@ExceptionHandler` names none | the framework asks whether the parameter is assignable to `Throwable` | `error_advice` | ✅ **shipped, to the framework's rule, 2026-10-21** (user decision A, `type_header`, D00 §5). A parameter is read as an exception where its `extends` chain reaches a declared root, and the chain now runs through DEPENDENCY classes: the extractor reads the HEADER of every type the module's own classes refer to and did not compile, from the resolved classpath — superclass, interfaces, class-level annotations, never a member — and follows `extends` upward until the JDK. MEASURED on `fixtures/orders-advice`: `invalid(MethodArgumentNotValidException e)`, bare `@ExceptionHandler`, proven through `BindException` (spring-context) to `Exception` across two jars; before, nothing. **Boundary, measured and not small:** on Maven the classpath is the module's DIRECT declarations (`dependency_versions`), and Spring Boot's starters put nearly every type one hop behind a classless starter jar — `genai` read 9 headers against 73 unscanned owners, `spring-petclinic-rest` 13 against 234, and `yudao-module-system`, whose one direct dependency is a sibling, **0 against 2,146**. Gradle has no such gap (its init script reports the resolved classpath). `OI-167`. The previous escape, `extract_libraries`, still scans a whole jar on request |
+| Java | Spring error handling (@ControllerAdvice) | Error handling — the exception type taken from the handler's PARAMETER, where `@ExceptionHandler` names none | the framework asks whether the parameter is assignable to `Throwable` | `error_advice` | ✅ **shipped, to the framework's rule, 2026-10-21** (user decision A, `type_header`, D00 §5). A parameter is read as an exception where its `extends` chain reaches a declared root, and the chain now runs through DEPENDENCY classes: the extractor reads the HEADER of every type the module's own classes refer to and did not compile, from the resolved classpath — superclass, interfaces, class-level annotations, never a member — and follows `extends` upward until the JDK. MEASURED on `fixtures/orders-advice`: `invalid(MethodArgumentNotValidException e)`, bare `@ExceptionHandler`, proven through `BindException` (spring-context) to `Exception` across two jars; before, nothing. **On the field corpus since 2026-10-21** (`OI-167` closed, spec `2026-10-21-maven-classpath-design.md`): the classpath is the one MAVEN resolved, transitives included, so the starters' one-hop gap is gone — `genai` reads **94** headers (was 9; 29 reached types in no archive, the platform's own), `spring-petclinic-rest` **197** (was 13), `yudao-module-system` **335** (was 0). Where Maven cannot be asked the module keeps the direct declarations, LABELLED (`dependency_source: declared`) with Maven's reason in the document's coverage line — `mall-admin` and `spring-petclinic-api-gateway` sit there offline until `--allow-resolve` fetches the plugin their POMs pin. Gradle answers from its resolved classpath as before. The previous escape, `extract_libraries`, still scans a whole jar on request |
 | Java | Spring error handling (@ControllerAdvice) | Error handling — a status set inside a `ResponseEntity` body (`ResponseEntity.status(NOT_FOUND).body(…)`) | body analysis, not a declaration | — | **Boundary — `status` is NULL, deliberately** (2O design §4b). Reading it is `fluent`-style body analysis that derives no endpoint. NULL is an answer here rather than a gap: inventing a status would present a value nothing declared as one the framework returns |
 | Java | Spring error handling (@ControllerAdvice) | Error handling — `@ResponseStatus` on the EXCEPTION CLASS | the framework's default for every handler that declares none | `error_advice` | ✅ **shipped 2026-10-21, through the same header read** — the class-level annotations of a dependency type arrive as `type_header` facts, in the `annotation` fact's own `use` grammar (one producer, exposed rather than copied), and `error_advice` reads them beside the module's own. MEASURED on `fixtures/orders-advice`: `conflict(ConflictingOrderException e)` publishes `status = HttpStatus#CONFLICT` from an annotation sitting in the stub jar, which that module does NOT opt into. **Only `error_advice` reads header annotations** — the endpoint engines never see a library's `@RestController` through them, which is why `type_header` is a fact kind of its own. Worth stating plainly: Spring's own exceptions carry no `@ResponseStatus` (read off `spring-web` 6.1.6: none of the four most-handled), so on the pinned corpora this row moves NO status — the shape needs a third-party class that declares one, and the fixture is where it exists. Same Maven boundary as the row above |
 | Java | Spring error handling (@ControllerAdvice) | Error handling — `ResponseEntityExceptionHandler` subclasses, `@ExceptionHandler` on an interface or superclass, `ErrorController`, `ProblemDetail` bodies | four more ways the error contract is declared, none probed | — | **Boundary — derives nothing.** Absent evidence, produce nothing (§8); each needs its own probe before it can be catalogued |
@@ -3092,8 +3096,10 @@ Boundaries, each verified against the shipped code:
   The fact that does is which handler auto-configuration would REGISTER:
   `@ConditionalOnClass(io.rsocket.RSocket, …)` against
   `@ConditionalOnClass(WebSocketMessageBrokerConfigurer)`. Both catalogs gate on the
-  coordinates that ship those types, and on the STARTERS beside them — F1 does not resolve
-  transitives, so a module declaring `spring-boot-starter-rsocket` records the starter alone.
+  coordinates that ship those types, and on the STARTERS beside them — on the declared
+  fallback a module naming `spring-boot-starter-rsocket` records the starter alone (since
+  2026-10-21 Maven's own answer carries the transitives too, and the starters stay listed
+  for that fallback).
   `rsocket` joined D00's protocol set in the same change.
 
   **Three residuals, each stated rather than closed:**

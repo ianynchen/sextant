@@ -9,12 +9,16 @@ are both classes the module never compiled.
 
 import json
 import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.resources import extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 ADVICE = FIXTURES / "orders-advice"
@@ -28,7 +32,12 @@ def analysed(tmp_path_factory: pytest.TempPathFactory):
     shutil.copytree(ADVICE, root)
     result = CliRunner().invoke(cli, ["module", "analyze", str(root)])
     assert result.exit_code == 0, result.output
+    rendered = CliRunner().invoke(cli, ["module", "render", str(root)])
+    assert rendered.exit_code == 0, rendered.output
     metadata = json.loads((root / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
+    metadata["_document"] = (root / ".sextant" / "render" / "architecture.md").read_text(
+        encoding="utf-8"
+    )
     workspace = DuckDbWorkspace(root / ".sextant" / "workspace.duckdb")
     try:
         handlers = {
@@ -111,3 +120,89 @@ def test_a_dependency_type_mints_no_endpoint(analysed):
     assert len(endpoints) == 1
     assert endpoints[0][1] == "/orders"
     assert "com/acme/advice/OrderController" in endpoints[0][2]
+
+
+@pytest.mark.pins("render.the-document-SAYS-how-many-named-types-the-header-read-found")
+def test_the_document_says_how_many_named_types_the_read_found_and_who_answered(analysed):
+    """Spec 2026-10-21 §3e — the document is the result. The read reached 15 dependency
+    types — the 8 this module's classes name, plus the supertypes it discovered from the
+    headers it read — found the header of 10, and 5 were in no archive (the JDK's own:
+    `Object`, `RuntimeException`, `Exception`, `Throwable`, `String`). The classpath they were
+    looked up on was MAVEN's own resolved one — `fixture_build` primes the file, `copytree`
+    keeps its time, so it is current here. Measured, not predicted: the same 15/10/5 came out
+    of the declared set on this small fixture, which is why the LABEL is on the line — it is
+    the only thing that tells a reader which classpath those numbers describe."""
+    metadata, _, _, _ = analysed
+    assert (
+        "- Dependency types the header read reached: 15 — header read for 10, found in no "
+        "dependency archive 5 (dependencies: resolved by the build tool)."
+    ) in metadata["_document"]
+
+
+@pytest.mark.pins("storage.the-UNLOCATED-count-is-read-off-the-header-document")
+def test_the_unlocated_count_travels_on_the_header_document(analysed):
+    metadata, _, _, _ = analysed
+    assert metadata["coverage"]["type_headers"] == 10
+    assert metadata["coverage"]["type_headers_unlocated"] == 5
+    assert metadata["module"]["dependency_source"] == "maven"
+
+
+def test_a_read_that_locates_nothing_is_still_a_document_saying_so(tmp_path: Path):
+    """The header document is written whenever a classpath was handed over, with ZERO headers
+    as readily as with ten: an EMPTY classpath file against this fixture's classes locates
+    none of the 8 types the classes name, and the document says `0` read and `8` in no
+    archive — 8 and not 15, because the other 7 are supertypes the walk only discovers from
+    a header it managed to read. A missing file would leave "no read was attempted" and "the
+    read found nothing" indistinguishable — on `yudao-module-system`'s declared set that is
+    0 of 445, the number OI-167 was measured by."""
+    compile_fixture(ADVICE)
+    classpath = tmp_path / "empty.tsv"
+    classpath.write_text("", encoding="utf-8")
+    out = tmp_path / "facts"
+    completed = subprocess.run(
+        [
+            "java",
+            "-jar",
+            str(extractor_jar()),
+            "--module-id",
+            "com.example:orders-advice",
+            "--coordinates",
+            "com.example/orders-advice",
+            "--version",
+            "1.0.0",
+            "--classes",
+            str(ADVICE / "target" / "classes"),
+            "--out",
+            str(out),
+            "--fact-schema-version",
+            str(FACT_SCHEMA_VERSION),
+            "--sextant-version",
+            SEXTANT_VERSION,
+            "--classpath-file",
+            str(classpath),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert report["type_headers"] == "0" or report["type_headers"] == 0
+    assert int(report["type_headers_unlocated"]) == 8
+    lines = (out / "__type_headers__.jsonl").read_text(encoding="utf-8").splitlines()
+    document = json.loads(lines[0])
+    assert document["header_only"] is True
+    assert document["type_headers_unlocated"] == 8
+    assert lines[1:] == []
+
+
+def test_the_second_hop_is_a_transitive_the_fixture_never_declares():
+    """OI-167's shape, closed: `BindException` lives in `spring-context`, which this fixture
+    does NOT declare — it reaches the module as `spring-boot`'s own transitive, the way every
+    Spring Boot starter delivers every type. The proof above (`invalid(...)` resolved through
+    two jars) therefore ran on the classpath MAVEN resolved, not on the direct declarations:
+    with those alone, the walk stopped at `BindException` (measured, 2026-10-21, before the
+    detector asked Maven). Pinned on the POM so the dependency cannot creep back in and turn
+    this fixture into a proof of the weaker case."""
+    pom = (ADVICE / "pom.xml").read_text(encoding="utf-8")
+    assert "<artifactId>spring-context</artifactId>" not in pom
+    assert "<artifactId>spring-boot</artifactId>" in pom

@@ -69,9 +69,24 @@ the fully-evaluated model and writes one JSON document to the named file — nev
 which Gradle, the target build's own scripts, and JVM warnings all pollute. It rides
 whatever Gradle version the project pins, so there is no client-library compatibility
 matrix — the audit found that the official Tooling API route would *also* need an injected
-model builder for source-set precision, making it this mechanism plus a dependency. Maven
-needs no such artifact — `mvn dependency:build-classpath -o` and `help:effective-pom`
-answer directly.
+model builder for source-set precision, making it this mechanism plus a dependency.
+
+**The Maven mechanism is `dependency:build-classpath`, built 2026-10-21**
+(spec `2026-10-21-maven-classpath-design.md`): one `mvn -o -q -B [compile]
+dependency:build-classpath -Dmdep.outputFile=target/sextant-classpath.txt
+-Dmdep.includeScope=compile [-pl <module> -am]` per analysis, from the reactor root, with
+`compile` attached only inside a reactor (the goal resolves a sibling only as a built artifact
+of the same session) and `-pl` when `analyze` was handed one module. The file it leaves beside
+each module's classes is re-used while it is newer than every POM that module is read from,
+which is why the suite and a second run start no `mvn`. **Maven differs from Gradle in having
+a fallback, and the fallback is labelled** (user ruling, 2026-10-21): where `mvn` is not on
+`PATH`, nothing is built, no module declares a dependency, or Maven refuses offline and
+`--allow-resolve` is not set, the detector publishes the POM-declared-and-inherited set it has
+always read, as `dependency_source: declared` with Maven's own last error line as the reason —
+not a partial model assembled by guessing, but the weaker claim, named as such, and the
+document's coverage line says which one a reader holds. The detector never builds the
+analysed code: a module with nothing under `target/classes` ends the question before any
+process starts.
 
 > **2M delivery status (§1b of the [2M design](../superpowers/specs/2026-09-02-phase-2m-build-and-output-design.md)):**
 > `GradleDetector` itself shipped in 2M — `src/sextant/ingress/detect/gradle.py`, this same

@@ -856,6 +856,9 @@ SELECT document_id,
        -- leaves it out of `documents`; false on every real document, where the key is
        -- absent and `coalesce` says so.
        coalesce((payload ->> 'header_only')::BOOLEAN, false) AS header_only,
+       -- Spec 2026-10-21 §3e: on the header-only document, the dependency types this
+       -- module names that were in no archive on its classpath; 0 elsewhere.
+       coalesce((payload ->> 'type_headers_unlocated')::INTEGER, 0) AS type_headers_unlocated,
        -- JEP 238 (W3): which copy of an overlaid class this document holds, and
        -- the name the JVM knows that class by. Projected so `selected_documents`
        -- below can group copies without re-reading the payload, and so a reader

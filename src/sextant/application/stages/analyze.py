@@ -525,6 +525,8 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         dependency_versions=dict(module.dependency_versions),
         declared_release=module.declared_release,
         sibling_coordinates=list(module.sibling_coordinates),
+        dependency_source=module.dependency_source,
+        dependency_source_reason=module.dependency_source_reason,
     )
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 

@@ -522,7 +522,11 @@ _NAMED_QUERIES = {
     "module_dependencies": """
         SELECT payload ->> 'module_id'            AS module_id,
                payload -> 'dependency_coordinates' AS dependency_coordinates,
-               payload -> 'dependency_versions'    AS dependency_versions
+               payload -> 'dependency_versions'    AS dependency_versions,
+               -- Who answered for the two above (spec 2026-10-21 §3c): `maven` or `gradle`
+               -- means the build tool's own resolved set, transitives included, and an
+               -- absence from it is a real absence; `declared` means a build-file parse.
+               payload ->> 'dependency_source'     AS dependency_source
         FROM raw_facts WHERE kind = 'module'
         ORDER BY module_id
     """,
@@ -532,7 +536,11 @@ _NAMED_QUERIES = {
     "coverage": """
         SELECT count(*) FILTER (WHERE NOT header_only)                AS documents,
                sum(CASE WHEN partial AND NOT header_only THEN 1 ELSE 0 END) AS partial_documents,
-               (SELECT count(*) FROM raw_facts WHERE kind = 'type_header') AS type_headers
+               (SELECT count(*) FROM raw_facts WHERE kind = 'type_header') AS type_headers,
+               -- The other half of that number (spec 2026-10-21 §3e): named types the read
+               -- found in no archive, off the header document that holds the read.
+               (SELECT coalesce(max(type_headers_unlocated), 0) FROM documents
+                WHERE header_only)                                    AS type_headers_unlocated
         FROM documents
     """,
     # FR-17 clause 3 (F8 §9.5, W38). How much was UNDERSTOOD, beside how many files were

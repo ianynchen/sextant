@@ -424,8 +424,8 @@ def _unresolvable_framework_questions(
     only where NO module fact was recorded, reasoning that "a build that records
     coordinates and names neither library has said something". It has not, and
     `dependencies.py`'s own `_NOT_DECLARED` message says so in the same breath:
-    on Maven a dependency reaching this module only as another artifact's own
-    transitive is absent from the recorded set and *cannot be told apart from
+    where the set is a build FILE's, a dependency reaching this module only as another
+    artifact's own transitive is absent from the recorded set and *cannot be told apart from
     real absence here*. The case that reasoning lost is ordinary — a Maven module
     whose STOMP dependency arrives through a company aggregate artifact derived
     its five rows before W16 and afterwards derived nothing and asked nothing.

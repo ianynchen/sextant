@@ -125,6 +125,13 @@ def write_metadata(
                 for root in module.source_roots
                 if root.is_relative_to(module.root)
             ),
+            # Who answered for `dependencies` (spec 2026-10-21 §3c), and why the build tool
+            # did not when it did not. Written down here because `render` reconstructs the
+            # module from this file and never re-detects (M00), and the document's
+            # coverage line needs the label — the same numbers mean different things on
+            # the two answers.
+            "dependency_source": module.dependency_source,
+            "dependency_source_reason": module.dependency_source_reason,
         },
         "provenance": {
             "commit": commit,

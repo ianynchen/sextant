@@ -1107,6 +1107,7 @@ def assemble_module_document(
         _runs(f"Partial documents: {report.coverage.get('partial_documents', 0)}"),
         _runs(f"Facts loaded: {report.facts_loaded}"),
     ]
+    coverage_items += _type_header_items(report.coverage, module)
     coverage_items += _understanding_items(report.coverage)
     coverage_items += _config_coverage_items(resolved_config)
     coverage_items += _unresolved_derivation_items(report.endpoints)
@@ -2192,6 +2193,37 @@ def _trace_elision(trace: Trace) -> str:
             f"and not followed: {stops[TraceStop.CYCLE]}."
         )
     return " ".join(parts)
+
+
+def _type_header_items(coverage: dict[str, object], module: ModuleModel) -> list[tuple[Run, ...]]:
+    """Spec 2026-10-21 §3e: the dependency types the header read REACHED — the ones this
+    module's classes name, plus every supertype the walk discovered from a header it did
+    read — split into those whose header was read and those found in no dependency archive,
+    and who answered for the dependency set, because the two halves mean different things
+    under the two answers. "9 of 89" on the POM's declared set is a dependency set that was
+    not the real one; the same figure on the build tool's own answer is the platform
+    boundary and nothing else.
+
+    Absent where no header read ran at all (the extractor was handed no dependency
+    archives), the same way the understanding items are absent without a call graph: a line
+    about zero reached types would read as a failure where nothing was looked for.
+    """
+    read = int(str(coverage.get("type_headers", 0) or 0))
+    unlocated = int(str(coverage.get("type_headers_unlocated", 0) or 0))
+    if read + unlocated == 0:
+        return []
+    source = (
+        "resolved by the build tool"
+        if module.dependency_source == "maven"
+        else "the build file's declared set — "
+        + (module.dependency_source_reason or "the build tool was not asked")
+    )
+    return [
+        _runs(
+            f"Dependency types the header read reached: {read + unlocated} — header read "
+            f"for {read}, found in no dependency archive {unlocated} (dependencies: {source})."
+        )
+    ]
 
 
 def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
