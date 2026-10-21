@@ -1,7 +1,11 @@
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from sextant.application.ports.detector import LibraryRoot
+from sextant.ingress.detect import maven as maven_module
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.detect.sextant_config import SextantConfigError
 
@@ -30,27 +34,31 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     )
 
 
-def test_dependency_coordinates_are_what_the_pom_declares_and_inherits():
+@pytest.mark.pins("detect.mavens-OWN-classpath-answers-for-the-dependency-set")
+def test_dependency_coordinates_are_what_maven_resolved_transitives_included():
     """2O design §2a, ruling R9: the gate a `derived_resource` catalog reads
-    needs the module's dependencies in the workspace. Since F1 that is what
-    the pom declares PLUS what it inherits from every ancestor pom the
-    detector could open — this fixture has no parent, so the two are the same
-    set here and the inheritance cases have tests of their own below. What is
-    still out of reach either way is a TRANSITIVE. Sorted, because everything
-    a detector reports is (NFR-1)."""
+    needs the module's dependencies in the workspace. Since F1 that was what
+    the pom declares PLUS what it inherits; since spec 2026-10-21 §3b it is what
+    MAVEN resolved — the file `dependency:build-classpath` wrote beside the
+    classes, which the fixture build primes — so a TRANSITIVE is in the set
+    with the version Maven chose, exactly as Gradle has always reported.
+    Sorted, because everything a detector reports is (NFR-1)."""
     module = MavenDetector().detect(FIXTURE).modules[0]
 
+    assert module.dependency_source == "maven"
+    assert module.dependency_source_reason is None
     assert "org.springframework:spring-web" in module.dependency_coordinates
     # The one the Data REST gate reads, declared by this fixture on purpose
     # (2O Task 6's conformance fixture).
     assert "org.springframework.data:spring-data-rest-core" in module.dependency_coordinates
     assert list(module.dependency_coordinates) == sorted(module.dependency_coordinates)
-    # A coordinate no pom in the chain declares is absent — which the gate
-    # must read as "not declared or inherited HERE", never as "not on the
-    # classpath". Data REST pulls `evo-inflector` in transitively and no pom
-    # here names it, which is exactly the shape F1 still cannot see: reading
-    # it would mean implementing Maven's mediation, not parsing another file.
-    assert "org.atteo:evo-inflector" not in module.dependency_coordinates
+    # Data REST pulls `evo-inflector` in transitively and no pom here names it.
+    # This line used to assert the OPPOSITE, as the shape the POM parse could
+    # not see without implementing Maven's mediation; Maven's own answer sees
+    # it, which is the whole of `OI-167`, and the declared-only reading is the
+    # labelled fallback `dependency_source == "declared"` now names.
+    assert "org.atteo:evo-inflector" in module.dependency_coordinates
+    assert module.dependency_versions["org.atteo:evo-inflector"]
 
 
 def test_a_module_declaring_no_dependencies_reports_none(tmp_path: Path):
@@ -1561,3 +1569,192 @@ def test_the_declared_release_is_read_where_the_build_states_it(
     says so. Nothing read any of these keys before."""
     [module] = MavenDetector().detect(_pom(tmp_path / "m", body)).modules
     assert module.declared_release == expected
+
+
+# --- Maven's own classpath (spec 2026-10-21) -------------------------------------------
+
+
+def _no_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every `detect` below that must not start Maven is run under this: a start is a
+    test failure with the argv in it, not a slow pass."""
+
+    def refuse(argv, **_kwargs):
+        raise AssertionError(f"mvn was started: {argv}")
+
+    monkeypatch.setattr(maven_module.subprocess, "run", refuse)
+
+
+_DEPENDS = "<dependencies><dependency><groupId>org.example</groupId><artifactId>lib</artifactId><version>1.2</version></dependency></dependencies>"
+# A module that DECLARES a dependency: the other precondition `_ask_maven` checks — a POM
+# compiling against nothing but the platform has no classpath worth asking for.
+_DEPENDENT_POM = _BARE_POM.replace("</project>", f"{_DEPENDS}</project>")
+
+
+def _built(module_dir: Path, pom: str = _DEPENDENT_POM) -> Path:
+    """A module with something BUILT: the POM, and a class under `target/classes` — the
+    precondition `_ask_maven` checks before it starts a process."""
+    module_dir.mkdir(parents=True, exist_ok=True)
+    _module(module_dir, pom)
+    classes = module_dir / "target" / "classes"
+    classes.mkdir(parents=True, exist_ok=True)
+    (classes / "Thing.class").write_bytes(b"\xca\xfe\xba\xbe")
+    return module_dir
+
+
+def _classpath_file(module_dir: Path, entries: list[Path]) -> Path:
+    file = module_dir / "target" / "sextant-classpath.txt"
+    file.write_text(os.pathsep.join(str(entry) for entry in entries), encoding="utf-8")
+    return file
+
+
+@pytest.mark.pins("detect.a-POM-with-nothing-built-starts-no-process")
+def test_a_temporary_pom_detect_starts_no_process_and_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Spec §4: the unit suite writes temporary POMs by the dozen, and none of them has
+    compiled output — so there is nothing a classpath could be read FOR, and the
+    detector must refuse the question before any process starts. The declared set is the
+    answer, LABELLED (ruling b), with the precondition as the reason."""
+    _no_process(monkeypatch)
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+    assert module.dependency_source == "declared"
+    assert module.dependency_source_reason is not None
+    assert "target/classes" in module.dependency_source_reason
+
+
+def test_no_mvn_on_path_is_the_reason_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _no_process(monkeypatch)
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: None)
+    module = MavenDetector().detect(_built(tmp_path)).modules[0]
+    assert module.dependency_source == "declared"
+    assert "`mvn` is not on PATH" in (module.dependency_source_reason or "")
+
+
+@pytest.mark.pins("detect.mavens-FILE-feeds-archives-coordinates-and-siblings")
+def test_mavens_file_feeds_archives_coordinates_and_siblings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Spec §3b, from a CAPTURED file, no Maven involved (2M design §4's rule): a jar
+    under the local repository names its coordinate and version by the repository
+    layout; a reactor sibling's `target/classes` directory is a library root named by its
+    OWN POM; an entry that is neither is reported by its path with its reason. The file
+    is newer than the POM, so the re-use rule (§3d) holds and no process starts."""
+    _no_process(monkeypatch)
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    jar = home / ".m2" / "repository" / "org" / "example" / "lib" / "1.2" / "lib-1.2.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"PK")
+    sibling = _built(
+        tmp_path / "sib",
+        _DEPENDENT_POM.replace("<artifactId>thing</artifactId>", "<artifactId>sib</artifactId>"),
+    )
+    module = _built(tmp_path / "m")
+    stray = tmp_path / "elsewhere" / "local.jar"
+    _classpath_file(module, [jar, sibling / "target" / "classes", stray])
+
+    detected = MavenDetector().detect(module).modules[0]
+
+    assert detected.dependency_source == "maven"
+    assert detected.dependency_source_reason is None
+    assert detected.dependency_archives == (
+        LibraryRoot(coordinate="org.example:lib", version="1.2", archive=jar),
+    )
+    assert detected.dependency_coordinates == ("org.example:lib",)
+    assert detected.dependency_versions == {"org.example:lib": "1.2"}
+    assert detected.dependencies_not_resolved == ()
+    assert LibraryRoot("com.acme:sib", "1.0.0", sibling / "target" / "classes") in (
+        detected.library_roots
+    )
+    assert any(str(stray) in reason for reason in detected.libraries_not_resolved)
+
+
+@pytest.mark.pins("detect.a-STALE-file-asks-maven-offline-and-online-only-under-the-flag")
+def test_a_stale_file_asks_maven_offline_and_online_only_under_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """M02's posture, ruling (a)/(b): offline first; the offline refusal is retried
+    online exactly once and only under `allow_resolve`; a failure is the module's reason
+    in Maven's own words, never an exception. A single module gets no `compile` phase and
+    no `-pl` (spec §2, fact 2). The file is OLDER than the POM here, so §3d's re-use rule
+    does not hold and Maven is asked."""
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    module = _built(tmp_path)
+    file = _classpath_file(module, [])
+    stale = (module / "pom.xml").stat().st_mtime - 60
+    os.utime(file, (stale, stale))
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(argv, *, cwd, **_kwargs):
+        calls.append((list(argv), Path(cwd)))
+        return subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr="[ERROR] Cannot access central in offline mode\n"
+        )
+
+    monkeypatch.setattr(maven_module.subprocess, "run", fake_run)
+
+    detected = MavenDetector().detect(module).modules[0]
+    assert [argv[:4] for argv, _ in calls] == [["mvn", "-o", "-q", "-B"]]
+    assert "compile" not in calls[0][0] and "-pl" not in calls[0][0]
+    assert calls[0][1] == module
+    assert detected.dependency_source == "declared"
+    assert detected.dependency_source_reason == "Cannot access central in offline mode"
+
+    calls.clear()
+    MavenDetector().detect(module, allow_resolve=True)
+    assert len(calls) == 2
+    assert "-o" in calls[0][0] and "-o" not in calls[1][0]
+
+
+@pytest.mark.pins("detect.a-reactor-CHILD-is-asked-from-the-root-with-compile-attached")
+def test_a_reactor_child_is_asked_from_the_root_with_pl_and_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Spec §2, fact 2: inside a reactor the goal resolves a sibling only as a built
+    artifact of the same session, and a module directory cannot even read its own
+    import-POMs — so Maven is started from the ROOT, told `-pl <this module> -am`, with
+    `compile` attached. Maven here returns success and writes nothing, and the module
+    says so rather than reading a file that is not there."""
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    root = tmp_path / "reactor"
+    root.mkdir()
+    _module(
+        root,
+        _BARE_POM.replace(
+            "<artifactId>thing</artifactId>", "<artifactId>reactor</artifactId>"
+        ).replace(
+            "</project>",
+            "<packaging>pom</packaging><modules><module>a</module></modules></project>",
+        ),
+    )
+    child = _built(
+        root / "a",
+        _CHILD_POM.replace("acme-parent", "reactor")
+        .replace("2.3.0", "1.0.0")
+        .replace("</project>", f"{_DEPENDS}</project>"),
+    )
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(argv, *, cwd, **_kwargs):
+        calls.append((list(argv), Path(cwd)))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(maven_module.subprocess, "run", fake_run)
+    detected = MavenDetector().detect(child).modules[0]
+
+    [(argv, cwd)] = calls
+    assert cwd == root
+    assert "compile" in argv
+    assert argv[argv.index("-pl") + 1] == "a" and "-am" in argv
+    assert detected.dependency_source == "declared"
+    assert "wrote no current target/sextant-classpath.txt" in (
+        detected.dependency_source_reason or ""
+    )
+
+
+def test_mavens_reason_is_its_last_named_error_line():
+    output = "[ERROR] Failed to execute goal\n[ERROR] dependency: x:y:jar:1 (test)\n[ERROR] \n[ERROR] -> [Help 1]\n"
+    assert MavenDetector._maven_reason(output, 1) == "dependency: x:y:jar:1 (test)"
+    assert MavenDetector._maven_reason("", 7) == "mvn exited 7 and printed nothing"

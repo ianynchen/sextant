@@ -184,7 +184,10 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     instead was measured and rejected: the commonest Boot module in the estate
     would then report no declared release at all, and multi-release selection
     would fall back to the class-file major — a worse answer than the pom
-    actually states.
+    actually states. Since 2026-10-21 it also carries `classpath`, for the
+    reason Gradle's entry does: `dependency:build-classpath` is the name of
+    MAVEN's goal, and the file it writes is the same language-neutral idea —
+    the places symbols were read from — under the build tool's own word.
 
     `api.py` was the composition-root exception (2N Task 5, §5b): the
     reactor-walk/scan composition that used to live inline in `cli/app.py`'s
@@ -214,7 +217,7 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     known_leak = {
         "domain/facts.py": {"classpath"},
         "ingress/detect/gradle.py": {"classpath"},
-        "ingress/detect/maven.py": {"java"},
+        "ingress/detect/maven.py": {"java", "classpath"},
     }
 
     found = offenders(files, JVM_NAMES)

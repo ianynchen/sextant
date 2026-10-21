@@ -140,6 +140,12 @@ def is_current(root: Path) -> bool:
     stamp = root / STAMP
     if not (root / "target" / "classes").is_dir() or not stamp.is_file():
         return False
+    # The classpath file Maven writes beside the classes (spec 2026-10-21 §3d): a fixture
+    # stamped before the goal was added has classes and a stamp and no file, and the
+    # detector would then fall back to the declared set on a fixture whose tests pin the
+    # resolved one. Required here so such a fixture is compiled once more, not forever.
+    if not (root / "target" / "sextant-classpath.txt").is_file():
+        return False
     return stamp.read_text(encoding="utf-8") == fingerprint(root)
 
 
@@ -151,7 +157,24 @@ def compile_and_stamp(root: Path, *, offline: bool) -> Path:
     """
     inputs = fingerprint(root)
     mode = ["-o"] if offline else ["-B"]
-    subprocess.run(["mvn", "-q", *mode, "compile"], cwd=root, check=True)
+    # `compile` AND the resolved classpath, in one Maven start (spec 2026-10-21 §3a): the
+    # detector reads `target/sextant-classpath.txt` and re-uses it while no POM is newer,
+    # so the suite never starts `mvn` itself. Priming is where the dependency plugin and
+    # every scope the goal resolves get fetched — `mvn compile` alone fetches neither,
+    # which is why the goal must run here online and not only in the detector offline.
+    subprocess.run(
+        [
+            "mvn",
+            "-q",
+            *mode,
+            "compile",
+            "dependency:build-classpath",
+            "-Dmdep.outputFile=target/sextant-classpath.txt",
+            "-Dmdep.includeScope=compile",
+        ],
+        cwd=root,
+        check=True,
+    )
     (root / STAMP).parent.mkdir(exist_ok=True)
     (root / STAMP).write_text(inputs, encoding="utf-8")
     return root

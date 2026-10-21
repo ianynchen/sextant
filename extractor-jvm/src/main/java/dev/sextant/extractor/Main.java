@@ -74,6 +74,7 @@ public final class Main {
             java.util.Set<String> referenced = new java.util.HashSet<>();
             java.util.Set<String> ownTypes = new java.util.HashSet<>();
             int typeHeaders = 0;
+            int typeHeadersUnlocated = 0;
             try (ClassSource source = ClassSource.of(classes)) {
                 List<String> classFiles = source.names();
                 // The silent-success hole, closed (2I Task 6). A `--classes`
@@ -248,8 +249,9 @@ public final class Main {
                     typeHeaders = headers.headers();
                     facts += headers.factLines().size();
                 }
+                typeHeadersUnlocated = headers.unlocated();
             }
-            System.out.println(report(documents, facts, uncovered, typeHeaders));
+            System.out.println(report(documents, facts, uncovered, typeHeaders, typeHeadersUnlocated));
         } catch (Exception failure) {
             System.err.println("extractor failed: " + failure);
             System.exit(1);
@@ -650,7 +652,7 @@ public final class Main {
     }
 
     private static String report(int documents, int facts, List<String> uncovered,
-                                 int typeHeaders) throws IOException {
+                                 int typeHeaders, int typeHeadersUnlocated) throws IOException {
         List<String> quoted = new ArrayList<>();
         for (String source : uncovered) quoted.add(JsonOut.string(source));
         TreeMap<String, String> fields = new TreeMap<>();
@@ -660,6 +662,10 @@ public final class Main {
         // beside `documents` and not inside it: a header is not a class file this module
         // built, and the figure a reader wants here is "how many did the classpath give".
         fields.put("type_headers", String.valueOf(typeHeaders));
+        // Referenced dependency types found in NO archive on the classpath — the JDK's, and
+        // every one a classpath that is not the real one leaves out. The honesty count
+        // beside `type_headers`: a read that found 9 of 300 must say so.
+        fields.put("type_headers_unlocated", String.valueOf(typeHeadersUnlocated));
         fields.put("scanner_id", JsonOut.string(SCANNER_ID));
         // What actually read the class files, with the versions Gradle
         // RESOLVED — provenance a consumer can act on, in place of the literal

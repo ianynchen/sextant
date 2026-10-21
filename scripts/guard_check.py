@@ -549,6 +549,75 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- Maven's own classpath (spec 2026-10-21) --------------------------------------
+    "detect.mavens-OWN-classpath-answers-for-the-dependency-set": Guard(
+        what="where Maven wrote a classpath file, the dependency set is what MAVEN resolved "
+        "— transitives included, the version it chose — not what the POM parse declares",
+        why="`dependencies.py` says `could not tell` for every framework reached through a "
+        "starter while the set is the declared one; the Data REST row and every "
+        "version-scoped rule read the same list. Dropping the assignment leaves the file "
+        "read and the weaker set published under the stronger label",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/maven.py",
+                find="            coordinates = tuple(sorted(resolved.versions))",
+                replace="            pass  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "detect.mavens-FILE-feeds-archives-coordinates-and-siblings": Guard(
+        what="a current classpath file beside the module's classes is READ — jars to "
+        "archives and coordinates, directories to sibling roots, the rest named",
+        why="without the read the header walk sees the direct declarations only, which on "
+        "Spring Boot is nearly nothing (`OI-167`: 9 of 89 named types on genai), and the "
+        "module still claims nothing is wrong",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/maven.py",
+                find="        return MavenDetector._classpath_entries(path / _CLASSPATH_FILE), None",
+                replace='        return None, "guard disabled by scripts/guard_check.py"',
+            ),
+        ),
+    ),
+    "detect.a-POM-with-nothing-built-starts-no-process": Guard(
+        what="a single module with nothing under `target/classes` is never asked of Maven",
+        why="a classpath is read FOR compiled classes; without the gate every temporary POM "
+        "the unit suite writes starts a JVM, and an unbuilt checkout pays a build it did "
+        "not ask for",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/maven.py",
+                find="        if unbuilt:\n            return (",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return (",
+            ),
+        ),
+    ),
+    "detect.a-STALE-file-asks-maven-offline-and-online-only-under-the-flag": Guard(
+        what="Maven's offline refusal is retried online ONLY under `allow_resolve`",
+        why="M02: Sextant never reaches the network on its own. Without the condition every "
+        "offline refusal goes online unflagged, which is the one thing the flag exists to "
+        "withhold",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/maven.py",
+                find="        if not (allow_resolve and _OFFLINE_REFUSAL_SUBSTRING in combined):",
+                replace="        if True:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "detect.a-reactor-CHILD-is-asked-from-the-root-with-compile-attached": Guard(
+        what="a module inside a reactor is asked from the reactor ROOT with `-pl` and `-am`",
+        why="from its own directory the goal cannot resolve the sibling import-POMs and "
+        "fails every time (measured on ruoyi), so the module would carry a failure reason "
+        "forever and never the classpath Maven can in fact produce",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/maven.py",
+                find='            *(["-pl", selected, "-am"] if selected is not None else []),',
+                replace="            *([]),  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "storage.a-TYPE-HEADER-joins-the-superclass-walk": Guard(
         what="`type_header` facts are unioned into the `superclasses` query, so a module "
         "class extending a library class — or a handler parameter typed as one — reaches a "

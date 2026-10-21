@@ -60,9 +60,20 @@ def maven(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     roots: list[Path] = []
 
     def fake_run(args: list[str], *, cwd: Path, check: bool) -> None:
-        assert args == ["mvn", "-q", "-o", "compile"]
+        # `compile` and the resolved classpath in one start (spec 2026-10-21 §3a): the
+        # file the goal writes is the second thing the stamp check looks for.
+        assert args == [
+            "mvn",
+            "-q",
+            "-o",
+            "compile",
+            "dependency:build-classpath",
+            "-Dmdep.outputFile=target/sextant-classpath.txt",
+            "-Dmdep.includeScope=compile",
+        ]
         roots.append(cwd)
         (cwd / "target" / "classes").mkdir(parents=True, exist_ok=True)
+        (cwd / "target" / "sextant-classpath.txt").write_text("", encoding="utf-8")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     return roots
@@ -79,6 +90,7 @@ def _module(root: Path, *, pom: str = _POM) -> Path:
 def _stamped(root: Path) -> Path:
     """As `compile_and_stamp` leaves a root, without running anything."""
     (root / "target" / "classes").mkdir(parents=True, exist_ok=True)
+    (root / "target" / "sextant-classpath.txt").write_text("", encoding="utf-8")
     (root / fixture_build.STAMP).write_text(fixture_build.fingerprint(root), encoding="utf-8")
     return root
 

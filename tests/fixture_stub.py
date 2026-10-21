@@ -77,7 +77,21 @@ def compile_and_install(*, offline: bool) -> Path:
     runner has no compiler plugin in `~/.m2` to compile with)."""
     jar = local_repository_jar()
     mode = ["-o"] if offline else ["-B"]
-    subprocess.run(["mvn", "-q", *mode, "compile"], cwd=STUB, check=True)
+    # The classpath goal beside `compile`, as `fixture_build` runs it: the detector reads
+    # the file this writes, and a stub without one would start `mvn` on every `detect`.
+    subprocess.run(
+        [
+            "mvn",
+            "-q",
+            *mode,
+            "compile",
+            "dependency:build-classpath",
+            "-Dmdep.outputFile=target/sextant-classpath.txt",
+            "-Dmdep.includeScope=compile",
+        ],
+        cwd=STUB,
+        check=True,
+    )
     classes = STUB / "target" / "classes"
     staged = STUB / "target" / jar.name
     with zipfile.ZipFile(staged, "w") as archive:

@@ -1,5 +1,8 @@
 import os
 import re
+import shutil
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -96,6 +99,34 @@ _MAX_INHERITANCE_DEPTH = 16
 # must terminate as "unresolved" rather than spin.
 _MAX_INTERPOLATION_PASSES = 8
 _IMPORT_SCOPE = "import"
+
+# What Maven prints when a dependency it needs is not in the local repository and `-o`
+# forbids fetching it — the ONE failure `allow_resolve` licenses a second, online attempt
+# for (M02), recognised by Maven's own words the way `gradle.py` recognises Gradle's.
+_OFFLINE_REFUSAL_SUBSTRING = "in offline mode"
+# Where `dependency:build-classpath` writes. RELATIVE, so Maven resolves it against each
+# module's own basedir and a reactor run leaves one file per module under the build output
+# directory every checkout already ignores.
+_CLASSPATH_FILE = Path("target") / "sextant-classpath.txt"
+# A cap, not a guess at how long a build takes (the Gradle detector's own figure): the
+# reactor form attaches `compile`, and a build that never finishes must become a named
+# reason, never a hang.
+_MAVEN_TIMEOUT_SECONDS = 900
+
+
+@dataclass(frozen=True)
+class _ResolvedClasspath:
+    """One module's compile classpath as MAVEN resolved it (spec 2026-10-21 §3b): the jars
+    under the local repository as archives with the coordinate and version their path
+    spells, the reactor siblings it lists as `target/classes` directories, and every entry
+    that is neither — named, so a reader can see what the resolved set left unnamed."""
+
+    archives: tuple[LibraryRoot, ...]
+    versions: dict[str, str]
+    siblings: tuple[LibraryRoot, ...]
+    unresolvable: tuple[str, ...]
+
+
 _PLACEHOLDER = re.compile(r"\$\{([^{}]+)\}")
 
 
@@ -209,13 +240,21 @@ class MavenDetector:
         # pom.xml` today names exactly one (`orders-soap-client`).
         top_pom = self._parse_pom(path)
         is_reactor = top_pom.find("m:modules", _POM_NS) is not None
-        modules = self._walk(path, visited=(), seen=set())
+        # Asked ONCE per analysis, from the reactor root, before any module is read
+        # (spec 2026-10-21 §3a): every module then finds its own file beside its classes,
+        # or inherits the one reason none of them can.
+        classpath_reason = self._ask_maven(path, top_pom, is_reactor, allow_resolve)
+        modules = self._walk(path, visited=(), seen=set(), classpath_reason=classpath_reason)
         return RepositoryModel(
             root=path, modules=modules, notes=self._notes(path), multi_module=is_reactor
         )
 
     def _walk(
-        self, path: Path, visited: tuple[Path, ...], seen: set[Path]
+        self,
+        path: Path,
+        visited: tuple[Path, ...],
+        seen: set[Path],
+        classpath_reason: str | None = None,
     ) -> tuple[ModuleModel, ...]:
         """Every buildable module reachable from `path` (2M design §2): a leaf
         POM (no `<modules>`) becomes one `ModuleModel`, exactly as `detect`
@@ -243,7 +282,7 @@ class MavenDetector:
             if resolved in seen:
                 return ()
             seen.add(resolved)
-            return (self._module_of(path, pom),)
+            return (self._module_of(path, pom, classpath_reason),)
         module_elements = modules_element.findall("m:module", _POM_NS)
         if not module_elements:
             # An aggregator that names no child analyzes nothing and used to
@@ -274,7 +313,7 @@ class MavenDetector:
                 raise ValueError(
                     f"{path / 'pom.xml'} names <module>{text}</module>, but {child} has no pom.xml"
                 )
-            children.extend(self._walk(child, (*visited, resolved), seen))
+            children.extend(self._walk(child, (*visited, resolved), seen, classpath_reason))
         return tuple(children)
 
     @staticmethod
@@ -291,7 +330,9 @@ class MavenDetector:
             raise ValueError(f"{pom_path} is not well-formed XML: {malformed}") from malformed
 
     @staticmethod
-    def _module_of(path: Path, pom: ElementTree.Element) -> ModuleModel:
+    def _module_of(
+        path: Path, pom: ElementTree.Element, classpath_reason: str | None = None
+    ) -> ModuleModel:
         # A reactor child inherits groupId and version from <parent> and may
         # omit its own elements entirely (Maven's inheritance rule) —
         # artifactId alone is never inherited. Reading the parent's value is
@@ -305,12 +346,30 @@ class MavenDetector:
         coordinates, versions, not_resolved, declared_release = (
             MavenDetector._resolved_dependencies(path, pom, group, artifact, version)
         )
-        # F4 §5.2 (W24). Reactor siblings this module DEPENDS ON, as library roots —
-        # appended to whatever `.sextant.yml` opted into, because a sibling is a
-        # dependency in every sense that matters here: it is on the classpath, its types
-        # appear in this module's signatures, and the only difference from a resolved
-        # jar is that it was built from source next door rather than fetched.
-        siblings = MavenDetector._sibling_roots(path, pom, coordinates, versions)
+        # **Maven's own answer, where it gave one** (spec 2026-10-21 §3b). The file
+        # `dependency:build-classpath` wrote beside this module's classes replaces three
+        # things the POM parse approximates: the dependency set becomes the TRANSITIVE
+        # closure with the version Maven chose (what Gradle has always reported), the
+        # archives the header read walks become every jar on it, and the reactor siblings
+        # become the directories it lists rather than the result of walking sibling POMs.
+        # Where it gave none — the user's ruling (b) — the declared set stands, labelled.
+        resolved, dependency_source_reason = MavenDetector._from_maven(path, classpath_reason)
+        if resolved is not None:
+            coordinates = tuple(sorted(resolved.versions))
+            versions = dict(sorted(resolved.versions.items()))
+            # The declared read's shortfall list described a parse that is no longer the
+            # source; a version Maven chose is not "unresolved" because a POM left it to
+            # a BOM this detector could not open.
+            not_resolved = ()
+            siblings = resolved.siblings
+            libraries_not_resolved = libraries_not_resolved + resolved.unresolvable
+        else:
+            # F4 §5.2 (W24). Reactor siblings this module DEPENDS ON, as library roots —
+            # appended to whatever `.sextant.yml` opted into, because a sibling is a
+            # dependency in every sense that matters here: it is on the classpath, its
+            # types appear in this module's signatures, and the only difference from a
+            # resolved jar is that it was built from source next door rather than fetched.
+            siblings = MavenDetector._sibling_roots(path, pom, coordinates, versions)
         library_roots = library_roots + siblings
         return ModuleModel(
             module_id=f"{group}:{artifact}",
@@ -353,16 +412,21 @@ class MavenDetector:
             library_roots=library_roots,
             sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,
-            # The classpath the header read walks: each declared dependency whose version
-            # resolved AND whose jar is in the local repository. One that is not is simply
-            # absent — `dependencies_not_resolved` already names the version case, and a
-            # jar Maven has not fetched is a jar nothing on this machine can read.
-            dependency_archives=tuple(
+            # The classpath the header read walks: Maven's own, where it answered; else
+            # each declared dependency whose version resolved AND whose jar is in the
+            # local repository. One that is not is simply absent —
+            # `dependencies_not_resolved` already names the version case, and a jar Maven
+            # has not fetched is a jar nothing on this machine can read.
+            dependency_archives=resolved.archives
+            if resolved is not None
+            else tuple(
                 LibraryRoot(coordinate=coordinate, version=version, archive=archive)
                 for coordinate, version in sorted(versions.items())
                 if version is not None
                 and (archive := _local_repository_archive(coordinate, version)).is_file()
             ),
+            dependency_source="declared" if resolved is None else "maven",
+            dependency_source_reason=dependency_source_reason,
         )
 
     @staticmethod
@@ -698,27 +762,278 @@ class MavenDetector:
                     frontier.append(nested)
         return tuple(found[key] for key in sorted(found))
 
-    @staticmethod
-    def _reactor_modules(
-        path: Path, pom: ElementTree.Element
-    ) -> dict[str, tuple[Path, ElementTree.Element]]:
-        """Every module of this module's reactor, by coordinate, with its directory and
-        its own parsed POM — including the children of a `<module>` that is itself an
-        aggregator, which is the whole of `OI-149`.
+    def _ask_maven(
+        self, path: Path, pom: ElementTree.Element, is_reactor: bool, allow_resolve: bool
+    ) -> str | None:
+        """Asks Maven for the compile classpath of every module this analysis will read,
+        once (spec 2026-10-21 §3a), and returns None when each can now read its own file
+        — or the REASON it cannot, which every module then carries as
+        `dependency_source_reason`. Never raises: the declared set is the fallback (ruling b),
+        and a failure here is a label on it, not the end of the analysis.
 
-        Reached through `<parent>` because `analyze` runs against ONE module's path: the
-        detector's own `<modules>` walk descends from an aggregator and so never sees
-        the siblings of the module being analysed. `_parent_pom` applies Maven's own
-        check that the POM at `<relativePath>` really declares the coordinates the
-        `<parent>` names, so an unrelated aggregator sitting at that path is refused
-        rather than read.
+        Offline first. The one failure `allow_resolve` licenses an online retry for is
+        Maven's own refusal to fetch (`_OFFLINE_REFUSAL_SUBSTRING`), and without the flag
+        that refusal is the reason. Two preconditions are checked before any process
+        starts, because asking would be pointless: `mvn` on `PATH`, and for a single module
+        something BUILT under `target/classes` — a classpath is read FOR compiled classes,
+        and a POM with nothing built (every temporary POM the unit suite writes) has none.
         """
+        if shutil.which("mvn") is None:
+            return "`mvn` is not on PATH, so the dependency set is what the POM declares"
+        leaves = MavenDetector._leaf_dirs(path, pom) if is_reactor else [path]
+        # **This detector never builds the analysed code.** The prerequisite is a build
+        # that already happened (M02), and the `compile` phase a reactor run attaches is
+        # there to let Maven see its siblings, not to produce them — so a module with
+        # nothing under `target/classes` ends the question before any process starts,
+        # by name. (A reactor with one abandoned module is then answered from the POMs,
+        # which is the labelled fallback and not a silent one.)
+        unbuilt = [leaf for leaf in leaves if not (leaf / "target" / "classes").is_dir()]
+        if unbuilt:
+            return (
+                f"nothing is built under {unbuilt[0] / 'target' / 'classes'}, so there is no "
+                "classpath to read for"
+            )
+        # And a classpath is asked for only where there is one: a module declaring and
+        # inheriting no dependency compiles against nothing but the platform, which no
+        # file could add to — and every temporary POM the unit suite writes is that.
+        if not any(MavenDetector._declares_dependencies(leaf) for leaf in leaves):
+            return (
+                "no module declares or inherits a dependency, so the compile classpath is "
+                "empty and Maven was not asked"
+            )
+        if all(MavenDetector._classpath_is_current(leaf) for leaf in leaves):
+            return None  # §3d: every module's file is newer than every POM it reads
+        root, selected = MavenDetector._invocation_root(path, pom, is_reactor)
+        options = [
+            "-q",
+            "-B",
+            # `compile` ATTACHED only for a reactor (spec §2, fact 2): the goal resolves a
+            # sibling only as a built artifact of the same session. A single module needs
+            # no phase and pays none.
+            *(["compile"] if selected is not None or is_reactor else []),
+            "dependency:build-classpath",
+            f"-Dmdep.outputFile={_CLASSPATH_FILE.as_posix()}",
+            "-Dmdep.includeScope=compile",
+            *(["-pl", selected, "-am"] if selected is not None else []),
+        ]
+        first = MavenDetector._run_maven(root, ["mvn", "-o", *options])
+        if isinstance(first, str):
+            return first
+        if first.returncode == 0:
+            return None
+        combined = first.stdout + first.stderr
+        if not (allow_resolve and _OFFLINE_REFUSAL_SUBSTRING in combined):
+            return MavenDetector._maven_reason(combined, first.returncode)
+        second = MavenDetector._run_maven(root, ["mvn", *options])
+        if isinstance(second, str):
+            return second
+        if second.returncode == 0:
+            return None
+        return MavenDetector._maven_reason(second.stdout + second.stderr, second.returncode)
+
+    @staticmethod
+    def _declares_dependencies(module_dir: Path) -> bool:
+        """Whether this module's POM, or any ancestor it can open, declares a dependency —
+        the same merge `_resolved_dependencies` reads, asked only for its emptiness."""
+        pom = _parsed_pom(module_dir / "pom.xml")
+        if pom is None:
+            return False
+        _properties, _managed, declared, _unreadable = MavenDetector._inherited_model(
+            pom, module_dir, 0, frozenset()
+        )
+        return bool(declared)
+
+    @staticmethod
+    def _run_maven(root: Path, argv: list[str]) -> "subprocess.CompletedProcess[str] | str":
+        """One Maven start, or the reason it could not finish."""
+        try:
+            return subprocess.run(
+                argv,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_MAVEN_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return f"mvn did not finish within {_MAVEN_TIMEOUT_SECONDS}s: {' '.join(argv)}"
+        except OSError as failed:
+            return f"mvn could not be started: {failed}"
+
+    @staticmethod
+    def _maven_reason(output: str, returncode: int) -> str:
+        """Maven's own last `[ERROR]` line, which is where it names the artifact or the
+        plugin it could not get; the last line of anything when it printed no such line."""
+        errors = [line for line in output.splitlines() if line.startswith("[ERROR]")]
+        named = [line for line in errors if line.strip() not in {"[ERROR]", "[ERROR] -> [Help 1]"}]
+        if named:
+            return named[-1].removeprefix("[ERROR]").strip()
+        tail = [line for line in output.splitlines() if line.strip()]
+        return tail[-1].strip() if tail else f"mvn exited {returncode} and printed nothing"
+
+    @staticmethod
+    def _invocation_root(
+        path: Path, pom: ElementTree.Element, is_reactor: bool
+    ) -> tuple[Path, str | None]:
+        """Where Maven is started and what it is told to build: the reactor root with
+        `-pl <this module>` when `analyze` was handed one module of a reactor — a module
+        inside a reactor cannot be resolved from its own directory, its import-POMs being
+        siblings that were never installed (spec §2, fact 2) — else `path` itself, whole."""
+        if is_reactor:
+            return path, None
+        top = MavenDetector._reactor_root(path, pom)
+        if top is None:
+            return path, None
+        # `normpath`, as `_walk` spells a `<module>` path: the parent chain is built from
+        # `<relativePath>`s like `../pom.xml`, and Maven is told a directory, not a route.
+        root = Path(os.path.normpath(top[0].parent))
+        return root, path.resolve().relative_to(root.resolve()).as_posix()
+
+    @staticmethod
+    def _leaf_dirs(
+        path: Path, pom: ElementTree.Element, seen: frozenset[Path] = frozenset()
+    ) -> list[Path]:
+        """Every module directory under `path` that is not itself an aggregator — the ones
+        that will each read a classpath file. Cheap: POMs only, which `_walk` re-reads."""
+        resolved = path.resolve()
+        if resolved in seen:
+            return []
+        modules_element = pom.find("m:modules", _POM_NS)
+        if modules_element is None:
+            return [path]
+        leaves: list[Path] = []
+        for module_element in modules_element.findall("m:module", _POM_NS):
+            text = (module_element.text or "").strip()
+            child = Path(os.path.normpath(path / text)) if text else None
+            child_pom = None if child is None else _parsed_pom(child / "pom.xml")
+            if child is not None and child_pom is not None:
+                leaves.extend(MavenDetector._leaf_dirs(child, child_pom, seen | {resolved}))
+        return leaves
+
+    @staticmethod
+    def _classpath_is_current(module_dir: Path) -> bool:
+        """Spec §3d: the file is re-used while it is newer than every POM this module's
+        model is read from — its own, and each ancestor on disk up the `<parent>` chain. A
+        published parent in the local repository never changes, so it is not consulted."""
+        file = module_dir / _CLASSPATH_FILE
+        if not file.is_file():
+            return False
+        written = file.stat().st_mtime
+        return all(pom.stat().st_mtime <= written for pom in MavenDetector._poms_read(module_dir))
+
+    @staticmethod
+    def _poms_read(module_dir: Path) -> list[Path]:
+        poms = [module_dir / "pom.xml"]
+        pom = _parsed_pom(poms[0])
+        here = module_dir
+        repository = (Path.home() / ".m2" / "repository").resolve()
+        while pom is not None and len(poms) < 32:
+            parent = pom.find("m:parent", _POM_NS)
+            if parent is None:
+                break
+            located, pom, _reason = MavenDetector._parent_pom(parent, here)
+            if located is None or located.resolve().is_relative_to(repository):
+                break
+            poms.append(located)
+            here = located.parent
+        return poms
+
+    @staticmethod
+    def _from_maven(
+        path: Path, classpath_reason: str | None
+    ) -> "tuple[_ResolvedClasspath | None, str | None]":
+        """This module's resolved classpath, or the reason it has none: the analysis-wide
+        reason where Maven was not asked or did not answer, else that Maven ran and still
+        wrote nothing current for THIS module (a `-pl` run that did not reach it)."""
+        if classpath_reason is not None:
+            return None, classpath_reason
+        if not MavenDetector._classpath_is_current(path):
+            return None, (
+                f"Maven wrote no current {_CLASSPATH_FILE.as_posix()} for this module, so the "
+                "dependency set is what the POM declares"
+            )
+        return MavenDetector._classpath_entries(path / _CLASSPATH_FILE), None
+
+    @staticmethod
+    def _classpath_entries(file: Path) -> _ResolvedClasspath:
+        """The file `dependency:build-classpath` wrote, read — never interpreted. A jar under
+        the local repository names its coordinate and version by the layout
+        `_repository_layout` spells (`<group dirs>/<artifact>/<version>/<file>`); a directory
+        is a reactor sibling's output, named by ITS OWN POM; anything else is reported by
+        its path with the reason, the way Gradle's path-only entries are."""
+        repository = (Path.home() / ".m2" / "repository").resolve()
+        archives: list[LibraryRoot] = []
+        versions: dict[str, str] = {}
+        siblings: dict[str, LibraryRoot] = {}
+        unresolvable: list[str] = []
+        for raw in file.read_text(encoding="utf-8").strip().split(os.pathsep):
+            entry = Path(raw.strip())
+            if not raw.strip():
+                continue
+            if entry.is_dir():
+                sibling = MavenDetector._sibling_root_of(entry)
+                if sibling is not None:
+                    siblings.setdefault(sibling.coordinate, sibling)
+                else:
+                    unresolvable.append(
+                        f"{entry}: a directory on the compile classpath that is not a reactor "
+                        "module's own target/classes, so it has no coordinate this analysis "
+                        "can name"
+                    )
+                continue
+            try:
+                relative = entry.resolve().relative_to(repository)
+            except ValueError:
+                unresolvable.append(
+                    f"{entry}: on the compile classpath but outside the local repository, so "
+                    "it has no coordinate this analysis can name"
+                )
+                continue
+            if len(relative.parts) < 4 or entry.suffix != ".jar" or not entry.is_file():
+                unresolvable.append(f"{entry}: not a jar in the local repository's layout")
+                continue
+            *group, artifact, version, _name = relative.parts
+            coordinate = f"{'.'.join(group)}:{artifact}"
+            archives.append(LibraryRoot(coordinate=coordinate, version=version, archive=entry))
+            versions.setdefault(coordinate, version)
+        return _ResolvedClasspath(
+            archives=tuple(archives),
+            versions=versions,
+            siblings=tuple(siblings[key] for key in sorted(siblings)),
+            unresolvable=tuple(unresolvable),
+        )
+
+    @staticmethod
+    def _sibling_root_of(classes: Path) -> LibraryRoot | None:
+        """A `<module>/target/classes` directory as the library root `_sibling_roots` would
+        have made of it: coordinate and version from the module's own POM, never from the
+        directory name. None where the directory is not that shape or holds no class."""
+        if classes.name != "classes" or classes.parent.name != "target":
+            return None
+        module_dir = classes.parent.parent
+        pom = _parsed_pom(module_dir / "pom.xml")
+        if pom is None or not any(classes.rglob("*.class")):
+            return None
+        coordinate = _coordinates_of(pom)
+        if coordinate is None:
+            return None
+        version = MavenDetector._text(pom, "version", module_dir, inherited=True)
+        return LibraryRoot(coordinate=coordinate, version=version or "unversioned", archive=classes)
+
+    @staticmethod
+    def _reactor_root(
+        path: Path, pom: ElementTree.Element
+    ) -> tuple[Path, ElementTree.Element] | None:
+        """The POM at the TOP of this module's reactor, with its path — or None where this
+        module has no aggregating parent on disk. Pulled out of `_reactor_modules` so the
+        Maven invocation (spec 2026-10-21 §3a) starts from the same root the sibling walk
+        does, under the same containment rule."""
         parent = pom.find("m:parent", _POM_NS)
         if parent is None:
-            return {}
+            return None
         parent_path, parent_pom, _reason = MavenDetector._parent_pom(parent, path)
         if parent_path is None or parent_pom is None:
-            return {}
+            return None
         # **AND THE WALK STARTS AT THE TOP OF THE REACTOR, not at this module's parent**
         # (`OI-149`, the other half). A reactor is the whole tree from its root by Maven's
         # own definition, and a dependency can be up AND across:
@@ -751,6 +1066,27 @@ class MavenDetector:
                 break
             parent_path, parent_pom = up_path, up_pom
             climbed.add(up_path.resolve())
+        return parent_path, parent_pom
+
+    @staticmethod
+    def _reactor_modules(
+        path: Path, pom: ElementTree.Element
+    ) -> dict[str, tuple[Path, ElementTree.Element]]:
+        """Every module of this module's reactor, by coordinate, with its directory and
+        its own parsed POM — including the children of a `<module>` that is itself an
+        aggregator, which is the whole of `OI-149`.
+
+        Reached through `<parent>` because `analyze` runs against ONE module's path: the
+        detector's own `<modules>` walk descends from an aggregator and so never sees
+        the siblings of the module being analysed. `_parent_pom` applies Maven's own
+        check that the POM at `<relativePath>` really declares the coordinates the
+        `<parent>` names, so an unrelated aggregator sitting at that path is refused
+        rather than read.
+        """
+        top = MavenDetector._reactor_root(path, pom)
+        if top is None:
+            return {}
+        parent_path, parent_pom = top
 
         found: dict[str, tuple[Path, ElementTree.Element]] = {}
         # **A `<module>` may itself be an aggregator, and its children are reactor

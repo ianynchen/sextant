@@ -143,6 +143,19 @@ class ModuleModel:
     # extractor is handed this list as its classpath. Empty where nothing resolved, which
     # leaves the scan exactly as it was.
     dependency_archives: tuple[LibraryRoot, ...] = ()
+    # WHO answered for the three dependency fields above (spec 2026-10-21 §3b/§3c):
+    # `maven` when the build tool's own resolved compile classpath did — transitives
+    # included, the version it chose beside each — and `declared` when this detector
+    # read the POM chain itself, which reaches no transitive. Gradle has only ever
+    # answered the first way; the label exists so a reader of a Maven module can tell
+    # the two apart, because they are different claims about the same list.
+    dependency_source: str = "declared"
+    # Why the build tool did not answer, when it did not — the tool's own last error
+    # line, or the precondition that stopped the question being asked (`mvn` not on
+    # `PATH`, nothing built). None when `dependency_source` is `maven`. Recorded rather
+    # than silent because the declared set is the WEAKER claim and a reader must be
+    # able to see which one they hold (user ruling b, 2026-10-21).
+    dependency_source_reason: str | None = None
 
 
 @dataclass(frozen=True)

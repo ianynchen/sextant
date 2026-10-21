@@ -1422,10 +1422,15 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # spec 2026-09-21 §3a: a catalog that only writes the channel edge's read
     # end runs before every engine that reads it (`resolve/endpoints.py`).
     metadata = json.loads((full_run / "metadata.json").read_text())
-    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the third: a
+    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the other: a
     # `config_join` file gated by its style, on a fixture that declares no Gateway.
+    # `spring-integration` LEFT this list with spec 2026-10-21 §3b: the dependency set
+    # is now what Maven resolved, and `spring-integration-core` is on this fixture's
+    # compile classpath through `spring-cloud-stream` — a transitive the POM parse could
+    # not see, so the catalog was skipped for a framework that was in fact present. The
+    # gate reading the resolved set is the point; the catalog runs and derives nothing
+    # here, which is the right answer for a module that configures no channel.
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
-        "spring-integration",
         "spring-rsocket",
         "spring-cloud-gateway-properties",
     ]
