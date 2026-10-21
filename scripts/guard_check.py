@@ -618,6 +618,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
+        what="the coverage section carries one line: dependency types named, headers read, "
+        "in no archive, and who answered for the classpath",
+        why="the document is the result (ruling 2026-10-17). `type_headers` in metadata "
+        "alone leaves a reader of the document unable to tell a read that found 9 of 89 "
+        "from one that found 9 of 9 — the whole of OI-167 was invisible that way",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="    coverage_items += _type_header_items(report.coverage, module)\n",
+                replace="",
+            ),
+        ),
+    ),
+    "storage.the-UNLOCATED-count-is-read-off-the-header-document": Guard(
+        what="`coverage.type_headers_unlocated` is the count the header document carries",
+        why="without it the only number is the headers READ, and a classpath that was not the "
+        "real one looks identical to the real one — 9 headers either way",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="               (SELECT coalesce(max(type_headers_unlocated), 0) FROM documents\n"
+                "                WHERE header_only)                                    AS type_headers_unlocated\n",
+                replace="               0 AS type_headers_unlocated\n",
+            ),
+        ),
+    ),
     "storage.a-TYPE-HEADER-joins-the-superclass-walk": Guard(
         what="`type_header` facts are unioned into the `superclasses` query, so a module "
         "class extending a library class — or a handler parameter typed as one — reaches a "

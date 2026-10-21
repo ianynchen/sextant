@@ -241,15 +241,17 @@ public final class Main {
                 TypeHeaders.Result headers = TypeHeaders.resolve(
                     referenced, ownTypes,
                     TypeHeaders.readClasspathFile(Path.of(classpathFile)), headerDocumentId);
-                if (!headers.factLines().isEmpty()) {
-                    writeTypeHeaderDocument(out.resolve("__type_headers__.jsonl"),
-                                            headerDocumentId, options,
-                                            sha256(Files.readString(Path.of(classpathFile))),
-                                            headers.factLines());
-                    typeHeaders = headers.headers();
-                    facts += headers.factLines().size();
-                }
+                // Written WHENEVER a classpath was handed over, with zero headers as readily
+                // as with hundreds: "0 of 445 named types found" is a statement about this
+                // module's classpath (spec 2026-10-21 §3e), and a missing file would leave
+                // the reader unable to tell it from "no read was attempted".
+                writeTypeHeaderDocument(out.resolve("__type_headers__.jsonl"),
+                                        headerDocumentId, options,
+                                        sha256(Files.readString(Path.of(classpathFile))),
+                                        headers.factLines(), headers.unlocated());
+                typeHeaders = headers.headers();
                 typeHeadersUnlocated = headers.unlocated();
+                facts += headers.factLines().size();
             }
             System.out.println(report(documents, facts, uncovered, typeHeaders, typeHeadersUnlocated));
         } catch (Exception failure) {
@@ -402,7 +404,8 @@ public final class Main {
      *  no file — the content hash is of the classpath that was read. */
     private static void writeTypeHeaderDocument(Path target, String documentId,
                                                 Map<String, String> options, String contentHash,
-                                                List<String> factLines) throws IOException {
+                                                List<String> factLines, int unlocated)
+            throws IOException {
         Files.createDirectories(target.getParent());
         TreeMap<String, String> document = new TreeMap<>();
         document.put("kind", JsonOut.string("document"));
@@ -417,6 +420,10 @@ public final class Main {
         document.put("origin_entry", JsonOut.string("<classpath>"));
         document.put("origin_tier", JsonOut.string("dependency"));
         document.put("header_only", "true");
+        // Referenced dependency types found in NO archive on the classpath — the honesty
+        // count beside the headers this document holds, on the document because one
+        // document is where the whole read's result lives.
+        document.put("type_headers_unlocated", String.valueOf(unlocated));
         document.put("redaction_set_hash", JsonOut.string(options.getOrDefault("redaction-hash", "sha256:none")));
         document.put("partial", "false");
         document.put("partial_reason", "null");

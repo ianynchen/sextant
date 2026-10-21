@@ -173,6 +173,10 @@ class Document(BaseModel):
     # that means "class files read" leaves it out. Absent on disk, and so false,
     # for every real document.
     header_only: bool = False
+    # On the header-only document: how many dependency types this module names were
+    # found in NO archive on its classpath (spec 2026-10-21 §3e) — the JDK's, and every
+    # one a classpath that is not the real one leaves out. 0 on every other document.
+    type_headers_unlocated: int = 0
 
 
 class ModuleFact(BaseModel):

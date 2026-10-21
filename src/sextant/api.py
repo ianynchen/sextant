@@ -891,6 +891,10 @@ def _reconstructed_report(
         source_roots=(),
         output_dirs=(),
         libraries_not_resolved=tuple(metadata.get("libraries_not_resolved", [])),
+        # Absent from a `metadata.json` written before 2026-10-21, and then the declared
+        # set is what that analysis had — which is what the defaults say.
+        dependency_source=module_info.get("dependency_source", "declared"),
+        dependency_source_reason=module_info.get("dependency_source_reason"),
     )
     skipped_catalogs = [
         SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))

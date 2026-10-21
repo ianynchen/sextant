@@ -532,7 +532,11 @@ _NAMED_QUERIES = {
     "coverage": """
         SELECT count(*) FILTER (WHERE NOT header_only)                AS documents,
                sum(CASE WHEN partial AND NOT header_only THEN 1 ELSE 0 END) AS partial_documents,
-               (SELECT count(*) FROM raw_facts WHERE kind = 'type_header') AS type_headers
+               (SELECT count(*) FROM raw_facts WHERE kind = 'type_header') AS type_headers,
+               -- The other half of that number (spec 2026-10-21 §3e): named types the read
+               -- found in no archive, off the header document that holds the read.
+               (SELECT coalesce(max(type_headers_unlocated), 0) FROM documents
+                WHERE header_only)                                    AS type_headers_unlocated
         FROM documents
     """,
     # FR-17 clause 3 (F8 §9.5, W38). How much was UNDERSTOOD, beside how many files were

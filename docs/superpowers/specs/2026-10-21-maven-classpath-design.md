@@ -158,7 +158,7 @@ header document is written whenever a classpath was handed over, even with zero 
 under Coverage, present only when a header read ran:
 
 ```
-- Dependency types this module names: 89 — header read for 9, in no archive 80 (classpath: declared; Maven: <reason>)
+- Dependency types the header read reached: 89 — header read for 9, found in no dependency archive 80 (dependencies: the build file's declared set — <Maven's reason>)
 ```
 
 ## 4. Performance (§8.7, decided here)

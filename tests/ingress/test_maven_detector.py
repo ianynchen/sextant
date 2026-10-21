@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from fixture_build import compile_fixture
 from sextant.application.ports.detector import LibraryRoot
 from sextant.ingress.detect import maven as maven_module
 from sextant.ingress.detect.maven import MavenDetector
@@ -34,7 +35,6 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     )
 
 
-@pytest.mark.pins("detect.mavens-OWN-classpath-answers-for-the-dependency-set")
 def test_dependency_coordinates_are_what_maven_resolved_transitives_included():
     """2O design §2a, ruling R9: the gate a `derived_resource` catalog reads
     needs the module's dependencies in the workspace. Since F1 that was what
@@ -43,6 +43,9 @@ def test_dependency_coordinates_are_what_maven_resolved_transitives_included():
     classes, which the fixture build primes — so a TRANSITIVE is in the set
     with the version Maven chose, exactly as Gradle has always reported.
     Sorted, because everything a detector reports is (NFR-1)."""
+    # The file is a build output: compiled (and so written) here, the way every e2e test
+    # does, rather than assumed — the guard harness copies no `target/`.
+    compile_fixture(FIXTURE)
     module = MavenDetector().detect(FIXTURE).modules[0]
 
     assert module.dependency_source == "maven"
@@ -1758,3 +1761,19 @@ def test_mavens_reason_is_its_last_named_error_line():
     output = "[ERROR] Failed to execute goal\n[ERROR] dependency: x:y:jar:1 (test)\n[ERROR] \n[ERROR] -> [Help 1]\n"
     assert MavenDetector._maven_reason(output, 1) == "dependency: x:y:jar:1 (test)"
     assert MavenDetector._maven_reason("", 7) == "mvn exited 7 and printed nothing"
+
+
+@pytest.mark.pins("detect.mavens-OWN-classpath-answers-for-the-dependency-set")
+def test_a_transitive_is_in_the_set_with_the_version_maven_chose():
+    """The same claim on the fixture the guard harness carries (`orders-advice`): it declares
+    `spring-web` and no `spring-core`, and `spring-core` is on its compile classpath as
+    `spring-web`'s own transitive — in the set, with the version Maven chose, because the
+    set is Maven's answer and not the POM's. Disabling that assignment leaves the file read
+    and the declared set published under the stronger label, which is what the pinned
+    guard measures."""
+    advice = FIXTURE.parent / "orders-advice"
+    compile_fixture(advice)
+    module = MavenDetector().detect(advice).modules[0]
+    assert module.dependency_source == "maven"
+    assert "org.springframework:spring-core" in module.dependency_coordinates
+    assert module.dependency_versions["org.springframework:spring-core"]
