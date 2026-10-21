@@ -783,38 +783,48 @@ class MavenDetector:
         leaves = MavenDetector._leaf_dirs(path, pom) if is_reactor else [path]
         # **This detector never builds the analysed code.** The prerequisite is a build
         # that already happened (M02), and the `compile` phase a reactor run attaches is
-        # there to let Maven see its siblings, not to produce them — so a module with
-        # nothing under `target/classes` ends the question before any process starts,
-        # by name. (A reactor with one abandoned module is then answered from the POMs,
-        # which is the labelled fallback and not a silent one.)
-        unbuilt = [leaf for leaf in leaves if not (leaf / "target" / "classes").is_dir()]
-        if unbuilt:
-            return (
-                f"nothing is built under {unbuilt[0] / 'target' / 'classes'}, so there is no "
-                "classpath to read for"
-            )
+        # there to let Maven see its siblings, not to produce them — so the question is
+        # asked for the modules that ARE built and for no other: a reactor is told
+        # `-pl <built modules>`, and a module with nothing under `target/classes` carries
+        # that as its own reason (`_from_maven`). Its siblings' answers do not depend on
+        # it — MEASURED in CI, where a reactor adopting a built fixture beside an unbuilt
+        # one read the built fixture differently through the reactor than alone.
+        built = [leaf for leaf in leaves if (leaf / "target" / "classes").is_dir()]
+        if not built:
+            # `leaves` is empty for a reactor the walk is about to REFUSE (a cycle, an
+            # empty `<modules>`, a child with no POM): nothing to say here, the walk says it.
+            where = (leaves or [path])[0] / "target" / "classes"
+            return f"nothing is built under {where}, so there is no classpath to read for"
         # And a classpath is asked for only where there is one: a module declaring and
         # inheriting no dependency compiles against nothing but the platform, which no
         # file could add to — and every temporary POM the unit suite writes is that.
-        if not any(MavenDetector._declares_dependencies(leaf) for leaf in leaves):
+        if not any(MavenDetector._declares_dependencies(leaf) for leaf in built):
             return (
                 "no module declares or inherits a dependency, so the compile classpath is "
                 "empty and Maven was not asked"
             )
-        if all(MavenDetector._classpath_is_current(leaf) for leaf in leaves):
-            return None  # §3d: every module's file is newer than every POM it reads
-        root, selected = MavenDetector._invocation_root(path, pom, is_reactor)
+        if all(MavenDetector._classpath_is_current(leaf) for leaf in built):
+            return None  # §3d: every built module's file is newer than every POM it reads
+        root = MavenDetector._invocation_root(path, pom, is_reactor)
+        in_reactor = root.resolve() != path.resolve() or is_reactor
+        # Which modules Maven is told to build: every built leaf, unless that is the whole
+        # reactor from its own root, which needs no `-pl` at all.
+        selected = (
+            None
+            if is_reactor and len(built) == len(leaves)
+            else ",".join(leaf.resolve().relative_to(root.resolve()).as_posix() for leaf in built)
+        )
         options = [
             "-q",
             "-B",
-            # `compile` ATTACHED only for a reactor (spec §2, fact 2): the goal resolves a
+            # `compile` ATTACHED only inside a reactor (spec §2, fact 2): the goal resolves a
             # sibling only as a built artifact of the same session. A single module needs
             # no phase and pays none.
-            *(["compile"] if selected is not None or is_reactor else []),
+            *(["compile"] if in_reactor else []),
             "dependency:build-classpath",
             f"-Dmdep.outputFile={_CLASSPATH_FILE.as_posix()}",
             "-Dmdep.includeScope=compile",
-            *(["-pl", selected, "-am"] if selected is not None else []),
+            *(["-pl", selected, "-am"] if selected is not None and in_reactor else []),
         ]
         first = MavenDetector._run_maven(root, ["mvn", "-o", *options])
         if isinstance(first, str):
@@ -889,18 +899,16 @@ class MavenDetector:
         return tail[-1].strip() if tail else f"mvn exited {returncode} and printed nothing"
 
     @staticmethod
-    def _invocation_root(
-        path: Path, pom: ElementTree.Element, is_reactor: bool
-    ) -> tuple[Path, str | None]:
-        """Where Maven is started and what it is told to build: the reactor root with
-        `-pl <this module>` when `analyze` was handed one module of a reactor — a module
-        inside a reactor cannot be resolved from its own directory, its import-POMs being
-        siblings that were never installed (spec §2, fact 2) — else `path` itself, whole."""
+    def _invocation_root(path: Path, pom: ElementTree.Element, is_reactor: bool) -> Path:
+        """Where Maven is started: the reactor root when `analyze` was handed one module of
+        a reactor — a module inside a reactor cannot be resolved from its own directory, its
+        import-POMs being siblings that were never installed (spec §2, fact 2) — else `path`
+        itself."""
         if is_reactor:
-            return path, None
+            return path
         top = MavenDetector._reactor_root(path, pom)
         if top is None:
-            return path, None
+            return path
         # `normpath`, as `_walk` spells a `<module>` path: the parent chain is built from
         # `<relativePath>`s like `../pom.xml`, and Maven is told a directory, not a route.
         root = Path(os.path.normpath(top[0].parent))
@@ -914,8 +922,8 @@ class MavenDetector:
         if top[1].find("m:modules", _POM_NS) is None or not path.resolve().is_relative_to(
             root.resolve()
         ):
-            return path, None
-        return root, path.resolve().relative_to(root.resolve()).as_posix()
+            return path
+        return root
 
     @staticmethod
     def _leaf_dirs(
@@ -975,6 +983,11 @@ class MavenDetector:
         wrote nothing current for THIS module (a `-pl` run that did not reach it)."""
         if classpath_reason is not None:
             return None, classpath_reason
+        if not (path / "target" / "classes").is_dir():
+            return None, (
+                f"nothing is built under {path / 'target' / 'classes'}, so there is no "
+                "classpath to read for"
+            )
         if not MavenDetector._classpath_is_current(path):
             return None, (
                 f"Maven wrote no current {_CLASSPATH_FILE.as_posix()} for this module, so the "

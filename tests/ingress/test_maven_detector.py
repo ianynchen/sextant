@@ -1836,3 +1836,49 @@ def test_a_module_whose_parent_is_a_published_pom_is_asked_from_its_own_director
     assert cwd == module
     assert "-pl" not in argv and "compile" not in argv
     assert detected.dependency_source == "declared"  # Maven wrote nothing in this fake
+
+
+def test_a_reactor_with_an_unbuilt_module_is_asked_for_the_built_ones_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """CI's finding: `orders-reactor` adopts a built fixture beside an unbuilt one, and the
+    built one came out `declared` through the reactor and `maven` alone — the whole reactor
+    had been refused for its one unbuilt module. A module's answer must not depend on a
+    sibling nobody built: Maven is told `-pl <built modules> -am` from the root, the unbuilt
+    module carries "nothing is built" as its OWN reason, and nothing compiles it."""
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    root = tmp_path / "reactor"
+    root.mkdir()
+    _module(
+        root,
+        _BARE_POM.replace(
+            "<artifactId>thing</artifactId>", "<artifactId>reactor</artifactId>"
+        ).replace(
+            "</project>",
+            "<packaging>pom</packaging><modules><module>a</module><module>b</module></modules></project>",
+        ),
+    )
+    child = (
+        _CHILD_POM.replace("acme-parent", "reactor")
+        .replace("2.3.0", "1.0.0")
+        .replace("</project>", f"{_DEPENDS}</project>")
+    )
+    _built(root / "a", child)
+    (root / "b").mkdir()
+    _module(
+        root / "b",
+        child.replace("<artifactId>thing</artifactId>", "<artifactId>other</artifactId>"),
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *, cwd, **_kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(maven_module.subprocess, "run", fake_run)
+    modules = {m.module_id: m for m in MavenDetector().detect(root).modules}
+
+    [argv] = calls
+    assert argv[argv.index("-pl") + 1] == "a" and "-am" in argv and "compile" in argv
+    assert "nothing is built under" in (modules["com.acme:other"].dependency_source_reason or "")
+    assert "wrote no current" in (modules["com.acme:thing"].dependency_source_reason or "")

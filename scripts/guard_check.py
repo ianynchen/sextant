@@ -587,8 +587,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/maven.py",
-                find="        if unbuilt:\n            return (",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return (",
+                find="        if not built:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -613,7 +613,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/maven.py",
-                find='            *(["-pl", selected, "-am"] if selected is not None else []),',
+                find='*(["-pl", selected, "-am"] if selected is not None and in_reactor else []),',
                 replace="            *([]),  # guard disabled by scripts/guard_check.py",
             ),
         ),
