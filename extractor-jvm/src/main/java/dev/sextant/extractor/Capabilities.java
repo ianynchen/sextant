@@ -92,6 +92,12 @@ public final class Capabilities {
         // Capability 9.13: a class symbol's erased direct superclass.
         "superclass",
         "type_annotations",
+        // The `type_header` fact (D00 §5): the superclass, interfaces and class-level
+        // annotations of every DEPENDENCY type this module's classes refer to, read from
+        // the class file's header in the resolved classpath — bodies never. What makes a
+        // module exception extending a library exception reach `Throwable`, and a
+        // library class's `@ResponseStatus` readable, without scanning the whole jar.
+        "type_headers",
         // W5. The formal type parameters a class or method declares, with their
         // bounds — the name and the position a generic substitution binds. The
         // parameter types `typed_signatures` reports can now be a bare type

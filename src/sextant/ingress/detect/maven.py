@@ -353,6 +353,16 @@ class MavenDetector:
             library_roots=library_roots,
             sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,
+            # The classpath the header read walks: each declared dependency whose version
+            # resolved AND whose jar is in the local repository. One that is not is simply
+            # absent — `dependencies_not_resolved` already names the version case, and a
+            # jar Maven has not fetched is a jar nothing on this machine can read.
+            dependency_archives=tuple(
+                LibraryRoot(coordinate=coordinate, version=version, archive=archive)
+                for coordinate, version in sorted(versions.items())
+                if version is not None
+                and (archive := _local_repository_archive(coordinate, version)).is_file()
+            ),
         )
 
     @staticmethod

@@ -1,0 +1,36 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>fixtures</artifactId>
+    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>orders-advice</artifactId>
+  <!-- The two `@ControllerAdvice` rows COVERAGE marked "narrower than the framework's rule",
+       both for one cause: the handled exception lives in a jar this workspace never scanned.
+       No `.sextant.yml` here on purpose — `orders-service` opts the stub in through
+       `extract_libraries`, and this module must NOT, or the header read has nothing to add. -->
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId><artifactId>spring-boot</artifactId><version>3.5.10</version>
+    </dependency>
+    <!-- Declared DIRECTLY, and that is the point of it. `MethodArgumentNotValidException`
+         (spring-web) extends `BindException` (spring-context), and on Maven the classpath the
+         header read walks is the DIRECT declarations — a jar that arrives only as another's
+         transitive is not on it (the same boundary COVERAGE row "a module whose build declares
+         the framework only TRANSITIVELY" records for Data REST). Without this line the chain
+         stops at `BindException`, the parameter is not proven a throwable, and the second
+         handler derives nothing — MEASURED before this line was added. Gradle has no such gap:
+         its init script reports the RESOLVED classpath, transitives included. -->
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId><artifactId>orders-soap-client</artifactId><version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>

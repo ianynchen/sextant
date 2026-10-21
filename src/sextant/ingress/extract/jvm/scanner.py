@@ -57,6 +57,22 @@ class AsmScanner:
         # writes the key only when it is given, so a module's own scan stays
         # byte-for-byte what it was before library extraction existed.
         origin = ["--origin", request.origin] if request.origin is not None else []
+        # The classpath goes in a FILE, one `coordinate<TAB>version<TAB>archive` per line:
+        # `ruoyi`'s largest module resolves hundreds of jars, and a command line is the
+        # wrong place for a list that long. Written beside the fact root rather than inside
+        # it — everything under `out_dir` is read back as facts — and removed afterwards.
+        classpath: list[str] = []
+        classpath_file: Path | None = None
+        if request.dependency_archives:
+            classpath_file = request.out_dir.parent / f".{request.out_dir.name}.classpath.tsv"
+            classpath_file.write_text(
+                "".join(
+                    f"{root.coordinate}\t{root.version}\t{root.archive}\n"
+                    for root in request.dependency_archives
+                ),
+                encoding="utf-8",
+            )
+            classpath = ["--classpath-file", str(classpath_file)]
         completed = subprocess.run(
             [
                 "java",
@@ -83,11 +99,14 @@ class AsmScanner:
                 "--sextant-version",
                 SEXTANT_VERSION,
                 *origin,
+                *classpath,
             ],
             capture_output=True,
             text=True,
             check=False,
         )
+        if classpath_file is not None:
+            classpath_file.unlink(missing_ok=True)
         if completed.returncode != 0:
             raise ScanError(f"extractor failed: {completed.stderr.strip()}")
         report = json.loads(completed.stdout)

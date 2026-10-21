@@ -438,6 +438,27 @@ class GradleDetector:
             library_roots=library_roots,
             sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,
+            # Gradle resolved the compile classpath itself and the init script records
+            # each artifact's `path` beside its coordinate, so the header read's classpath
+            # is read straight off it. Entries with no coordinate (a flat `files()` jar, an
+            # inter-project dependency) have nothing to name a fact's `origin` by and are
+            # left out — the same rule `dependency_coordinates` above applies.
+            dependency_archives=tuple(
+                LibraryRoot(
+                    coordinate=f"{entry['group']}:{entry['name']}",
+                    version=str(entry["version"]),
+                    archive=Path(str(entry["path"])),
+                )
+                for entry in sorted(
+                    (
+                        e
+                        for e in project["classpath"]
+                        if e.get("group") and e.get("name") and e.get("version") and e.get("path")
+                    ),
+                    key=lambda e: (str(e["group"]), str(e["name"]), str(e["version"])),
+                )
+                if Path(str(entry["path"])).is_file()
+            ),
         )
 
     @staticmethod

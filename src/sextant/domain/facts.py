@@ -168,6 +168,11 @@ class Document(BaseModel):
     # absent — for the module's own output, which is what every document was
     # until libraries could be scanned at all.
     origin: str | None = None
+    # D00 §2 (2026-10-21): true on the ONE synthetic document per module that holds
+    # every `type_header` fact — not a class file this module built, so every count
+    # that means "class files read" leaves it out. Absent on disk, and so false,
+    # for every real document.
+    header_only: bool = False
 
 
 class ModuleFact(BaseModel):
@@ -704,6 +709,38 @@ class OperationRecord(BaseModel):
     server_streaming: bool
 
 
+class TypeHeaderFact(BaseModel):
+    """D00 §5's `type_header`: the class-file HEADER of a type a module depends on
+    but did not build — superclass, interfaces and class-level annotations, never a
+    member — read from the resolved dependency archives and followed up `extends`
+    until the chain leaves every archive for the platform's own types.
+
+    A fact kind of its own rather than a `symbol` in the dependency tier, on the
+    user's ruling (2026-10-21, option A): an endpoint engine must never see a
+    library's `@RestController` and mint an endpoint this module does not serve.
+    Only `superclasses`, `implementations` and the advice engine's annotation
+    lookup read it. `symbol` is spelled under the LIBRARY's own coordinate, so
+    `MethodArgumentNotValidException` has one spelling however many modules
+    depend on the jar that holds it.
+    """
+
+    model_config = {"frozen": True}
+    kind: Literal["type_header"] = "type_header"
+    document_id: str
+    symbol: str
+    construct_kind: ConstructKind
+    # None where the superclass is the platform's root type or the type is an
+    # interface: the walk's end, not an unread value.
+    superclass: str | None = None
+    interfaces: list[str] = Field(default_factory=list)
+    annotations: list[AnnotationUse] = Field(default_factory=list)
+    # The jar the header was read from, as its coordinate and the version the
+    # classpath resolved — the `origin` a real document carries, here per fact
+    # because one document holds headers from every jar.
+    origin: str
+    version: str
+
+
 class DeclaredShapeFact(BaseModel):
     """One message or record type, as its schema declares it (D00 §5,
     D01 §3). Never emitted by an extractor: it is the interpreter's output,
@@ -754,6 +791,7 @@ Fact = Annotated[
     | ConfigEntryFact
     | ConstantFact
     | EmbeddedDescriptorFact
+    | TypeHeaderFact
     | DeclaredShapeFact,
     Field(discriminator="kind"),
 ]

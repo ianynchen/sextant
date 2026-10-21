@@ -549,6 +549,51 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "storage.a-TYPE-HEADER-joins-the-superclass-walk": Guard(
+        what="`type_header` facts are unioned into the `superclasses` query, so a module "
+        "class extending a library class — or a handler parameter typed as one — reaches a "
+        "declared throwable root",
+        why="the walk proving a type is a throwable stops at the first class not in the "
+        "facts. `MethodArgumentNotValidException extends BindException extends Exception` "
+        "crosses two jars; without the union the handler taking that parameter derives "
+        "nothing from it — the COVERAGE row `@ControllerAdvice` carried as ◐ for a month",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="        WHERE kind = 'type_header' AND (payload ->> 'superclass') IS NOT NULL",
+                replace="        WHERE false  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "error_advice.a-STATUS-on-a-library-exception-class-is-read": Guard(
+        what="`error_advice` reads class-level annotations off `type_header` facts, so "
+        "`@ResponseStatus` on a handled exception living in a dependency jar reaches the "
+        "handler's `status`",
+        why="a third-party exception class carries its annotation in a jar this workspace "
+        "never scanned, so its handler's `status` was NULL — the other ◐ row. Only this "
+        "engine reads header annotations; the row-minting engines must never see a "
+        "library's class-level annotations",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/error_advice.py",
+                find='        for query in ("annotations", "type_header_annotations")',
+                replace='        for query in ("annotations",)  # guard disabled',
+            ),
+        ),
+    ),
+    "storage.a-HEADER-ONLY-document-is-not-a-document-read": Guard(
+        what="the synthetic `type_header` document is excluded from `coverage.documents`",
+        why="`documents` means class files this module built; a header read of two "
+        "thousand referenced types would otherwise report as a document opened, and every "
+        "field pin asserting that count would move for a file nobody read",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="        SELECT count(*) FILTER (WHERE NOT header_only)                AS documents,",
+                replace="        SELECT count(*)                                              AS documents,",
+            ),
+        ),
+    ),
     "stitch.a-participant-is-MATCHED-by-its-artifact-id": Guard(
         what="a participant's matching NAME is its module's artifactId, with the full "
         "coordinate carried beside it",
@@ -3091,6 +3136,8 @@ def copy_tree(destination: Path) -> Path:
         "reactor-twoservice",
         # The gateway reactor CP-40's gate is measured on.
         "reactor-gateway",
+        # The `type_header` read's fixture: two handlers whose exceptions live in jars.
+        "orders-advice",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

@@ -112,6 +112,16 @@ public final class ClassScanner {
         }
     }
 
+    /** The annotation-use grammar, for a SECOND producer: {@link TypeHeaders} reads the
+     *  class-level annotations of a dependency type's header and must write them in exactly
+     *  the shape every `annotation` fact carries, or the engines' `use.annotation` /
+     *  `use.args` reads diverge by producer. The four helpers behind this were already
+     *  stateless; this makes that fact usable instead of copying them. */
+    static org.objectweb.asm.AnnotationVisitor collectAnnotationUse(
+            String descriptor, java.util.function.Consumer<String> onUse) {
+        return Visitor.useCollectingVisitor(descriptor, onUse);
+    }
+
     String symbolOf(String descriptorPath) {
         return "sextant-jvm maven " + coordinates + " " + version + " " + descriptorPath;
     }
@@ -1035,7 +1045,7 @@ public final class ClassScanner {
 
         /** Collects one annotation's argument values and hands the finished
          *  {@code {"annotation":...,"args":{...}}} JSON to {@code onUse}. */
-        private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
+        private static org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
                 String descriptor, java.util.function.Consumer<String> onUse) {
             return useCollectingVisitor(descriptor, 0, onUse);
         }
@@ -1067,7 +1077,7 @@ public final class ClassScanner {
          *  read and so no {@code args} key is written at all. An EMPTY
          *  {@code args} would be a silent truncation: indistinguishable from an
          *  annotation genuinely written with no arguments (GUIDELINES §8). */
-        private org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
+        private static org.objectweb.asm.AnnotationVisitor useCollectingVisitor(
                 String descriptor, int depth, java.util.function.Consumer<String> onUse) {
             String annotation = Type.getType(descriptor).getInternalName() + "#";
             TreeMap<String, String> args = new TreeMap<>();
@@ -1162,7 +1172,7 @@ public final class ClassScanner {
          *  {@code null} at the bound is ASM's own "skip this sub-tree" contract —
          *  the value is already recorded as unresolved by then, so nothing is lost
          *  silently. */
-        private org.objectweb.asm.AnnotationVisitor nestedUseVisitor(
+        private static org.objectweb.asm.AnnotationVisitor nestedUseVisitor(
                 String descriptor, int parentDepth, java.util.function.Consumer<String> onUse) {
             if (parentDepth + 1 > MAX_NESTED_ANNOTATION_DEPTH) {
                 TreeMap<String, String> use = new TreeMap<>();
@@ -1181,12 +1191,12 @@ public final class ClassScanner {
          *  for an enum reference, so it carries its owning type rather than the
          *  bare constant name. Dropping it would make {@code @RequestMapping} with
          *  no method indistinguishable from one that names every method. */
-        private String enumReference(String descriptor, String constant) {
+        private static String enumReference(String descriptor, String constant) {
             return JsonOut.string(
                 Type.getType(descriptor).getInternalName() + "#" + constant + ".");
         }
 
-        private String literal(Object value) {
+        private static String literal(Object value) {
             if (value instanceof String text) return JsonOut.string(text);
             // NaN and the infinities are NOT JSON (RFC 8259 has no such
             // literals), so `String.valueOf` would write a bare token that a

@@ -80,6 +80,10 @@ PRIMED_FIXTURES = (
     # never read.
     "reactor-twoservice",
     "reactor-gateway",
+    # Depends on the stub library WITHOUT opting it in, so the `type_header` read is the
+    # only thing that can see the stub exception's `@ResponseStatus`. The stub is
+    # installed by `fixture_stub.py` before this list is compiled.
+    "orders-advice",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

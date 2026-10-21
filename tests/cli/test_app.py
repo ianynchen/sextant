@@ -239,7 +239,13 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 153 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
     # 154 since spec 2026-09-21 §7a: `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend
     # lambda class of `coRouter { accept(JSON) { } }` — one class file.
-    assert metadata["coverage"]["documents"] == 154
+    # 155 since the `type_header` read (2026-10-21): `ConflictingOrderException`, a SECOND
+    # class file inside the opted-in `com.example:orders-soap-client` jar, put there so
+    # `orders-advice` has a handler parameter that lives in a dependency. The library scan
+    # reads every class the jar holds, so it is one more document here too. NOT the header
+    # document: that one is `header_only` and `coverage` leaves it out — the count would
+    # read 156 if it did not, which is what `test_type_headers` pins.
+    assert metadata["coverage"]["documents"] == 155
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(
