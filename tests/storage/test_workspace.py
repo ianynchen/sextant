@@ -1107,6 +1107,15 @@ def test_every_table_and_view_in_the_schema_is_exported(tmp_path: Path):
     exemption. The `fact_*` tables `load_facts` builds are not one either:
     each is the storage behind one fact view, and that view exports under its
     own name, so its rows travel exactly once.
+
+    **One exclusion exists and it is about SCOPE, added 2026-10-19.** `D01`'s
+    two system-scope tables, `participants` and `links`, live in `schema.sql`
+    because one class opens both kinds of workspace — and a bundle is a MODULE
+    artifact, which `D06` describes no system equivalent of. A module bundle
+    carrying an empty `links` would assert that the module has no links, and
+    linking is a tier above the module, so the rows are not the module's to
+    ship. `schema_objects` names them, so adding a third system table without
+    deciding this again still fails here.
     """
     workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())

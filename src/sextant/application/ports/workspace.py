@@ -9,7 +9,7 @@ sites, and the failure it prevents — a mistyped name — raises immediately an
 is caught by any test that exercises the path. The reading cost at every call
 site outweighs it. Revisit if the sets grow or a second Workspace appears."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol, TypeVar
 
@@ -52,6 +52,28 @@ class Workspace(Protocol):
         A structure that depends on no catalog is built here so that a resolve running
         thirty catalogs folds the same 25,000 rows into the same index once, not thirty
         times: GUIDELINES §8.7's "compute once, read many"."""
+
+    def federate(self, participants: "Mapping[str, Path]") -> None:
+        """Make every participant's own graph readable from THIS workspace, as views —
+        `system_endpoints` and `system_config` — without copying any of it.
+
+        `participants` maps the name a link is matched by to the workspace holding that
+        participant's graph. [D01]'s system scope is the contract: the system workspace
+        owns two native tables and reads everything else through views, so nothing here
+        imports, and a participant unreachable at query time fails naming it rather than
+        giving a shorter answer.
+
+        **This is the second Workspace the module docstring above said to revisit on.** It
+        is one method rather than a port of its own because the surface it needs is
+        exactly this one: the matcher asks named queries, and the only thing it cannot do
+        through the existing surface is say which graphs are in scope.
+
+        Calling it again replaces the previous set, so one process may analyze two
+        reactors. Participants whose graph is missing are simply not passed — the
+        `participants` table records them as absent with a reason, which is where that
+        fact belongs (M06 attributes an unmatched call into an absent participant to the
+        gap rather than to the architecture).
+        """
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         """Write the bundle's graph tables as Parquet, one file per table.

@@ -1,0 +1,28 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.acme</groupId><artifactId>reactor-gateway</artifactId><version>1.0.0</version></parent>
+  <artifactId>edge</artifactId>
+  <dependencies>
+    <!-- The STARTER coordinate the catalog's `detect.coordinates` names, and the one a real
+         module writes (`spring-petclinic-api-gateway` declares exactly it). Marked
+         `provided` so this fixture needs none of the runtime tree resolved: the catalog is
+         gated on the DECLARATION, which the detector reads from this pom, and the routes
+         themselves are configuration rather than code. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
+      <version>5.0.0</version>
+      <scope>provided</scope>
+      <optional>true</optional>
+      <!-- Every transitive excluded: this fixture compiles no gateway code and the catalog
+           is gated on the declaration alone, so resolving the runtime tree would make the
+           fixture depend on what happens to be in a local repository. -->
+      <exclusions>
+        <exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId><artifactId>spring-boot</artifactId><version>3.5.10</version>
+    </dependency>
+  </dependencies>
+</project>

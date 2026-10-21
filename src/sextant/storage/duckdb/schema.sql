@@ -562,6 +562,81 @@ CREATE TABLE IF NOT EXISTS endpoint_metadata (
     requirement TEXT
 );
 
+-- ==========================================================================
+-- System scope (D01 "System scope — two native tables, everything else
+-- federated"). These two are the ONLY tables the system workspace owns; every
+-- participant's own graph is read through a view over its workspace, never
+-- copied. Written by `application/stitch`, one reset/insert pair each.
+-- ==========================================================================
+
+CREATE TABLE IF NOT EXISTS participants (
+    -- The name this participant is MATCHED by: a service-discovery name a client
+    -- states (`customers-service`) is matched against this. On the reactor path it
+    -- is the module's artifactId, which is what Spring's `spring.application.name`
+    -- defaults to and what every `lb://` in the two pinned gateways names.
+    name          TEXT,
+    -- `service` or `external`. Only `service` is written on the reactor path — a
+    -- declared external host is a `system.yml` fact and there is no manifest
+    -- (M06 "External participants", not built; user decision 5).
+    kind          TEXT,
+    -- The build coordinate, so two modules whose artifactId collides across groups
+    -- are still two participants. `modules.json`'s own `module_id`.
+    module_id     TEXT,
+    -- **Every other name this participant answers to**, as a JSON array (D01's system
+    -- scope names this column; `M05`'s output calls it the alias index).
+    --
+    -- A build coordinate is not a service name. The artifactId is
+    -- `spring-petclinic-customers-service` and every client states `customers-service` —
+    -- the name the module registers in discovery, read from the configuration key a
+    -- catalog declares (`participant_name_key`). Without it a client naming a service by
+    -- its registered name matches no participant at all, which is measured: that corpus
+    -- scores 0 links on the artifactId alone.
+    aliases       TEXT,
+    -- Where this participant's graph is read FROM, and the obligation D01 attaches
+    -- to recording it: one unreachable at query time fails naming it, never a
+    -- shorter answer. A module workspace on the reactor path, a bundle under M05.
+    location      TEXT,
+    -- The commit the participant was analyzed at, from its own metadata.
+    commit_id     TEXT,
+    -- Whether this participant's graph could be read at all. A module `analyze`
+    -- skipped, or one whose workspace is missing, is `absent` WITH a reason —
+    -- M06's rule depends on it: an unmatched call into an absent participant is
+    -- attributed to the gap rather than reported as an architectural finding.
+    present       BOOLEAN,
+    absent_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS links (
+    -- The OUTBOUND end, by the columns that identify an endpoint (D01 §3) plus the
+    -- participant it belongs to. Carried rather than joined, for `endpoint_metadata`'s
+    -- stated reason: a key into a table rebuilt every resolve names nothing outside
+    -- the run that built it, and here the two ends are in two different workspaces.
+    from_participant TEXT,
+    from_protocol    TEXT,
+    from_method      TEXT,
+    from_path        TEXT,
+    from_caller      TEXT,
+    -- The INBOUND end. NULL on a participant-level link: a gateway forwarding to
+    -- `lb://customers-service` names the destination service and no route, so the
+    -- link is to the participant and the endpoint columns say so by being NULL.
+    to_participant   TEXT,
+    to_protocol      TEXT,
+    to_method        TEXT,
+    to_path          TEXT,
+    -- D00 §4's sets, as M06 step 4 assigns them. `resolved` for one survivor,
+    -- `narrowed` for several with every candidate listed below, and no row at all
+    -- where nothing matched — an unmatched outbound endpoint is a finding the
+    -- document states, not a link with an empty other end.
+    resolution       TEXT,
+    -- `declared` for a shared contract or a resolved deployment chain, `name_match`
+    -- for uniqueness, `human` for a curation. No heuristic sits above `name_match`.
+    evidence         TEXT,
+    -- Every candidate a `narrowed` link could not choose between, as a JSON array.
+    -- M06's honesty obligation: "every `narrowed` link with all candidates and the
+    -- evidence that produced them".
+    candidates       TEXT
+);
+
 CREATE TABLE IF NOT EXISTS type_hierarchy (
     -- The subtype, bare (D00 §5a) — the spelling `call_sites.owner` uses, so a site
     -- joins straight to its own ancestry with no rewriting.

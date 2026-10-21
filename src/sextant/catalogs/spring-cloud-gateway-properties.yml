@@ -79,10 +79,12 @@ requires: [resolved_config]
 #     framework. That is the `shortcut` grammar, and `_genkey_` is the `positional` key
 #     prefix the map form may also spell.
 #   * row 4 — `RouteDefinition` carries `id predicates filters uri metadata order enabled`;
-#     only `predicates` and `uri` are read. `filters[M]` are NOT read — `RewritePath`,
-#     `StripPrefix` and their kin change the UPSTREAM path at runtime; the served path
-#     is the predicate's (spec §7b's stated boundary). `id`, `order`, `metadata`,
-#     `enabled` name no wire.
+#     only `predicates` and `uri` are read BY THIS CATALOG'S OWN ROWS. `filters[M]` change
+#     the UPSTREAM path at runtime and the served path is the predicate's (spec §7b's stated
+#     boundary), which is unchanged. **Amended 2026-10-20:** the `strip` entry below reads
+#     one filter for the SYSTEM tier, which joins this route's prefix to the paths the named
+#     service serves — a different question from what this gateway serves, and it does not
+#     move the served path. `id`, `order`, `metadata`, `enabled` name no wire.
 #   * rows 5 and 7 — each predicate factory binds its positional arguments into the
 #     fields `shortcutFieldOrder` names, by `shortcutType`: `Path` is
 #     `GATHER_LIST_TAIL_FLAG` over `[patterns, matchTrailingSlash]` (every positional is
@@ -156,3 +158,24 @@ matches:
         Cookie: { kind: cookie, args: [name, regexp] }
       pass_through: [Host, After, Before, Between, RemoteAddr, Weight, XForwardedRemoteAddr, CloudFoundryRouteService, ReadBody]
       peer: { field: uri, direction: outbound }
+      # **Read by the SYSTEM tier only, and the served row is unchanged by it.** The
+      # boundary row 4 states still holds for the endpoint this catalog mints: the path this
+      # gateway SERVES is the predicate's, and no filter moves it.
+      #
+      # What the system tier needs it for is the other end. Joining a route's literal prefix
+      # to the paths the named service serves — `/api/customer` in front of
+      # `GET /owners/{ownerId}` — is only sound if the filter removes exactly that prefix,
+      # so `strip` names the filter whose argument has to equal the prefix's segment count.
+      # Where the two numbers disagree the composition is refused (`stitch/gateway.py`).
+      #
+      # MEASURED (`scripts/probes/cp40_strip_prefix.md`, `spring-cloud-gateway-server` 4.3.4
+      # and `spring-cloud-gateway-server-webflux` 5.0.0, identical in both): the filter
+      # tokenises the raw path on `/` discarding empties, keeps every segment whose index is
+      # `>= parts`, and rejoins them under a leading `/`. So `StripPrefix=2` on
+      # `/api/customer/owners/7` yields `/owners/7`.
+      #
+      # **No other path-rewriting filter is declared, and that is the refusal rather than an
+      # omission**: `RewritePath`, `SetPath` and `PrefixPath` rewrite by rules this probe did
+      # not measure, so a route carrying one gets a participant-level link and no endpoint
+      # link. None appears in any pinned corpus — 9 routes of 9 use `StripPrefix`.
+      strip: { field: filters, name: StripPrefix }

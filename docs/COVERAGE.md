@@ -1987,6 +1987,32 @@ the field corpus) live in
   `<host>` and no peer rather than naming one of them (`OI-154`, measured; `OI-157` records
   the under-report this leaves when both destinations WERE read).
 
+### 3a-viii. The linking tier reaches one REACTOR, and says so
+
+**`sextant system analyze <reactor root>` links the modules of one build to each other**
+(built 2026-10-20, spec `2026-10-19-reactor-linking-design.md`, eight user decisions). Before
+it, Sextant read that one module calls `POST /owners/{ownerId}/pets` at `customers-service`
+and that another serves exactly that, and **nothing joined the two facts** — `FR-8` was
+unbuilt and `GAP-2` recorded it. Measured: `spring-petclinic-microservices` 23 links,
+`mall-swarm` 258, zero narrowed on either, zero unmatched.
+
+**What it does NOT reach, stated here because a reader will otherwise take `FR-8` as
+delivered:**
+
+| | |
+|---|---|
+| participants in **separate repositories** at separate commits | `M05`, `system.yml`, `system.state.json`, staleness — all unbuilt. One Maven reactor is the whole scope |
+| **overlay and curation** | `M01`, `D03`, `proposals.yml`, human-asserted links — unbuilt, so a `narrowed` link is recorded in `links` and nowhere else |
+| **structural compatibility** (`M06` step 3) | specified, unbuilt. On this corpus every link is already unique on wire identity, so there is no candidate set for a payload test to discriminate between |
+| **path-SHAPE matching** | `/v1/orders/42` against `/v1/orders/{id}`. Specified, unbuilt: both sides of every measured link derive a template, not a concrete address |
+| **external participants** | a declared external host is a `system.yml` fact and there is no manifest. A call matching nothing is a finding, not a link |
+| an address whose **authority went unread** | never matched by path alone, even where exactly one participant serves it (user decision 6). Costs all ten of `apollo-portal`'s outbound rows, and for Apollo the link would have been correct — evidence for the rule, not proof of it |
+| a gateway route rewriting its path by any filter but **`StripPrefix`** | `RewritePath`, `SetPath`, `PrefixPath` rewrite by rules CP-40 did not measure, so such a route gets a participant-level link only. None appears in any pinned corpus |
+
+**And the participant set reads module WORKSPACES rather than bundles**, which is a declared
+`D01` deviation sound only for one build: every workspace comes from the same run, so there
+is no second artefact to drift from. It does not generalise past one reactor.
+
 - **Spring Boot 2 / Spring Framework 5 is ruled in scope and is measured almost nowhere.**
   The only pre-Jakarta evidence in the table is Tomcat 9 for `javax-servlet`. Everything
   else Spring is 6.1.6 and later.

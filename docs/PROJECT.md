@@ -67,7 +67,8 @@ Measured on 2026-09-10, and every figure here is reproducible rather than rememb
 | CLI verbs | **4** — `analyze`, `render`, `enrich`, `export` | `src/sextant/cli/app.py` |
 | Catalogs | **64** | `ls src/sextant/catalogs/*.yml` |
 | Scanner capabilities | **23 of 26 designed implemented**; the 3 unshipped are `invokedynamic`, `constant_propagation`, `control_flow` | `Capabilities.ALL` in `extractor-jvm/src/main/java/dev/sextant/extractor/Capabilities.java` — 23 entries; [M03](components/M03-scanner.md):77 says the same |
-| Absent components | `overlay` (M01/D03), `sync` (M05), `stitcher` (M06), `state.json` (D05's second half) | — |
+| Absent components | `overlay` (M01/D03), `sync` (M05), `state.json` (D05's second half) | — |
+| Partly built | `stitcher` (M06) — the REACTOR participant set only, steps 1, 2 and 4; `M06`'s own amendments name each decision, and `GAP-2` lists what stays open | spec `2026-10-19-reactor-linking-design.md` |
 
 **Component statuses, counted rather than remembered: 4 `delivered`, 9 `in-progress`,
 4 `planned`** — seventeen rows, and the count is `grep` on the two tables, not a memory of
@@ -100,7 +101,7 @@ here is rounded in either direction; each names the specific distance left.
 | [M03](components/M03-scanner.md) scanner | **in-progress** | [FR-2](REQUIREMENTS.md#fr-2--fact-extraction) |
 | [M04](components/M04-resolver.md) resolver | **in-progress** | FR-3 … FR-6 |
 | [M05](components/M05-sync.md) sync | planned | [FR-8](REQUIREMENTS.md#fr-8--system-linking) |
-| [M06](components/M06-stitcher.md) stitcher | planned | [FR-8](REQUIREMENTS.md#fr-8--system-linking) |
+| [M06](components/M06-stitcher.md) stitcher | **in-progress** | [FR-8](REQUIREMENTS.md#fr-8--system-linking) |
 | [M07](components/M07-renderer.md) renderer | **delivered** | [FR-7](REQUIREMENTS.md#fr-7--diagrams) |
 | [M08](components/M08-exporter.md) exporter | **delivered** | [FR-18](REQUIREMENTS.md#fr-18--export) |
 | [M09](components/M09-query.md) query | **in-progress** | [FR-9](REQUIREMENTS.md#fr-9--blast-radius), [FR-10](REQUIREMENTS.md#fr-10--query-surface) |

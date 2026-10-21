@@ -1,0 +1,19 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId><artifactId>reactor-gateway</artifactId><version>1.0.0</version>
+  <packaging>pom</packaging>
+  <!-- A reactor with a GATEWAY and one service behind it, for the prefix composition
+       (CP-40) and for the refusal that gates it.
+
+       Two routes to the same service, differing only in `StripPrefix`:
+         /good/**  StripPrefix=1   the prefix is one segment, so the composition is exact
+         /a/b/**   StripPrefix=1   the prefix is TWO segments, so it is refused
+       The second is the whole point: `/a/b/orders` would arrive as `/b/orders`, which
+       `orders` does not serve, so prefix-plus-path would publish an address no request
+       takes. -->
+  <modules><module>edge</module><module>orders</module></modules>
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+</project>

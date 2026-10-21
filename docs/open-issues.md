@@ -114,6 +114,37 @@ code. The stitcher would miss it.
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
 
+**BUILT 2026-10-20 — the REACTOR case only**, spec
+`docs/superpowers/specs/2026-10-19-reactor-linking-design.md`, plan
+`docs/superpowers/plans/2026-10-19-reactor-linking.md`. Eight decisions settled by the user;
+`M00`, `M05`, `M06` and `D01` carry the amendments, each naming its decision.
+
+**Measured through `sextant system analyze` on two real systems:**
+
+| | participants | links | unmatched | uncalled |
+|---|---|---|---|---|
+| `spring-petclinic-microservices` | 8 | **23** | 0 | 36 |
+| `mall-swarm` | 9 | **258** | 0 | 40 |
+
+The link a reader wanted all along:
+
+| From | Calls | Endpoint |
+|---|---|---|
+| `genai-service` POST `/owners/{ownerId}/pets` | `customers-service` | POST `/owners/{ownerId}/pets` |
+
+Of those, 22 come from the outbound rows (13 endpoint, 9 participant) and the rest from the
+gateway prefix join: `petclinic` 13, `mall-swarm` 245. **Zero narrowed on either system** —
+`M06`'s claim that uniqueness needs no threshold, measured rather than reasoned. `apollo`
+scores 0, which is decision 6 working: all ten of its outbound rows have an unread authority
+or no address at all.
+
+**What it leaves open, so this entry is not read as `FR-8` delivered:** no cross-repository
+participants (`M05`, `system.yml`, `system.state.json`, staleness); no overlay or curation
+(`M01`, `D03`, `proposals.yml`, human-asserted links); no structural compatibility (`M06`
+step 3); no path-SHAPE matching; no external participants; and **no link for an address whose
+authority went unread** (decision 6, refused — the reason it costs Apollo all ten of its
+rows). `GAP-2` stays open until those land.
+
 ## GAP-3 — the async SQS client is read for one call · **1 of 28**
 
 `SqsAsyncClient.sendMessage` derives since `G-43` (closed on CI run 34669970510):
@@ -532,6 +563,106 @@ as part of closing a Major.
 **Closes when** the entries carry enough to tell the calls apart — an ordinal, or the call
 site — or when the key keeps the query while the published path does not. **Falsified by** a
 module making two such calls and the document showing one row.
+
+### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
+**Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
+
+**A principle violation, not a defect in output** — and the second class of its kind this
+register has recorded, which §13.8 says to raise rather than quietly fix. GUIDELINES §10 and
+`D02`'s whole premise: framework knowledge is catalog data, never code. The architecture test
+that enforces it (`test_no_framework_is_named_anywhere_in_code`) scans for framework
+NAMES — "spring", "kafka" — and all three of these spell none, which is how they passed it.
+
+| where | what | whose knowledge it is |
+|---|---|---|
+| `links.py:35`, `gateway.py:241` | `"lb://"` hardcoded | Spring Cloud LoadBalancer's URI scheme |
+| `gateway.py` | the `/**` wildcard tail; the `Name=arg` shortcut regex | Spring's Ant-path grammar; Spring Cloud Gateway's shortcut form, which the catalog ALREADY declares as `grammar: shortcut` and `stitch` re-implements |
+| `participants.py` | `module_id.rsplit(":", 1)[-1]` as the participant's name | `group:artifact` is Maven/Gradle coordinate syntax. A Go module id has no colon; this returns the whole path and calls it a name |
+
+**Real triggering input:** the third is triggered by the first non-JVM detector; the first two
+by the first non-Spring gateway. None fabricates today because the corpus is all Spring on
+Maven — which is exactly the condition under which creep goes unnoticed.
+
+**Closes by** the scheme and the grammar moving to the gateway catalog beside
+`participant_name_key` and `strip`, and the participant name being produced by the DETECTOR
+that produced `module_id` (ingress knows what a coordinate is; `stitch` should not). And by
+the architecture test learning to refuse a URI scheme or a glob tail in `application/`, since
+a name-based scan has now been shown insufficient.
+
+### OI-160 — `system_analyze` is 95 lines of pipeline inside the API facade
+**Minor · entered 2026-10-20, design review of PR #56 · `src/sextant/api.py::system_analyze`**
+
+It reads `modules.json`, builds participants, federates, loads every catalog, resolves
+aliases, matches, composes gateway routes, counts uncalled endpoints, writes two tables and
+renders. `module analyze` keeps that sequence in `application/stages/analyze.py`, testable
+without the CLI's file layout; the system tier has no stage and the sequence lives where only
+an end-to-end test can reach it. **Real triggering input:** every change to the sequence.
+**Closes by** `application/stages/system.py` owning it, with `api.py` reduced to paths in and
+a result out, as `analyze` already is.
+
+### OI-161 — `stitch` reads another engine's private block and a sibling's internal constant
+**Minor · entered 2026-10-20, design review of PR #56 · `src/sextant/application/stitch/gateway.py::route_model`, `links.py`**
+
+`route_model` walks `catalog.matches["indexed"]["item"]["peer"]["field"]` — `config_join`'s
+undocumented dict shape. Rename a key there and composition returns `None`: no error, no
+refusal, no links, and nothing says why. `links.py` imports `UNREADABLE_HOST` from
+`resolve/shapes/arguments.py`, a published convention of the `path` column living in a
+sibling package's internals. **Real triggering input:** any edit to `config_join`'s block.
+**Closes by** the route model being a declared catalog form the loader validates (as
+`participant_name_key` is), and `<host>` moving to `domain/` beside the other published
+markers.
+
+### OI-162 — a composed gateway link's `from_*` matches no endpoint row
+**Minor · entered 2026-10-20, design review of PR #56, measured on `petclinic` · `src/sextant/application/stitch/gateway.py`, `D01` system scope**
+
+`D01` says `links` joins "outbound endpoint, inbound endpoint". For the 15 gateway endpoint
+links on `petclinic`, **13 have a `from_path` that exists in no `endpoints` row of the
+gateway's own workspace** — `GET /api/customer/owners/{ownerId}` is synthesised from the
+prefix, while the gateway's real row is `GET /api/customer/**`. A consumer joining
+`links.from_*` back to `endpoints` finds nothing, and `from_caller` is NULL. The document is
+correct; the TABLE's join semantics are not. **Real triggering input:** any gateway route.
+**Closes by** a ruling: either the from-end is the gateway's inbound `/**` row (an inbound
+endpoint acting as a forwarder) with the composed address in its own column, or `D01`
+states that a link's from-end may be a derived address. Either way `D01` must say which.
+
+### OI-163 — `StripPrefix` declared as a default filter is not read, so the route is refused
+**Minor · entered 2026-10-20, review probe · `src/sextant/application/stitch/gateway.py::_routes`**
+
+`spring.cloud.gateway.server.webflux.default-filters[N]` applies to every route, and the join
+reads `routes[N].filters[M]` only. A gateway stripping its prefix globally has every route
+refused with "declares no StripPrefix filter" — a false REFUSAL, not a false link, so an
+under-report. **Real triggering input:** ordinary; `petclinic` uses `default-filters` for
+`CircuitBreaker` and `Retry` today and could move `StripPrefix` there tomorrow. **Closes by**
+the catalog declaring the default-filters key and the join reading both, route-level winning.
+
+### OI-164 — a `Path` predicate with several comma-separated patterns is read as one
+**Minor · entered 2026-10-20, review probe · `src/sextant/application/stitch/gateway.py::_one`**
+
+`Path=/a/**,/b/**` is two patterns (the catalog's own `gather: list_tail_flag` says so). The
+join takes the whole argument, sees it end in `/**`, and reads the prefix as `/a/**,/b` — three
+"segments". Today that is refused because the count mismatches `StripPrefix=1`, **with a wrong
+reason**; with a strip count that happened to equal 3 it would compose
+`/a/**,/b/orders`, an address that exists nowhere. **Real triggering input:** uncommon but
+legal. **Closes by** splitting on `,` as the catalog grammar does and composing one prefix per
+pattern, or refusing a multi-pattern predicate with that as the stated reason.
+
+### OI-165 — a participant's name is interpolated into the federated view's SQL
+**Minor · entered 2026-10-20, review · `src/sextant/storage/duckdb/workspace.py::federate`**
+
+`f"SELECT '{name}' AS participant …"` — the name is a VALUE, as the surrounding comment says,
+and then it is spliced into the statement rather than bound. A name containing `'` breaks the
+view; one containing `' UNION …` is worse. Maven forbids quotes in an artifactId, which is why
+this has not fired. **Real triggering input:** a Gradle project name, or `OI-159`'s next
+detector. **Closes by** binding the literal or escaping it.
+
+### OI-166 — loading 101 catalogs is more than half of a system run
+**Minor · entered 2026-10-20, measured · `src/sextant/api.py::system_analyze`**
+
+`system analyze` on `mall-swarm` takes 206 ms; 113 ms of it is `YamlCatalogSource.load()`,
+to read two declarations (`participant_name_key` and the route model). Not a defect at this
+scale — recorded because it is the dominant cost of every system run and grows with every
+catalog added. **Closes by** a loader entry point that reads only the system-tier declarations,
+or a cached load shared with `module analyze` in one process.
 
 ### OI-155 — `preserves` is the only identity key with no closed-set validation
 **Minor · entered 2026-10-19, found by review of `spec/discovery-peer-and-fluent` · `src/sextant/ingress/catalogs/yaml_source.py::_identities`**

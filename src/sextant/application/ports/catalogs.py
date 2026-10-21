@@ -216,6 +216,22 @@ class Catalog:
     # `{http: any}` there would claim it of every HTTP endpoint in the
     # estate, and a gateway's rows are the exception rather than the rule.
     format_any: bool = False
+    # **The configuration key under which a module registers the name OTHER modules
+    # call it by** (the reactor-linking spec, 2026-10-19; `D01`'s `participants.aliases`
+    # and `M05`'s "alias index").
+    #
+    # Why this is a catalog key and not a line in the stitcher: a build coordinate is
+    # not a service name. `spring-petclinic-customers-service` is the artifactId, and
+    # every client in that system states `customers-service` — the name the module
+    # registers in discovery, which it declares in its own configuration. Which KEY
+    # holds it is framework knowledge, so it is declared here and the matcher only ever
+    # asks "what is this participant's registered name?".
+    #
+    # Read by the system tier, which is why nothing in `resolve/` consults it: it names
+    # a participant, and a participant is a system-scope idea. A catalog declaring none
+    # contributes none, and a participant whose module declares no value keeps its
+    # artifactId — measured on `petclinic`, 7 of 8 modules declare one.
+    participant_name_key: str | None = None
     json_default_markers: list[str | dict[str, str]] = field(default_factory=list)
     # 2G design §7's fourth format vocabulary, read only by
     # `resolve/shapes/parse_binding.py`: `{bytes_payloads: [...], calls:

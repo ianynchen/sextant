@@ -26,6 +26,21 @@ deployment facts and aliases. Claims from [M01](M01-overlay.md).
 
 **No code, no repositories, no builds.** Everything needed already travelled in bundles.
 
+**Amendment 2026-10-19 (user decision 1, spec `2026-10-19-reactor-linking-design.md`): the
+participant set may instead be a REACTOR, and then the endpoints are read from each module's
+own WORKSPACE rather than from a bundle.** The set comes from the `<modules>` walk
+`module analyze` uses; `M05`, `system.yml` and `M01` are not involved. What this module does
+with the set is unchanged — it is handed participants and their endpoints either way, and the
+"no code, no repositories, no builds" rule holds exactly as written.
+
+*Why workspaces are allowed on that path, and only on it:* [D01](D01-graph-schema.md)'s
+system scope says the estate's graphs are views over the bundles and that Parquet "cannot
+drift from the bundle, because it IS the bundle". A reactor is ONE build, so every module
+workspace comes from the same run and there is no second artefact to drift from. Requiring
+bundles there would add a `module export` per module for a guarantee the single build already
+provides. Past one build the bundle rule is the right one and this exception does not
+generalise.
+
 ## Output
 
 `links`, `participants` and `findings` in [D01](D01-graph-schema.md); `proposals.yml`; and
@@ -49,6 +64,18 @@ Each outbound endpoint runs through four steps. Survivors at the end decide the 
 identity is `${orders.topic}`; what it names lives in `resolved_config`, per environment.
 `system.yml` declares exactly one environment, and every comparison in steps 1–3 uses the
 values resolved **for that environment**.
+
+**Amendment 2026-10-19 (user decision 7): on the reactor path the environment is named by
+`--environment NAME`, defaulting to `default`.** The rule above is untouched — one
+environment, and every comparison uses its values. Where the SELECTED environment leaves a
+key unresolved the comparison is refused with that reason; it never falls back to another
+environment's value, which would publish a link no deployment has.
+
+*Measured when this was decided:* 119 keys resolve to different values per environment across
+the pinned estate, and none of them is a wire identity — they are datasource URLs, registry
+addresses, LDAP mappings, log levels and feature flags. Zero gateway routes are built on a
+placeholder and zero outbound rows carry an unresolved `${…}` in `peer` or `path`. So no link
+in that corpus moves; this step is built for the shape one edit away from it.
 
 **Matching never compares expression text.** Two services can use the same key name for
 different topics, and different key names for the same topic. The rule is always
@@ -75,7 +102,29 @@ Where a concrete address matches several templates, **all are reported in specif
 order**. Predicting which one a framework would choose at runtime means writing a second
 copy of somebody else's routing table, and it will eventually disagree with the real one.
 
+**Amendments 2026-10-19 (spec `2026-10-19-reactor-linking-design.md`), both narrowing this
+step on the reactor path:**
+
+* **Shape matching is specified and NOT built** (user decision 3). Matching is string
+  equality on the template. Measured: all 18 endpoint links across `petclinic` and
+  `mall-swarm` match on the string, because both sides derive a template rather than a
+  concrete address — the shape rule is for a client that writes `/v1/orders/42`, which this
+  corpus does not contain.
+* **An address whose AUTHORITY went unread is not matched by path alone** (user decision 6,
+  REFUSED). A row reading `<host>/services/admin` stays unmatched with that reason, even
+  where exactly one participant serves `/services/admin`. Uniqueness inside the set cannot
+  rule out a target outside it, so the one key that would link it rests on the half of the
+  address nobody read. Measured cost: 5 of `apollo-portal`'s 10 outbound rows, and 0
+  elsewhere — and for Apollo the link would have been correct, which is evidence for the rule
+  and not proof of it.
+
 ### Step 3 — directional structural compatibility
+
+> **NOT BUILT on the reactor path** (user decision 2, 2026-10-19). Measured: every one of the
+> 18 endpoint links is already unique on wire identity, so there is no candidate set for a
+> payload test to discriminate between, and this step carries open decision 4 (shapes across
+> serialisation formats) which that spec does not settle. Specified, unbuilt.
+
 
 Two tests pointing in opposite directions:
 
@@ -133,6 +182,12 @@ across the system does the work, and there is no parameter to tune.
 
 ### Ambiguity goes to a person, cheaply
 
+> **`proposals.yml` is NOT written on the reactor path** (user decision 4, 2026-10-19),
+> because [D03](D03-overlay-schema.md) and [M01](M01-overlay.md) do not exist. A `narrowed`
+> link is recorded in `links` with every candidate, which is the honesty obligation below;
+> the file that makes accepting one cheap arrives with the overlay.
+
+
 A `narrowed` link is recorded with all its candidates **and** written to `proposals.yml` in
 exactly the shape a curation takes ([D03](D03-overlay-schema.md)). Accepting one means
 deleting the wrong lines and moving the file.
@@ -159,6 +214,11 @@ Both are output. Neither stops the run. But an unmatched call into a participant
 architectural finding.
 
 ### External participants
+
+> **NOT BUILT on the reactor path** (user decision 5, 2026-10-19): a declared external host
+> is a `system.yml` fact and there is no manifest. A call matching nothing is an unmatched
+> outbound endpoint, which is the finding below rather than a link.
+
 
 A call whose target resolves to a declared external host produces a link to that
 participant. Without this, every third-party call reads as an unmatched outbound endpoint

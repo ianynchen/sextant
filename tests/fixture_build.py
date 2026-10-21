@@ -73,6 +73,13 @@ PRIMED_FIXTURES = (
     "orders-servlet",
     "temporal-probe",
     "orders-eventbus",
+    # The two REACTOR fixtures the stitcher is measured on. Named by their ROOT, which is
+    # what `mvn compile` there builds every module of — including `reactor-gateway/edge`,
+    # whose only content is gateway configuration: it carries no Java, and `analyze` still
+    # needs its `target/classes` to exist or the module is skip-listed and its routes are
+    # never read.
+    "reactor-twoservice",
+    "reactor-gateway",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

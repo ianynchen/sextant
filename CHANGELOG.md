@@ -14,6 +14,54 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The two sides of a cross-service call are joined** (`GAP-2`, the reactor case;
+  `sextant system analyze <reactor root>`). Sextant read that one module calls
+  `POST /owners/{ownerId}/pets` at `customers-service` and that another serves exactly that,
+  and nothing connected them — `FR-8` was unbuilt and `M05`/`M06` were `planned`. One
+  document now says it:
+
+  | From | Calls | Endpoint | Resolution |
+  |---|---|---|---|
+  | `genai-service` POST `/owners/{ownerId}/pets` | `customers-service` | POST `/owners/{ownerId}/pets` | resolved · declared |
+
+  **Measured on two real systems:** `spring-petclinic-microservices` 23 links,
+  `mall-swarm` 258, **zero narrowed on either**, zero unmatched — `M06`'s claim that
+  uniqueness needs no threshold, measured rather than reasoned. `apollo` scores 0, which is
+  the refusal below working.
+
+  **A reactor is the participant set.** No `system.yml`, no `M05`, no bundles: the set is the
+  `modules.json` `module analyze` already writes and each participant's graph is the
+  workspace it already left, read through a federated view that copies nothing. Measured
+  before the matcher was written — 18 workspaces totalling 432 MB attach in 45 ms and one
+  scan of 484 endpoint rows takes 2 ms, because `ATTACH` reads a header rather than a
+  database.
+
+  **A participant answers to its artifactId AND to the name it registers.** The artifactId is
+  `spring-petclinic-customers-service` and every client states `customers-service`; of the
+  distinct names clients state, petclinic matches 4 of 4 by the registered name and 0 by the
+  artifactId while `mall-swarm` matches 5 of 5 the other way, so neither source alone covers
+  both systems. Which configuration key holds it is framework knowledge, so a catalog
+  declares it.
+
+  **A gateway route is a PATH PREFIX, not a rewrite engine.** `Path=/api/customer/**` in
+  front of `customers-service`'s `GET /owners/{ownerId}` publishes
+  `GET /api/customer/owners/{ownerId}` — the same join a class-level `@RequestMapping` makes,
+  with the halves in two modules. CP-40 measures the one framework fact it rests on across
+  both sides of Spring Cloud's module rename, so the gate is arithmetic: the strip count must
+  equal the prefix's segment count, or the composition is refused with both numbers stated
+  and the participant-level link left standing.
+
+  **Three refusals, each costing something on purpose.** A peer this system does not contain
+  refuses outright rather than falling through to the path — linking a module that merely
+  serves that path is fabrication. An address whose authority went unread is never matched by
+  path alone, which costs all ten of `apollo-portal`'s rows and would have been *correct* for
+  Apollo. And a route rewriting its path by any filter CP-40 did not measure gets no endpoint
+  link.
+
+  **What this is NOT**, because `FR-8` is not delivered: no cross-repository participants, no
+  overlay or curation, no structural compatibility, no path-shape matching, no external
+  participants. `COVERAGE.md` §3a-viii states the boundary and `GAP-2` stays open.
+
 - **An outbound row's QUERY STRING leaves its address and becomes metadata** (`OI-151`), so
   the two sides of one call finally record the same contract the same way:
 

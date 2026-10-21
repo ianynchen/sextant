@@ -143,6 +143,12 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+# The stitcher (M06), whose guards arrived with the reactor linking spec.
+_PARTICIPANTS = "sextant/application/stitch/participants.py"
+_LINKS = "sextant/application/stitch/links.py"
+_SYSTEM_RENDER = "sextant/egress/render/system.py"
+_GATEWAY = "sextant/application/stitch/gateway.py"
+_WORKSPACE = "sextant/storage/duckdb/workspace.py"
 _COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
@@ -337,6 +343,303 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    named = authority_of(argument, caller, workspace, index, identities)",
                 replace="    named = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-route-restricted-to-some-VERBS-composes-only-those": Guard(
+        what="a gateway route declaring a `Method` predicate composes links only for those "
+        "verbs; one declaring none forwards every verb",
+        why="MEASURED as a false fact in the review of PR #56: `Method=GET` in front of a "
+        "service serving `GET` and `POST /orders` composed BOTH, and `POST /o/orders` is an "
+        "address the gateway rejects before it forwards. The catalog declares the predicate "
+        "for exactly this and the first version ignored it",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find='            if verbs and str(row["method"]).upper() not in verbs:',
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-COLLIDING-artifact-id-is-named-by-its-coordinate": Guard(
+        what="two modules sharing an artifactId are named by their full coordinates, with "
+        "the bare artifactId an alias on both",
+        why="MEASURED as silent data loss in the review of PR #56: the federation is a map "
+        "keyed by `name`, so two participants both called `svc` collapsed to one and the "
+        "other's graph was never attached — with nothing to say so. Unique names key the "
+        "federation; the shared alias makes a client stating `svc` hit the ambiguity "
+        "refusal instead of being linked to whichever the dict kept",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        unique = module_id if short in collided else short",
+                replace="        unique = short  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-gateway-ROUTE-PREFIX-joins-the-paths-the-service-serves": Guard(
+        what="a gateway route's literal prefix is joined to each inbound path of the service "
+        "its `uri` names, publishing the gateway's own address for that route",
+        why="a route declaring `Path=/api/customer/**` in front of `customers-service`'s "
+        "`GET /owners/{ownerId}` serves `GET /api/customer/owners/{ownerId}`, and nothing "
+        "joined those two halves — the gateway's dependencies read as a destination with no "
+        "routes. It is the same join a class-level `@RequestMapping` in front of a method "
+        "path already makes, with the halves in two MODULES. Measured: `petclinic`'s four "
+        "routes publish 13 endpoint links and `mall-swarm`'s five publish 245, every one "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="        for row in served.get(target, ()):",
+                replace="        for row in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-STRIP-that-disagrees-with-the-prefix-REFUSES-the-composition": Guard(
+        what="the composition is refused unless the route's strip count equals its prefix's "
+        "segment count",
+        why="`StripPrefix=N` must remove exactly the prefix being composed. With "
+        "`Path=/a/b/**` and `StripPrefix=1` a request to `/a/b/orders` arrives as "
+        "`/b/orders`, which the service does not serve — so composing anyway publishes an "
+        "address no request takes, which is `M06`'s fabrication rather than imprecision. "
+        "Measured off the jar (CP-40, two releases either side of the module rename): the "
+        "filter keeps every segment whose index is >= `parts`. The dependency is not lost by "
+        "refusing — the `lb://` row still links the two participants",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="        if strip is None or strip != len(segments):",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-refused-route-composes-NO-endpoint-link": Guard(
+        what="a route the gate refused contributes no endpoint link at all",
+        why="the refusal has to BE a refusal: a route whose prefix cannot be composed must "
+        "leave the participant-level link standing and add nothing, rather than publish a "
+        "composed address beside a note saying it could not be composed",
+        edits=(
+            Edit(
+                path=_GATEWAY,
+                find="            continue\n        for row in served.get(target, ()):",
+                replace="        for row in served.get(target, ()):  # guard disabled",
+            ),
+        ),
+    ),
+    "stitch.the-SYSTEM-DOCUMENT-carries-the-link-not-only-the-table": Guard(
+        what="every link reaches the system document, naming the caller, the service, the "
+        "route and how much the match is worth",
+        why="**the document is the result, not the table** (user ruling 2026-10-17). A green "
+        "`links` table behind a blank document is a failed delivery, and this tier exists "
+        "entirely to state something no module document can: that one module's "
+        "`POST /owners/{ownerId}/pets` reaches another's `@PostMapping` of the same route",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='        lines.append(f"| {source} | `{link.to_participant}` | {endpoint} | {resolution} |")',
+                replace="        pass  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.the-document-names-every-REFUSAL-with-its-reason": Guard(
+        what="an outbound endpoint that matched nothing is in the document WITH the reason "
+        "it matched nothing",
+        why="`M06`'s honesty obligation, and a count alone cannot carry it: a client naming "
+        "a service outside the system is a dependency leaving it, while an address whose "
+        "authority went unread is a limit of this analysis. A reader who cannot tell those "
+        "apart cannot act on either",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='            lines.append(f"| `{u.participant}` | {call} | {u.reason} |")',
+                replace='            lines.append(f"| `{u.participant}` | {call} | |")',
+            ),
+        ),
+    ),
+    "stitch.UNCALLED-inbound-endpoints-are-a-section-of-their-own": Guard(
+        what="an inbound endpoint a link reaches is NOT reported as uncalled",
+        why="`M06` requires unmatched outbound and uncalled inbound reported separately "
+        "because they are different questions. Reporting a reached endpoint among them "
+        "makes the section an inventory rather than a finding, and a reader chasing dead "
+        "routes would be handed live ones",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        if key in reached:\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            continue",
+            ),
+        ),
+    ),
+    "stitch.the-document-names-the-ENVIRONMENT-it-resolved-for": Guard(
+        what="the system document states which environment its comparisons resolved "
+        "configuration values for",
+        why="a module's registered name and a gateway's routes are both configuration, so "
+        "every link is a statement about ONE environment (`M06` step 0). A document that "
+        "did not say which becomes unreadable the first time two environments disagree, and "
+        "silently wrong rather than visibly partial",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find='            f"resolving configuration for the `{environment}` environment."',
+                replace='            "resolving configuration."  # guard disabled',
+            ),
+        ),
+    ),
+    "stitch.a-PEER-the-client-states-settles-who-before-the-path-picks-the-route": Guard(
+        what="a peer the client states resolves through the participants' names AND aliases, "
+        "settling WHO is called before any path is compared",
+        why="`M06`'s key table calls a stated service name the strong HTTP case, and it is "
+        "what makes a second module serving the same path harmless. The alias half is "
+        "load-bearing and measured: of the distinct names clients state, "
+        "`spring-petclinic-microservices` matches 4 of 4 by the registered name and 0 by the "
+        "artifactId, while `mall-swarm` matches 5 of 5 the other way — neither source alone "
+        "covers both systems, and without aliases petclinic links nothing at all",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        for name in participant.answers_to():",
+                replace="        for name in (participant.name,):  # guard disabled",
+            ),
+        ),
+    ),
+    "stitch.a-peer-OUTSIDE-the-system-is-a-finding-not-a-fallback": Guard(
+        what="a client naming a service this system does not contain produces NO link — "
+        "never a fall through to matching the path instead",
+        why="the dangerous failure is not refusing, it is falling through: a module serving "
+        "that path would be linked to a call that does not reach it, which is `M06`'s "
+        'fabrication rather than imprecision — "and an agent will then reason from it". '
+        "The honest row is `M06`'s own finding: a service outside the system, a participant "
+        "nobody added, or a dependency nobody documented",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='            return refuse(f"the client names {peer!r}, which is not a participant")',
+                replace="            target = None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.an-UNREAD-authority-is-never-matched-by-path-alone": Guard(
+        what="an outbound row whose authority went unread mints no link, even where exactly "
+        "one participant serves that path",
+        why="the user's decision 6, refused 2026-10-19. Uniqueness INSIDE the participant set "
+        "cannot rule out a target outside it, so the only key that would link such a row "
+        "rests on the half of the address nobody read. Measured cost: 5 of "
+        "`apollo-portal`'s 10 outbound rows and 0 elsewhere — and for Apollo the link would "
+        "have been correct, which is evidence for the rule rather than proof of it",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="    if path.startswith(UNREADABLE_HOST):",
+                replace="    if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not": Guard(
+        what="a module's registered service name becomes an alias, and one equal to the "
+        "artifactId does not",
+        why="a build coordinate is not a service name — `spring-petclinic-customers-service` "
+        "against the `customers-service` every client writes — and the registered name is "
+        "what closes that gap. An alias equal to the name says nothing and would restate "
+        "every participant beside itself; `mall-swarm`'s six modules are all that case",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        if name is None or name in participant.answers_to():",
+                replace="        if name is None:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-participant-is-MATCHED-by-its-artifact-id": Guard(
+        what="a participant's matching NAME is its module's artifactId, with the full "
+        "coordinate carried beside it",
+        why="a client names a service the way service discovery does, and on a Spring "
+        "module that is `spring.application.name`, which defaults to the artifactId — "
+        "every `lb://` in the two pinned gateways names exactly that. The coordinate is "
+        "carried too because an artifactId is not unique in principle: two groups may ship "
+        "one, and without `module_id` those are one participant in the table and a link "
+        "could be minted against the wrong half of a collision",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find='    bare = [module_id.rsplit(":", 1)[-1] for module_id in ids]',
+                replace="    bare = list(ids)  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.an-ABSENT-participant-is-a-row-not-an-omission": Guard(
+        what="a module whose graph could not be read is a `participants` ROW marked absent "
+        "with a reason, never a module left out of the table",
+        why="`M06`'s rule is that an unmatched call into a participant nobody could read is "
+        "attributed to the GAP rather than reported as an architectural finding, and a "
+        "missing row cannot carry that distinction: *nothing calls this service* and *we "
+        "could not read this service* are different statements about a system, and a reader "
+        "acting on the first while the second is true deletes a dependency that exists",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        out.append(\n            Participant(",
+                replace="        if entry.get('location') is None:  # guard disabled\n"
+                "            continue\n"
+                "        out.append(\n            Participant(",
+            ),
+        ),
+    ),
+    "stitch.a-federated-view-READS-a-participants-graph-and-copies-nothing": Guard(
+        what="the system workspace reads each participant's graph through a view over its "
+        "workspace and imports none of it",
+        why="`D01`'s system scope: two native tables, everything else federated, because "
+        '"federating them costs no import stage and cannot drift from the bundle". Copying '
+        "would reintroduce exactly the drift the rule exists to prevent, and measured it "
+        "would also be pointless — `ATTACH` reads a header, so 18 workspaces totalling "
+        "432 MB attach in 45 ms and one scan of all 484 endpoint rows takes 2 ms",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")',
+                replace="            self._connection.execute(\n"
+                '                f"CREATE OR REPLACE TABLE {view} AS SELECT * FROM ({union}) WHERE false"\n'
+                "            )  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.a-reactor-entry-with-no-coordinate-names-no-participant": Guard(
+        what="a reactor entry carrying no build coordinate yields no participant",
+        why="its matching name would be the empty string, and a participants row whose "
+        "name is empty claims to be a service while matching nothing meaningfully. The "
+        "same refusal every reader in this project makes about a value it cannot name",
+        edits=(
+            Edit(
+                path=_PARTICIPANTS,
+                find="        if not module_id:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.NO-participant-leaves-an-EMPTY-view-never-a-missing-one": Guard(
+        what="a system with no readable participant still has the views, empty",
+        why="a missing view makes a system query raise a catalog error that says nothing "
+        "about why, where an empty one answers and leaves the reason where a reader can act "
+        "on it — per participant in `participants`, with its own sentence. A reactor every "
+        "module of which was skip-listed is the live case",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="            if not aliases:",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "stitch.FEDERATING-again-replaces-the-previous-set": Guard(
+        what="federating a second set detaches the first, so one process may analyze two "
+        "reactors without the first one's participants staying readable",
+        why="a link minted against a participant that is not in THIS system is a dependency "
+        "this system does not have — the same fabrication `M06` refuses heuristics to avoid, "
+        "arriving through stale state instead of through a guess",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            self._connection.execute(f"DETACH DATABASE IF EXISTS {alias}")',
+                replace="            pass  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -2781,6 +3084,13 @@ def copy_tree(destination: Path) -> Path:
         "orders-pathvars",
         "orders-fluentaddress",
         "orders-discovery",
+        # The two-module REACTOR the stitcher's guards are measured on. It is the only
+        # fixture here that is a reactor rather than a module, and it has to be: the
+        # participant set is read from the `modules.json` an analysis at a reactor ROOT
+        # writes, so a single module cannot state the shape at all.
+        "reactor-twoservice",
+        # The gateway reactor CP-40's gate is measured on.
+        "reactor-gateway",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

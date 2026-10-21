@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeVar, cast
 
@@ -863,6 +863,27 @@ _NAMED_QUERIES = {
     # Its ordering is the file's last statement, over the whole union and on
     # every column (NFR-1) — stated there, beside the arms whose ties it breaks.
     "value_edges": (_SQL_DIR / "value_edges.sql").read_text(encoding="utf-8"),
+    # D01's system scope. The two native tables, ordered for NFR-1 exactly as every
+    # other query here is: a tie left to insert order is not an ordering.
+    "participants": "SELECT * FROM participants ORDER BY name, module_id",
+    "links": (
+        "SELECT * FROM links ORDER BY from_participant, from_protocol, from_method, "
+        "from_path, from_caller, to_participant, to_method, to_path"
+    ),
+    # Every participant's endpoints, through the federated view `federate` builds — one
+    # view over the module workspaces, never a copy (D01, amended 2026-10-19). Reading it
+    # before `federate` has run raises, which is the honest failure: a system query over
+    # no participants would otherwise answer "no endpoints" and mean "no participants".
+    "system_endpoints": (
+        "SELECT * FROM system_endpoints "
+        "ORDER BY participant, protocol, method, path, handler, caller"
+    ),
+    # The same, for the configuration a comparison resolves values from. Filtered to one
+    # environment by the caller (`M06` step 0, user decision 7): never a fall back to
+    # another environment's value, so the filter is the query's own parameter.
+    "system_config": (
+        "SELECT * FROM system_config WHERE environment = ? ORDER BY participant, key"
+    ),
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -1318,6 +1339,13 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
+    # D01's system scope, written by `application/stitch`. A reset/insert pair each,
+    # both run once per `system analyze` — unlike the resolve tables above, where the
+    # reset is the pipeline's and the insert is per catalog.
+    "participants_reset": "reset_participants.sql",
+    "participants_insert": "insert_participants.sql",
+    "links_reset": "reset_links.sql",
+    "links_insert": "insert_links.sql",
     # Spec 2026-09-19 §4d/§5a. A reset/insert pair like `endpoint_metadata`'s and
     # for the same reason: the reset runs once per resolve from `derive_endpoints`
     # (beside `endpoints_reset`, ahead of every engine), the insert once per engine run.
@@ -1712,7 +1740,8 @@ class DuckDbWorkspace:
         """
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?, ?, ?) "
+            "WHERE table_schema = 'main' AND table_name NOT IN "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1723,6 +1752,16 @@ class DuckDbWorkspace:
                 _ENDPOINT_CANDIDATES,
                 _ROUTE_REQUIREMENTS,
                 _CHANNEL_BINDINGS,
+                # D01's two SYSTEM-scope tables. They are in `schema.sql` because one
+                # class opens both kinds of workspace, and they are not in a module
+                # bundle because a bundle is a MODULE artifact (D06 describes no bundle
+                # for the system workspace). A module bundle carrying an empty `links`
+                # would state that this module has no links, which is not a fact about
+                # the module — linking is a tier above it. This is the only exclusion
+                # here that is about SCOPE rather than about a table `schema.sql` did
+                # not create, which is why it is spelled out rather than listed.
+                "participants",
+                "links",
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:
@@ -1972,6 +2011,50 @@ class DuckDbWorkspace:
         self._stage_map(
             _REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", self._staged_payloads[1]
         )
+
+    def federate(self, participants: Mapping[str, Path]) -> None:
+        """The port's contract, as DuckDB does it: `ATTACH` each participant read-only and
+        define the two views as a `UNION ALL` across them.
+
+        **`ATTACH` reads a header, not a database**, which is what makes D01's "federating
+        them costs no import stage" true rather than aspirational. MEASURED 2026-10-19 on
+        `ruoyi-vue-pro`: 18 workspaces totalling 432 MB attach in 45 ms, the views define
+        in 0.5 ms, and one scan of all 484 endpoint rows takes 2 ms. Nothing here needs
+        caching or a narrowed view.
+
+        The alias is positional (`p0`, `p1`, …) and never the participant's own name: a
+        name is an artifactId and may carry a hyphen, which is not an identifier, and
+        quoting it would put the caller's string into SQL. The name travels as a VALUE in
+        the view's own `participant` column instead, which is also what the matcher reads.
+        """
+        aliases = []
+        for index, (name, location) in enumerate(sorted(participants.items())):
+            alias = f"p{index}"
+            self._connection.execute(f"DETACH DATABASE IF EXISTS {alias}")
+            # READ_ONLY because this workspace is the only one being written: a system run
+            # must not be able to touch a participant's graph, and the flag is the
+            # enforcement rather than a convention.
+            self._connection.execute(f"ATTACH '{location}' AS {alias} (READ_ONLY)")
+            aliases.append((alias, name))
+        for view, table, columns in (
+            ("system_endpoints", "endpoints", "*"),
+            ("system_config", "resolved_config", "*"),
+        ):
+            if not aliases:
+                # No participant whose graph could be read. The view still EXISTS and is
+                # empty, because the alternative — no view — makes a system query raise
+                # `Catalog Error` and say nothing about why. `participants` carries the
+                # reason per participant; this keeps the query answerable.
+                self._connection.execute(
+                    f"CREATE OR REPLACE VIEW {view} AS "
+                    f"SELECT NULL AS participant, {table}.* FROM {table} WHERE false"
+                )
+                continue
+            union = " UNION ALL ".join(
+                f"SELECT '{name}' AS participant, {columns} FROM {alias}.{table}"
+                for alias, name in aliases
+            )
+            self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")
 
     def close(self) -> None:
         # The staged rows hold the values the export exists to keep out of a

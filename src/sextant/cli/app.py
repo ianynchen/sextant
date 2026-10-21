@@ -29,6 +29,11 @@ def module() -> None:
     """Operate on one buildable unit."""
 
 
+@cli.group()
+def system() -> None:
+    """Operate on a set of buildable units that call each other."""
+
+
 @contextmanager
 def _rich_progress() -> Iterator[Progress]:
     """The CLI's own `Progress` — a fresh `RichProgress` per module, closed
@@ -112,6 +117,40 @@ def module_analyze(
         dir_cell = _truncated(outcome.dir, _TABLE_DIR_WIDTH)
         analyzed_cell = "yes" if outcome.analyzed else "no"
         click.echo(f"{dir_cell:<{_TABLE_DIR_WIDTH}} {outcome.kind:<15} {analyzed_cell}")
+
+
+@system.command("analyze")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--environment",
+    "environment",
+    default=api.DEFAULT_ENVIRONMENT,
+    show_default=True,
+    help=(
+        "The environment every comparison resolves configuration values for. A module's "
+        "registered name and a gateway's routes are both configuration, and a value this "
+        "environment leaves unresolved is never filled from another one."
+    ),
+)
+def system_analyze(path: Path, environment: str) -> None:
+    """Link the modules of a REACTOR to each other.
+
+    Reads the `modules.json` that `module analyze` wrote at the reactor root, and each
+    module's own workspace — it analyses nothing and needs no build (`M05`'s rule, for one
+    reactor). A module with no workspace is a participant marked absent with that reason.
+    """
+    try:
+        result = api.system_analyze(path, environment=environment)
+    except api.SextantError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"participants  {result.participants}")
+    click.echo(f"links         {result.links}")
+    # Printed beside the links rather than hidden behind a flag: a run whose links look
+    # right and whose unmatched count is large has found less of the system than it seems
+    # to, and the document names every one of them with a reason.
+    click.echo(f"unmatched     {result.unmatched}")
+    click.echo(f"uncalled      {result.uncalled}")
+    click.echo(str(result.document))
 
 
 @module.command("render")

@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: edge
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: good
+              uri: lb://orders
+              predicates:
+                - Path=/good/**
+              filters:
+                - StripPrefix=1
+            - id: mismatched
+              uri: lb://orders
+              predicates:
+                - Path=/a/b/**
+              filters:
+                - StripPrefix=1
