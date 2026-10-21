@@ -201,8 +201,8 @@ is the silent-disable shape rather than a strict one.
 themselves**, and is refused without `detect.required` (it would describe a bypass of a gate
 that is not there). The gate answers BEFORE any matching runs, so without this key an
 annotation only one framework defines could never be the positive evidence §3.6 says it is:
-a module whose build recorded no RSocket coordinate — the ordinary Maven case, where a
-starter's own transitives are not recorded — derived nothing from a `@ConnectMapping` class
+a module whose build recorded no RSocket coordinate — the Maven FALLBACK case, where the
+dependency set is the pom's and a starter's own transitives are not in it — derived nothing from a `@ConnectMapping` class
 and asked nothing either. Declared per catalog rather than computed as "an annotation only
 one catalog claims", because a rule that changes when an unrelated catalog is added is a
 rule nobody can read off the file that states it.
@@ -255,19 +255,22 @@ unchanged on a workspace whose facts predate the module fact.
 
 **A gated catalog that does not derive files a question rather than going quiet**, on
 either failing branch of the gate: no module fact recorded, and coordinates recorded that
-name none of the catalog's. The two are one finding, because on Maven a dependency reaching
-a module only as another artifact's own transitive is absent from the recorded set and
-cannot be told from real absence. The question is `handler_protocol`
+name none of the catalog's. The two are one finding, because where the set is a build
+FILE's (`dependency_source: declared`) a dependency reaching a module only as another
+artifact's own transitive is absent from it and cannot be told from real absence. The question is `handler_protocol`
 ([D01](D01-graph-schema.md) §7), it is filed only for classes the catalog's whole match —
 `type_annotation` conjunct included — would have claimed and that nothing else derived a row
 for, and where two catalogs ask it about one class the rows are folded into one question
 carrying both wires as candidates.
 
 The coordinates a module's build declares reach the workspace as [D00](D00-fact-schema.md)
-§5's `module` fact (`dependency_coordinates`). **Their REACH differs by build system and
-is not smoothed over**: Gradle reports the resolved compile classpath, transitives
-included; Maven reports the POM's own direct declarations, because the detector parses
-`pom.xml` rather than asking Maven to resolve it. A gated catalog whose question cannot be
+§5's `module` fact (`dependency_coordinates`), with WHO answered beside them
+(`dependency_source`). **Their REACH follows the answerer and is not smoothed over**: the
+build tool's own resolved compile classpath, transitives included, where Gradle's init
+script or Maven's `dependency:build-classpath` answered (spec `2026-10-21-maven-classpath-design.md`);
+the POM's declared-and-inherited set where Maven could not be asked — `mvn` absent,
+nothing built, or an offline refusal without `--allow-resolve` — which is labelled
+`declared` with the reason. A gated catalog whose question cannot be
 answered — no module fact recorded, or a starter arriving transitively on Maven — is
 SKIPPED and reported, exactly as an unmet capability is. Making this a MODULE-WIDE
 activation gate (the "active set" §12 describes) still waits on a resolved classpath under

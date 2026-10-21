@@ -14,6 +14,29 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The Maven dependency set is what Maven resolved, asked of Maven** (`OI-167` closed; spec
+  `2026-10-21-maven-classpath-design.md`, three rulings 2026-10-21). The detector runs
+  `mvn -o dependency:build-classpath` once per analysis from the reactor root and reads the
+  file it leaves beside each module's classes: the header read's archives, the dependency
+  set with transitives and the version Maven chose (what Gradle has always reported), and
+  the reactor siblings. Re-used while no POM is newer, so a second run and the whole test
+  suite start no `mvn`. **Measured on the field corpus:** `genai` 9 → **94** headers,
+  `spring-petclinic-rest` 13 → **197**, `yudao-module-system` 0 → **335**; both
+  `@ControllerAdvice` rows produce on real Spring Boot, and `orders-service`'s Spring
+  Integration catalog — skipped for a month on a framework that was on its classpath — runs.
+
+  **Offline first; online once and only under `--allow-resolve`; never fatal.** Where
+  Maven cannot be asked (`mvn` absent, nothing built, an offline refusal unflagged) the
+  POM-declared set this detector always read stands, LABELLED `dependency_source: declared`
+  with Maven's own reason, and the dependency gate's skip says "could not tell" there and
+  "not in the resolved set" where Maven answered. The document gains one coverage line —
+  dependency types the header read reached, headers read, found in no archive, and who
+  answered — and the header document is written whenever a classpath was handed over, so
+  "0 of 445" is said rather than being a missing file. One field pin moved and says why:
+  `jhipster-sample-app` classifies five more calls as `persistence/database`, calls on
+  `CrudRepository` itself, whose header (`extends Repository`) the supertype rule can now
+  read.
+
 - **A dependency type's place in the hierarchy is read from its class-file header**
   (`type_header`, D00 §5; user decision A, 2026-10-21). An engine proving a type is a
   throwable walks `extends` facts to a declared root, and those facts existed only for classes

@@ -435,6 +435,10 @@ class GradleDetector:
             # coordinate Gradle reported without a version is a shape nothing
             # here has seen — inventing one would be a release nobody cut.
             dependency_versions=GradleDetector._dependency_versions(project["classpath"]),
+            # Gradle has only ever answered from its own resolved compile classpath, which
+            # is what this label means (spec 2026-10-21 §3c); the Maven detector earns it
+            # per module and falls back to `declared`, Gradle never does.
+            dependency_source="gradle",
             library_roots=library_roots,
             sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,

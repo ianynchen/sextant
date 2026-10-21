@@ -22,19 +22,25 @@ A style like `derived_resource` is the opposite case — its evidence (an
 interface extending a generic repository contract) mentions no HTTP anywhere,
 so the framework's presence is the only thing that turns it into an API.
 
-**Why "unanswerable" degrades visibly rather than either way.** The two build
-systems answer with different reach: Gradle reports the resolved compile
-classpath, transitives included; Maven reports what a module's pom declares
-plus what it INHERITS from every ancestor pom the detector could open, and no
-transitives (F1). *Until F1 the Maven side was direct declarations alone, which
-skipped every module whose starter came from a company parent — the single
-worst case this gate had, and it is closed.* What remains is a framework that
-reaches the classpath only as another artifact's own transitive dependency, and
-for that the answer is still "we could not tell". Deriving anyway would
-fabricate an API for every plain Spring Data JPA module; omitting silently would
-leave a reader unable to tell "the framework is absent" from "we could not
-tell". The catalog is therefore SKIPPED, through the same channel and into the
-same manifest section an unmet capability already uses (M04, FR-17).
+**Why "unanswerable" degrades visibly rather than either way.** The dependency
+set's reach depends on WHO answered for it, and the module fact says who
+(`dependency_source`, spec 2026-10-21 §3c). Where the build tool did — Gradle's
+resolved compile classpath, or the file Maven's own `dependency:build-classpath`
+wrote — the set is the real one, transitives included, and a framework absent
+from it is absent: the skip says so plainly. Where this analysis read the build
+file itself (Maven's labelled fallback: `mvn` not on `PATH`, nothing built, or
+Maven refusing offline without `--allow-resolve`), the set is what the pom
+declares plus what it inherits (F1) and reaches no transitive, so a framework
+arriving only as another artifact's own dependency is "we could not tell".
+*Until F1 the Maven side was direct declarations alone, which skipped every
+module whose starter came from a company parent; until 2026-10-21 it was the
+pom parse always, which skipped every module reaching the framework through a
+starter — on `orders-service` that was Spring Integration, present and skipped.*
+Deriving anyway would fabricate an API for every plain Spring Data JPA module;
+omitting silently would leave a reader unable to tell "the framework is absent"
+from "we could not tell". The catalog is therefore SKIPPED, through the same
+channel and into the same manifest section an unmet capability already uses
+(M04, FR-17), with the reason that matches who answered.
 """
 
 import json
@@ -104,9 +110,19 @@ DEPENDENCY_GATED = frozenset({"derived_resource", "config_join"})
 # still true rather than being deleted along with the case it covered.*
 _NOT_DECLARED = (
     "a build declaration of one of {coordinates} — this module's build declares "
-    "and inherits none of them (D02 `detect.coordinates`; on Maven a dependency "
-    "reaching this module only as another artifact's own transitive is absent "
-    "from the recorded set and cannot be told apart from real absence here)"
+    "and inherits none of them (D02 `detect.coordinates`; the dependency set here "
+    "is the build FILE's, so a dependency reaching this module only as another "
+    "artifact's own transitive is absent from it and cannot be told apart from "
+    "real absence)"
+)
+
+# The same gate where the BUILD TOOL answered for the set (spec 2026-10-21 §3c):
+# transitives are in it, so an absence is a real absence and the message says
+# so without the caveat — which is the whole point of knowing who answered.
+_NOT_RESOLVED = (
+    "a build declaration of one of {coordinates} — none is in this module's "
+    "dependency set as the build tool resolved it, transitives included "
+    "(D02 `detect.coordinates`)"
 )
 
 _NOT_RECORDED = (
@@ -151,8 +167,8 @@ def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
     # (F2 §3.6, `Catalog.detect_satisfied_by`): `@ConnectMapping` is RSocket's
     # connection-setup annotation, STOMP has no counterpart, and a class carrying
     # one is running RSocket whether or not the recorded coordinates say so —
-    # which matters most on Maven, where a starter's own transitives are not
-    # recorded at all and the gate's answer is "could not tell".
+    # which matters where the set is a build FILE's — a starter's own transitives
+    # are not in it and the gate's answer is "could not tell".
     #
     # Checked only AFTER the build has failed to answer, so the ordinary path is
     # unchanged and this query runs on the modules that would otherwise derive
@@ -161,6 +177,8 @@ def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
         return None
     if declared is None:
         return _NOT_RECORDED.format(coordinates=wanted)
+    if _resolved_by_the_build_tool(workspace):
+        return _NOT_RESOLVED.format(coordinates=wanted)
     return _NOT_DECLARED.format(coordinates=wanted)
 
 
@@ -217,3 +235,14 @@ def _declared_coordinates(workspace: Workspace) -> set[str] | None:
         recorded_any = True
         declared.update(str(entry) for entry in json.loads(str(recorded)))
     return declared if recorded_any else None
+
+
+def _resolved_by_the_build_tool(workspace: Workspace) -> bool:
+    """Whether every module fact's dependency set is the build tool's own answer
+    (`dependency_source` other than `declared`, spec 2026-10-21 §3c). A fact
+    written before the field existed reads NULL and counts as `declared`: it was."""
+    rows = workspace.query("module_dependencies")
+    return bool(rows) and all(
+        row["dependency_source"] is not None and str(row["dependency_source"]) != "declared"
+        for row in rows
+    )

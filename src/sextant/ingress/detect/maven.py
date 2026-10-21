@@ -862,12 +862,29 @@ class MavenDetector:
 
     @staticmethod
     def _maven_reason(output: str, returncode: int) -> str:
-        """Maven's own last `[ERROR]` line, which is where it names the artifact or the
-        plugin it could not get; the last line of anything when it printed no such line."""
-        errors = [line for line in output.splitlines() if line.startswith("[ERROR]")]
-        named = [line for line in errors if line.strip() not in {"[ERROR]", "[ERROR] -> [Help 1]"}]
-        if named:
-            return named[-1].removeprefix("[ERROR]").strip()
+        """Maven's FIRST informative `[ERROR]` line — the one naming the artifact, plugin or
+        POM it could not get — with its boilerplate skipped: the `-> [Help 1]` pointers,
+        the re-run advice and the `-rf :module` resume hint all come AFTER the cause and
+        were what a last-line rule recorded (measured: `mall-admin`'s reason read as a
+        cwiki URL). The last line of anything when Maven printed no `[ERROR]` at all."""
+        boilerplate = (
+            "-> [Help",
+            "[Help",
+            "To see the full stack trace",
+            "Re-run Maven using",
+            "For more information about the errors",
+            "Some problems were encountered",
+            "After correcting the problems",
+            "mvn <args>",
+        )
+        for line in output.splitlines():
+            if not line.startswith("[ERROR]"):
+                continue
+            text = line.removeprefix("[ERROR]").strip()
+            while text.startswith("[ERROR]"):
+                text = text.removeprefix("[ERROR]").strip()
+            if text and not text.startswith(boilerplate):
+                return text
         tail = [line for line in output.splitlines() if line.strip()]
         return tail[-1].strip() if tail else f"mvn exited {returncode} and printed nothing"
 
@@ -887,6 +904,17 @@ class MavenDetector:
         # `normpath`, as `_walk` spells a `<module>` path: the parent chain is built from
         # `<relativePath>`s like `../pom.xml`, and Maven is told a directory, not a route.
         root = Path(os.path.normpath(top[0].parent))
+        # **The top of the `<parent>` chain is a reactor root only if it AGGREGATES this
+        # module** — declares `<modules>` and contains it. The climb's own first step is
+        # not checked for that (`_reactor_modules` reads nothing from a non-aggregator and
+        # loses nothing), so a module whose parent is a published POM in the local
+        # repository — `jhipster-sample-app` on `spring-boot-starter-parent` — arrives here
+        # with `root` under `~/.m2`. MEASURED: the field pin failed on exactly that, with a
+        # `relative_to` error where a single-module run was the answer.
+        if top[1].find("m:modules", _POM_NS) is None or not path.resolve().is_relative_to(
+            root.resolve()
+        ):
+            return path, None
         return root, path.resolve().relative_to(root.resolve()).as_posix()
 
     @staticmethod

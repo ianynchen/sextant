@@ -18,17 +18,13 @@
     <dependency>
       <groupId>org.springframework.boot</groupId><artifactId>spring-boot</artifactId><version>3.5.10</version>
     </dependency>
-    <!-- Declared DIRECTLY, and that is the point of it. `MethodArgumentNotValidException`
-         (spring-web) extends `BindException` (spring-context), and on Maven the classpath the
-         header read walks is the DIRECT declarations — a jar that arrives only as another's
-         transitive is not on it (the same boundary COVERAGE row "a module whose build declares
-         the framework only TRANSITIVELY" records for Data REST). Without this line the chain
-         stops at `BindException`, the parameter is not proven a throwable, and the second
-         handler derives nothing — MEASURED before this line was added. Gradle has no such gap:
-         its init script reports the RESOLVED classpath, transitives included. -->
-    <dependency>
-      <groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>6.1.6</version>
-    </dependency>
+    <!-- `spring-context` is NOT declared here, and that is the point of it.
+         `MethodArgumentNotValidException` (spring-web) extends `BindException` (spring-context),
+         and spring-context reaches this module only as `spring-boot`'s own transitive. Until
+         2026-10-21 the header read walked the DIRECT declarations and this line had to be
+         declared to prove the chain (OI-167); the classpath is now the one Maven resolved
+         (`target/sextant-classpath.txt`, spec 2026-10-21-maven-classpath-design.md), so the
+         chain crosses the transitive — which is the shape every Spring Boot starter has. -->
     <dependency>
       <groupId>com.example</groupId><artifactId>orders-soap-client</artifactId><version>1.0.0</version>
     </dependency>

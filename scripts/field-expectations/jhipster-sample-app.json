@@ -9,9 +9,9 @@
     "outbound": {}
   },
   "terminal_kinds": {
-    "persistence/database": 70,
+    "persistence/database": 75,
     "throws": 40,
-    "unresolved": 1071
+    "unresolved": 1066
   },
   "narrowed_sites": {
     "in_graph": 0,
@@ -64,5 +64,8 @@
       "PUT /api/operations/{id}"
     ],
     "outbound": []
-  }
+  },
+  "notes": [
+    "terminal_kinds 2026-10-21 (spec 2026-10-21-maven-classpath-design.md): persistence/database 70 -> 75, unresolved 1071 -> 1066. The five are calls whose owner is org/springframework/data/repository/CrudRepository itself: the terminals rule matches the Repository SUPERTYPE, and CrudRepository's own header (extends Repository) is a fact only since the header read walks Maven's resolved classpath (409 headers on this module, dependency_source maven). Measured: the five owners were listed and each is known through a type_header fact and no symbol fact. throws and every other count unmoved."
+  ]
 }

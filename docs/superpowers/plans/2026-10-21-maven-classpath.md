@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Status: rulings settled 2026-10-21** (spec §5: a, b, c all agreed).
+**Status: BUILT 2026-10-21** — rulings a, b, c agreed, all four tasks done; the measured
+result is in the spec's §1 BUILT block and `OI-167` is closed.
 
 **Goal:** `OI-167`. On Maven the `type_header` read sees a module's direct declarations only;
 asked of Maven itself, the classpath is the real one. Measured target (spec §1): `genai`
@@ -23,8 +24,9 @@ before Task 1.
 - **No resolver of our own.** A line of Maven's file is read; nothing is inferred about one
   that is not under the local repository.
 - **The detector names no language** (`test_language_confinement`, `test_source_rules`);
-  `java`/`classpath` leaks are pinned per file in `known_leak` and nothing new is added
-  there — the words belong to the extractor side.
+  `java`/`classpath` leaks are pinned per file in `known_leak`; `maven.py` gained `classpath`
+  there for the reason Gradle's entry has it (the goal's own name), and nothing else did —
+  the two model fields were named `dependency_source`/`dependency_source_reason` for that.
 - **No `mvn` in unit tests** (2M design §4's rule for Gradle, applied here): the subprocess
   half and the file-to-model half are separate functions; a test that drives `detect` on a
   temporary POM must be shown not to start a process.
@@ -52,57 +54,58 @@ before Task 1.
 
 ---
 
-## Task 1 — the detector asks Maven, and says when it could not
+## Task 1 — the detector asks Maven, and says when it could not · **DONE**
 
-- [ ] Reactor root: reuse `_reactor_modules`' `<parent>` walk to find the root; the module's
+- [x] Reactor root: reuse `_reactor_modules`' `<parent>` walk to find the root; the module's
       path relative to it is the `-pl` argument.
-- [ ] `_classpath_file(...)`: the subprocess half — offline first, online once under
+- [x] `_classpath_file(...)`: the subprocess half — offline first, online once under
       `allow_resolve`, `compile` attached only for a reactor root; a failure returns the
       reason (Maven's own last `[ERROR]` line, or the named precondition: no `mvn`, no
       `target/classes`), never raises.
-- [ ] Re-use rule (spec §3d): the file is newer than every POM read for the module.
-- [ ] `_classpath_entries(file)`: the translate half — jars under the local repository to
+- [x] Re-use rule (spec §3d): the file is newer than every POM read for the module.
+- [x] `_classpath_entries(file)`: the translate half — jars under the local repository to
       `(coordinate, version, archive)`; directories to sibling roots; anything else named
       in `libraries_not_resolved` with its reason, as Gradle's path-only entries are.
-- [ ] `_module_of` fed from the entries when present: `dependency_archives`,
+- [x] `_module_of` fed from the entries when present: `dependency_archives`,
       `dependency_coordinates`/`dependency_versions` (the closure), sibling roots; the
       declared set and `dependency_source="declared"` + reason otherwise.
-- [ ] Unit tests from a CAPTURED file; a test proving a temporary-POM `detect` starts no
+- [x] Unit tests from a CAPTURED file; a test proving a temporary-POM `detect` starts no
       process; a test that the offline refusal is retried online only under the flag.
-- [ ] `test_a_transitive_is_not_recorded` (line ~53) inverts, with the reason: under Maven's
+- [x] `test_a_transitive_is_not_recorded` (line ~53) inverts, with the reason: under Maven's
       answer `evo-inflector` IS recorded, which is the point.
-- [ ] Gate.
+- [x] Gate.
 
-## Task 2 — the honesty count reaches the document
+## Task 2 — the honesty count reaches the document · **DONE**
 
-- [ ] `Main.java`: write the header document whenever `--classpath-file` was given, carrying
+- [x] `Main.java`: write the header document whenever `--classpath-file` was given, carrying
       `type_headers_unlocated`; `TypeHeadersTest` pins "0 located is still a document".
-- [ ] `Document.type_headers_unlocated`, the `documents` view column, `coverage` reading
+- [x] `Document.type_headers_unlocated`, the `documents` view column, `coverage` reading
       `type_headers` and `type_headers_unlocated`, `ModuleFact.dependency_source` and
       `dependency_source_reason` written by `analyze`.
-- [ ] `document.py`: the one coverage line, present only when a header read ran. Goldens that
+- [x] `document.py`: the one coverage line, present only when a header read ran. Goldens that
       have no header read are unchanged.
-- [ ] D00 §2 (document field) and §5 (`module` row) amended as built.
-- [ ] Gate.
+- [x] D00 §2 (document field) and §5 (`module` row) amended as built.
+- [x] Gate.
 
-## Task 3 — fixtures, priming, and the chain that crosses a transitive
+## Task 3 — fixtures, priming, and the chain that crosses a transitive · **DONE**
 
-- [ ] `orders-advice/pom.xml` drops `spring-context`; `test_type_headers` pins that the
+- [x] `orders-advice/pom.xml` drops `spring-context`; `test_type_headers` pins that the
       `BindException` hop now comes through `spring-boot`'s transitive — the case OI-167
       named — and pins the coverage line's numbers.
-- [ ] `fixture_build.compile_and_stamp` runs the classpath goal beside `compile` (online in
+- [x] `fixture_build.compile_and_stamp` runs the classpath goal beside `compile` (online in
       CI's priming, offline in the suite), so the plugin and every scope are in `~/.m2` and
       each fixture carries its file under the stamp.
-- [ ] Guards: Maven's file feeding `dependency_archives`; the fallback label when the file is
-      absent; the coverage line.
-- [ ] Gate, guards.
+- [x] Guards: Maven's file feeding `dependency_archives`; the fallback label when the file is
+      absent; the coverage line. (Seven guards in all, every one shown to catch its break;
+      the dependency-set guard's pin moved to `orders-advice`, a fixture the harness carries.)
+- [x] Gate, guards.
 
-## Task 4 — close-out, measured
+## Task 4 — close-out, measured · **DONE**
 
-- [ ] Re-run spec §1 on the three modules through `analyze` itself (not the extractor
+- [x] Re-run spec §1 on the three modules through `analyze` itself (not the extractor
       alone), and on the other pinned corpora; record the table in the spec under §1.
-- [ ] Field pins re-run; any moved expectation re-recorded with its cause named.
-- [ ] `OI-167` closed; `dependencies.py`'s docstring, the Data REST boundary row and the
+- [x] Field pins re-run; any moved expectation re-recorded with its cause named.
+- [x] `OI-167` closed; `dependencies.py`'s docstring, the Data REST boundary row and the
       `@ControllerAdvice` boundary text in COVERAGE updated to what is now true on Maven.
-- [ ] `M02`: the Maven mechanism as built, and the fallback rule (ruling b) stated.
-- [ ] CHANGELOG. Full gate, full guard sweep, all six field pins.
+- [x] `M02`: the Maven mechanism as built, and the fallback rule (ruling b) stated.
+- [x] CHANGELOG. Full gate, full guard sweep, all six field pins.

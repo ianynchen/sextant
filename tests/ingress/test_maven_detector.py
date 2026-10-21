@@ -1757,9 +1757,27 @@ def test_a_reactor_child_is_asked_from_the_root_with_pl_and_compile(
     )
 
 
-def test_mavens_reason_is_its_last_named_error_line():
-    output = "[ERROR] Failed to execute goal\n[ERROR] dependency: x:y:jar:1 (test)\n[ERROR] \n[ERROR] -> [Help 1]\n"
-    assert MavenDetector._maven_reason(output, 1) == "dependency: x:y:jar:1 (test)"
+def test_mavens_reason_is_its_first_informative_error_line():
+    """The cause comes first and the boilerplate after — `-> [Help 1]`, the `-X` advice,
+    the `[Help 1] http://cwiki…` pointer and the `mvn <args> -rf :module` resume hint. A
+    last-line rule recorded the pointer as `mall-admin`'s reason (measured 2026-10-21)."""
+    output = (
+        "[ERROR] Failed to execute goal on project m: Could not resolve dependencies\n"
+        "[ERROR] dependency: x:y:jar:1 (test)\n[ERROR] \n[ERROR] -> [Help 1]\n"
+        "[ERROR] Re-run Maven using the -X switch to enable full debug logging.\n"
+        "[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/X\n"
+        "[ERROR]   mvn <args> -rf :m\n"
+    )
+    assert MavenDetector._maven_reason(output, 1) == (
+        "Failed to execute goal on project m: Could not resolve dependencies"
+    )
+    # A doubled prefix (`[ERROR] [ERROR] Some problems were encountered…`) is skipped to the
+    # line that names the POM.
+    doubled = (
+        "[ERROR] [ERROR] Some problems were encountered while processing the POMs:\n"
+        "[ERROR] Non-resolvable import POM: x:y:pom:1\n"
+    )
+    assert MavenDetector._maven_reason(doubled, 1) == "Non-resolvable import POM: x:y:pom:1"
     assert MavenDetector._maven_reason("", 7) == "mvn exited 7 and printed nothing"
 
 
@@ -1777,3 +1795,44 @@ def test_a_transitive_is_in_the_set_with_the_version_maven_chose():
     assert module.dependency_source == "maven"
     assert "org.springframework:spring-core" in module.dependency_coordinates
     assert module.dependency_versions["org.springframework:spring-core"]
+
+
+def test_a_module_whose_parent_is_a_published_pom_is_asked_from_its_own_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`jhipster-sample-app`'s shape, which the field pin caught: the `<parent>` is
+    `spring-boot-starter-parent`, a POM that lives in the local repository and aggregates
+    nothing. The top of that chain is not a reactor root — it declares no `<modules>` and
+    does not contain the module — so Maven is started from the module's own directory,
+    whole, with no `-pl`. Before this check the detector handed `relative_to` a directory
+    under `~/.m2` and the whole analysis failed on a path error."""
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    published = home / ".m2" / "repository" / "com" / "acme" / "acme-parent" / "2.3.0"
+    published.mkdir(parents=True)
+    (published / "acme-parent-2.3.0.pom").write_text(
+        _BARE_POM.replace("<artifactId>thing</artifactId>", "<artifactId>acme-parent</artifactId>")
+        .replace("1.0.0", "2.3.0")
+        .replace("</project>", "<packaging>pom</packaging></project>"),
+        encoding="utf-8",
+    )
+    module = _built(
+        tmp_path / "app",
+        _CHILD_POM.replace("</parent>", "<relativePath/></parent>").replace(
+            "</project>", f"{_DEPENDS}</project>"
+        ),
+    )
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(argv, *, cwd, **_kwargs):
+        calls.append((list(argv), Path(cwd)))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(maven_module.subprocess, "run", fake_run)
+    detected = MavenDetector().detect(module).modules[0]
+
+    [(argv, cwd)] = calls
+    assert cwd == module
+    assert "-pl" not in argv and "compile" not in argv
+    assert detected.dependency_source == "declared"  # Maven wrote nothing in this fake

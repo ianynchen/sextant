@@ -44,6 +44,22 @@ reads. Gradle already answers all three from its resolved compile classpath (`gr
 "dependency coordinates come from the resolved compile classpath"); Maven will answer them
 the same way, from the same file.
 
+> **BUILT 2026-10-21 — measured through `analyze` itself, not the extractor alone:**
+>
+> | module | headers / in no archive | `dependency_source` | wall time, fresh |
+> |---|---|---|---|
+> | `genai` | **94 / 29** (was 9 / 80) | `maven`, 286 coordinates | 1.5s |
+> | `spring-petclinic-rest` | **197 / 61** (was 13 / 186) | `maven`, 150 | 1.9s |
+> | `yudao-module-system` | **335 / 176** (was 0 / 445) | `maven`, 278 | 7.8s (reactor `-pl … -am` with `compile`) |
+> | `mall-admin` | 233 / 113 | `declared` — offline plugin refusal, `--allow-resolve` escapes | 6.5s |
+> | `spring-petclinic-api-gateway` | 0 / 64 | `declared` — offline refusal on a test-scoped artifact `mvn compile` never fetched (§2, fact 1) | 2.4s |
+>
+> The three predictions held to the number (§1 was the extractor on the same files). The two
+> fallbacks are §3c as ruled — labelled, with the reason, in the document. `orders-service`'s
+> `spring-integration` catalog, skipped for a month on a framework that was on its classpath
+> through `spring-cloud-stream`, runs; the Data REST boundary row and `dependencies.py`'s
+> caveat now describe the fallback only.
+
 ## 2. The cost, measured
 
 `mvn -o -q -B dependency:build-classpath -Dmdep.outputFile=target/sextant-classpath.txt

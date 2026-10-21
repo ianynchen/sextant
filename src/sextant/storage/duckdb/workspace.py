@@ -522,7 +522,11 @@ _NAMED_QUERIES = {
     "module_dependencies": """
         SELECT payload ->> 'module_id'            AS module_id,
                payload -> 'dependency_coordinates' AS dependency_coordinates,
-               payload -> 'dependency_versions'    AS dependency_versions
+               payload -> 'dependency_versions'    AS dependency_versions,
+               -- Who answered for the two above (spec 2026-10-21 §3c): `maven` or `gradle`
+               -- means the build tool's own resolved set, transitives included, and an
+               -- absence from it is a real absence; `declared` means a build-file parse.
+               payload ->> 'dependency_source'     AS dependency_source
         FROM raw_facts WHERE kind = 'module'
         ORDER BY module_id
     """,

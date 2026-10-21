@@ -193,3 +193,16 @@ def test_a_read_that_locates_nothing_is_still_a_document_saying_so(tmp_path: Pat
     assert document["header_only"] is True
     assert document["type_headers_unlocated"] == 8
     assert lines[1:] == []
+
+
+def test_the_second_hop_is_a_transitive_the_fixture_never_declares():
+    """OI-167's shape, closed: `BindException` lives in `spring-context`, which this fixture
+    does NOT declare — it reaches the module as `spring-boot`'s own transitive, the way every
+    Spring Boot starter delivers every type. The proof above (`invalid(...)` resolved through
+    two jars) therefore ran on the classpath MAVEN resolved, not on the direct declarations:
+    with those alone, the walk stopped at `BindException` (measured, 2026-10-21, before the
+    detector asked Maven). Pinned on the POM so the dependency cannot creep back in and turn
+    this fixture into a proof of the weaker case."""
+    pom = (ADVICE / "pom.xml").read_text(encoding="utf-8")
+    assert "<artifactId>spring-context</artifactId>" not in pom
+    assert "<artifactId>spring-boot</artifactId>" in pom
