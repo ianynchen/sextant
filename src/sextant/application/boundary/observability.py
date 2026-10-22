@@ -21,8 +21,9 @@ A skipped catalog is a gap by its recorded `cause` (ruled 2026-10-22): one skipp
 its framework is ABSENT from a classpath the build tool resolved (`module.dependency_source`
 `maven` or `gradle`) is not — there is nothing to observe — and takes no part in the map; one
 skipped for a missing extractor capability is; on a `declared` classpath (Maven could not be
-asked) an absence is not proven, so that skip stays a reason, as do the unrecorded-coordinates
-and superseded gates. A skip recorded without a `cause` (metadata written before the field)
+asked) an absence is not proven, so that skip stays a reason, as does the unrecorded-coordinates
+gate. A `superseded` skip is not a gap on any classpath: a sibling catalog reading the same
+annotations ran in its place (`detect.superseded_by`), so the kind was fed. A skip recorded without a `cause` (metadata written before the field)
 is a gap, the old rule, and its reason says the cause was unrecorded.
 
 For a code-grounded kind: any reason makes it `partial`; it is `not-observable` when no
@@ -185,14 +186,18 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
     uncovered = sorted(str(path) for path in cast(list[object], metadata.get("uncovered") or []))
     source = _mapping(metadata.get("module")).get("dependency_source")
     declared = source == "declared"
-    # A framework absent from a classpath the build tool resolved is nothing to observe:
-    # not a gap, and no part of the map (ruled 2026-10-22, the branch's final review).
+    # A framework absent from a classpath the build tool resolved is nothing to observe, and
+    # a superseded catalog's kinds were fed by the catalog that superseded it: neither is a
+    # gap, and neither takes part in the map (ruled 2026-10-22, the branch's final review).
     skipped = [
         _mapping(one)
         for one in cast(list[object], metadata.get("skipped_catalogs") or [])
         if not (
-            _mapping(one).get("cause") == SKIP_FRAMEWORK_ABSENT
-            and source in _RESOLVED_BY_THE_BUILD_TOOL
+            _mapping(one).get("cause") == SKIP_SUPERSEDED
+            or (
+                _mapping(one).get("cause") == SKIP_FRAMEWORK_ABSENT
+                and source in _RESOLVED_BY_THE_BUILD_TOOL
+            )
         )
     ]
 

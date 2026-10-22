@@ -566,13 +566,15 @@ def test_the_fixtures_endpoints_carry_the_requirements_the_binder_enforces(rende
     assert {"kind": "param", "name": "q", "requirement": "required"} in search["requirements"]  # type: ignore[operator]
 
 
-def test_a_request_that_gains_a_required_param_is_a_changed_requirement_set(
+def test_a_request_that_gains_a_required_param_is_a_breaking_change(
     rendered_root: Path, tmp_path: Path
 ):
-    """Side `a` is the fixture with `q`'s requirement row removed, so from `a` to the
-    fixture the request GAINS a required `@RequestParam`: one `changed` endpoint naming the
-    requirement set. Unlabelled — the spec labels body changes (M06 step 3), and a
-    requirement set is not a body."""
+    """Through the real pass: the fixture's `RequestParamsController#search` binds
+    `@RequestParam String q`, which the binder makes `required`. Side `before` is the
+    fixture with that requirement row removed, so from `before` to the fixture the request
+    GAINS a required param — one `changed` endpoint naming the requirement set, `breaking`
+    (ruled 2026-10-22: M06 step 3 counts a required metadata row as part of what the server
+    requires). Read the other way the requirement is dropped, which is `compatible`."""
     before = tmp_path / "before" / "orders-service"
     shutil.copytree(rendered_root, before)
     workspace = DuckDbWorkspace(before / ".sextant" / "workspace.duckdb")
@@ -592,7 +594,9 @@ def test_a_request_that_gains_a_required_param_is_a_changed_requirement_set(
     gained = {"kind": "param", "name": "q", "requirement": "required"}
     assert gained in cast(list[object], cast(dict[str, object], entry.to)["requirements"])
     assert gained not in cast(list[object], cast(dict[str, object], entry.from_)["requirements"])
-    assert entry.compatibility is None
+    assert entry.compatibility == "breaking"
+    (dropped,) = api.diff(rendered_root, before).diff.entries
+    assert (dropped.change, dropped.compatibility) == ("changed", "compatible")
 
 
 def test_diff_before_analyze_raises_notanalyzederror(tmp_path: Path):

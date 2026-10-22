@@ -385,6 +385,72 @@ def test_a_non_body_change_has_no_label(tmp_path: Path, sources: Callable[[Path]
     )  # fmt: skip
 
 
+def _requiring(*requirements: tuple[str, str]) -> Callable[[DuckDbWorkspace], None]:
+    """`GET /search` with one inbound requirement row per `(name, requirement)`, written as
+    the real writer writes them: `caller` is the HANDLER (`request_requirements._entry`)."""
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        _endpoint(workspace, method="GET", path="/search", handler="H#search().")
+        for name, requirement in requirements:
+            _insert(workspace, "endpoint_metadata", protocol="http", direction="inbound",
+                    method="GET", path="/search", caller="H#search().", kind="param",
+                    name=name, requirement=requirement)  # fmt: skip
+
+    return build
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "label"),
+    [
+        ((), (("q", "required"),), "breaking"),  # gains a required param
+        ((("q", "optional"),), (("q", "required"),), "breaking"),  # optional becomes required
+        ((("q", "required"),), (), "compatible"),  # drops it
+        ((("q", "required"),), (("q", "optional"),), "compatible"),  # relaxes it
+        ((), (("tag", "optional"),), "compatible"),  # gains an optional one
+    ],
+)
+def test_a_requirement_set_change_is_labelled_by_what_the_server_requires(
+    tmp_path: Path,
+    sources: Callable[[Path], BoundarySource],
+    before: tuple[tuple[str, str], ...],
+    after: tuple[tuple[str, str], ...],
+    label: str,
+):
+    """M06 step 3 counts `requirement: required` metadata as part of what the server
+    REQUIRES (ruled 2026-10-22): a request that gains a required entry is one an old client
+    cannot make; losing or relaxing one never refuses a request that worked."""
+    a = sources(_built(tmp_path / "a", _requiring(*before)))
+    b = sources(_built(tmp_path / "b", _requiring(*after)))
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
+    assert (entry.kind, entry.change, list(cast(dict[str, object], entry.to))) == (
+        "endpoint", "changed", ["requirements"],
+    )  # fmt: skip
+    assert entry.compatibility == label
+
+
+def test_a_dependency_header_set_change_is_compatible(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The same rule on a dependency's headers. A call SENDS a header and enforces nothing,
+    so its rows carry no `requirement` and a header gained or lost is `compatible`."""
+
+    def build(headers: tuple[str, ...]) -> Callable[[DuckDbWorkspace], None]:
+        def fill(workspace: DuckDbWorkspace) -> None:
+            _endpoint(workspace, direction="outbound", method="GET", path="/o",
+                      caller="C#o().", peer="p")  # fmt: skip
+            for name in headers:
+                _insert(workspace, "endpoint_metadata", protocol="http", direction="outbound",
+                        method="GET", path="/o", caller="C#o().", kind="header", name=name,
+                        value="v")  # fmt: skip
+
+        return fill
+
+    a = sources(_built(tmp_path / "a", build(())))
+    b = sources(_built(tmp_path / "b", build(("X-Trace",))))
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
+    assert (entry.kind, entry.compatibility) == ("dependency", "compatible")
+
+
 def test_a_contract_with_a_new_field_is_changed_and_names_the_field(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):

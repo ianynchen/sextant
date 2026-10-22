@@ -230,7 +230,8 @@ are gone:
   catalog that feeds the kind and is a gap, and, for `dependency` and `data-contract` alone,
   `dependency_source: declared`) and `not-observable` only
   where a catalog feeding the kind was skipped as a gap and none feeding it ran. Every skip is
-  a gap but one: a skip whose `cause` is `framework_absent` on a classpath the build tool resolved (`dependency_source` `maven` or `gradle`) is not — the framework is simply not used, so there
+  a gap but two: a `superseded` one (a sibling catalog on the same annotations ran in its
+  place, so the kind was fed), and a skip whose `cause` is `framework_absent` on a classpath the build tool resolved (`dependency_source` `maven` or `gradle`) is not — the framework is simply not used, so there
   is nothing to observe (ruled 2026-10-22). On a `declared` classpath the same absence is not
   proven and stays a reason; a skip with no recorded `cause` is a gap and its reason says the
   cause was unrecorded. `module` and

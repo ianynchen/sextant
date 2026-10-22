@@ -1846,8 +1846,9 @@ def diff(
     `.sextant.yml` (`_redactor_for` at its module root, exactly as `export` would mask it),
     a bundle side's the rules its exporter recorded, the bundle being masked already. Two
     sides whose rule sets differ are refused like the other producer stamps; allowed, both
-    are masked by the union of the two. When `out` is given the diff's JSON is written
-    there, parents created.
+    are masked by the union of the two — except that a BUNDLE side's own extra `redact:`
+    rules cannot be applied to the other side, because only their hash travels in its
+    manifest. When `out` is given the diff's JSON is written there, parents created.
 
     Raises `NotAnalyzedError` where a side is neither a workspace nor a bundle (naming what
     was looked for — a bundle exported by an older Sextant lacks a table), and

@@ -44,7 +44,12 @@ forwards in time: `breaking` where the request gained a required field or an exi
 request field became required, where the response lost a field, where an existing field's
 wire type changed in either body, or where either body's structure changed; `compatible`
 otherwise; and `None` where a changed body has nothing to compare on one side (no body, or
-`{"several": [...]}`) and nothing else said `breaking`.
+`{"several": [...]}`) and nothing else said `breaking`. The requirement set (an endpoint's
+`requirements`, a dependency's `headers`) is labelled by the same test, because M06 step 3
+counts `requirement: required` metadata as part of what the server requires: an entry that
+GAINS `required` (a header, query parameter or cookie an old client never sent) is
+`breaking`; one lost, added optional or relaxed to optional is `compatible`. A change only
+to `conditions`, `consumes`, `produces`, `format` or `resolution` is not labelled.
 
 One `rows(kind)` per kind per side — six named kind reads per side (`module` is read off
 the metadata, no query), plus the shared reads a side makes once on first use and every kind
@@ -72,6 +77,8 @@ _VERSIONS = ("graph_schema_version", "fact_schema_version", "boundary_vocabulary
 _PRODUCER = ("sextant_version", "catalog_hash", "redaction_set_hash")
 # The attributes that are sets, not values: rows joined by masking take their union.
 _SETS = ("requirements", "conditions", "headers")
+# The sets whose change is labelled: what the server requires of a request (M06 step 3).
+_REQUIREMENT_SETS = ("requirements", "headers")
 _BODIES = ("request", "response")
 _DESCRIPTORS = ("request_shape", "response_shape")
 # What a type symbol becomes in a descriptor's structure, and the keys that hold one.
@@ -452,6 +459,11 @@ def _compatibility(
         for column in _DESCRIPTORS
         if column in differing
     ]
+    verdicts += [
+        _requirement_verdict(old[column], new[column])
+        for column in _REQUIREMENT_SETS
+        if column in differing
+    ]
     if "breaking" in verdicts:
         return "breaking"
     if verdicts and all(verdict == "compatible" for verdict in verdicts):
@@ -477,6 +489,25 @@ def _body_verdict(body: str, old: object, new: object) -> Compatibility | None:
         )
         return "breaking" if newly_required else "compatible"
     return "breaking" if old_by.keys() - new_by.keys() else "compatible"
+
+
+def _requirement_verdict(old: object, new: object) -> Compatibility:
+    """M06 step 3 counts a `requirement: required` metadata row as part of what the server
+    REQUIRES, beside a body's required fields: an entry, by `(kind, name)`, that is
+    `required` on the new side and was not on the old is one an old client never sent, so
+    `breaking`; an entry lost, added optional or relaxed from required is `compatible`. An
+    entry carrying no `requirement` (every outbound header — a call SENDS it, it enforces
+    nothing) is never required."""
+
+    def required(entries: object) -> set[tuple[object, object]]:
+        return {
+            (entry.get("kind"), entry.get("name"))
+            for entry in cast(list[dict[str, object]], entries)
+            if entry.get("requirement") == "required"
+        }
+
+    gained = required(new) - required(old)
+    return "breaking" if gained else "compatible"
 
 
 def _structure_verdict(old: object, new: object) -> Compatibility | None:

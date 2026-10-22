@@ -180,14 +180,25 @@ def test_on_a_declared_classpath_a_framework_absent_skip_stays_a_reason():
     )
 
 
-@pytest.mark.parametrize("cause", ["dependencies_unrecorded", "superseded"])
-def test_the_other_gates_still_degrade_on_a_resolved_classpath(cause: str):
-    """Recorded no coordinates at all: the question was never answered. Superseded: not a
-    framework-absence ruling, so the old behaviour stands."""
-    skipped = [_skip("jax-rs", cause, "why", ["endpoint"])]
+def test_unrecorded_coordinates_still_degrade_on_a_resolved_classpath():
+    """Recorded no coordinates at all: the question was never answered."""
+    skipped = [_skip("jax-rs", "dependencies_unrecorded", "why", ["endpoint"])]
     m = observability_of(_with(skipped_catalogs=skipped))
 
     assert m.kinds["endpoint"] == Verdict("partial", ("catalog skipped: jax-rs (why)",))
+
+
+@pytest.mark.parametrize("source", ["maven", "declared"])
+def test_a_superseded_catalog_is_not_a_gap_on_any_classpath(source: str):
+    """A sibling catalog reading the same annotations ran in its place (`detect.superseded_by`
+    — `quarkus-rest` for `jakarta-jaxrs`), so the kind was fed: no reason, and no part in
+    `not-observable` even where the counts say nothing else fed it (ruled 2026-10-22)."""
+    skipped = [_skip("jakarta-jaxrs", "superseded", "superseded by io.quarkus:quarkus-rest",
+                     ["endpoint"])]  # fmt: skip
+    module = {"id": "com.acme:orders-service", "dependency_source": source}
+    m = observability_of(_with(module=module, skipped_catalogs=skipped, catalogs_run={}))
+
+    assert m.kinds["endpoint"] == Verdict("observable", ())
 
 
 def test_a_skip_recorded_without_a_cause_is_a_gap_and_says_why():

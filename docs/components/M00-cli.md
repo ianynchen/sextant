@@ -130,9 +130,12 @@ kind, change and identity, and a `summary` row per kind of `added`, `removed` an
 counts. Every kind is present even at zero, so an empty diff is `{"entries": [], "summary":
 {all zeros}}` and never an absent file (NFR-7). A `changed` entry's `from` and `to` carry only
 the attributes that differ, each named. An entry of kind `endpoint` or `dependency` whose body
-changed carries `compatibility`, `compatible` or `breaking`, by the stitcher's own directional
-test ([M06](M06-stitcher.md) step 3) read forwards in time (`null` for every other entry, and
-where a changed body has nothing to compare). Each entry carries `origin`, and an
+or requirement set changed carries `compatibility`, `compatible` or `breaking`, by the
+stitcher's own directional test ([M06](M06-stitcher.md) step 3) read forwards in time (`null`
+for every other entry, and where a changed body has nothing to compare). M06 step 3 counts
+`requirement: required` metadata as part of what the server requires, so an endpoint's
+`requirements` (or a dependency's `headers`) that GAIN a required header, query parameter or
+cookie read `breaking`, and one lost or relaxed to optional reads `compatible`. Each entry carries `origin`, and an
 entry grounded only in `dependency`-origin documents says so: a module is never reported as
 having changed a boundary its own build did not declare. The kinds, and what identifies each,
 are [D01](D01-graph-schema.md) §3's.
@@ -162,9 +165,9 @@ side under the rules its exporter recorded, which it already carries. The two ru
 compared by `redaction_set_hash` like the other producer stamps, so a `redact:` rule one
 side's module declares and the other's does not refuses by default; under
 `--allow-producer-change` both sides are masked by the UNION of the two sets, so nothing
-either side's rules hide is printed. (A bundle records its rules' hash, not the rules, so a
-value only a bundle's own additions would mask is masked on the workspace side by the
-workspace's rules alone.) A workspace outside its module's `.sextant` directory — a custom
+either side's rules hide is printed. A bundle side's own extra `redact:` rules cannot be
+applied to the other side, because only their hash travels in the manifest: a value only those
+additions would mask is masked on the workspace side by the workspace's rules alone. A workspace outside its module's `.sextant` directory — a custom
 `--workspace DIR` — is refused by name, because which `.sextant.yml` masks it is unknown:
 pass the module, its `.sextant` directory, or a bundle.
 

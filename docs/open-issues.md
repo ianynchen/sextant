@@ -662,8 +662,9 @@ requirement and condition rows carry the verbatim one, and the join misses them:
 endpoint reads with no requirements and no conditions, and a diff against the workspace it
 came from reports them removed.
 
-**What happens today:** measured by the reviewer, 0 such paths across 44 workspaces — no
-inbound path in the corpus is changed by masking, so nothing misses.
+**What happens today:** 0 such paths across 44 workspaces, measured by the whole-branch
+review of `h/meridian` on 2026-10-22 (not re-measured when this entry was logged) — no inbound
+path in that set is changed by masking, so nothing misses.
 
 **Real triggering input:** an endpoint path the redactor rewrites, e.g. a `redact:` value
 pattern a route segment matches, on a module with a requirement or a condition on that route.
