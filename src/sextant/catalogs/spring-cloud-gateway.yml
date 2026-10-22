@@ -25,6 +25,8 @@ measured:
   - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
       identity: reported, by: scripts/probes/w19_catalog_surface.md }
 
+bean_model: spring
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 # Spring Cloud Gateway's Java route DSL (`G-30`, spec §12 word 4): every route is a lambda

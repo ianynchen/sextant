@@ -76,6 +76,8 @@ measured:
   - { artifact: io.rsocket:rsocket-core, versions: ["1.1.4"],
       identity: assumed, by: scripts/probes/w16_rsocket_versus_stomp.md }
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 matches:

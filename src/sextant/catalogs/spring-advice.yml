@@ -12,6 +12,8 @@ style: error_advice
 detect:
   coordinates: ["org.springframework:spring-web"]
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 matches:

@@ -3,8 +3,9 @@ ruled 2026-10-22): the class-level condition an inbound endpoint's handler type 
 STATED on the row as structured data and evaluated per environment the module resolves —
 never deciding whether the row exists.
 
-The framework knowledge is the catalog's (`matches.mapping.conditions`, D02): which
-annotation, which of its members, and the probe that read the rule off the jar. This pass
+The framework knowledge is the Spring bean model's (`bean-models/spring.yml`, `conditions`,
+D02 §1c): which annotation, which of its members, and the probe that read the rule off the
+jar. This pass
 reads two existing things — the handler type's class-level annotations
 (`conditions.annotation_index`, one decode per load) and `resolved_config` — and writes
 `endpoint_conditions`: one row per (inbound endpoint, condition, environment).
@@ -25,14 +26,14 @@ What it evaluates, and what it refuses (spec §3b, §4):
 Runs AFTER `apply_protocol_hints`: a row names its endpoint by the identity columns, and
 `protocol` is final only there. Cost per resolve (GUIDELINES §8.7): one read of `endpoints`,
 one `annotation_index` lookup per inbound handler TYPE, one read of `resolved_config`, one
-insert — nothing per catalog beyond reading its block.
+insert — nothing per catalog beyond reading its model's block.
 """
 
 import json
 from dataclasses import dataclass
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
 from sextant.domain.symbols import bare_descriptor, type_descriptor
@@ -106,43 +107,28 @@ def record_endpoint_conditions(workspace: Workspace, catalogs: list[Catalog]) ->
 
 
 def _models(catalogs: list[Catalog]) -> dict[str, ConditionModel]:
-    """Every `conditions` entry across the catalogs, keyed by the annotation's bare symbol.
-    Refused naming the file where the block is malformed, as the requirements pass refuses
-    its own block; `by:` is required, because a rule nobody measured is a guess."""
+    """Every `conditions` entry across the catalogs' bean models, keyed by the annotation's
+    bare symbol — one entry per annotation however many catalogs name the model. The loader
+    has already refused a malformed block, naming the model's file and requiring a `by:`
+    probe, because a rule nobody measured is a guess (`yaml_source._check_bean_model`)."""
     models: dict[str, ConditionModel] = {}
     for catalog in catalogs:
-        mapping = catalog.matches.get("mapping")
-        if not isinstance(mapping, dict) or "conditions" not in mapping:
+        declared = catalog.bean_model.get("conditions")
+        if not declared:
             continue
-        declared = mapping["conditions"]
-        where = f"loading catalog {catalog.source}: `mapping.conditions`"
-        if not isinstance(declared, dict):
-            raise CatalogError(f"{where} must be a mapping of kind to entry, got {declared!r}")
         for kind, entry in declared.items():
-            if kind not in (PROFILE, PROPERTY, OTHER) or not isinstance(entry, dict):
-                raise CatalogError(
-                    f"{where}.{kind}: the kinds are `profile`, `property` and `other`, "
-                    "each a mapping"
-                )
             if kind == OTHER:
                 # The conditions this analysis NAMES and does not evaluate (spec §4): each is
                 # code, not configuration — a `Condition` class, a bean's presence, a SpEL
                 # expression — and a verdict would be a guess. One model per annotation, so
                 # a row is written verbatim with `holds = unresolved` in every environment,
                 # rather than the endpoint reading as unconditional.
-                names = entry.get("annotations")
-                if not isinstance(names, list) or not names or not entry.get("by"):
-                    raise CatalogError(
-                        f"{where}.other needs `annotations` (a list) and a `by:` probe"
-                    )
+                names = entry["annotations"]
                 for name in names:
                     symbol = type_descriptor(str(name))
                     models[symbol] = ConditionModel(kind=OTHER, annotation=symbol, members={})
                 continue
-            annotation = entry.get("annotation")
-            if not isinstance(annotation, str) or not entry.get("by"):
-                raise CatalogError(f"{where}.{kind} needs `annotation` and a `by:` probe")
-            symbol = type_descriptor(annotation)
+            symbol = type_descriptor(entry["annotation"])
             models[symbol] = ConditionModel(kind=kind, annotation=symbol, members=dict(entry))
     return models
 

@@ -7,6 +7,8 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+bean_model: spring
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:

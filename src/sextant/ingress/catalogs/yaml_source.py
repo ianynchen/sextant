@@ -61,6 +61,8 @@ class YamlCatalogSource:
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading model {path}: not a YAML mapping")
             models[str(_required(raw, "id", path))] = raw
+            if subdirectory == "bean-models":
+                _check_bean_model(raw, path)
         return models
 
     def server_model(self) -> list[dict[str, Any]]:
@@ -812,6 +814,53 @@ def _named_model(
             f"`{subdirectory}/` — known models: {sorted(models) or 'none'} ({section})"
         )
     return models[named]
+
+
+_CONDITION_KINDS = ("profile", "property", "other")
+
+
+def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
+    """Refuses a malformed `conditions` or `presence` block of a bean model, naming the file
+    (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
+    framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
+    measured is a guess, and a typo here would silently strip every bean of its condition."""
+    where = f"loading model {path}"
+    if "conditions" in raw:
+        declared = raw["conditions"]
+        if not isinstance(declared, dict):
+            raise CatalogError(
+                f"{where}: `conditions` must be a mapping of kind to entry, got {declared!r}"
+            )
+        for kind, entry in declared.items():
+            if kind not in _CONDITION_KINDS or not isinstance(entry, dict):
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}`: the kinds are `profile`, `property` and "
+                    "`other`, each a mapping"
+                )
+            if kind == "other":
+                names = entry.get("annotations")
+                if not isinstance(names, list) or not names or not entry.get("by"):
+                    raise CatalogError(
+                        f"{where}: `conditions.other` needs `annotations` (a list) and a `by:` probe"
+                    )
+            elif not isinstance(entry.get("annotation"), str) or not entry.get("by"):
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}` needs `annotation` and a `by:` probe"
+                )
+    if "presence" in raw:
+        presence = raw["presence"]
+        strings = ("missing", "present")
+        lists = ("type_attrs", "name_attrs")
+        if (
+            not isinstance(presence, dict)
+            or not all(isinstance(presence.get(key), str) for key in strings)
+            or not all(isinstance(presence.get(key), list) for key in lists)
+            or not presence.get("by")
+        ):
+            raise CatalogError(
+                f"{where}: `presence` needs `missing` and `present` (annotation names), "
+                "`type_attrs` and `name_attrs` (lists) and a `by:` probe"
+            )
 
 
 def _required(raw: dict[str, Any], key: str, path: Path) -> Any:

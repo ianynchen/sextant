@@ -378,3 +378,70 @@ def test_a_directory_with_no_value_models_and_no_hop_keys_has_an_empty_model(tmp
     (tmp_path / "invented-bare.yml").write_text(_HEADER + "matches: {}\n", encoding="utf-8")
 
     assert YamlCatalogSource(tmp_path).value_model() == []
+
+
+# --- the condition vocabulary a bean model carries (spec 2026-10-22 conditional-beans) -----
+
+
+def _model_with(directory: Path, body: str) -> None:
+    (directory / "bean-models").mkdir(exist_ok=True)
+    (directory / "bean-models" / "tiny.yml").write_text("id: tiny\n" + body, encoding="utf-8")
+
+
+def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path: Path):
+    _model_with(
+        tmp_path,
+        "conditions:\n"
+        "  profile: {annotation: com.acme.Profile, expressions: value, by: probe.md}\n"
+        "  other: {annotations: [com.acme.Odd], by: probe.md}\n"
+        "presence:\n"
+        "  missing: com.acme.Missing\n"
+        "  present: com.acme.Present\n"
+        "  type_attrs: [value, type]\n"
+        "  name_attrs: [name]\n"
+        "  by: probe.md\n",
+    )
+    (tmp_path / "invented-di.yml").write_text(
+        _HEADER + "bean_model: tiny\nmatches: {}\n", encoding="utf-8"
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.bean_model["conditions"]["profile"]["annotation"] == "com.acme.Profile"
+    assert catalog.bean_model["presence"]["name_attrs"] == ["name"]
+
+
+@pytest.mark.parametrize(
+    ("body", "complaint"),
+    [
+        ("conditions: [profile]\n", "`conditions` must be a mapping"),
+        ("conditions:\n  regex: {annotation: com.acme.Re, by: p.md}\n", "the kinds are"),
+        ("conditions:\n  profile: {expressions: value, by: p.md}\n", "needs `annotation`"),
+        ("conditions:\n  profile: {annotation: com.acme.P}\n", "`by:` probe"),
+        ("conditions:\n  other: {by: p.md}\n", "`conditions.other` needs `annotations`"),
+        ("presence: {missing: com.acme.M, present: com.acme.P, by: p.md}\n", "`presence` needs"),
+        (
+            (
+                "presence: {missing: com.acme.M, present: com.acme.P, type_attrs: [value], "
+                "name_attrs: [name]}\n"
+            ),
+            "`presence` needs",
+        ),
+    ],
+)
+def test_a_malformed_condition_vocabulary_is_refused_naming_the_model_file(
+    tmp_path: Path, body: str, complaint: str
+):
+    """A typo here would strip every bean of its condition without a word, so the loader
+    refuses it where the file is known — the contract `_models` kept when the block lived in
+    a catalog."""
+    _model_with(tmp_path, body)
+    (tmp_path / "invented-di.yml").write_text(
+        _HEADER + "bean_model: tiny\nmatches: {}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "tiny.yml" in str(raised.value)
+    assert complaint in str(raised.value)

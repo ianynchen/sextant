@@ -16,6 +16,13 @@ displayName: The Spring dependency-injection model (@Bean, @Qualifier, the chann
 # with `bean_model: spring` and the loader hands the mapping through as
 # `Catalog.bean_model`; a catalog naming an id no file here carries is refused
 # by file, exactly as an unknown `shape_model` is.
+#
+# It also carries the container's REGISTRATION vocabulary (spec 2026-10-22
+# conditional-beans §2a): which annotations make a class a bean, which one marks
+# a configuration class, and the conditions Spring evaluates when it registers a
+# bean (`conditions`, `presence` below). That knowledge belongs to the container,
+# not to any one catalog, so EVERY catalog that detects a Spring artifact names
+# this model (`tests/architecture/test_catalog_bean_model.py`).
 
 # `@Bean` declares `value()` and `name()`, both `String[]` and aliases of each
 # other (spring-context 6.1.6, `@AliasFor` — spec §0a F8; CP-27 row 14,
@@ -69,3 +76,88 @@ channel_types:
   - org.springframework.messaging.MessageChannel
   - org.springframework.messaging.SubscribableChannel
   - org.springframework.messaging.PollableChannel
+
+# **Which classes are beans, and what Spring consults when it registers one** (spec
+# 2026-10-22 conditional-beans §2a; CP-44, `scripts/probes/cp44_bean_registration_conditions.md`).
+#
+# `stereotypes` — the annotations component scanning registers a class under. Each
+# reaches `@Component` itself or through the annotation it is built on (`@RestController`
+# through `@Controller`, `@RestControllerAdvice` through `@ControllerAdvice`), which is
+# what the scanner's default `AnnotationTypeFilter(Component)` matches (CP-44 row 5).
+# `configuration_annotation` — the annotation that makes a class a configuration class:
+# Spring skips every `@Bean` of a configuration class whose own condition fails (CP-44
+# row 4: `loadBeanDefinitionsForConfigurationClass` returns before it reads the class's
+# `@Bean` methods).
+stereotypes:
+  - org.springframework.stereotype.Component
+  - org.springframework.stereotype.Service
+  - org.springframework.stereotype.Repository
+  - org.springframework.stereotype.Controller
+  - org.springframework.web.bind.annotation.RestController
+  - org.springframework.context.annotation.Configuration
+  - org.springframework.web.bind.annotation.ControllerAdvice
+  - org.springframework.web.bind.annotation.RestControllerAdvice
+configuration_annotation: org.springframework.context.annotation.Configuration
+
+# **A bean that exists in one environment only** (spec 2026-10-21 conditional-controllers,
+# ruled 2026-10-22; generalized to every bean by 2026-10-22 conditional-beans).
+# The conditions a bean's own annotations carry as DATA — stated on the row, structured,
+# evaluated per environment the module resolves, never deciding whether a row exists.
+# Each entry names the annotation, which of its members carry the condition, and the
+# probe that read the framework's own rule off the jar (§5.4):
+#   `profile`  — `@Profile(value)`: ANY listed expression matching accepts; `!p`
+#                negates; `&`, `|` and parentheses are expressions this analysis does not
+#                evaluate (CP-42 row 3) and reports `unresolved`.
+#   `property` — `@ConditionalOnProperty`: `key` is `prefix` + `.` + each of `name`
+#                (alias `value`); `having_value` compares case-insensitively, and EMPTY
+#                means "any value but `false`"; an absent key matches exactly when
+#                `match_if_missing` is true (CP-43 rows 2 and 3).
+conditions:
+  profile:  { annotation: org.springframework.context.annotation.Profile,
+              expressions: value,
+              by: scripts/probes/cp42_profile_condition.md }
+  property: { annotation: org.springframework.boot.autoconfigure.condition.ConditionalOnProperty,
+              prefix: prefix, names: [name, value], having_value: havingValue,
+              match_if_missing: matchIfMissing,
+              by: scripts/probes/cp43_on_property_condition.md }
+  # Named, never evaluated (spec §4): each is a `Condition` CLASS — code, not
+  # configuration (CP-42 row 4; the eighteen autoconfigure ones CP-43 row 5
+  # enumerates, less `ConditionalOnProperty`, which is `property` above). A bean
+  # under one writes its rows verbatim with `holds = unresolved`.
+  other:
+    by: scripts/probes/cp43_on_property_condition.md
+    annotations:
+      - org.springframework.context.annotation.Conditional
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnBean
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperties
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnClass
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnCloudPlatform
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnJava
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnJndi
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWarDeployment
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnProperties
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnResource
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnThreading
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnWarDeployment
+      - org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication
+
+# **The bean-presence conditions** (spec 2026-10-22 conditional-beans §2c; CP-44 rows 1-3).
+# `@ConditionalOnMissingBean` / `@ConditionalOnBean` check the beans registered SO FAR
+# (row 3), so a verdict from one module's own beans is `partial`. `type_attrs` are the
+# attributes naming the TYPE checked (`value` and `type` are one set, row 2); `name_attrs`
+# the attribute naming a bean by name; a use with neither (and no `annotation`) on a
+# `@Bean` method checks the method's own return type (row 1). Until the presence pass reads
+# this block the two annotations are also listed under `other` above, so they stay
+# `unresolved`, verbatim.
+presence:
+  missing: org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+  present: org.springframework.boot.autoconfigure.condition.ConditionalOnBean
+  type_attrs: [value, type]
+  name_attrs: [name]
+  by: scripts/probes/cp44_bean_registration_conditions.md

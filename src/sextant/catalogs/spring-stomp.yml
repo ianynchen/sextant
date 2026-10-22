@@ -56,6 +56,8 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/w16_rsocket_versus_stomp.md }
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 matches:

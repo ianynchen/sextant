@@ -37,6 +37,8 @@ measured:
   - { artifact: org.apache.kafka:kafka-clients, versions: ["3.6.2"],
       identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
 
+bean_model: spring
+
 requires: [resolved_config]
 
 matches:

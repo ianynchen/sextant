@@ -20,6 +20,8 @@ measured:
   - { artifact: org.springframework.ws:spring-ws-core, versions: ["4.1.4"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
+bean_model: spring
+
 requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 # A SECOND FILE beside `spring-ws.yml`, not a second block inside it, and the

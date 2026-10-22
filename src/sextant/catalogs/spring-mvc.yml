@@ -37,6 +37,8 @@ measured:
   - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
       identity: reported, by: scripts/probes/w17_webflux_controller.md }
 
+bean_model: spring
+
 requires: [annotation_args, type_annotations]
 
 matches:
@@ -138,53 +140,8 @@ matches:
     # attributes of that name only, so a media type spelled through `headers=` reaches
     # neither column (a stated boundary, rare in real code).
     request_requirement_attrs: { params: param, headers: header }
-    # **A controller that exists in one environment only** (spec
-    # 2026-10-21-conditional-controllers-design.md, ruled 2026-10-22). The class-level
-    # conditions this engine's inbound rows carry as DATA — stated on the row, structured,
-    # evaluated per environment the module resolves, never deciding whether a row exists.
-    # Each entry names the annotation, which of its members carry the condition, and the
-    # probe that read the framework's own rule off the jar (§5.4):
-    #   `profile`  — `@Profile(value)`: ANY listed expression matching accepts; `!p`
-    #                negates; `&`, `|` and parentheses are expressions this analysis does not
-    #                evaluate (CP-42 row 3) and reports `unresolved`.
-    #   `property` — `@ConditionalOnProperty`: `key` is `prefix` + `.` + each of `name`
-    #                (alias `value`); `having_value` compares case-insensitively, and EMPTY
-    #                means "any value but `false`"; an absent key matches exactly when
-    #                `match_if_missing` is true (CP-43 rows 2 and 3).
-    conditions:
-      profile:  { annotation: org.springframework.context.annotation.Profile,
-                  expressions: value,
-                  by: scripts/probes/cp42_profile_condition.md }
-      property: { annotation: org.springframework.boot.autoconfigure.condition.ConditionalOnProperty,
-                  prefix: prefix, names: [name, value], having_value: havingValue,
-                  match_if_missing: matchIfMissing,
-                  by: scripts/probes/cp43_on_property_condition.md }
-      # Named, never evaluated (spec §4): each is a `Condition` CLASS — code, not
-      # configuration (CP-42 row 4; the eighteen autoconfigure ones CP-43 row 5
-      # enumerates, less `ConditionalOnProperty`, which is `property` above). A
-      # controller under one writes its rows verbatim with `holds = unresolved`.
-      other:
-        by: scripts/probes/cp43_on_property_condition.md
-        annotations:
-          - org.springframework.context.annotation.Conditional
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnBean
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperties
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnClass
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnCloudPlatform
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnJava
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnJndi
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWarDeployment
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnProperties
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnResource
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnSingleCandidate
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnThreading
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnWarDeployment
-          - org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication
+    # The conditions on a controller's class (`@Profile`, `@ConditionalOn…`) are the Spring
+    # bean model's (`bean-models/spring.yml`, `conditions`): a controller is a bean.
     # The seventh condition, and the one no class file states: a custom `RequestCondition`
     # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
     # module declaring one is left alone entirely rather than told about a conflict it
