@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
+from click.testing import CliRunner
+
+from sextant.cli.app import cli
 from sextant.egress.export.manifest import write_manifest
+
+FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "orders-service"
 
 
 def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
@@ -113,3 +118,40 @@ def test_the_manifest_names_the_render_files_it_ships(tmp_path: Path):
     )
     written = json.loads((tmp_path / "manifest.json").read_text())
     assert written["contents"]["render"] == ["architecture.md", "architecture.html"]
+
+
+def test_the_manifest_producer_copies_the_vocabulary_version_from_metadata(tmp_path: Path):
+    """FR-21: the producer block names the vocabulary generation the bundle's boundary
+    entries were derived under. It is COPIED from `metadata.json`, never recomputed — the
+    sentinel is not the current stamp, so a recomputing exporter would fail here."""
+    metadata = {
+        "module": {"id": "com.acme:orders-service", "kind": "service", "languages": ["java"]},
+        "provenance": {"sextant_version": "0.1.0", "fact_schema_version": 5, "scanners": []},
+        "boundary_vocabulary_version": 7,
+    }
+    write_manifest(
+        tmp_path / "manifest.json",
+        metadata,
+        source={},
+        catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
+        module_commit="a3f91c",
+        tables=[],
+        facts_files=0,
+    )
+    written = json.loads((tmp_path / "manifest.json").read_text())
+    assert written["producer"]["boundary_vocabulary_version"] == 7
+
+
+def test_metadata_and_manifest_carry_the_vocabulary_version(analyzed_workspace_copy: Path):
+    """End to end on the real fixture: `analyze` stamps `metadata.json` and `export` carries
+    the same number into the bundle manifest's `producer`."""
+    metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
+    assert metadata["boundary_vocabulary_version"] == 1
+    result = CliRunner().invoke(
+        cli,
+        ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
+    assert manifest["producer"]["boundary_vocabulary_version"] == 1

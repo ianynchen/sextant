@@ -1,4 +1,4 @@
-"""The three stamps every fact file, workspace and bundle carries, and the ONE
+"""The stamps every fact file, workspace and bundle carries, and the ONE
 place each is written down.
 
 They were four hand-maintained copies across two languages until Step 0, and
@@ -89,5 +89,16 @@ SEXTANT_VERSION = version("sextant")
 #             table the system tier federates, so a workspace without it cannot be read
 #             by this build's `system analyze` — refused by name, never a bare
 #             `Catalog Error`.
+#
+#   boundary vocabulary
+#     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
+#             seven kinds — `module`, `endpoint`, `dependency`, `data-contract`,
+#             `boundary-property`, `schedule`, `error-handler` — each with the columns that
+#             IDENTIFY an entry, the ones that are its ATTRIBUTES and the ones that are
+#             EVIDENCE. It moves on its own, because adding a kind or moving a column
+#             between those three sets changes what a diff or an observability map means
+#             without changing a single table or fact: a consumer comparing two bundles
+#             reads this stamp to know whether the same words were used on both sides.
 FACT_SCHEMA_VERSION = 5
 GRAPH_SCHEMA_VERSION = 3
+BOUNDARY_VOCABULARY_VERSION = 1

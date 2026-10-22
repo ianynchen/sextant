@@ -10,7 +10,12 @@ from pathlib import Path
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.domain.version import (
+    BOUNDARY_VOCABULARY_VERSION,
+    FACT_SCHEMA_VERSION,
+    GRAPH_SCHEMA_VERSION,
+    SEXTANT_VERSION,
+)
 
 # What Sextant knowingly does not do, rotated whole rather than narrowed as
 # capability lands (spec ruling I3): a gap that closes retires by name, and
@@ -87,6 +92,9 @@ def write_metadata(
 
     document: dict[str, object] = {
         "schema_version": GRAPH_SCHEMA_VERSION,
+        # The vocabulary generation (FR-21) the boundary entries a reader derives from
+        # this workspace are named in; `export` copies it into the manifest's `producer`.
+        "boundary_vocabulary_version": BOUNDARY_VOCABULARY_VERSION,
         "module": {
             "id": module.module_id,
             "kind": module.kind,

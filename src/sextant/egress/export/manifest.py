@@ -40,6 +40,10 @@ def write_manifest(
         "sextant_version": provenance.get("sextant_version"),
         "fact_schema_version": provenance.get("fact_schema_version"),
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        # Copied from what `analyze` wrote, never recomputed: the vocabulary the
+        # entries were named in is the one that was current when the workspace was
+        # built, which a later build of this exporter may not be.
+        "boundary_vocabulary_version": metadata.get("boundary_vocabulary_version"),
         "scanners": provenance.get("scanners", []),
         "catalog_hash": catalog_hash,
         "redaction_set_hash": redaction_set_hash,
