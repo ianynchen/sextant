@@ -1,0 +1,3 @@
+# The `prod` environment: `BalanceController` (`@Profile("prod")`) exists here and not in `default`.
+billing:
+  mode: live

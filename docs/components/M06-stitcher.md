@@ -213,6 +213,21 @@ Both are output. Neither stops the run. But an unmatched call into a participant
 [M05](M05-sync.md) marked **absent** is attributed to the gap, not reported as an
 architectural finding.
 
+### A condition on the inbound endpoint is data the link carries, never a gate
+
+**Ruled 2026-10-22 (spec `2026-10-21-conditional-controllers-design.md`, ruling 2):** an
+endpoint is an endpoint — the filter chain joins an outbound endpoint to an inbound one on
+protocol, verb and path, and nothing about either side's implementation, environment or
+reactor enters that join. A controller under `@Profile("prod")` or
+`@ConditionalOnProperty(…)` exists in some of its module's environments only; that is a
+property of the INBOUND endpoint, stored as structured rows in the participant's own
+`endpoint_conditions` and read here through the federated `system_endpoint_conditions`
+view, exactly as the inbound row itself is read. After matching, each link carries the
+`(environment, holds)` pairs of the endpoint it reaches (`Link.to_conditions`, not a column
+of `links` — the rows live in the participant's bundle and join on participant, verb and
+path), and the system document states them beside the link: *exists in `prod`; not in
+`default`*. **No link is dropped or added for a condition**, in any environment.
+
 ### External participants
 
 > **NOT BUILT on the reactor path** (user decision 5, 2026-10-19): a declared external host
@@ -233,6 +248,8 @@ and the real dependencies are lost in the noise.
 - **No silent choice among candidates.** Several survivors is `narrowed`, never a pick.
 - **No runtime prediction.** Report the candidates a router could match; do not simulate the
   router.
+- **No environment-aware matching.** A condition on the inbound endpoint is stated on the
+  link, never used to drop or add one.
 - **No writing to `system.yml` or `curations.yml`.** Proposals go to their own file.
 
 ## Honesty obligations

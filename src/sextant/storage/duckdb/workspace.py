@@ -844,6 +844,15 @@ _NAMED_QUERIES = {
     # may carry several headers, and two callers may reach one address with different ones
     # — so the endpoint columns alone tie, and `kind, name` ties for a repeated header
     # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
+    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22): the conditions an inbound
+    # endpoint's handler type carries, one row per environment, in the order a reader
+    # compares them — endpoint, then environment.
+    "endpoint_conditions": """
+        SELECT protocol, direction, method, path, handler, kind, expression, environment,
+               holds, resolution, evidence
+        FROM endpoint_conditions
+        ORDER BY protocol, direction, method, path, handler, kind, expression, environment
+    """,
     "endpoint_metadata": """
         SELECT protocol, direction, method, path, caller, kind, name, value,
                resolution, evidence, requirement
@@ -929,6 +938,12 @@ _NAMED_QUERIES = {
     # another environment's value, so the filter is the query's own parameter.
     "system_config": (
         "SELECT * FROM system_config WHERE environment = ? ORDER BY participant, key"
+    ),
+    # Every participant's `endpoint_conditions`, federated as `system_endpoints` is: the
+    # conditions an inbound endpoint carries, which a link to it states beside itself.
+    "system_endpoint_conditions": (
+        "SELECT * FROM system_endpoint_conditions "
+        "ORDER BY participant, protocol, method, path, handler, kind, expression, environment"
     ),
 }
 
@@ -1174,6 +1189,9 @@ _EXPORT_QUERIES = {
     # is no analysis to break by masking early and no second chance to forget. A mask
     # applied here as well would be the redactor run twice over its own output.
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
+    # Structured for a machine (ruling 1, 2026-10-22): the conditions rows go out as they
+    # are, the document being the one verbose rendering of them.
+    "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
@@ -1389,6 +1407,8 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
+    "endpoint_conditions_reset": "reset_endpoint_conditions.sql",
+    "endpoint_conditions_insert": "insert_endpoint_conditions.sql",
     # D01's system scope, written by `application/stitch`. A reset/insert pair each,
     # both run once per `system analyze` — unlike the resolve tables above, where the
     # reset is the pipeline's and the insert is per catalog.
@@ -1497,6 +1517,23 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
         )
         for name, value in params.items()
     }
+
+
+class StaleParticipantError(RuntimeError):
+    """`federate` was handed a participant workspace lacking a table the system views read:
+    derived by an older Sextant, before that table existed. Named, with the command to run,
+    rather than a bare `Catalog Error` on the first system query."""
+
+
+# The system views, each a `UNION ALL` over one table of every participant (D01 "System
+# scope"): (view, participant table, columns).
+_FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
+    ("system_endpoints", "endpoints", "*"),
+    ("system_config", "resolved_config", "*"),
+    # Spec 2026-10-21-conditional-controllers (ruling 2): a condition is data on the
+    # inbound endpoint and the link states it, read from the participant's own table.
+    ("system_endpoint_conditions", "endpoint_conditions", "*"),
+)
 
 
 class DuckDbWorkspace:
@@ -2086,10 +2123,25 @@ class DuckDbWorkspace:
             # enforcement rather than a convention.
             self._connection.execute(f"ATTACH '{location}' AS {alias} (READ_ONLY)")
             aliases.append((alias, name))
-        for view, table, columns in (
-            ("system_endpoints", "endpoints", "*"),
-            ("system_config", "resolved_config", "*"),
-        ):
+            # A view binds at creation, so a participant lacking one of the federated tables
+            # — a workspace an OLDER Sextant derived, before that table existed — would make
+            # the first system query raise a bare `Catalog Error`. Refused here, naming the
+            # participant and what to do, which is the same answer `render` gives a stale
+            # workspace (D01 §7's stamp): there is no analysis here this build can read.
+            present = {
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT table_name FROM duckdb_tables() WHERE database_name = ?", [alias]
+                ).fetchall()
+            }
+            missing = sorted(table for _, table, _ in _FEDERATED_VIEWS if table not in present)
+            if missing:
+                raise StaleParticipantError(
+                    f"participant `{name}` ({location}) carries no `{'`, `'.join(missing)}` "
+                    "table: its workspace was derived by an older Sextant. Run "
+                    "`sextant module analyze` on it again, then `system analyze`."
+                )
+        for view, table, columns in _FEDERATED_VIEWS:
             if not aliases:
                 # No participant whose graph could be read. The view still EXISTS and is
                 # empty, because the alternative — no view — makes a system query raise

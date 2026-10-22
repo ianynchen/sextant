@@ -134,7 +134,8 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # 97 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes.kt`'s
     # `accept(JSON) { }` at the top of `coRouter { }` — `(None, /**)`, one row; the 88 gap
     # row is now `(None, /ktmvc/**)` resolved, the same count.
-    assert metadata["endpoints"]["inbound"]["http"] == 97
+    # 99 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): `GET /ops/status`, `GET /legacy/orders/all`.
+    assert metadata["endpoints"]["inbound"]["http"] == 99
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -247,7 +248,8 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # read 156 if it did not, which is what `test_type_headers` pins.
     # 156 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the wrapper that reassigns `path` on one
     # branch — one class file.
-    assert metadata["coverage"]["documents"] == 156
+    # 158 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): one class file each.
+    assert metadata["coverage"]["documents"] == 158
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

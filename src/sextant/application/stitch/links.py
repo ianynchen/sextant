@@ -56,6 +56,12 @@ class Link:
     resolution: str = str(Resolution.RESOLVED)
     evidence: str = NAME_MATCH
     candidates: tuple[str, ...] = ()
+    # The conditions the INBOUND endpoint carries, as `(environment, holds)` pairs read off
+    # the participant's own `endpoint_conditions` (spec 2026-10-21-conditional-controllers,
+    # ruling 2): matching never read them — an endpoint is an endpoint — and the link
+    # states them. Not a column of `links`: the structured rows live in the participant's
+    # bundle and join on (participant, method, path).
+    to_conditions: tuple[tuple[str, str], ...] = ()
 
     def row(self) -> dict[str, object]:
         return {

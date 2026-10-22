@@ -85,5 +85,9 @@ SEXTANT_VERSION = version("sextant")
 #             additive: a query against the older rows fails rather than
 #             answering empty, which is what comparing a stamp is for.
 #     2       the integer scheme. No table change.
+#     3       `endpoint_conditions` (spec 2026-10-21-conditional-controllers): a derived
+#             table the system tier federates, so a workspace without it cannot be read
+#             by this build's `system analyze` — refused by name, never a bare
+#             `Catalog Error`.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 2
+GRAPH_SCHEMA_VERSION = 3

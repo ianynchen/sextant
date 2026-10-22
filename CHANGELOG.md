@@ -14,6 +14,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A controller that exists in one environment only says so** (COVERAGE `conditional-controllers`
+  C → ✅; spec `2026-10-21-conditional-controllers-design.md`, ruled 2026-10-22). A controller under
+  `@Profile(…)` or `@ConditionalOnProperty(…)` used to publish its endpoints as if they always
+  existed. Its condition is now STATED on the row as structured data a machine reads — the new
+  `endpoint_conditions` table, one row per (endpoint, condition, environment the module
+  resolves), `holds` decided by the framework's own rule read off the jars (CP-42, CP-43) —
+  and the architecture document renders it in words: *Exists only when the active profile
+  matches one of: `prod`. Of this module's environments: holds in 1 of 2 — not in `default`.*
+  No row is dropped or added anywhere; matching never reads a condition — an endpoint is an
+  endpoint — and a link states its inbound endpoint's conditions beside it. Expressions this
+  analysis does not evaluate (`&`/or profile compositions; `@Conditional(Class)`,
+  `@ConditionalOnExpression`, `@ConditionalOnBean` and the rest of CP-43 row 5's set, named by
+  the catalog's `other` entry) are stated verbatim with `holds = unresolved`. A key an
+  environment declares as `${REF}` that nothing fills is `unresolved` there, not absent.
+  `GRAPH_SCHEMA_VERSION` 2 → 3: `system analyze` refuses, by name and with the command to
+  run, a participant workspace an older build derived without the table. Framework knowledge is catalog data (`mapping.conditions`
+  on the Spring inbound catalogs). The bean case (`OI-108`, 68 of the 69 conditional classes
+  across the corpora) is the next consumer of the same table.
+
 - **A value merged from two branches resolves when both branches are the same value** —
   `OI-143` closed (spec `2026-10-21-merged-values-design.md`; ruled "take your partial
   approach", 2026-10-21). A parameter reassigned on one branch — `if (path.startsWith("/"))

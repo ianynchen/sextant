@@ -105,9 +105,9 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 from xml.etree.ElementTree import ParseError
@@ -149,6 +149,7 @@ from sextant.application.stitch import (
 from sextant.application.stitch import (
     with_registered_names as _with_registered_names,
 )
+from sextant.application.stitch.links import Link
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
@@ -179,7 +180,7 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, extractor_jar, instructions_path
-from sextant.storage.duckdb.workspace import DuckDbWorkspace
+from sextant.storage.duckdb.workspace import DuckDbWorkspace, StaleParticipantError
 
 # --------------------------------------------------------------------------
 # The SextantError family (module docstring above states the grouping).
@@ -873,6 +874,32 @@ def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
 # --------------------------------------------------------------------------
 
 
+def _with_inbound_conditions(
+    links: tuple[Link, ...], conditions: Sequence[Mapping[str, Any]]
+) -> tuple[Link, ...]:
+    """Each link with the `(environment, holds)` pairs of the inbound endpoint it reaches —
+    read off the participants' own `endpoint_conditions` through the federated view, joined
+    on (participant, method, path), the identity an inbound row carries. A link to an
+    unconditional endpoint keeps the empty tuple."""
+    by_endpoint: dict[tuple[str, str | None, str | None], list[tuple[str, str]]] = {}
+    for row in conditions:
+        key = (
+            str(row["participant"]),
+            None if row["method"] is None else str(row["method"]),
+            None if row["path"] is None else str(row["path"]),
+        )
+        by_endpoint.setdefault(key, []).append((str(row["environment"]), str(row["holds"])))
+    return tuple(
+        replace(
+            link,
+            to_conditions=tuple(
+                by_endpoint.get((link.to_participant, link.to_method, link.to_path), ())
+            ),
+        )
+        for link in links
+    )
+
+
 def _reconstructed_report(
     path: Path, workspace: DuckDbWorkspace, metadata: dict[str, Any]
 ) -> tuple[ModuleModel, ResolveReport]:
@@ -916,6 +943,7 @@ def _reconstructed_report(
         # and the workspace is where rows live.
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),
+        endpoint_conditions=workspace.query("endpoint_conditions"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report
@@ -1570,9 +1598,14 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     workspace_path.unlink(missing_ok=True)
     workspace = DuckDbWorkspace(workspace_path)
     try:
-        workspace.federate(
-            {p.name: p.location for p in participants if p.present and p.location is not None}
-        )
+        try:
+            workspace.federate(
+                {p.name: p.location for p in participants if p.present and p.location is not None}
+            )
+        except StaleParticipantError as stale:
+            # The same refusal `render` makes for a workspace another build derived (D01
+            # §7): nothing here this build can read, run `analyze`.
+            raise NotAnalyzedError(str(stale)) from stale
         endpoints = workspace.query("system_endpoints")
         config = workspace.query("system_config", environment=environment)
         # WHICH key holds a module's registered name is framework knowledge, so a catalog
@@ -1605,6 +1638,11 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         )
         composed, refusals = _gateway_links(config, endpoints, model, names)
         links = (*links, *composed)
+        # Spec 2026-10-21-conditional-controllers (ruling 2): a condition is a property of
+        # the inbound endpoint and travels with it as data. Nothing above read it; each
+        # link now carries its inbound endpoint's per-environment verdicts so the system
+        # document can state them beside the link, and nothing is dropped for it.
+        links = _with_inbound_conditions(links, workspace.query("system_endpoint_conditions"))
         uncalled = _uncalled_endpoints(endpoints, links)
         workspace.derive("participants_reset")
         workspace.derive("participants_insert", rows=[p.row() for p in participants])

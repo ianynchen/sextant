@@ -342,7 +342,9 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `substring`, `makeConcatWithConstants`, `exchange` and `getBody`, plus the two
     # callers' calls into `send` (the numerator's +2) and the constructor's `Object.<init>`.
     # Still 29%.
-    assert "Calls whose callee body this workspace read: 535 of 1820 (29%)" in document
+    # 535 of 1822 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two
+    # constructors' `Object.<init>`, the only calls either class makes. Still 29%.
+    assert "Calls whose callee body this workspace read: 535 of 1822 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -392,7 +394,8 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # names a super-constructor exactly. `owner_not_scanned` below is unchanged: the
     # platform owner was already counted.
     # 1818 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the seven edges above, all `resolved`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1818." in document
+    # 1820 since the two conditional controllers: the two `Object.<init>` edges, `resolved`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1820." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -717,7 +720,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 97 since spec 2026-09-21 §7a (`dsl-media-route`): `(None, /**)`, `coRouter { }`'s
         # `accept(JSON) { }` — moving with `tests/cli/test_app.py`'s count; the 88 gap row
         # is now `(None, /ktmvc/**)` resolved.
-        "http": 97,
+        # 99 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers).
+        "http": 99,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -964,7 +968,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 164 since spec 2026-09-21 §7a (`dsl-media-route`): `coRouter { }`'s
             # `accept(JSON) { }`, `(None, /**)`; the 149 gap row is now `(None, /ktmvc/**)`
             # resolved, the same count.
-            ("inbound", 164),
+            # 166 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers).
+            ("inbound", 166),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             # 70 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two
@@ -1802,7 +1807,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # fact carries its own. It is NOT module output, and the bundle says so by the two
     # columns pinned beneath, which is what keeps this count readable.
     # 155 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19), one class file.
-    assert (None, 155) in origins
+    # 157 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers), one class file each.
+    assert (None, 157) in origins
     header = duckdb.sql(
         "SELECT origin_tier, origin FROM read_parquet("
         f"'{bundle / 'graph' / 'documents.parquet'}') WHERE header_only"
@@ -2183,3 +2189,38 @@ def test_a_wrappers_merged_path_reaches_the_document_with_its_verb(full_run: Pat
         "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
         "json (assumed) | partial |"
     ) in document
+
+
+def test_a_conditional_controller_states_where_it_exists_in_the_document(full_run: Path):
+    """The document is the result (ruling 2026-10-17), for the `conditional-controllers` cell
+    (spec 2026-10-21-conditional-controllers, ruled 2026-10-22). `OpsController` is under
+    `@Profile("prod")` and `LegacyOrdersController` under `@ConditionalOnProperty(name =
+    "orders.legacy", havingValue = "true")`, which `application-prod.yml` sets and
+    `application.yml` sets `false`. Each endpoint's detail block carries the two verbose lines
+    DERIVED from `endpoint_conditions` — the condition as the code spells it, and where it
+    holds among the module's two environments — and both rows stay in the inbound table at
+    `resolved`: the address is read; where it exists is a separate fact, stated, not decided."""
+    document = (full_run / "render" / "architecture.md").read_text()
+    assert "| `GET /ops/status` | `OpsController#status` |" in document
+    assert "  - Exists only when: the active profile matches one of: `prod`\n" in document
+    assert "| `GET /legacy/orders/all` | `LegacyOrdersController#all` |" in document
+    assert "  - Exists only when: the configuration key `orders.legacy` is `true`\n" in document
+    assert (
+        document.count(
+            "  - Of this module's environments: holds in 1 of 2 environments — not in `default`"
+        )
+        == 2
+    )
+    # Structured first: the bundle carries the rows a machine reads, four of them.
+    import duckdb
+
+    [parquet] = list(full_run.rglob("endpoint_conditions.parquet"))
+    rows = duckdb.sql(
+        f"SELECT path, environment, holds FROM read_parquet('{parquet}') ORDER BY 1, 2"
+    ).fetchall()
+    assert rows == [
+        ("/legacy/orders/all", "default", "false"),
+        ("/legacy/orders/all", "prod", "true"),
+        ("/ops/status", "default", "false"),
+        ("/ops/status", "prod", "true"),
+    ]

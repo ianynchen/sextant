@@ -1715,6 +1715,18 @@ declared on an interface method the class implements is not read as absent. Clas
 method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
 to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
 conflict with each other while neither conflicts with a method outside it. **The same two
+**`mapping.conditions` (2026-10-22)** declares the class-level annotations under which a
+catalog's inbound rows EXIST — `profile: {annotation, expressions, by}` and
+`property: {annotation, prefix, names, having_value, match_if_missing, by}`, each `by:` a
+committed probe (CP-42, CP-43) that read the framework's rule off its jar; and
+`other: {annotations: [...], by}`, the conditions the analysis NAMES and never evaluates
+(`@Conditional` and the eighteen autoconfigure conditions CP-43 row 5 enumerates) — a row
+under one is written verbatim with `holds = unresolved`, so the endpoint never reads as
+unconditional. The pass that reads
+them (`resolve/endpoint_conditions.py`) writes `endpoint_conditions` ([D01](D01-graph-schema.md))
+and refuses a malformed block naming the file; what it evaluates and what it reports
+`unresolved` is the spec's §3b/§4 — no `&`/`|` profile expression, no code-deciding
+`@Conditional`. Mapping
 attributes, read as REQUIREMENTS, are `mapping.request_requirement_attrs: { params: param,
 headers: header }`** (spec 2026-09-19 §5c) — attribute name to `kind`, `param` because the
 parameter condition reads the query string and a form body through one API — one

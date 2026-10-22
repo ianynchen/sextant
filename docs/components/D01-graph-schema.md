@@ -211,6 +211,7 @@ needs it.
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
+| `endpoint_conditions` | **A condition an inbound endpoint's handler type carries, stated as data and never deciding whether the row exists** (spec `2026-10-21-conditional-controllers-design.md`, ruled 2026-10-22): one row per (endpoint, condition, environment the module resolves) — `kind` (`profile`, `property`, `other`), `expression` (JSON typed per kind), `environment`, `holds` (`true`/`false`/`unresolved`), with its own resolution and evidence. Structured for a machine; the architecture document is the one verbose rendering. The matcher never reads it — an endpoint is an endpoint — and a link states its inbound endpoint's conditions beside it |
 | `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
 | `channel_bindings` (temp) | One edge between an in-process CHANNEL and a method at one of its ends: `channel`, `role` (`fed_by`, `read_by`, `sends_to`), `symbol`, `protocol`, `direction`, `destination`, `catalog_id`, `resolution`. Working state of one resolve — replaced whole beside `endpoints`, never in a bundle — joined into `endpoints` rows by `resolve/channel_bindings.py` and read by `config_join.gaps` |
 
@@ -712,7 +713,7 @@ materialisation where measurement demands it, not presumed everywhere.
 |---|---|---|
 | `participants` | Service or external, name, aliases, **bundle location**, commit | Natively |
 | `links` | Outbound endpoint, inbound endpoint, trust fields, candidates | Natively |
-| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces` | Each participant's own graph | **Views over the bundles** |
+| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions`, the conditions an inbound endpoint carries, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2) | **Views over the bundles** |
 
 The system workspace does **not** copy the estate's graphs. Bundles are Parquet, and one
 query reads Parquet across many paths, so a view is enough.

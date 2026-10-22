@@ -87,6 +87,21 @@ def _links(links: "Sequence[Link]") -> list[str]:
             if link.to_path is None
             else f"{link.to_method or ''} `{link.to_path}`".strip()
         )
+        if link.to_conditions:
+            # The inbound endpoint exists in some environments only (spec 2026-10-21-
+            # conditional-controllers, ruling 2): stated beside the link, from the
+            # participant's own rows; the link itself is matched and kept as any other.
+            holds = sorted(e for e, h in link.to_conditions if h == "true")
+            fails = sorted(e for e, h in link.to_conditions if h == "false")
+            unread = sorted(e for e, h in link.to_conditions if h == "unresolved")
+            parts = []
+            if holds:
+                parts.append("exists in " + ", ".join(f"`{e}`" for e in holds))
+            if fails:
+                parts.append("not in " + ", ".join(f"`{e}`" for e in fails))
+            if unread:
+                parts.append("not evaluated in " + ", ".join(f"`{e}`" for e in unread))
+            endpoint += " — " + "; ".join(parts)
         resolution = f"{link.resolution} · {link.evidence}"
         if link.resolution == str(Resolution.NARROWED):
             # `M06`'s honesty obligation: every narrowed link with all its candidates. It
