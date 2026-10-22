@@ -599,7 +599,7 @@ def _dsn(value: str) -> Callable[[DuckDbWorkspace], None]:
     return build
 
 
-@pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
+@pytest.mark.pins("boundary.a-PRODUCER-mismatch-refuses-unless-allowed")
 def test_two_workspaces_masked_under_their_own_rules_refuse_where_the_rules_differ(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
