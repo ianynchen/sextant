@@ -159,6 +159,7 @@ def test_identical_sides_produce_the_empty_change_set_with_every_kind_at_zero(
     assert diff.producer_changed is False
 
 
+@pytest.mark.pins("boundary.every-kind-is-in-the-summary-at-zero")
 def test_every_kind_is_present_in_the_summary_at_zero_even_with_no_rows_anywhere(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -173,6 +174,7 @@ def test_every_kind_is_present_in_the_summary_at_zero_even_with_no_rows_anywhere
 # --- identity: the wire, not the code -----------------------------------------------------
 
 
+@pytest.mark.pins("boundary.the-HANDLER-is-evidence-never-identity")
 def test_a_moved_controller_is_no_entry_and_a_new_route_is_added(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -271,6 +273,7 @@ def test_a_response_field_added_is_a_compatible_change_with_from_and_to(
     assert [f["wire_name"] for f in entry.to["response"]] == ["id", "name", "phone"]  # type: ignore[attr-defined]
 
 
+@pytest.mark.pins("boundary.a-REQUIRED-request-field-added-is-breaking")
 def test_a_required_request_field_added_is_breaking(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -422,6 +425,7 @@ def _secrets(workspace: DuckDbWorkspace) -> None:
             environment="default")  # fmt: skip
 
 
+@pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
 def test_a_masked_bundle_and_its_verbatim_workspace_diff_empty(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -439,6 +443,7 @@ def test_a_masked_bundle_and_its_verbatim_workspace_diff_empty(
     assert diff_sources(verbatim, masked, REDACTOR).entries == ()
 
 
+@pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
 def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path], BoundarySource]):
     a = sources(_built(tmp_path / "a", lambda w: None))
     b = sources(_built(tmp_path / "b", _secrets))
@@ -539,6 +544,7 @@ def test_different_module_ids_refuse_naming_both(tmp_path: Path):
         diff_sources(a, b, REDACTOR, allow_producer_change=True)
 
 
+@pytest.mark.pins("boundary.a-PRODUCER-mismatch-refuses-unless-allowed")
 def test_different_sextant_versions_refuse_unless_allowed_and_then_label(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):

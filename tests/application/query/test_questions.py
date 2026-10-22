@@ -295,6 +295,7 @@ def test_impact_terminates_on_recursion(workspace: DuckDbWorkspace, tmp_path: Pa
     }
 
 
+@pytest.mark.pins("query.impact-returns-THREE-partitions")
 def test_a_path_through_narrowed_dispatch_is_possible_and_the_strongest_path_wins(
     workspace: DuckDbWorkspace, tmp_path: Path
 ):
@@ -321,6 +322,7 @@ def test_a_path_through_narrowed_dispatch_is_possible_and_the_strongest_path_win
     assert _names(result["possible"]) == [_method(n) for n in ("n", "x")]
 
 
+@pytest.mark.pins("query.impact-returns-THREE-partitions")
 def test_the_unknown_regions_are_an_unread_callee_and_a_direct_ancestor_nobody_read(
     workspace: DuckDbWorkspace, tmp_path: Path
 ):

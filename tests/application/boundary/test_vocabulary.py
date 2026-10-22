@@ -1,3 +1,5 @@
+import pytest
+
 from sextant.application.boundary.vocabulary import KINDS, kinds_fed_by
 from sextant.domain.version import BOUNDARY_VOCABULARY_VERSION
 
@@ -26,6 +28,7 @@ def test_every_kind_is_keyed_by_its_own_name():
     assert all(name == kind.name for name, kind in KINDS.items())
 
 
+@pytest.mark.pins("boundary.the-HANDLER-is-evidence-never-identity")
 def test_endpoint_identity_is_the_exposed_address_and_the_handler_is_evidence():
     """§2 "the wire is the identity; the symbol is evidence": an endpoint that moved
     controller is the same endpoint, so the handler is never an identity or attribute column."""

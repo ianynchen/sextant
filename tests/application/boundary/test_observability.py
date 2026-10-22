@@ -7,6 +7,8 @@ in `metadata.json` and the manifest) live in `tests/egress/test_manifest.py` and
 import copy
 import json
 
+import pytest
+
 from sextant.application.boundary.observability import Verdict, observability_of
 from sextant.application.boundary.vocabulary import KINDS
 from sextant.domain.version import BOUNDARY_VOCABULARY_VERSION
@@ -117,11 +119,13 @@ def test_a_skipped_catalog_does_not_make_a_kind_not_observable_while_another_ran
     assert m.kinds["endpoint"].verdict == "partial"
 
 
+@pytest.mark.pins("boundary.the-static-GAP-list-is-stated-never-a-verdict")
 def test_the_static_gap_list_is_stated_never_a_verdict():
     m = observability_of(_with(gaps=["config_as_code_not_read"]))
 
     assert m.kinds["boundary-property"].verdict == "observable"
     assert m.kinds["boundary-property"].reasons == ()
+    assert all("config_as_code_not_read" not in v.reasons for v in m.kinds.values())
     assert m.stated_boundaries == ("config_as_code_not_read",)
 
 

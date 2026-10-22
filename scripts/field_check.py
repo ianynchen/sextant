@@ -57,6 +57,15 @@ Checks, per expectation:
   `mall-admin` and 17 on `jhipster-sample-app`, and the class diagram draws one arrow on
   each corpus that has any; those figures appear in four documents and nothing re-checked
   them.
+- **`diff_against`**, where the pin declares one (boundary vocabulary and diff, spec
+  2026-10-22 §1b) — `{"commit": …, "summary": {kind: {added, removed, changed}}}`. The
+  derivation diff is only ever shown on two hand-built sides in the suite; this is the one
+  place it meets real history. The clone gets a git WORKTREE at the older commit under
+  `examples/<repo>-at-<short sha>` (created once, reused after; the main clone's checkout is
+  never touched), built and analysed by the same steps as the pinned side, and
+  `sextant.api.diff(old, pinned)`'s `summary` is compared kind by kind with the expected
+  one. Only the kinds the pin names are compared, so a kind left out is a kind the pin's
+  `notes` say cannot be measured the same way on every machine.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -85,6 +94,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
@@ -456,6 +466,53 @@ def _first_diagram_parses(html_text: str) -> bool:
     return "$" not in without_quoted_spans
 
 
+def _diff_against(
+    repo: Path,
+    module: Path,
+    spec: dict[str, object],
+    maven: str,
+    jdk: str | None,
+) -> list[str]:
+    """The pinned module diffed against the same module at `spec["commit"]`, one problem per
+    kind whose `{added, removed, changed}` differs from the pin.
+
+    The older tree is a worktree beside the clone rather than a checkout of it:
+    `_checkout` is what pins the main clone and this must not move it. An existing worktree
+    is re-pinned by the same `_checkout` (a dirty one is refused, one at another commit is
+    moved and rebuilt), so a leftover cannot be diffed as though it were the pinned commit."""
+    from sextant import api
+
+    resolved = _run(["git", "rev-parse", "--verify", f"{spec['commit']}^{{commit}}"], cwd=repo)
+    if resolved.returncode != 0:
+        raise FieldCheckFailure(
+            f"{repo} has no commit {spec['commit']} to diff against: {resolved.stderr.strip()} "
+            f"— deepen its history (git fetch --unshallow) and re-run"
+        )
+    commit = resolved.stdout.strip()
+    older = EXAMPLES_DIR / f"{repo.name}-at-{commit[:7]}"
+    if not older.is_dir():
+        added = _run(["git", "worktree", "add", "--detach", str(older), commit], cwd=repo)
+        if added.returncode != 0:
+            raise FieldCheckFailure(
+                f"could not add a worktree of {repo} at {commit}: {added.stderr.strip()}"
+            )
+    moved = _checkout(older, commit)
+    older_module = older / module.relative_to(repo)
+    _ensure_compiled(older, force=moved, module=older_module, maven=maven, jdk=jdk)
+    _analyze_and_render(older_module)
+
+    try:
+        result = api.diff(older_module, module)
+    except api.SextantError as refused:
+        raise FieldCheckFailure(f"diff against {commit} failed: {refused}") from refused
+    expected = cast(dict[str, dict[str, int]], spec["summary"])
+    return [
+        f"diff against {commit[:7]}, {kind}: expected {counts!r}, got {result.diff.summary[kind]!r}"
+        for kind, counts in expected.items()
+        if result.diff.summary[kind] != counts
+    ]
+
+
 def _check_one(name: str) -> list[str]:
     """Every problem found validating one expectation file — empty means it held."""
     expectation_path = EXPECTATIONS_DIR / f"{name}.json"
@@ -586,6 +643,12 @@ def _check_one(name: str) -> list[str]:
                 f"resolvable superclass calls: expected {expected_shape}, got {counted} "
                 f"— this is the shape F3 §4.2's resolution work is measured against"
             )
+
+    # Boundary vocabulary and diff (spec 2026-10-22 §1b). OPTIONAL: the one pin with history
+    # deep enough to hold a real controller move and a real contract change.
+    expected_diff = expectation.get("diff_against")
+    if expected_diff is not None:
+        problems.extend(_diff_against(repo, module, expected_diff, maven, expectation.get("jdk")))
 
     html_text = (module / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
     if not _zero_pre_outside_code_blocks(html_text):
