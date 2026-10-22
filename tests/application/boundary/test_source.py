@@ -23,11 +23,23 @@ from sextant.application.boundary.source import (
     NotABoundarySource,
 )
 from sextant.application.boundary.vocabulary import KINDS
+from sextant.application.resolve.config import resolve_config
+from sextant.application.resolve.endpoint_conditions import record_endpoint_conditions
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    ConfigEntryFact,
+    Document,
+    Parameter,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb import workspace as workspace_module
 from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
@@ -119,7 +131,15 @@ def _document(document_id: str, tier: OriginTier) -> Document:
     )
 
 
-def _catch_all(root: Path, owner: str, tier: OriginTier = OriginTier.MODULE_OUTPUT) -> None:
+def _catch_all(
+    root: Path,
+    owner: str,
+    tier: OriginTier = OriginTier.MODULE_OUTPUT,
+    parameters: tuple[Parameter, ...] = (),
+    on_class: tuple[AnnotationUse, ...] = (),
+) -> None:
+    """A `@RestController` with one `@GetMapping("/**")` handler; `parameters` are the
+    handler's, `on_class` further annotations on the class (a `@Profile`)."""
     handler = _MODULE + owner + "get(sig_00000001)."
     write_fact_file(
         root / f"{owner.replace('/', '_')}.jsonl",
@@ -133,7 +153,14 @@ def _catch_all(root: Path, owner: str, tier: OriginTier = OriginTier.MODULE_OUTP
                 symbol=handler,
                 construct_kind=ConstructKind.METHOD,
                 enclosing=_MODULE + owner,
+                signature=Signature(parameters=list(parameters)) if parameters else None,
             ),
+            *[
+                AnnotationFact(
+                    document_id=owner, target=_MODULE + owner, retention="runtime", use=use
+                )
+                for use in on_class
+            ],
             AnnotationFact(
                 document_id=owner,
                 target=_MODULE + owner,
@@ -436,38 +463,90 @@ def test_an_endpoints_bodies_are_field_sets_or_none(
     }  # fmt: skip
 
 
+def _annotated_parameter(name: str, annotation: str, **args: object) -> Parameter:
+    """A `String` handler parameter carrying one Spring binder annotation, as the
+    extractor writes it (D00 §5a)."""
+    return Parameter(
+        name=name,
+        type=TypeRef(symbol="java/lang/String#", nullable=True),
+        erased_symbol="java/lang/String#",
+        annotations=[
+            AnnotationUse(
+                annotation=f"org/springframework/web/bind/annotation/{annotation}#", args=args
+            )
+        ],
+    )
+
+
+def _config_file(root: Path, relative_path: str, entries: dict[str, str]) -> None:
+    document = _document(relative_path, OriginTier.MODULE_OUTPUT).model_copy(
+        update={"relative_path": relative_path, "language": "yaml",
+                "scanner_id": "sextant-config-reader", "origin_entry": "src/main/resources"}
+    )  # fmt: skip
+    write_fact_file(
+        root / f"{relative_path}.jsonl",
+        document,
+        [
+            ConfigEntryFact(document_id=relative_path, key_raw=k, key_path=k, value=v)
+            for k, v in entries.items()
+        ],
+    )
+
+
 def test_requirements_conditions_and_headers_are_sorted_sets(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
+    """The inbound rows are written by the REAL passes through the shipped `spring-web`
+    catalog — `record_request_requirements` and `record_endpoint_conditions` — because the
+    writer is what decides which column names the endpoint: an inbound `endpoint_metadata`
+    row carries the HANDLER in its `caller` column while the `endpoints` row's `caller` is
+    NULL, and a test that wrote both by hand matched them on a NULL nobody writes.
+
+    Two handlers behind `GET /**`: A binds `@RequestParam(required = false) q` and
+    `@RequestHeader("X-Id")` and sits under `@Profile("prod")`; B binds the same header.
+    The header is one entry, the conditions are A's two environments. The outbound header is
+    written as `engines/single_call.py` writes one — `caller` the calling method on both
+    tables, so the dependency's join is on `caller`."""
+    facts = tmp_path / "facts"
+    header = _annotated_parameter("id", "RequestHeader", value="X-Id")
+    _catch_all(facts, "com/acme/a/AController#",
+               parameters=(_annotated_parameter("q", "RequestParam", required=False), header),
+               on_class=(AnnotationUse(annotation="org/springframework/context/annotation/Profile#",
+                                       args={"value": ["prod"]}),))  # fmt: skip
+    _catch_all(facts, "com/acme/b/BController#", parameters=(header,))
+    _config_file(facts, "application.yml", {"server.port": "8080"})
+    _config_file(facts, "application-prod.yml", {"server.port": "80"})
+
     def build(workspace: DuckDbWorkspace) -> None:
-        for handler in ("H#a().", "H#b()."):  # two handlers behind one identity
-            _endpoint(workspace, method="GET", path="/**", handler=handler)
-        _endpoint(
-            workspace, direction="outbound", method="GET", path="/o", caller="C#o().", peer="p"
-        )
-        for kind, name, requirement in (("query", "q", "optional"), ("header", "X-Id", "required"),
-                                        ("header", "X-Id", "required")):  # fmt: skip
-            _insert(workspace, "endpoint_metadata", protocol="http", direction="inbound",
-                    method="GET", path="/**", kind=kind, name=name, requirement=requirement)  # fmt: skip
+        workspace.load_facts(facts)
+        spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+        derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
+        resolve_config(workspace, [spring])
+        workspace.derive("endpoint_metadata_reset")
+        record_request_requirements(workspace, [spring])
+        workspace.derive("endpoint_conditions_reset")
+        record_endpoint_conditions(workspace, [spring])
+        # Not vacuous: the writer names the handler, and the endpoint row has no caller.
+        (inbound,) = {(r["caller"], r["handler"]) for r in workspace.query("endpoints")
+                      if r["handler"].startswith(_MODULE + "com/acme/a/")}  # fmt: skip
+        assert inbound[0] is None
+        assert inbound[1] in {str(r["caller"]) for r in workspace.query("endpoint_metadata")}
+        _endpoint(workspace, direction="outbound", method="GET", path="/o", caller="C#o().",
+                  peer="p")  # fmt: skip
         _insert(workspace, "endpoint_metadata", protocol="http", direction="outbound",
                 method="GET", path="/o", caller="C#o().", kind="header", name="Accept",
                 value="application/json")  # fmt: skip
         _insert(workspace, "endpoint_metadata", protocol="http", direction="outbound",
                 method="GET", path="/o", caller="C#o().", kind="query", name="page", value="1")  # fmt: skip
-        for handler, environment in (("H#b().", "prod"), ("H#a().", "default"), ("H#a().", "prod")):
-            _insert(workspace, "endpoint_conditions", protocol="http", direction="inbound",
-                    method="GET", path="/**", handler=handler, kind="profile",
-                    expression='{"expressions": ["prod"]}', environment=environment,
-                    holds="true")  # fmt: skip
 
     source = sources(_built(tmp_path, build))
     (endpoint,) = source.rows(KINDS["endpoint"])
     assert endpoint["requirements"] == [
         {"kind": "header", "name": "X-Id", "requirement": "required"},
-        {"kind": "query", "name": "q", "requirement": "optional"},
+        {"kind": "param", "name": "q", "requirement": "optional"},
     ]
     assert [(c["environment"], c["holds"]) for c in endpoint["conditions"]] == [  # type: ignore[attr-defined, union-attr]
-        ("default", "true"),
+        ("default", "false"),
         ("prod", "true"),
     ]
     assert set(endpoint["conditions"][0]) == {"kind", "expression", "environment", "holds"}  # type: ignore[index]

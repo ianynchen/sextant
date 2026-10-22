@@ -69,8 +69,15 @@ _QUERY_OF = {
 
 # What ties an `endpoint_metadata` / `endpoint_conditions` row to the `endpoints` row it
 # belongs to: the wire identity with the direction, then the symbol that distinguishes two
-# rows at one address — the caller for metadata, the handler for conditions.
+# rows at one address. `endpoint_metadata` names that symbol in its `caller` column for
+# every row, and the writers put different things there: an INBOUND row's is the handler
+# (`request_requirements._entry`, `endpoint_attributes._entry`, `single_call`'s inbound
+# rows), whose `endpoints` row has a NULL `caller`; an outbound row's is the calling method,
+# which the `endpoints` row carries as `caller`. So an `endpoint` is matched on its
+# `handler` and a `dependency` on its `caller`, against the metadata's one column.
 _METADATA_KEY = ("protocol", "direction", "method", "path", "caller")
+_ENDPOINT_METADATA_KEY = ("protocol", "direction", "method", "path", "handler")
+_DEPENDENCY_METADATA_KEY = _METADATA_KEY
 _CONDITION_KEY = ("protocol", "direction", "method", "path", "handler")
 _FIELD_KEYS = ("wire_name", "wire_type", "wire_format", "required", "nullable")
 
@@ -198,7 +205,7 @@ class BoundarySource:
             **self._payloads(members),
             **_attributes(members, "consumes", "produces", "format"),
             "requirements": self._merged(
-                self._requirements_by_row(), members, _METADATA_KEY, ("kind", "name")
+                self._requirements_by_row(), members, _ENDPOINT_METADATA_KEY, ("kind", "name")
             ),
             "conditions": self._merged(
                 self._conditions_by_row(),
@@ -216,7 +223,7 @@ class BoundarySource:
             **self._payloads(members),
             **_attributes(members, "format"),
             "headers": self._merged(
-                self._headers_by_row(), members, _METADATA_KEY, ("name", "value")
+                self._headers_by_row(), members, _DEPENDENCY_METADATA_KEY, ("name", "value")
             ),
             **_attributes(members, "resolution"),
             **self._wire_evidence(members, "caller"),

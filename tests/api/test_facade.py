@@ -29,12 +29,14 @@ from click.testing import CliRunner
 from fixture_build import compile_fixture
 from sextant import api
 from sextant.agents import AGENT_REGISTRY
+from sextant.application.boundary.source import BoundarySource
 from sextant.application.boundary.vocabulary import KINDS
 from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -545,6 +547,51 @@ def test_diff_writes_the_file_when_out_is_given(rendered_root: Path, tmp_path: P
     written = target.read_text(encoding="utf-8")
     assert json.loads(written)["summary"] == result.diff.to_json()["summary"]
     assert written == json.dumps(result.diff.to_json(), sort_keys=True, indent=2) + "\n"
+
+
+def test_the_fixtures_endpoints_carry_the_requirements_the_binder_enforces(rendered_root: Path):
+    """On real data, not hand-built rows: `RequestParamsController#search`'s `@RequestParam
+    String q` is a `required` param, and it reaches the `endpoint` kind's `requirements`
+    (the writer names the handler in `endpoint_metadata.caller`; the `endpoints` row's own
+    `caller` is NULL)."""
+    source = BoundarySource.open(rendered_root, open_read_only)
+    try:
+        rows = source.rows(KINDS["endpoint"])
+    finally:
+        source.close()
+    with_requirements = [row for row in rows if row["requirements"]]
+    assert with_requirements
+    (search,) = [row for row in rows if row["path"] == "/v1/params/search"]
+    assert {"kind": "param", "name": "q", "requirement": "required"} in search["requirements"]  # type: ignore[operator]
+
+
+def test_a_request_that_gains_a_required_param_is_a_changed_requirement_set(
+    rendered_root: Path, tmp_path: Path
+):
+    """Side `a` is the fixture with `q`'s requirement row removed, so from `a` to the
+    fixture the request GAINS a required `@RequestParam`: one `changed` endpoint naming the
+    requirement set. Unlabelled — the spec labels body changes (M06 step 3), and a
+    requirement set is not a body."""
+    before = tmp_path / "before" / "orders-service"
+    shutil.copytree(rendered_root, before)
+    workspace = DuckDbWorkspace(before / ".sextant" / "workspace.duckdb")
+    try:
+        workspace._connection.execute(
+            "DELETE FROM endpoint_metadata WHERE path = '/v1/params/search' AND name = 'q'"
+        )
+    finally:
+        workspace.close()
+
+    (entry,) = api.diff(before, rendered_root).diff.entries
+
+    assert (entry.kind, entry.change, entry.identity["path"]) == (
+        "endpoint", "changed", "/v1/params/search",
+    )  # fmt: skip
+    assert set(cast(dict[str, object], entry.to)) == {"requirements"}
+    gained = {"kind": "param", "name": "q", "requirement": "required"}
+    assert gained in cast(list[object], cast(dict[str, object], entry.to)["requirements"])
+    assert gained not in cast(list[object], cast(dict[str, object], entry.from_)["requirements"])
+    assert entry.compatibility is None
 
 
 def test_diff_before_analyze_raises_notanalyzederror(tmp_path: Path):
