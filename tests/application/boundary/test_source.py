@@ -242,6 +242,116 @@ def test_the_queries_filter_on_the_text_the_vocabulary_states():
         assert where is not None and where in workspace_module._NAMED_QUERIES[query]
 
 
+# --- rows that disagree, and the documents behind schedule, error-handler and contract ----
+
+
+def test_two_expressions_for_one_schedule_identity_are_both_kept(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """One method with two `@Scheduled(cron=...)` (javac folds them into `@Schedules`) is one
+    `(handler, trigger)`. Taking the first row would drop the second expression silently."""
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        for expression in ("0 30 * * * *", "0 0 * * * *"):
+            _insert(workspace, "scheduled_work", handler="J#run().", trigger="cron",
+                    expression=expression, resolution="resolved", evidence="compiler",
+                    catalog_id="spring-scheduling")  # fmt: skip
+
+    (row,) = sources(_built(tmp_path, build)).rows(KINDS["schedule"])
+    assert row["expression"] == {"several": ["0 0 * * * *", "0 30 * * * *"]}
+    assert row["resolution"] == "resolved"  # rows that agree keep the single value
+
+
+def test_handlers_behind_one_address_with_different_request_shapes_are_all_kept(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    def build(workspace: DuckDbWorkspace) -> None:
+        _field(workspace, "com/acme/A#", 0, "a")
+        _field(workspace, "com/acme/B#", 0, "b")
+        for handler, shape in (("H#b().", "com/acme/B#"), ("H#a().", "com/acme/A#")):
+            _endpoint(workspace, method="POST", path="/**", handler=handler,
+                      request_shape=_shape_descriptor(shape))  # fmt: skip
+
+    (row,) = sources(_built(tmp_path, build)).rows(KINDS["endpoint"])
+    assert row["request_shape"] == {
+        "several": [_shape_descriptor("com/acme/A#"), _shape_descriptor("com/acme/B#")]
+    }
+    several = row["request"]["several"]  # type: ignore[index]
+    assert [[f["wire_name"] for f in fields] for fields in several] == [["a"], ["b"]]
+    assert row["response"] is None and row["resolution"] == "resolved"
+    assert row["evidence"]["symbols"] == ["H#a().", "H#b()."]  # type: ignore[index]
+
+
+def _declared(root: Path, owners: dict[str, tuple[OriginTier, str]]) -> Path:
+    """Fact files declaring each owner class and one method on it, in the given origin tier."""
+    facts = root / "facts"
+    for owner, (tier, method) in owners.items():
+        write_fact_file(
+            facts / f"{owner.replace('/', '_')}.jsonl",
+            _document(owner, tier),
+            [
+                SymbolFact(
+                    document_id=owner, symbol=_MODULE + owner, construct_kind=ConstructKind.CLASS
+                ),
+                SymbolFact(
+                    document_id=owner,
+                    symbol=_MODULE + owner + method,
+                    construct_kind=ConstructKind.METHOD,
+                    enclosing=_MODULE + owner,
+                ),
+            ],
+        )
+    return facts
+
+
+def test_a_contract_schedule_and_error_handler_name_their_documents_and_origin(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The join from a shape or a handler to its declaring document is what makes `origin`
+    mean anything: a failed join would read `module_output` for a dependency's class."""
+    own, dep = OriginTier.MODULE_OUTPUT, OriginTier.DEPENDENCY
+    facts = _declared(
+        tmp_path,
+        {
+            "com/dep/Money#": (dep, "amount(sig_00000001)."),
+            "com/acme/Job#": (own, "run(sig_00000002)."),
+            "com/dep/Advice#": (dep, "bad(sig_00000003)."),
+            "com/acme/Own#": (own, "x(sig_00000004)."),
+        },
+    )
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        workspace.load_facts(facts)
+        for shape, tier in (("com/dep/Money#", "dependency"), ("com/acme/Own#", "module_output"),
+                            ("AuditEntry", None)):  # fmt: skip
+            _insert(workspace, "shapes", shape_id=shape, content_hash="md5:1", open=False,
+                    origin_tier=tier)  # fmt: skip
+        _insert(workspace, "scheduled_work", handler=_MODULE + "com/acme/Job#run(sig_00000002).",
+                trigger="cron", expression="0 * * * * *", resolution="resolved",
+                evidence="compiler", catalog_id="c")  # fmt: skip
+        _insert(workspace, "error_handlers", handler=_MODULE + "com/dep/Advice#bad(sig_00000003).",
+                advice="com/dep/Advice#", exception="java/lang/Exception#", status="BAD_REQUEST",
+                resolution="resolved", evidence="compiler", catalog_id="c")  # fmt: skip
+
+    source = sources(_built(tmp_path, build))
+    contracts = {r["shape_id"]: r for r in source.rows(KINDS["data-contract"])}
+    money = contracts["com/dep/Money#"]
+    assert money["evidence"]["documents"] == ["com/dep/Money.java"]  # type: ignore[index]
+    assert money["evidence"]["origin_tier"] == "dependency"  # type: ignore[index]
+    assert money["origin"] == "dependency"
+    assert contracts["com/acme/Own#"]["evidence"]["documents"] == ["com/acme/Own.java"]  # type: ignore[index]
+    assert contracts["com/acme/Own#"]["origin"] == "module_output"
+    # A declared schema's bare name matches no class: no document, and the module's own.
+    assert contracts["AuditEntry"]["evidence"]["documents"] == []  # type: ignore[index]
+    assert contracts["AuditEntry"]["origin"] == "module_output"
+    (schedule,) = source.rows(KINDS["schedule"])
+    assert schedule["evidence"]["documents"] == ["com/acme/Job.java"]  # type: ignore[index]
+    assert schedule["origin"] == "module_output"
+    (handler,) = source.rows(KINDS["error-handler"])
+    assert handler["evidence"]["documents"] == ["com/dep/Advice.java"]  # type: ignore[index]
+    assert handler["origin"] == "dependency"
+
+
 # --- bodies, requirements, conditions ---------------------------------------------------
 
 

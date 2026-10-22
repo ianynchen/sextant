@@ -11,9 +11,22 @@ the rows sharing the kind's identity columns become ONE row carrying the set of 
 ground it, because the wire is the identity and the symbol is evidence (§2): four handlers
 behind `GET /**` are one endpoint with four pieces of evidence. NULL equals NULL for this
 purpose — two `sendDefault` calls to one peer, whose method and path could not be read, are
-one dependency — so the grouping is done on Python tuples, never with SQL equality. Where
-rows of one identity disagree about an attribute, the row the query orders first supplies it
-(the ORDER BY puts attributes ahead of evidence, so a moved controller never changes it).
+one dependency — so the grouping is done on Python tuples, never with SQL equality.
+
+**No silent choice among candidates.** Where the rows grouped under one identity DISAGREE
+about an attribute (one method with two `@Scheduled(cron=...)` is one `(handler, trigger)`
+with two expressions; handlers behind `GET /**` with different request shapes), the
+attribute's value is `{"several": [the distinct values, sorted]}` — sorted by their JSON
+serialisation with `sort_keys=True`, which is how lists and dicts order — and where they
+agree it is the single value.
+This holds for every attribute of every kind, including the field sets and the evidence
+columns `origin_tier` and `source`. A reader comparing two rows meets the dict and sees the
+disagreement itself, not whichever row the query happened to order first. `requirements`,
+`conditions` and `headers` are sets and stay unions.
+
+A stated limit: `dependency.headers` cannot be told apart across two dependencies that share
+a caller and an unread address, because `endpoint_metadata` carries no `peer`; both read
+the same metadata rows.
 
 A row is a dict keyed by the kind's identity columns, then its attributes under the names
 `ROW_KEYS` gives (`request`/`response` are what the vocabulary calls `request_body`/
@@ -75,6 +88,19 @@ class NotABoundarySource(ValueError):
 
 def _present_first(value: object) -> tuple[bool, str]:
     return (value is not None, "" if value is None else str(value))
+
+
+def _agreed(values: Iterable[object]) -> object:
+    """The one value the rows agree on, or `{"several": [...]}` naming every distinct value
+    where they do not (see the module docstring)."""
+    distinct = {json.dumps(value, sort_keys=True, default=str): value for value in values}
+    if len(distinct) == 1:
+        return next(iter(distinct.values()))
+    return {"several": [distinct[key] for key in sorted(distinct)]}
+
+
+def _attributes(members: list[dict[str, object]], *columns: str) -> dict[str, object]:
+    return {column: _agreed(row[column] for row in members) for column in columns}
 
 
 def _by(*columns: str) -> Callable[[dict[str, object]], tuple[tuple[bool, str], ...]]:
@@ -167,13 +193,10 @@ class BoundarySource:
         }
 
     def _endpoint(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
         return {
-            **{column: first[column] for column in kind.identity},
-            **self._payloads(first),
-            "consumes": first["consumes"],
-            "produces": first["produces"],
-            "format": first["format"],
+            **{column: members[0][column] for column in kind.identity},
+            **self._payloads(members),
+            **_attributes(members, "consumes", "produces", "format"),
             "requirements": self._merged(
                 self._requirements_by_row(), members, _METADATA_KEY, ("kind", "name")
             ),
@@ -183,69 +206,59 @@ class BoundarySource:
                 _CONDITION_KEY,
                 ("kind", "expression", "environment"),
             ),
-            "resolution": first["resolution"],
+            **_attributes(members, "resolution"),
             **self._wire_evidence(members, "handler"),
         }
 
     def _dependency(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
         return {
-            **{column: first[column] for column in kind.identity},
-            **self._payloads(first),
-            "format": first["format"],
+            **{column: members[0][column] for column in kind.identity},
+            **self._payloads(members),
+            **_attributes(members, "format"),
             "headers": self._merged(
                 self._headers_by_row(), members, _METADATA_KEY, ("name", "value")
             ),
-            "resolution": first["resolution"],
+            **_attributes(members, "resolution"),
             **self._wire_evidence(members, "caller"),
         }
 
     def _contract(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
-        shape_id = str(first["shape_id"])
+        shape_id = str(members[0]["shape_id"])
         documents = self._documents_of_shape(shape_id)
         return {
             "shape_id": shape_id,
-            "content_hash": first["content_hash"],
+            **_attributes(members, "content_hash"),
             "fields": list(self._fields_by_shape().get(shape_id, [])),
             "evidence": {
                 "symbols": [],
                 "documents": _paths(documents),
-                "origin_tier": first["origin_tier"],
+                **_attributes(members, "origin_tier"),
             },
             "origin": _origin(documents),
         }
 
     def _property(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
         return {
-            "key": first["key"],
-            "environment": first["environment"],
-            "value": first["value"],
-            "unresolved_reason": first["unresolved_reason"],
-            "evidence": {"symbols": [], "documents": [], "source": first["source"]},
+            "key": members[0]["key"],
+            "environment": members[0]["environment"],
+            **_attributes(members, "value", "unresolved_reason"),
+            "evidence": {"symbols": [], "documents": [], **_attributes(members, "source")},
             "origin": "module_output",
         }
 
     def _schedule(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
         return {
-            "handler": first["handler"],
-            "trigger": first["trigger"],
-            "expression": first["expression"],
-            "resolution": first["resolution"],
+            "handler": members[0]["handler"],
+            "trigger": members[0]["trigger"],
+            **_attributes(members, "expression", "resolution"),
             **self._handler_evidence(members),
         }
 
     def _error_handler(self, kind: Kind, members: list[dict[str, object]]) -> dict[str, object]:
-        first = members[0]
         return {
-            "handler": first["handler"],
-            "exception": first["exception"],
-            "advice": first["advice"],
-            "scope": first["scope"],
-            "status": first["status"],
-            "response_shape": first["response_shape"],
+            "handler": members[0]["handler"],
+            "exception": members[0]["exception"],
+            **_attributes(members, "advice", "scope", "status", "response_shape"),
             **self._handler_evidence(members),
         }
 
@@ -302,16 +315,15 @@ class BoundarySource:
             }
         return self._field_sets
 
-    def _payloads(self, row: dict[str, object]) -> dict[str, object]:
+    def _payloads(self, members: list[dict[str, object]]) -> dict[str, object]:
         """`request`/`response`: the field set of the shape the descriptor names, or `None`
         where the row declares no payload. The raw descriptors ride along under their column
         names, because the field set alone cannot tell an `OrderView` from a list of them or a
         shapeless string from nothing."""
         return {
-            "request": self._field_set(row["request_shape"]),
-            "response": self._field_set(row["response_shape"]),
-            "request_shape": row["request_shape"],
-            "response_shape": row["response_shape"],
+            "request": _agreed(self._field_set(row["request_shape"]) for row in members),
+            "response": _agreed(self._field_set(row["response_shape"]) for row in members),
+            **_attributes(members, "request_shape", "response_shape"),
         }
 
     def _field_set(self, descriptor: object) -> list[dict[str, object]] | None:
