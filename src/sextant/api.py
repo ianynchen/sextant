@@ -1,8 +1,13 @@
-"""Sextant as a library (2N Task 5, spec §5b): the four verbs the CLI's own
-`module analyze`/`render`/`enrich`/`export` commands are thin wrappers over —
-`analyze`, `render`, `enrich`/`enrich_async`, `export` — each a plain,
-synchronous function returning a small frozen result object, never printing
-anything and never raising `SystemExit`.
+"""Sextant as a library (2N Task 5, spec §5b): the verbs the CLI's own
+`module analyze`/`render`/`enrich`/`export`/`diff` commands are thin wrappers
+over — `analyze`, `render`, `enrich`/`enrich_async`, `export`, `diff` — each a
+plain, synchronous function returning a small frozen result object, never
+printing anything and never raising `SystemExit`. `system_analyze` wraps
+`system analyze`; `observability` (which boundary kinds an analysis could see)
+and `query` (six module-scope questions about a symbol) have no command of
+their own. Group H (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21–FR-24)
+added `diff`, `observability`, `query` and the two options objects,
+`AnalyzeOptions` and `DiffOptions`.
 
 **Built by extraction, not duplication.** Every composition that used to live
 inline inside a `click` command body in `cli/app.py` — the reactor loop
@@ -72,7 +77,7 @@ stated (review round 1): the real fix is a native async entry point on the
 future work, not this task's.
 
 **The `SextantError` family.** The spec asks for "a typed `SextantError`
-family", not naming the members — this module picks four, grouped by what a
+family", not naming the members — this module picks five, grouped by what a
 caller could sensibly want to catch and retry or report differently, not one
 subclass per refusal site:
 
@@ -80,10 +85,12 @@ subclass per refusal site:
   repository (a malformed `pom.xml`, a `<modules>` cycle), a multi-module
   root was asked for a single `--workspace`, or one module inside a reactor
   walk failed (named, the walk stopped).
-- `NotAnalyzedError` — `render`/`enrich`/`export`, pointed at a workspace
-  `analyze` never wrote to, at a multi-module root instead of one of its
-  modules, or at one whose recorded stamps say a different Sextant build
-  derived it (D01 §7's re-derivation rule, enforced at the read gate).
+- `NotAnalyzedError` — `render`/`enrich`/`export`/`query`, pointed at a
+  workspace `analyze` never wrote to, at a multi-module root instead of one of
+  its modules, or at one whose recorded stamps say a different Sextant build
+  derived it (D01 §7's re-derivation rule, enforced at the read gate); also
+  `diff` and `observability`, given a path that is neither a workspace nor a
+  bundle.
 - `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
   malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
   `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
@@ -95,6 +102,11 @@ subclass per refusal site:
   mutually-exclusive doors, a workspace with no rendered document, the tool
   jail's own setup, an unknown `--agent` name, a missing model, the agent's
   own construction or run failing, or an answer that will not validate.
+- `DiffRefusedError` — `diff`'s own refusal to compare: a stamp absent on one
+  side, a schema or vocabulary version that differs, two different modules, or
+  a producer change (Sextant version, catalog hash, redaction rule set) the
+  caller did not allow with `DiffOptions(allow_producer_change=True)`. The
+  message names the stamps and both values.
 
 Every one of these carries the exact string the CLI already prints for the
 same refusal — this module raises it; `cli/app.py` is the only place that
@@ -200,7 +212,7 @@ from sextant.storage.duckdb.workspace import (
 
 
 class SextantError(RuntimeError):
-    """Base of every refusal the four verbs below raise — never
+    """Base of every refusal the verbs below raise — never
     `SystemExit`, never a bare `ValueError`/`RuntimeError` from underneath.
     `str(error)` is always the exact message the CLI prints for the same
     refusal."""

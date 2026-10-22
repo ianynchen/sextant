@@ -43,6 +43,28 @@ Answers, as text for a terminal and JSON when piped.
 | `path` | How does A reach B? |
 | `endpoint list`, `find`, `match`, `trace` | The boundary questions |
 
+> **BUILT, IN PROCESS, FOR SIX OF THESE (2026-10-22; spec
+> [boundary-vocabulary-and-diff](../superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md)
+> §5, FR-24).** `source`, `callers`, `callees`, `implementations`, `uses` and `impact` are
+> answered at MODULE scope by `application/query/questions.py` and reached as
+> `sextant.api.query(path, question, symbol=...)`, which reads the workspace `analyze` left and
+> never re-analyzes. The rest of the table WAITS: `find`, `path`, the `endpoint` family
+> (`match` and `trace` are system-scope questions over the federated views), the `symbol` and
+> `endpoint` command-line nouns, and the coding-agent plugin. They stay under the gate of
+> 2026-09-18 — the query surface waits for Java/Kotlin, Go, Rust, Python and TypeScript/JavaScript
+> — which the user partially reopened on 2026-10-22 for this one function alone, over the
+> objection that a surface shaped by one extractor's facts would be shaped wrong; the objection
+> was put and overruled.
+>
+> An answer is a list of `{"symbol", "file", "line_start", "line_end"}` sorted by symbol
+> (a line is `null` where the class file states none, as for a type or a field), or for
+> `impact` the three partitions below. A question naming a symbol the workspace does not hold
+> is refused by name rather than answered empty: an empty answer would read as *nothing calls
+> it*. What is NOT yet true of the built six, against the obligations below: an answer does not
+> carry the resolution tier of the edges beside each item (the `definite`/`possible` split is
+> the tier, per symbol), does not name the commit, and applies none of the filtering
+> described under it.
+
 **`uses` and `callers` are different questions**, and the difference is why the four
 type-reference edge kinds are kept. `callers` follows call edges and asks about functions.
 `uses` follows type references and asks about a type. For a payload class, `uses` is the
@@ -83,6 +105,14 @@ indistinguishable from finding less.
 | **Definite** | `resolved` edges only |
 | **Possible** | `narrowed` or `partial` edges, with candidates shown |
 | **Unknown regions** | The `unresolved` sites hit on the frontier, each with file, line and reason |
+
+**As built**, the partitions are narrower than the table: `definite` is every path crossing
+only `resolved` edges and type references; `possible` is a symbol every path to which crossed
+an edge that was not `resolved` — in practice `narrowed`, the only other value
+`call_edges.resolution` holds (the strongest path wins); `unknown_regions` is where the
+upstream walk cannot see — a call edge whose callee body was never read, named by its caller,
+and a direct ancestor in `type_hierarchy` that this workspace never scanned. Neither region
+carries a file or line yet. The impact of a TYPE starts from the type and its members. See [D01](D01-graph-schema.md) §5 for the walk and its cost.
 
 The third is the most valuable part. It is the list of places a person has to go and look,
 because the tool could not. A report that omits it looks complete and is not — and a blast

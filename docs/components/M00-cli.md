@@ -40,7 +40,7 @@ Every command is *noun, verb, subject, options*.
 
 | Noun | Verbs |
 |---|---|
-| `module` | `analyze` `list` `status` `render` `enrich` `export` `clean` |
+| `module` | `analyze` `list` `status` `render` `enrich` `export` `diff` `clean` |
 | `system` | `analyze` `status` `render` `clean` |
 | `symbol` | `find` `source` `callers` `callees` `implementations` `uses` `impact` `path` |
 | `endpoint` | `list` `find` `match` `trace` |
@@ -106,6 +106,59 @@ through the `EnrichmentAgent` port or takes the `--dry-run`/`--ingest` door inst
 itself** — there is no second render command; `render`, run again later over a workspace
 that already carries an overlay, takes the identical assembly path and reproduces the same
 documents.
+
+### `module diff` (spec 2026-10-22-boundary-vocabulary-and-diff §3, FR-22)
+
+```
+sextant module diff <a> <b> [--out PATH] [--format json or text] [--allow-producer-change]
+```
+
+What changed at the boundary from `a` to `b`, two analyses of ONE module — the answer to
+*did the architecture change*, not *did the code change*. Each side is a module path, its
+`.sextant` workspace or an exported bundle directory, in any mix: a bundle shipped from CI
+against a local workspace is the drift scenario, and both hold the same tables, one as DuckDB
+and one as Parquet. Both are opened read-only; `diff` never re-analyzes and never builds, so
+two sides analysed fresh by one build always agree and a stored side is the case that needs
+the flags below.
+
+**The output is one JSON document, deterministic** (NFR-1): `boundary_vocabulary_version`,
+each side's `module`, `commit` and `producer`, `producer_changed`, the `entries` sorted by
+kind, change and identity, and a `summary` row per kind of `added`, `removed` and `changed`
+counts. Every kind is present even at zero, so an empty diff is `{"entries": [], "summary":
+{all zeros}}` and never an absent file (NFR-7). A `changed` entry's `from` and `to` carry only
+the attributes that differ, each named. An entry of kind `endpoint` or `dependency` whose body
+changed carries `compatibility`, `compatible` or `breaking`, by the stitcher's own directional
+test ([M06](M06-stitcher.md) step 3) read forwards in time (`null` for every other entry, and
+where a changed body has nothing to compare). Each entry carries `origin`, and an
+entry grounded only in `dependency`-origin documents says so: a module is never reported as
+having changed a boundary its own build did not declare. The kinds, and what identifies each,
+are [D01](D01-graph-schema.md) §3's.
+
+**`--format`** applies to standard output only: `json` (the default) prints the document, and
+`text` prints the summary table and one line per entry, a view of the JSON and never a second
+source. **`--out PATH`** writes the JSON there, parents created, whichever `--format` was
+given, and prints one line of totals (`N added, N removed, N changed`) in place of the
+document.
+
+**It refuses rather than guesses**, naming the stamps and both values. No flag overrides a
+difference in `fact_schema_version`, `graph_schema_version` or `boundary_vocabulary_version`,
+a stamp absent on one side, or two different module ids. A difference in `sextant_version`,
+`catalog_hash` or `redaction_set_hash` refuses by default, because a fixed dispatch bug or a
+new catalog changes rows with no code change and a diff that mixed the two could not say which
+it was reporting; **`--allow-producer-change`** lets it run, and the output then carries
+`producer_changed: true` with both sides' stamps. A side that is neither a workspace nor a
+bundle is refused as `render` and `export` refuse an unanalyzed path.
+
+**The diff is itself an exit** ([D04](D04-config-and-exclusion.md) §1). A bundle's addresses
+and configuration values were masked at export and a workspace's are verbatim, so each side's
+`path`, `peer` and property values pass through the module's redactor before they are
+compared — otherwise every masked peer would read as a change — and the output is masked the
+same way. The redactor comes from the module's own `.sextant.yml`, found from the module root
+of a workspace side. A custom `--workspace` directory is out of scope for `diff`: pass the
+module, its `.sextant` directory, or a bundle.
+
+`system diff` stays deferred (`PROJECT.md`): `links` and `participants` would be two more
+kinds, and the drift scenario is per module.
 
 ### Addressing
 

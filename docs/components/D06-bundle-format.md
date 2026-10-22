@@ -100,6 +100,7 @@ columnar need per fact kind is stated.
   "producer": { "sextant_version": "0.4.0",
                 "fact_schema_version": 2,
                 "graph_schema_version": 2,
+                "boundary_vocabulary_version": 1,
                 "scanners": [{ "id": "sextant-detector" },
                   { "id": "sextant-jvm-extractor",
                     "libraries": ["org.ow2.asm:asm:9.10.1"] }],
@@ -116,7 +117,17 @@ columnar need per fact kind is stated.
                 "render": ["architecture.md", "architecture.html"] },
   "gaps": ["call_graph_not_implemented"],
   "uncovered": ["src/main/java/…/LegacyController.java"],
-  "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"] }]
+  "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"],
+                         "feeds": ["dependency"] }],
+  "catalogs_run": { "endpoint": 12, "dependency": 4, "data-contract": 9, "schedule": 1 },
+  "observability": { "boundary_vocabulary_version": 1,
+                     "kinds": { "endpoint": { "verdict": "partial",
+                                              "reasons": ["uncovered files: 1 (src/main/java/…/LegacyController.java)"] },
+                                "dependency": { "verdict": "partial",
+                                                "reasons": ["catalog skipped: spring-webclient (string_constants)",
+                                                            "uncovered files: 1 (src/main/java/…/LegacyController.java)"] } },
+                     "attributes": {},
+                     "stated_boundaries": ["call_graph_not_implemented"] }
 }
 ```
 
@@ -127,6 +138,23 @@ system graph becomes an error instead of a silent result.
 invalidate different things at very different cost, and `sextant_version` changes results
 without either of them moving — a fixed bug in dispatch resolution produces a different graph
 from identical facts. See [D01](D01-graph-schema.md) §7.
+
+**A fourth, `boundary_vocabulary_version`, versions the words and not a table.** It says
+which generation of the boundary kinds ([D01](D01-graph-schema.md) §3, "The boundary
+vocabulary") the entries a reader derives from this bundle are named in, and `sextant module
+diff` refuses to compare two bundles that carry different values. It is **copied from
+`metadata.json`**, as is `catalog_hash` when `analyze` recorded one (the exporter recomputes it
+only for a workspace analysed before that, and `redaction_set_hash` it always computes
+itself), because the vocabulary in force is the one current when the workspace was built,
+which a later build of this exporter may not be.
+
+**`catalogs_run` and `observability` are copied, never re-derived**
+([D05](D05-manifest-and-state.md) §3 says what they hold), and only where `analyze` wrote
+them: a bundle exported from a workspace analysed before the map existed carries neither, and a
+placeholder would read as a measurement. `catalogs_run` travels beside the map because
+`sextant.api.observability` computes a bundle's map from its manifest alone, and without the
+counts that would be the degraded one. Each `skipped_catalogs` entry gains `feeds`, the kinds
+it would have fed, for the same reason: a bundle's reader has no catalogs to ask.
 
 **`redaction_set_hash` is written by the exporter**, beside `catalog_hash` and for the same
 reason: it is what the exporter itself applied, not what `analyze` recorded. Under 2K design
