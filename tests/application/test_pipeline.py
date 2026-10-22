@@ -4635,9 +4635,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_environment_divergence",
         "apply_protocol_hints",
         "record_request_requirements",
-        # Spec 2026-10-21-conditional-controllers: the conditions pass, beside the two that
-        # also write per-row facts below the protocol hints.
-        "record_endpoint_conditions",
+        # Spec 2026-10-22-conditional-beans: the conditions pass, where spec 2026-10-21's
+        # endpoint-only one ran (it replaced that pass at the same point).
+        "record_bean_conditions",
         "record_endpoint_attributes",
         "record_self_exchange",
         "record_routing_conflicts",

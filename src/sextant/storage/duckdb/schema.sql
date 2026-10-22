@@ -519,21 +519,24 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- resolution and evidence, so a header whose value could not be read is visibly
 -- unresolved rather than absent — which is the difference between "this call sends no
 -- Authorization header" and "it sends one we could not read".
--- A controller that exists in one environment only (spec 2026-10-21-conditional-controllers,
--- ruled 2026-10-22): the CONDITION an inbound endpoint's handler type carries, stated as a
--- fact about the row — structured for a machine, one row per (endpoint, condition,
--- environment the module resolves) — and never deciding whether the row exists. `kind` is
--- `profile`, `property` or `other`; `expression` is JSON typed per kind (the catalog's
--- `conditions` block says which annotation members fill it); `holds` is what the
--- framework's own rule (CP-42, CP-43) says for that environment, or `unresolved` where this
--- analysis does not evaluate the shape. The architecture document is the one verbose
--- rendering of these rows. Replaced whole per resolve, as `endpoint_metadata` is.
-CREATE TABLE IF NOT EXISTS endpoint_conditions (
-    protocol    TEXT,
-    direction   TEXT,
-    method      TEXT,
-    path        TEXT,
-    handler     TEXT,
+-- A bean that exists in some environments only (spec 2026-10-22-conditional-beans §2, §2a;
+-- the general rule spec 2026-10-21-conditional-controllers was a case of): the CONDITION
+-- Spring evaluates when it registers a bean, stated as a fact about the BEAN — structured
+-- for a machine, one row per (bean, registration route, condition, environment the module
+-- resolves) — and never deciding whether any row derived from it exists. `bean` is the
+-- class whose code runs, spelled as `symbols.symbol` spells a type (the spelling
+-- `symbols.enclosing` uses, which is how every derived row finds it); `bean_kind` is `class`
+-- (a condition on a scanned class), `factory` (on the `@Bean` method that constructs and
+-- returns it) or `configuration` (on that method's configuration class); `via` is that
+-- method, NULL for `class`. `kind`, `expression` and `holds` are the conditions pass's
+-- encoding (CP-42, CP-43): `profile`, `property` or `other`, the expression JSON typed per
+-- kind, and the framework's own verdict for that environment or `unresolved`. A class
+-- registered more than one way is `unresolved`, its `evidence` naming the routes (CP-44).
+-- Replaced whole per resolve, as `endpoint_metadata` is.
+CREATE TABLE IF NOT EXISTS bean_conditions (
+    bean        TEXT,
+    bean_kind   TEXT,
+    via         TEXT,
     kind        TEXT,
     expression  TEXT,
     environment TEXT,
@@ -1192,3 +1195,18 @@ SELECT * FROM call_edges ORDER BY callee, caller, ordinal, target;
 -- engine filtering on `path` against a handler-sorted file reads every row.
 CREATE OR REPLACE VIEW roots_by_address AS
 SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
+
+-- The conditions an endpoint row carries, read through the bean its code lives in (spec
+-- 2026-10-22-conditional-beans, decision 3): a VIEW, so no row copies them, and kept under
+-- PR #61's name and columns — `caller` appended last — so the documents, the system tier
+-- (which federates it by name) and the bundle read what they read before, now for rows of
+-- every direction. A row's owner class is its handler's `enclosing`, or its caller's where
+-- it has no handler (an outbound call). DISTINCT because one condition reached by two
+-- routes of one bean is one condition on the row. Last in this file because a view binds
+-- at creation, and `symbols` is defined above.
+CREATE OR REPLACE VIEW endpoint_conditions AS
+SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
+       b.environment, b.holds, b.resolution, b.evidence, e.caller
+FROM endpoints e
+JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
+JOIN bean_conditions b ON b.bean = s.enclosing;

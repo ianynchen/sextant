@@ -726,15 +726,16 @@ GUARDS: dict[str, Guard] = {
     ),
     # --- a controller that exists in one environment only (spec 2026-10-21) ------------
     "conditions.the-PASS-writes-a-row-per-condition-and-environment": Guard(
-        what="`record_endpoint_conditions` runs in the pipeline and writes `endpoint_conditions`",
+        what="`record_bean_conditions` runs in the pipeline and writes `bean_conditions`, which "
+        "the `endpoint_conditions` view reads",
         why='without it a `@Profile("prod")` controller publishes its endpoints as if they '
         "always existed — the cell as it stood for a month, and the one real instance "
         "(Apollo's `HomePageController`) read `resolved` in the two environments where it 404s",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find='    if rows:\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
-                replace='    if False:  # guard disabled by scripts/guard_check.py\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    if rows:\n        workspace.derive("bean_conditions_insert", rows=rows)\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        workspace.derive("bean_conditions_insert", rows=rows)\n',
             ),
         ),
     ),
@@ -745,7 +746,7 @@ GUARDS: dict[str, Guard] = {
         "the endpoint exists nowhere",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find="                verdicts.append(environment != text[1:].strip())\n",
                 replace="                verdicts.append(environment == text[1:].strip())  # guard disabled\n",
             ),
@@ -758,7 +759,7 @@ GUARDS: dict[str, Guard] = {
         "controller gated on a key the deployment never sets would be published as served there",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find='                if not expression["match_if_missing"]:\n                    return FAILS, "resolved"\n',
                 replace='                if False:  # guard disabled by scripts/guard_check.py\n                    return FAILS, "resolved"\n',
             ),
@@ -771,7 +772,7 @@ GUARDS: dict[str, Guard] = {
         "analysis does not see (CP-42 row 3)",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find="            if any(char in _COMPOSITION for char in text):\n                composed = True\n                continue\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n                composed = True\n                continue\n",
             ),
@@ -803,7 +804,7 @@ GUARDS: dict[str, Guard] = {
         "framework would see and this analysis does not (review fix, 2026-10-22)",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find='        if value is None and reason == "missing_key" and row.get("source") is None:\n',
                 replace='        if value is None and reason == "missing_key":  # guard disabled\n',
             ),
@@ -818,9 +819,9 @@ GUARDS: dict[str, Guard] = {
         "closes, for sixteen of the nineteen conditions CP-43 row 5 enumerates",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find="                for name in names:\n                    symbol = type_descriptor(str(name))\n",
-                replace="                for name in ():  # guard disabled by scripts/guard_check.py\n                    symbol = type_descriptor(str(name))\n",
+                path="sextant/application/resolve/bean_conditions.py",
+                find="            for name in names:\n                symbol = type_descriptor(str(name))\n",
+                replace="            for name in ():  # guard disabled by scripts/guard_check.py\n                symbol = type_descriptor(str(name))\n",
             ),
         ),
     ),

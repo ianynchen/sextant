@@ -844,14 +844,40 @@ _NAMED_QUERIES = {
     # may carry several headers, and two callers may reach one address with different ones
     # — so the endpoint columns alone tie, and `kind, name` ties for a repeated header
     # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
-    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22): the conditions an inbound
-    # endpoint's handler type carries, one row per environment, in the order a reader
-    # compares them — endpoint, then environment.
+    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22), read since spec
+    # 2026-10-22-conditional-beans through the VIEW of that name: the conditions an endpoint
+    # row's bean carries, one row per environment, in the order a reader compares them —
+    # endpoint, then environment. `caller` last, the view's own order; it joins the ORDER BY
+    # so an outbound row (no handler) is as total an order as an inbound one (NFR-1).
     "endpoint_conditions": """
         SELECT protocol, direction, method, path, handler, kind, expression, environment,
-               holds, resolution, evidence
+               holds, resolution, evidence, caller
         FROM endpoint_conditions
-        ORDER BY protocol, direction, method, path, handler, kind, expression, environment
+        ORDER BY protocol, direction, method, path, handler, kind, expression, environment,
+                 caller
+    """,
+    # Spec 2026-10-22-conditional-beans §2: the conditions every bean carries, keyed by the
+    # bean. Ordered on the whole row — one bean may be reached by several routes, each a
+    # (bean_kind, via), and several conditions per route.
+    "bean_conditions": """
+        SELECT bean, bean_kind, via, kind, expression, environment, holds, resolution,
+               evidence
+        FROM bean_conditions
+        ORDER BY bean, bean_kind, via, kind, expression, environment, holds, resolution,
+                 evidence
+    """,
+    # The constructor calls a `@Bean` method's body makes, and every other one in the module
+    # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
+    # that class is also constructed anywhere else. Read once per resolve, restricted here to
+    # `<init>` sites with a body this workspace read — a library class has no code a derived
+    # row could live in. The site's own `name` says what is called, so nothing parses a
+    # descriptor to tell a constructor from a method.
+    "constructor_edges": """
+        SELECT DISTINCT e.caller, e.callee
+        FROM call_edges e
+        JOIN call_sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
+        WHERE s.name = '<init>' AND e.callee IS NOT NULL
+        ORDER BY e.caller, e.callee
     """,
     "endpoint_metadata": """
         SELECT protocol, direction, method, path, caller, kind, name, value,
@@ -1190,8 +1216,10 @@ _EXPORT_QUERIES = {
     # applied here as well would be the redactor run twice over its own output.
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     # Structured for a machine (ruling 1, 2026-10-22): the conditions rows go out as they
-    # are, the document being the one verbose rendering of them.
+    # are, the document being the one verbose rendering of them — the bean's own rows and the
+    # view every endpoint row reads them through (spec 2026-10-22-conditional-beans).
     "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
+    "bean_conditions": _NAMED_QUERIES["bean_conditions"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
@@ -1407,8 +1435,8 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
-    "endpoint_conditions_reset": "reset_endpoint_conditions.sql",
-    "endpoint_conditions_insert": "insert_endpoint_conditions.sql",
+    "bean_conditions_reset": "reset_bean_conditions.sql",
+    "bean_conditions_insert": "insert_bean_conditions.sql",
     # D01's system scope, written by `application/stitch`. A reset/insert pair each,
     # both run once per `system analyze` — unlike the resolve tables above, where the
     # reset is the pipeline's and the insert is per catalog.
@@ -1531,9 +1559,18 @@ _FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
     ("system_endpoints", "endpoints", "*"),
     ("system_config", "resolved_config", "*"),
     # Spec 2026-10-21-conditional-controllers (ruling 2): a condition is data on the
-    # inbound endpoint and the link states it, read from the participant's own table.
+    # inbound endpoint and the link states it, read from the participant's own
+    # `endpoint_conditions` — a VIEW since spec 2026-10-22-conditional-beans, which binds
+    # inside the participant's own catalog when attached.
     ("system_endpoint_conditions", "endpoint_conditions", "*"),
 )
+
+# Names `schema.sql` once declared as a TABLE and now declares as a VIEW (spec
+# 2026-10-22-conditional-beans: `endpoint_conditions`). `CREATE OR REPLACE VIEW` refuses to
+# replace a table, so a workspace file an earlier build wrote is dropped of the table first
+# — `_add_columns_the_schema_has_gained`'s reasoning: it is derived, and the next resolve
+# rebuilds what it held.
+_TABLES_NOW_VIEWS = ("endpoint_conditions",)
 
 
 class DuckDbWorkspace:
@@ -1544,6 +1581,7 @@ class DuckDbWorkspace:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = duckdb.connect(str(path))
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
+        self._drop_tables_the_schema_made_views()
         self._connection.execute(schema)
         self._add_columns_the_schema_has_gained(schema)
         # Read HERE, while every fact view is still the form `schema.sql` just gave
@@ -1575,6 +1613,19 @@ class DuckDbWorkspace:
         # never re-derived. Cleared with `_fact_reads`, for the same reason: this is
         # a reading of `raw_facts`, and `load_facts` is its one writer.
         self._staged_payloads: tuple[str, list[tuple[str, ...]]] | None = None
+
+    def _drop_tables_the_schema_made_views(self) -> None:
+        """Drops an existing TABLE `schema.sql` now declares as a view (`_TABLES_NOW_VIEWS`),
+        so the schema's `CREATE OR REPLACE VIEW` can run on a workspace file an earlier build
+        wrote — `module analyze` reopens that file rather than starting a new one, and is the
+        command every stale-workspace refusal tells the reader to run."""
+        held = self._connection.execute(
+            "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
+            f"AND schema_name = 'main' AND table_name IN ({', '.join('?' for _ in _TABLES_NOW_VIEWS)})",
+            list(_TABLES_NOW_VIEWS),
+        ).fetchall()
+        for (table,) in held:
+            self._connection.execute(f"DROP TABLE {table}")
 
     def _add_columns_the_schema_has_gained(self, schema: str) -> None:
         """Adds any column `schema.sql` declares that an EXISTING workspace file does
@@ -2128,18 +2179,22 @@ class DuckDbWorkspace:
             # the first system query raise a bare `Catalog Error`. Refused here, naming the
             # participant and what to do, which is the same answer `render` gives a stale
             # workspace (D01 §7's stamp): there is no analysis here this build can read.
-            present = {
-                str(row[0])
-                for row in self._connection.execute(
-                    "SELECT table_name FROM duckdb_tables() WHERE database_name = ?", [alias]
-                ).fetchall()
-            }
-            missing = sorted(table for _, table, _ in _FEDERATED_VIEWS if table not in present)
+            # Present means present as the KIND this build's own schema makes it — a table
+            # or a view, read off this workspace's own catalog — because a participant
+            # analysed before `endpoint_conditions` became a view still holds a TABLE of
+            # that name, with a column fewer, and the `UNION ALL` below would fail on it.
+            present = self._object_kinds(alias)
+            expected = self._object_kinds(None)
+            missing = sorted(
+                table
+                for _, table, _ in _FEDERATED_VIEWS
+                if present.get(table) != expected.get(table)
+            )
             if missing:
                 raise StaleParticipantError(
                     f"participant `{name}` ({location}) carries no `{'`, `'.join(missing)}` "
-                    "table: its workspace was derived by an older Sextant. Run "
-                    "`sextant module analyze` on it again, then `system analyze`."
+                    "as this build derives it: its workspace was derived by an older Sextant. "
+                    "Run `sextant module analyze` on it again, then `system analyze`."
                 )
         for view, table, columns in _FEDERATED_VIEWS:
             if not aliases:
@@ -2157,6 +2212,24 @@ class DuckDbWorkspace:
                 for alias, name in aliases
             )
             self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")
+
+    def _object_kinds(self, database: str | None) -> dict[str, str]:
+        """Every table and view `database` holds (this workspace's own where None), mapped
+        to `table` or `view` — what `federate` compares a participant's against."""
+        where = "database_name = coalesce(?, current_database()) AND NOT internal"
+        kinds = {
+            str(name): "table"
+            for (name,) in self._connection.execute(
+                f"SELECT table_name FROM duckdb_tables() WHERE {where}", [database]
+            ).fetchall()
+        }
+        kinds.update(
+            (str(name), "view")
+            for (name,) in self._connection.execute(
+                f"SELECT view_name FROM duckdb_views() WHERE {where}", [database]
+            ).fetchall()
+        )
+        return kinds
 
     def close(self) -> None:
         # The staged rows hold the values the export exists to keep out of a

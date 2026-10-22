@@ -89,5 +89,10 @@ SEXTANT_VERSION = version("sextant")
 #             table the system tier federates, so a workspace without it cannot be read
 #             by this build's `system analyze` — refused by name, never a bare
 #             `Catalog Error`.
+#     4       `bean_conditions` (spec 2026-10-22-conditional-beans): the conditions every
+#             bean carries, a new derived table; `endpoint_conditions` stops being a table
+#             and becomes a VIEW joining endpoint rows to it, gaining `caller`. A workspace
+#             holding the old table is refused by name by `system analyze` and rebuilt by
+#             `module analyze`.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 3
+GRAPH_SCHEMA_VERSION = 4

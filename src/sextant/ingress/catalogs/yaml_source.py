@@ -820,7 +820,8 @@ _CONDITION_KINDS = ("profile", "property", "other")
 
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
-    """Refuses a malformed `conditions` or `presence` block of a bean model, naming the file
+    """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
+    `stereotypes` / `configuration_annotation` — naming the file
     (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
     framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
     measured is a guess, and a typo here would silently strip every bean of its condition."""
@@ -860,6 +861,26 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
             raise CatalogError(
                 f"{where}: `presence` needs `missing` and `present` (annotation names), "
                 "`type_attrs` and `name_attrs` (lists) and a `by:` probe"
+            )
+    # Which classes are beans at all (CP-44 row 5): an empty or malformed list would make
+    # every scanned class unconditional without a word, the failure the blocks above refuse.
+    if "stereotypes" in raw:
+        stereotypes = raw["stereotypes"]
+        if (
+            not isinstance(stereotypes, list)
+            or not stereotypes
+            or not all(isinstance(name, str) and name for name in stereotypes)
+        ):
+            raise CatalogError(
+                f"{where}: `stereotypes` must be a non-empty list of annotation names, "
+                f"got {stereotypes!r}"
+            )
+    if "configuration_annotation" in raw:
+        configuration = raw["configuration_annotation"]
+        if not isinstance(configuration, str) or not configuration:
+            raise CatalogError(
+                f"{where}: `configuration_annotation` must be one annotation name, "
+                f"got {configuration!r}"
             )
 
 

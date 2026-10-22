@@ -399,7 +399,9 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         "  present: com.acme.Present\n"
         "  type_attrs: [value, type]\n"
         "  name_attrs: [name]\n"
-        "  by: probe.md\n",
+        "  by: probe.md\n"
+        "stereotypes: [com.acme.Component]\n"
+        "configuration_annotation: com.acme.Config\n",
     )
     (tmp_path / "invented-di.yml").write_text(
         _HEADER + "bean_model: tiny\nmatches: {}\n", encoding="utf-8"
@@ -408,6 +410,7 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
     [catalog] = YamlCatalogSource(tmp_path).load()
 
     assert catalog.bean_model["conditions"]["profile"]["annotation"] == "com.acme.Profile"
+    assert catalog.bean_model["stereotypes"] == ["com.acme.Component"]
     assert catalog.bean_model["presence"]["name_attrs"] == ["name"]
 
 
@@ -427,6 +430,10 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
             ),
             "`presence` needs",
         ),
+        ("stereotypes: []\n", "`stereotypes` must be a non-empty list"),
+        ("stereotypes: com.acme.Component\n", "`stereotypes` must be a non-empty list"),
+        ("stereotypes: [com.acme.Component, 7]\n", "`stereotypes` must be a non-empty list"),
+        ("configuration_annotation: [com.acme.Config]\n", "`configuration_annotation` must"),
     ],
 )
 def test_a_malformed_condition_vocabulary_is_refused_naming_the_model_file(

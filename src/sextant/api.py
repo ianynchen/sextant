@@ -880,9 +880,14 @@ def _with_inbound_conditions(
     """Each link with the `(environment, holds)` pairs of the inbound endpoint it reaches —
     read off the participants' own `endpoint_conditions` through the federated view, joined
     on (participant, method, path), the identity an inbound row carries. A link to an
-    unconditional endpoint keeps the empty tuple."""
+    unconditional endpoint keeps the empty tuple. Inbound rows only: the view carries every
+    direction since spec 2026-10-22-conditional-beans, and an outbound row of the same
+    participant under the same method and path is a call it makes, not the endpoint the link
+    reaches."""
     by_endpoint: dict[tuple[str, str | None, str | None], list[tuple[str, str]]] = {}
     for row in conditions:
+        if row["direction"] != "inbound":
+            continue
         key = (
             str(row["participant"]),
             None if row["method"] is None else str(row["method"]),
@@ -944,6 +949,7 @@ def _reconstructed_report(
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),
         endpoint_conditions=workspace.query("endpoint_conditions"),
+        bean_conditions=workspace.query("bean_conditions"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report
