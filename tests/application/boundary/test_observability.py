@@ -23,7 +23,7 @@ BASE: dict[str, object] = {
         "documents": 4,
         "partial_documents": 0,
         "format_unresolved": 0,
-        "endpoints_total": 10,
+        "inbound_total": 10,
         "peer_unresolved": 0,
         "outbound_total": 3,
     },
@@ -146,7 +146,7 @@ def test_unresolved_formats_and_peers_are_attribute_verdicts_with_their_share():
     coverage = {
         **BASE["coverage"],  # type: ignore[dict-item]
         "format_unresolved": 4,
-        "endpoints_total": 10,
+        "inbound_total": 10,
         "peer_unresolved": 1,
         "outbound_total": 3,
     }

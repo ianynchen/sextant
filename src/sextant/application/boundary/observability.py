@@ -139,7 +139,7 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
 
     attributes: dict[str, dict[str, Verdict]] = {}
     for kind, attribute, unresolved, total, noun in (
-        ("endpoint", "format", "format_unresolved", "endpoints_total", "formats"),
+        ("endpoint", "format", "format_unresolved", "inbound_total", "formats"),
         ("dependency", "peer", "peer_unresolved", "outbound_total", "peers"),
     ):
         found = _share(coverage, unresolved, total, noun)

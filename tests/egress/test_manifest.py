@@ -250,11 +250,15 @@ def test_metadata_and_manifest_carry_the_map(analyzed_workspace_copy: Path):
     # The two counts the attribute verdicts read are measured off the rows, beside the rest
     # of `coverage`, and the map is computed from them.
     coverage = metadata["coverage"]
-    assert 0 < coverage["format_unresolved"] <= coverage["endpoints_total"]
+    # Counted over the rows the `endpoint` kind holds (inbound and `both`), so the share is
+    # never inflated by outbound rows, which belong to `dependency` and carry no format
+    # attribute on the map. The fixture's inbound total is strictly below its all-rows total.
+    assert 0 < coverage["format_unresolved"] <= coverage["inbound_total"]
+    assert coverage["inbound_total"] == sum(metadata["endpoints"]["inbound"].values())
     assert observability["attributes"]["endpoint"]["format"] == {
         "verdict": "partial",
         "reasons": [
-            f"{coverage['format_unresolved']} of {coverage['endpoints_total']} formats unresolved"
+            f"{coverage['format_unresolved']} of {coverage['inbound_total']} formats unresolved"
         ],
     }
 

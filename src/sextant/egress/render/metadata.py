@@ -93,13 +93,18 @@ def write_metadata(
             outbound[protocol] = outbound.get(protocol, 0) + 1
 
     # The two shares the map's attribute verdicts read (spec 2026-10-22 §4a), measured off
-    # the same rows counted above: the ladder's `unresolved` formats over every row, and the
-    # outbound rows with no peer over every outbound row (`both` counts on the outbound side).
+    # the same rows counted above. `inbound_total` is the rows the `endpoint` kind holds (the
+    # `inbound` dict's own predicate), so outbound rows, which belong to `dependency`, cannot
+    # inflate the format share; the peer share is over the outbound side, where a `both` row
+    # counts.
+    inbound_rows = [
+        endpoint for endpoint in report.endpoints if endpoint["direction"] in ("inbound", "both")
+    ]
     coverage = dict(report.coverage)
     coverage["format_unresolved"] = sum(
-        1 for endpoint in report.endpoints if endpoint.get("format_resolution") == "unresolved"
+        1 for endpoint in inbound_rows if endpoint.get("format_resolution") == "unresolved"
     )
-    coverage["endpoints_total"] = len(report.endpoints)
+    coverage["inbound_total"] = len(inbound_rows)
     outbound_rows = [
         endpoint for endpoint in report.endpoints if endpoint["direction"] in ("outbound", "both")
     ]

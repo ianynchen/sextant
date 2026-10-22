@@ -1797,4 +1797,8 @@ def observability(path: Path) -> ObservabilityMap:
         raise NotAnalyzedError(
             f"no analysis found at {path} — run `sextant module analyze {path}` first."
         ) from refused
+    if not isinstance(recorded, dict):
+        raise NotAnalyzedError(
+            f"{document} is not a JSON object — run `sextant module analyze {path}` again."
+        )
     return observability_of(recorded)

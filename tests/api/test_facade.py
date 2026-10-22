@@ -610,3 +610,12 @@ def test_observability_of_a_workspace_without_the_map_is_the_labelled_degraded_o
 def test_observability_before_analyze_raises_notanalyzederror(tmp_path: Path):
     with pytest.raises(api.NotAnalyzedError):
         api.observability(tmp_path)
+
+
+def test_observability_of_a_document_that_is_not_an_object_raises_notanalyzederror(
+    tmp_path: Path,
+):
+    (tmp_path / "metadata.json").write_text("[1, 2]", encoding="utf-8")
+
+    with pytest.raises(api.NotAnalyzedError, match="metadata.json"):
+        api.observability(tmp_path)
