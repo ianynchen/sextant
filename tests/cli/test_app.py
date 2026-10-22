@@ -1223,3 +1223,67 @@ def test_a_refused_detection_leaves_a_pre_existing_workspace_byte_untouched(tmp_
 
     assert (workspace / "metadata.json").read_bytes() == metadata_before
     assert (workspace / "workspace.duckdb").read_bytes() == db_before
+
+
+def test_cli_diff_prints_json_with_summary_and_entries(analyzed_workspace_copy: Path):
+    out = CliRunner().invoke(
+        cli, ["module", "diff", str(analyzed_workspace_copy), str(analyzed_workspace_copy)]
+    )
+
+    assert out.exit_code == 0, out.output
+    document = json.loads(out.output)
+    assert document["summary"]["endpoint"] == {"added": 0, "removed": 0, "changed": 0}
+    assert document["entries"] == []
+
+
+def test_cli_diff_text_format_prints_the_summary_table(analyzed_workspace_copy: Path):
+    out = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "diff",
+            str(analyzed_workspace_copy),
+            str(analyzed_workspace_copy),
+            "--format",
+            "text",
+        ],
+    )
+
+    assert out.exit_code == 0, out.output
+    assert "| kind | added | removed | changed |" in out.output
+
+
+def test_cli_diff_out_writes_the_json_file_and_prints_the_summary_count(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    target = tmp_path / "diff.json"
+
+    out = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "diff",
+            str(analyzed_workspace_copy),
+            str(analyzed_workspace_copy),
+            "--out",
+            str(target),
+        ],
+    )
+
+    assert out.exit_code == 0, out.output
+    assert json.loads(target.read_text(encoding="utf-8"))["entries"] == []
+    assert out.output.strip() == "0 added, 0 removed, 0 changed"
+
+
+def test_cli_diff_refusal_is_a_click_error_naming_the_stamp(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    stale = tmp_path / "stale"
+    shutil.copytree(analyzed_workspace_copy, stale)
+    metadata = json.loads((stale / "metadata.json").read_text(encoding="utf-8"))
+    metadata["schema_version"] = "0.9.0"
+    (stale / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    out = CliRunner().invoke(cli, ["module", "diff", str(analyzed_workspace_copy), str(stale)])
+
+    assert out.exit_code != 0 and "graph_schema_version" in out.output

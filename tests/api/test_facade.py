@@ -29,6 +29,7 @@ from click.testing import CliRunner
 from fixture_build import compile_fixture
 from sextant import api
 from sextant.agents import AGENT_REGISTRY
+from sextant.application.boundary.vocabulary import KINDS
 from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
@@ -520,3 +521,48 @@ def test_export_writes_a_bundle_with_the_manifest(rendered_root: Path):
 def test_export_before_analyze_raises_notanalyzederror(tmp_path: Path):
     with pytest.raises(api.NotAnalyzedError):
         api.export(tmp_path)
+
+
+# --------------------------------------------------------------------------
+# diff
+# --------------------------------------------------------------------------
+
+
+def test_diff_of_a_workspace_with_itself_is_empty_and_lists_every_kind(rendered_root: Path):
+    result = api.diff(rendered_root, rendered_root)
+
+    assert isinstance(result, api.DiffResult)
+    assert result.diff.entries == () and set(result.diff.summary) == set(KINDS)
+    assert result.written is None
+
+
+def test_diff_writes_the_file_when_out_is_given(rendered_root: Path, tmp_path: Path):
+    target = tmp_path / "nested" / "diff.json"
+
+    result = api.diff(rendered_root, rendered_root, out=target)
+
+    assert result.written == target
+    written = target.read_text(encoding="utf-8")
+    assert json.loads(written)["summary"] == result.diff.to_json()["summary"]
+    assert written == json.dumps(result.diff.to_json(), sort_keys=True, indent=2) + "\n"
+
+
+def test_diff_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError):
+        api.diff(tmp_path, tmp_path)
+
+
+def test_diff_of_two_stamps_that_cannot_be_compared_raises_diffrefusederror(
+    rendered_root: Path, tmp_path: Path
+):
+    """The refusal's own text names the stamp that differs; the facade carries it unchanged."""
+    stale = tmp_path / "stale"
+    shutil.copytree(rendered_root / ".sextant", stale)
+    metadata = json.loads((stale / "metadata.json").read_text(encoding="utf-8"))
+    metadata["schema_version"] = "0.9.0"
+    (stale / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(api.DiffRefusedError) as refused:
+        api.diff(rendered_root, stale)
+
+    assert "graph_schema_version" in str(refused.value)

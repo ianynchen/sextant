@@ -115,6 +115,8 @@ from xml.etree.ElementTree import ParseError
 from pydantic import ValidationError
 
 from sextant.agents import AGENT_REGISTRY, DEFAULT_MAX_TURNS
+from sextant.application.boundary.diff import Diff, DiffRefused, diff_sources
+from sextant.application.boundary.source import BoundarySource, NotABoundarySource
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
 from sextant.application.ports.detector import (
@@ -180,7 +182,11 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, extractor_jar, instructions_path
-from sextant.storage.duckdb.workspace import DuckDbWorkspace, StaleParticipantError
+from sextant.storage.duckdb.workspace import (
+    DuckDbWorkspace,
+    StaleParticipantError,
+    open_read_only,
+)
 
 # --------------------------------------------------------------------------
 # The SextantError family (module docstring above states the grouping).
@@ -219,6 +225,13 @@ class EnrichmentError(SextantError):
     document, the tool jail's own setup, an unknown agent or missing model,
     the agent's own construction or run, or an answer that will not
     validate."""
+
+
+class DiffRefusedError(SextantError):
+    """`diff` refused to compare the two sides: a stamp absent on one, a
+    schema or vocabulary version that differs, two different modules, or a
+    producer change the caller did not allow. The message is the refusal's own
+    text, which names the stamps."""
 
 
 # --------------------------------------------------------------------------
@@ -314,6 +327,25 @@ class ExportResult:
     files, the manifest, and either rendered document that already existed)."""
 
     bundle: Path
+
+
+@dataclass(frozen=True)
+class DiffOptions:
+    """What `diff` may do beyond comparing like with like. `allow_producer_change`
+    lets a diff proceed across a different Sextant version, catalog hash or
+    redaction rule set — refused by default because such a diff can report rows
+    that changed with no code change — and then labels it `producer_changed`."""
+
+    allow_producer_change: bool = False
+
+
+@dataclass(frozen=True)
+class DiffResult:
+    """`diff`'s own outcome: the diff itself, and the file it was written to
+    (`None` when no `out` was given)."""
+
+    diff: Diff
+    written: Path | None
 
 
 @dataclass(frozen=True)
@@ -1687,3 +1719,57 @@ def export(path: Path) -> ExportResult:
     export`. Raises `NotAnalyzedError` where the CLI would refuse for the
     same reason."""
     return _export(path, workspace_dir=None)
+
+
+_DEFAULT_DIFF_OPTIONS = DiffOptions()
+
+
+def diff(
+    a: Path,
+    b: Path,
+    *,
+    options: DiffOptions = _DEFAULT_DIFF_OPTIONS,
+    out: Path | None = None,
+) -> DiffResult:
+    """What changed at the boundary from `a` to `b`, two analyses of one module
+    — the library equivalent of `sextant module diff`. Each side is a module,
+    its `.sextant` workspace, or an exported bundle directory.
+
+    The redactor both sides are read through is the module's own (`_redactor_for`
+    at a workspace side's module root; side `a`'s when both are workspaces, which
+    share one module's rules), and the built-in set when both are bundles — a
+    bundle is already masked and has no module root. When `out` is given the
+    diff's JSON is written there, parents created.
+
+    Raises `NotAnalyzedError` where a side is neither a workspace nor a bundle,
+    and `DiffRefusedError` where the two cannot be compared. Both sides are
+    opened read-only and closed before returning."""
+    sources: list[BoundarySource] = []
+    try:
+        for path in (a, b):
+            try:
+                sources.append(BoundarySource.open(path, open_read_only))
+            except NotABoundarySource as refused:
+                raise NotAnalyzedError(
+                    f"no analysis found at {path} — run `sextant module analyze {path}` first."
+                ) from refused
+        roots = [root for root in (side.module_root for side in sources) if root is not None]
+        redactor = _redactor_for(roots[0]) if roots else Redactor.from_rules()
+        try:
+            found = diff_sources(
+                sources[0],
+                sources[1],
+                redactor,
+                allow_producer_change=options.allow_producer_change,
+            )
+        except DiffRefused as refused:
+            raise DiffRefusedError(str(refused)) from refused
+    finally:
+        for source in sources:
+            source.close()
+
+    if out is None:
+        return DiffResult(diff=found, written=None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(found.to_json(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return DiffResult(diff=found, written=out)

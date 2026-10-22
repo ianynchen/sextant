@@ -264,3 +264,41 @@ def module_export(path: Path, workspace_dir: Path | None, out_dir: Path | None) 
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused
     click.echo(str(result.bundle))
+
+
+@module.command("diff")
+@click.argument("a", type=click.Path(exists=True, path_type=Path))
+@click.argument("b", type=click.Path(exists=True, path_type=Path))
+@click.option("--out", "out", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "text"]),
+    default="json",
+    show_default=True,
+)
+@click.option("--allow-producer-change", "allow_producer_change", is_flag=True, default=False)
+def module_diff(
+    a: Path, b: Path, out: Path | None, output_format: str, allow_producer_change: bool
+) -> None:
+    """What changed at the boundary between two analyses of one module (each a
+    module, its `.sextant` workspace, or an exported bundle). Reads only — it
+    never re-analyzes. JSON on stdout by default; with `--out` the JSON goes to
+    the file and one line of totals is printed instead."""
+    try:
+        result = api.diff(
+            a, b, options=api.DiffOptions(allow_producer_change=allow_producer_change), out=out
+        )
+    except api.SextantError as refused:
+        raise click.ClickException(str(refused)) from refused
+
+    if out is not None:
+        totals = {
+            name: sum(per_kind[name] for per_kind in result.diff.summary.values())
+            for name in ("added", "removed", "changed")
+        }
+        click.echo(", ".join(f"{n} {name}" for name, n in totals.items()))
+    elif output_format == "text":
+        click.echo(result.diff.to_text(), nl=False)
+    else:
+        click.echo(json.dumps(result.diff.to_json(), sort_keys=True))
