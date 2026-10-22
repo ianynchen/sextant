@@ -124,8 +124,8 @@ the flags below.
 **The output is one JSON document, deterministic** (NFR-1): `boundary_vocabulary_version`,
 each side's `module`, `commit` and `producer` (the stamps compared, plus `redaction_recorded`:
 `true` for a bundle side, whose `redaction_set_hash` the exporter recorded, and `false` for a
-workspace side, whose `redaction_set_hash` is the rule set the diff itself masked it under,
-since `analyze` records none), `producer_changed`, the `entries` sorted by
+workspace side, whose `redaction_set_hash` is the diff's own hash of that side's module's
+rule set, since `analyze` records none), `producer_changed`, the `entries` sorted by
 kind, change and identity, and a `summary` row per kind of `added`, `removed` and `changed`
 counts. Every kind is present even at zero, so an empty diff is `{"entries": [], "summary":
 {all zeros}}` and never an absent file (NFR-7). A `changed` entry's `from` and `to` carry only
@@ -154,11 +154,19 @@ bundle is refused as `render` and `export` refuse an unanalyzed path.
 
 **The diff is itself an exit** ([D04](D04-config-and-exclusion.md) §1). A bundle's addresses
 and configuration values were masked at export and a workspace's are verbatim, so each side's
-`path`, `peer` and property values pass through the module's redactor before they are
-compared — otherwise every masked peer would read as a change — and the output is masked the
-same way. The redactor comes from the module's own `.sextant.yml`, found from the module root
-of a workspace side. A custom `--workspace` directory is out of scope for `diff`: pass the
-module, its `.sextant` directory, or a bundle.
+`path`, `peer` and property values pass through a redactor before they are compared —
+otherwise every masked peer would read as a change — and the output is masked the same way.
+**Each side is masked under its own rules**: a workspace side under its module's own
+`.sextant.yml`, found from the module above it, exactly as `export` would mask it; a bundle
+side under the rules its exporter recorded, which it already carries. The two rule sets are
+compared by `redaction_set_hash` like the other producer stamps, so a `redact:` rule one
+side's module declares and the other's does not refuses by default; under
+`--allow-producer-change` both sides are masked by the UNION of the two sets, so nothing
+either side's rules hide is printed. (A bundle records its rules' hash, not the rules, so a
+value only a bundle's own additions would mask is masked on the workspace side by the
+workspace's rules alone.) A workspace outside its module's `.sextant` directory — a custom
+`--workspace DIR` — is refused by name, because which `.sextant.yml` masks it is unknown:
+pass the module, its `.sextant` directory, or a bundle.
 
 `system diff` stays deferred (`PROJECT.md`): `links` and `participants` would be two more
 kinds, and the drift scenario is per module.

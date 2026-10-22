@@ -1805,6 +1805,29 @@ def export(path: Path) -> ExportResult:
 _DEFAULT_DIFF_OPTIONS = DiffOptions()
 
 
+def _side_redactor(path: Path, side: BoundarySource) -> Redactor:
+    """The exit one diff side is masked through: the built-ins for a bundle (masked at
+    export; its recorded hash is what it is compared on), its module's own for a workspace.
+
+    A workspace is its module's only where it IS that module's `.sextant` — the layout
+    `analyze` writes by default. One placed by `--workspace DIR` has `DIR.parent` above it,
+    which is not known to be the module, and reading that directory's `.sextant.yml` (or
+    none) would mask the side by rules nobody declared for it: refused, by name."""
+    if side.is_bundle:
+        return Redactor.from_rules()
+    root = side.module_root
+    if root is None or _workspace_dir_of(root, None).resolve() not in (
+        path.resolve(),
+        (path / ".sextant").resolve(),
+    ):
+        raise DiffRefusedError(
+            f"cannot diff {path}: it is a workspace outside its module's `.sextant` "
+            "directory, so which `.sextant.yml` names its redaction rules is unknown — "
+            "diff `<module>` or `<module>/.sextant`"
+        )
+    return _redactor_for(root)
+
+
 def diff(
     a: Path,
     b: Path,
@@ -1816,15 +1839,18 @@ def diff(
     — the library equivalent of `sextant module diff`. Each side is a module,
     its `.sextant` workspace, or an exported bundle directory.
 
-    The redactor both sides are read through is the module's own (`_redactor_for`
-    at a workspace side's module root; side `a`'s when both are workspaces, which
-    share one module's rules), and the built-in set when both are bundles — a
-    bundle is already masked and has no module root. When `out` is given the
-    diff's JSON is written there, parents created.
+    Each side is masked under its OWN rules (spec §3d): a workspace side's module's
+    `.sextant.yml` (`_redactor_for` at its module root, exactly as `export` would mask it),
+    a bundle side's the rules its exporter recorded, the bundle being masked already. Two
+    sides whose rule sets differ are refused like the other producer stamps; allowed, both
+    are masked by the union of the two. When `out` is given the diff's JSON is written
+    there, parents created.
 
-    Raises `NotAnalyzedError` where a side is neither a workspace nor a bundle,
-    and `DiffRefusedError` where the two cannot be compared. Both sides are
-    opened read-only and closed before returning."""
+    Raises `NotAnalyzedError` where a side is neither a workspace nor a bundle (naming what
+    was looked for — a bundle exported by an older Sextant lacks a table), and
+    `DiffRefusedError` where the two cannot be compared or a workspace side sits outside
+    its module's `.sextant` directory, so no `.sextant.yml` is known to mask it. Both sides
+    are opened read-only and closed before returning."""
     sources: list[BoundarySource] = []
     try:
         for path in (a, b):
@@ -1832,15 +1858,16 @@ def diff(
                 sources.append(BoundarySource.open(path, open_read_only))
             except NotABoundarySource as refused:
                 raise NotAnalyzedError(
-                    f"no analysis found at {path} — run `sextant module analyze {path}` first."
+                    f"cannot diff {path}: {refused.looked_for} — analyze the module "
+                    f"(`sextant module analyze`), or export the bundle again with this Sextant."
                 ) from refused
-        roots = [root for root in (side.module_root for side in sources) if root is not None]
-        redactor = _redactor_for(roots[0]) if roots else Redactor.from_rules()
+        redactors = [_side_redactor(path, side) for path, side in zip((a, b), sources)]
         try:
             found = diff_sources(
                 sources[0],
                 sources[1],
-                redactor,
+                redactors[0],
+                redactors[1],
                 allow_producer_change=options.allow_producer_change,
             )
         except DiffRefused as refused:

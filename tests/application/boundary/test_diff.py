@@ -153,7 +153,7 @@ def test_identical_sides_produce_the_empty_change_set_with_every_kind_at_zero(
 ):
     """NFR-1: identical inputs, and an empty diff is all zeros, never an absent answer."""
     side = sources(_built(tmp_path, _owners))
-    diff = diff_sources(side, side, REDACTOR)
+    diff = diff_sources(side, side, REDACTOR, REDACTOR)
     assert diff.entries == ()
     assert diff.summary == {name: _ZERO for name in KINDS}
     assert diff.producer_changed is False
@@ -165,7 +165,7 @@ def test_every_kind_is_present_in_the_summary_at_zero_even_with_no_rows_anywhere
 ):
     a = sources(_built(tmp_path / "a", lambda w: None))
     b = sources(_built(tmp_path / "b", lambda w: _endpoint(w, method="GET", path="/x")))
-    summary = diff_sources(a, b, REDACTOR).summary
+    summary = diff_sources(a, b, REDACTOR, REDACTOR).summary
     assert list(summary) == list(KINDS)  # registry order, every kind
     assert summary["endpoint"] == {"added": 1, "removed": 0, "changed": 0}
     assert all(summary[name] == _ZERO for name in KINDS if name != "endpoint")
@@ -188,7 +188,7 @@ def test_a_moved_controller_is_no_entry_and_a_new_route_is_added(
 
     a = sources(_built(tmp_path / "a", _owners))
     b = sources(_built(tmp_path / "b", after))
-    diff = diff_sources(a, b, REDACTOR)
+    diff = diff_sources(a, b, REDACTOR, REDACTOR)
     assert [(e.kind, e.change, e.identity["path"]) for e in diff.entries] == [
         ("endpoint", "added", "/api/v2/owners")
     ]
@@ -208,7 +208,7 @@ def test_a_removed_route_carries_the_evidence_of_the_side_it_was_on(
     a = sources(_built(tmp_path / "a", _owners))
     b = sources(_built(tmp_path / "b", lambda w: _endpoint(w, method="GET", path="/api/owners",
                                                            handler="X#get().")))  # fmt: skip
-    (removed,) = diff_sources(a, b, REDACTOR).entries
+    (removed,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert (removed.change, removed.identity["method"], removed.to) == ("removed", "POST", None)
     assert removed.from_ is not None and removed.from_["resolution"] == "resolved"
     assert removed.evidence["symbols"] == ["com/acme/rest/OwnerController#post()."]
@@ -254,7 +254,7 @@ def _changed_owner(
 ):
     a = sources(_built(root / "a", _owner_route(before, body)))
     b = sources(_built(root / "b", _owner_route(after, body)))
-    (entry,) = diff_sources(a, b, REDACTOR).entries
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert (entry.kind, entry.change) == ("endpoint", "changed")
     return entry
 
@@ -329,7 +329,7 @@ def test_a_body_that_becomes_a_list_of_the_same_dto_is_one_breaking_change(
     a = sources(_built(tmp_path / "a", _owner_route(fields, body)))
     b = sources(_built(tmp_path / "b", _owner_route(fields, body,
                                                     descriptor=lambda s: _array_of(_shape(s)))))  # fmt: skip
-    (entry,) = diff_sources(a, b, REDACTOR).entries
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert (entry.kind, entry.change, entry.compatibility) == ("endpoint", "changed", "breaking")
     assert entry.from_ is not None and entry.to is not None
     assert set(entry.from_) == set(entry.to) == {f"{body}_shape"}
@@ -350,7 +350,7 @@ def test_a_renamed_dto_with_the_same_structure_is_no_entry(
     )
     b = sources(_built(tmp_path / "b", _owner_route(fields, body, shape="com/acme/v1/OwnerV1#",
                                                     descriptor=lambda s: _array_of(_shape(s)))))  # fmt: skip
-    assert diff_sources(a, b, REDACTOR).entries == ()
+    assert diff_sources(a, b, REDACTOR, REDACTOR).entries == ()
 
 
 def test_a_body_that_becomes_several_is_changed_with_no_label(
@@ -368,7 +368,7 @@ def test_a_body_that_becomes_several_is_changed_with_no_label(
 
     a = sources(_built(tmp_path / "a", _owner_route([("id", True)], "response")))
     b = sources(_built(tmp_path / "b", after))
-    (entry,) = diff_sources(a, b, REDACTOR).entries
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert entry.change == "changed" and entry.compatibility is None
     # Both shapes are one structure with the symbol erased, so only the field sets differ.
     assert entry.to is not None and set(entry.to) == {"response"}
@@ -379,7 +379,7 @@ def test_a_non_body_change_has_no_label(tmp_path: Path, sources: Callable[[Path]
     a = sources(_built(tmp_path / "a", lambda w: _endpoint(w, method="GET", path="/x")))
     b = sources(_built(tmp_path / "b", lambda w: _endpoint(w, method="GET", path="/x",
                                                            produces="application/json")))  # fmt: skip
-    (entry,) = diff_sources(a, b, REDACTOR).entries
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert (entry.from_, entry.to, entry.compatibility) == (
         {"produces": None}, {"produces": "application/json"}, None,
     )  # fmt: skip
@@ -402,7 +402,7 @@ def test_a_contract_with_a_new_field_is_changed_and_names_the_field(
 
     a = sources(_built(tmp_path / "a", contract("md5:1", ("id", "name"))))
     b = sources(_built(tmp_path / "b", contract("md5:2", ("id", "name", "phone"))))
-    (entry,) = diff_sources(a, b, REDACTOR).entries
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert (entry.kind, entry.change) == ("data-contract", "changed")
     assert entry.identity == {"shape_id": "com/acme/OwnerDto#"}
     assert entry.to is not None and entry.from_ is not None
@@ -439,22 +439,22 @@ def test_a_masked_bundle_and_its_verbatim_workspace_diff_empty(
     assert [r["peer"] for r in verbatim.rows(KINDS["dependency"])] == [_SECRET_PEER]
     assert [r["peer"] for r in masked.rows(KINDS["dependency"])] == ["https://billing.internal"]
     assert [r["value"] for r in masked.rows(KINDS["boundary-property"])] == [REDACTED]
-    assert diff_sources(masked, verbatim, REDACTOR).entries == ()
-    assert diff_sources(verbatim, masked, REDACTOR).entries == ()
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    assert diff_sources(verbatim, masked, REDACTOR, REDACTOR).entries == ()
 
 
 @pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
 def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path], BoundarySource]):
     a = sources(_built(tmp_path / "a", lambda w: None))
     b = sources(_built(tmp_path / "b", _secrets))
-    entries = diff_sources(a, b, REDACTOR).entries
+    entries = diff_sources(a, b, REDACTOR, REDACTOR).entries
     assert [(e.kind, e.change) for e in entries] == [
         ("dependency", "added"), ("boundary-property", "added"),
     ]  # fmt: skip
     dependency, prop = entries
     assert dependency.identity["peer"] == "https://billing.internal"
     assert prop.to == {"value": REDACTED, "unresolved_reason": None}
-    assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR).to_json())
+    assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
@@ -474,12 +474,12 @@ def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
     bundle = _bundled(workspace, tmp_path / "bundle")
     assert len(sources(workspace).rows(KINDS["dependency"])) == 2
     assert len(sources(bundle).rows(KINDS["dependency"])) == 1
-    assert diff_sources(sources(workspace), sources(bundle), REDACTOR).entries == ()
+    assert diff_sources(sources(workspace), sources(bundle), REDACTOR, REDACTOR).entries == ()
 
     one = sources(_built(tmp_path / "one", lambda w: _endpoint(
         w, direction="outbound", method="POST", path="/v1/charge", peer="https://billing",
         caller="A#a().", format="json")))  # fmt: skip
-    (entry,) = diff_sources(one, sources(workspace), REDACTOR).entries
+    (entry,) = diff_sources(one, sources(workspace), REDACTOR, REDACTOR).entries
     assert entry.to == {"format": {"several": ["json", "xml"]}}
     assert entry.evidence["symbols"] == ["A#a().", "B#b()."]  # both callers, joined
 
@@ -499,7 +499,7 @@ def test_the_fixture_bundle_and_its_workspace_diff_empty(
     workspace, masked = sources(analyzed_workspace_copy), sources(bundle)
     values = {r["key"]: r["value"] for r in masked.rows(KINDS["boundary-property"])}
     assert REDACTED in values.values()  # the bundle did mask something
-    diff = diff_sources(masked, workspace, redactor)
+    diff = diff_sources(masked, workspace, Redactor.from_rules(), redactor)
     assert diff.entries == () and diff.producer_changed is False
     recorded = {**cast(dict[str, object], diff.b["producer"]), "redaction_recorded": True}
     assert diff.a["producer"] == recorded
@@ -522,7 +522,7 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 3") as refused:
-        diff_sources(a, b, REDACTOR, allow_producer_change=True)  # no flag overrides this
+        diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 
 
@@ -531,7 +531,7 @@ def test_different_fact_schema_and_vocabulary_versions_refuse_by_name(tmp_path: 
                  provenance={**_PROVENANCE, "fact_schema_version": 1})  # fmt: skip
     b = _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused) as refused:
-        diff_sources(a, b, REDACTOR)
+        diff_sources(a, b, REDACTOR, REDACTOR)
     assert "fact_schema_version 1 vs 2" in str(refused.value)
     assert "boundary_vocabulary_version 2 vs 1" in str(refused.value)
     assert set(refused.value.stamps) == {"fact_schema_version", "boundary_vocabulary_version"}
@@ -541,7 +541,7 @@ def test_different_module_ids_refuse_naming_both(tmp_path: Path):
     a = _stamped(tmp_path / "a", module={**_MODULE, "id": "com.acme:billing"})
     b = _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused, match="com.acme:billing vs com.acme:orders-service"):
-        diff_sources(a, b, REDACTOR, allow_producer_change=True)
+        diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
 
 
 @pytest.mark.pins("boundary.a-PRODUCER-mismatch-refuses-unless-allowed")
@@ -554,9 +554,9 @@ def test_different_sextant_versions_refuse_unless_allowed_and_then_label(
                        provenance={**_PROVENANCE, "sextant_version": "0.2.0"}))  # fmt: skip
     b = sources(_built(tmp_path / "b", lambda w: None))
     with pytest.raises(DiffRefused, match="sextant_version 0.2.0 vs 0.1.0") as refused:
-        diff_sources(a, b, REDACTOR)
+        diff_sources(a, b, REDACTOR, REDACTOR)
     assert refused.value.stamps == ("sextant_version",)
-    diff = diff_sources(a, b, REDACTOR, allow_producer_change=True)
+    diff = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
     assert diff.producer_changed is True
     assert (diff.a["producer"]["sextant_version"], diff.b["producer"]["sextant_version"]) == (  # type: ignore[index]
         "0.2.0", "0.1.0",
@@ -566,33 +566,101 @@ def test_different_sextant_versions_refuse_unless_allowed_and_then_label(
 def test_different_catalog_hashes_refuse_like_the_sextant_version(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", catalog_hash="sha256:other"), _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused, match="catalog_hash sha256:other vs sha256:catalogs"):
-        diff_sources(a, b, REDACTOR)
+        diff_sources(a, b, REDACTOR, REDACTOR)
 
 
 def test_a_bundle_masked_under_other_rules_refuses_on_the_redaction_set_hash(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
     """ "The value changed" and "the mask changed" cannot be told apart. A workspace side is
-    masked by the redactor the diff is given, so that is the rule set it is compared under."""
+    masked by the redactor given for it, so that is the rule set it is compared under."""
     workspace = _built(tmp_path / "w", _secrets)
     wider = Redactor.from_rules(RedactionRules(key_patterns=("charge",)))
     bundle = sources(_bundled(workspace, tmp_path / "bundle", wider))
     with pytest.raises(DiffRefused, match="redaction_set_hash") as refused:
-        diff_sources(bundle, sources(workspace), REDACTOR)
+        diff_sources(bundle, sources(workspace), REDACTOR, REDACTOR)
     assert refused.value.stamps == ("redaction_set_hash",)
     side = sources(workspace)
-    producer = cast(dict[str, object], diff_sources(side, side, REDACTOR).a["producer"])
+    producer = cast(dict[str, object], diff_sources(side, side, REDACTOR, REDACTOR).a["producer"])
     assert producer["redaction_set_hash"] == REDACTOR.rule_set_hash
     # Computed by the diff for the rules it masked under, not recorded by an export.
     assert producer["redaction_recorded"] is False
 
 
+_DSN_KEY = "orders.internal.dsn"
+_DSN_RULES = Redactor.from_rules(RedactionRules(key_patterns=("dsn",)))
+
+
+def _dsn(value: str) -> Callable[[DuckDbWorkspace], None]:
+    def build(workspace: DuckDbWorkspace) -> None:
+        _insert(workspace, "resolved_config", key=_DSN_KEY, value=value,
+                source="application.yml", environment="default")  # fmt: skip
+
+    return build
+
+
+@pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
+def test_two_workspaces_masked_under_their_own_rules_refuse_where_the_rules_differ(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Spec §3d: each side is masked under ITS OWN rules. A `redact:` rule only side b's
+    `.sextant.yml` declares is side b's rule set, so the two hashes differ and the diff
+    refuses, naming both — never masking b under a's rules and printing b's secret."""
+    a = sources(_built(tmp_path / "a", _dsn("jdbc:OLD")))
+    b = sources(_built(tmp_path / "b", _dsn("jdbc:NEW-SECRET")))
+    with pytest.raises(DiffRefused) as refused:
+        diff_sources(a, b, REDACTOR, _DSN_RULES)
+    assert refused.value.stamps == ("redaction_set_hash",)
+    assert f"redaction_set_hash {REDACTOR.rule_set_hash} vs {_DSN_RULES.rule_set_hash}" in str(
+        refused.value
+    )
+
+
+@pytest.mark.pins("boundary.both-sides-pass-through-the-REDACTOR")
+@pytest.mark.parametrize("rules_on", ["a", "b"])
+def test_allowed_both_sides_are_masked_under_the_union_of_the_two_rule_sets(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource], rules_on: str
+):
+    """Under `allow_producer_change` the diff runs, labelled, and BOTH sides are masked by
+    every rule either side declared: whichever side wanted the DSN hidden, it never leaves
+    in the clear, and two values the union masks alike are no change."""
+    a = sources(_built(tmp_path / "a", lambda w: None))
+    b = sources(_built(tmp_path / "b", _dsn("jdbc:NEW-SECRET")))
+    redactors = (_DSN_RULES, REDACTOR) if rules_on == "a" else (REDACTOR, _DSN_RULES)
+    diff = diff_sources(a, b, *redactors, allow_producer_change=True)
+    assert diff.producer_changed is True
+    (entry,) = diff.entries
+    assert (entry.kind, entry.change, entry.to) == (
+        "boundary-property", "added", {"value": REDACTED, "unresolved_reason": None},
+    )  # fmt: skip
+    assert "NEW-SECRET" not in json.dumps(diff.to_json())
+    old = sources(_built(tmp_path / "old", _dsn("jdbc:OLD")))
+    assert diff_sources(old, b, *redactors, allow_producer_change=True).entries == ()
+
+
+def test_two_bundles_are_compared_on_the_hashes_they_recorded(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """A bundle's hash is the one its exporter recorded, whatever redactor the diff is handed
+    for it: two bundles masked under different rules refuse, naming both recorded values."""
+    workspace = _built(tmp_path / "w", _secrets)
+    plain = sources(_bundled(workspace, tmp_path / "plain"))
+    wider = sources(_bundled(workspace, tmp_path / "wider", _DSN_RULES))
+    with pytest.raises(DiffRefused) as refused:
+        diff_sources(plain, wider, REDACTOR, REDACTOR)
+    assert f"redaction_set_hash {REDACTOR.rule_set_hash} vs {_DSN_RULES.rule_set_hash}" in str(
+        refused.value
+    )
+    same = sources(_bundled(workspace, tmp_path / "same", _DSN_RULES))
+    assert diff_sources(wider, same, REDACTOR, REDACTOR).producer_changed is False
+
+
 def test_a_side_missing_a_stamp_is_refused_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", catalog_hash=None), _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused, match="catalog_hash absent on a"):
-        diff_sources(a, b, REDACTOR, allow_producer_change=True)
+        diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
     with pytest.raises(DiffRefused, match="catalog_hash absent on b"):
-        diff_sources(b, a, REDACTOR, allow_producer_change=True)
+        diff_sources(b, a, REDACTOR, REDACTOR, allow_producer_change=True)
 
 
 # --- the output -----------------------------------------------------------------------------
@@ -613,7 +681,7 @@ def _mixed(root: Path, sources: Callable[[Path], BoundarySource]):
 
     a = sources(_built(root / "a", before))
     b = sources(_built(root / "b", after, provenance={**_PROVENANCE, "commit": "778285e8"}))
-    return diff_sources(a, b, REDACTOR)
+    return diff_sources(a, b, REDACTOR, REDACTOR)
 
 
 def test_entries_are_sorted_by_kind_change_identity(

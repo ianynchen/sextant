@@ -35,6 +35,7 @@ from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.redaction import REDACTED
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
 
@@ -603,16 +604,99 @@ def test_diff_of_two_stamps_that_cannot_be_compared_raises_diffrefusederror(
     rendered_root: Path, tmp_path: Path
 ):
     """The refusal's own text names the stamp that differs; the facade carries it unchanged."""
-    stale = tmp_path / "stale"
-    shutil.copytree(rendered_root / ".sextant", stale)
-    metadata = json.loads((stale / "metadata.json").read_text(encoding="utf-8"))
+    stale = _side(rendered_root, tmp_path / "stale")
+    metadata = json.loads((stale / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
     metadata["schema_version"] = "0.9.0"
-    (stale / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (stale / ".sextant" / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
 
     with pytest.raises(api.DiffRefusedError) as refused:
         api.diff(rendered_root, stale)
 
     assert "graph_schema_version" in str(refused.value)
+
+
+_DSN = "orders.internal.dsn"
+
+
+def _side(rendered_root: Path, where: Path, *, rules: bool = True, sql: str = "") -> Path:
+    """A copy of the analysed module at `where/orders-service`. `rules=False` leaves its
+    `.sextant.yml` without the fixture's `redact:` section (whose `dsn` pattern is what masks
+    `orders.internal.dsn`); `sql` is run against its workspace."""
+    root = where / "orders-service"
+    shutil.copytree(rendered_root, root)
+    if not rules:
+        (root / ".sextant.yml").write_text(
+            "extract_libraries:\n  - com.example:orders-soap-client\n", encoding="utf-8"
+        )
+    if sql:
+        workspace = DuckDbWorkspace(root / ".sextant" / "workspace.duckdb")
+        try:
+            workspace._connection.execute(sql)
+        finally:
+            workspace.close()
+    return root
+
+
+def test_a_redact_rule_only_side_b_declares_refuses_on_the_redaction_set_hash(
+    rendered_root: Path, tmp_path: Path
+):
+    """Spec §3d: each workspace side is masked under its OWN `.sextant.yml`. Side a lacks
+    the fixture's `dsn` rule and side b keeps it, so their rule sets differ and the diff
+    refuses, naming the stamp and both hashes — never masking b by a's rules alone."""
+    a = _side(rendered_root, tmp_path / "a", rules=False)
+    b = _side(rendered_root, tmp_path / "b",
+              sql=f"UPDATE resolved_config SET value = 'jdbc:NEW-SECRET' WHERE key = '{_DSN}'")  # fmt: skip
+
+    with pytest.raises(api.DiffRefusedError) as refused:
+        api.diff(a, b)
+
+    message = str(refused.value)
+    assert "redaction_set_hash" in message
+    assert api._redactor_for(a).rule_set_hash in message
+    assert api._redactor_for(b).rule_set_hash in message
+
+
+def test_allowed_a_rule_either_side_declares_masks_both_and_the_diff_is_labelled(
+    rendered_root: Path, tmp_path: Path
+):
+    """Under `allow_producer_change` both sides are masked by the UNION of their rule sets:
+    side b's DSN, a key only b's rules name, reads masked, and the diff says the producer
+    changed."""
+    a = _side(rendered_root, tmp_path / "a", rules=False,
+              sql=f"DELETE FROM resolved_config WHERE key = '{_DSN}'")  # fmt: skip
+    b = _side(rendered_root, tmp_path / "b",
+              sql=f"UPDATE resolved_config SET value = 'jdbc:NEW-SECRET' WHERE key = '{_DSN}'")  # fmt: skip
+
+    found = api.diff(a, b, options=api.DiffOptions(allow_producer_change=True)).diff
+
+    assert found.producer_changed is True
+    added = [e for e in found.entries if e.kind == "boundary-property"]
+    assert added and all(e.identity["key"] == _DSN and e.change == "added" for e in added)
+    assert all(cast(dict[str, object], e.to)["value"] == REDACTED for e in added)
+    assert "NEW-SECRET" not in json.dumps(found.to_json())
+
+
+def test_a_workspace_outside_its_modules_sextant_directory_is_refused_by_name(
+    rendered_root: Path, tmp_path: Path
+):
+    """`module analyze --workspace DIR` puts a workspace where no module's `.sextant.yml`
+    sits above it, so the rules it would be exported under are unknown: refused, naming
+    the path, rather than masked by the built-ins alone."""
+    custom = tmp_path / "custom-workspace"
+    shutil.copytree(rendered_root / ".sextant", custom)
+
+    with pytest.raises(api.DiffRefusedError, match="custom-workspace"):
+        api.diff(custom, rendered_root)
+
+
+def test_a_bundle_missing_a_table_is_told_what_is_missing(rendered_root: Path):
+    """A bundle exported before `endpoint_conditions` was a table is not "unanalysed": the
+    refusal keeps what the reader looked for."""
+    bundle = api.export(rendered_root).bundle
+    (bundle / "graph" / "endpoint_conditions.parquet").unlink()
+
+    with pytest.raises(api.NotAnalyzedError, match="endpoint_conditions"):
+        api.diff(bundle, rendered_root)
 
 
 # --------------------------------------------------------------------------

@@ -11,12 +11,21 @@ catalog changes rows with no code change, and a diff that mixed the two could no
 it was reporting (decision 3, §7).
 
 **Both sides are read through the same exit (§3d).** A bundle's `path`/`peer` and
-`boundary-property` value were masked at export; a workspace's are verbatim. Each side's
-rows pass through the redactor the exporter uses, by the same calls on the same columns, so
-a masked bundle and the workspace it came from diff empty, and the diff's own output is
-masked. A bundle side passes through unchanged because masking is idempotent. A workspace
-records no `redaction_set_hash`; its rows are masked by the redactor given here, so that is
-the rule set it is compared under.
+`boundary-property` value were masked at export; a workspace's are verbatim. Each side comes
+with its OWN redactor — a workspace's is its module's `.sextant.yml` widening the built-ins,
+exactly as `export` would mask it; a bundle's is the built-ins, its own rules having been
+applied already — and its rule set is what it is compared under: a workspace records no
+`redaction_set_hash`, so its hash is its redactor's; a bundle's is the one its exporter
+recorded. Two that differ refuse with the other producer stamps. Where they agree, or the
+caller allowed the change, every row of both sides passes through the UNION of the two
+redactors, by the calls the exporter makes on the same columns, so a masked bundle and the
+workspace it came from diff empty, nothing either side's rules hide is printed, and the
+diff's own output is masked. A bundle side passes through unchanged because masking is
+idempotent.
+
+A stated limit: a bundle's own `redact:` additions are not in its manifest, only their
+hash, so under `allow_producer_change` a workspace value only the BUNDLE's extra rules would
+mask is masked by the workspace's rules and the built-ins alone.
 
 Masking can make two identities one — two peers that differ only in userinfo — which is what
 the bundle's own grouping already did. Such rows are joined after masking exactly as the
@@ -37,8 +46,11 @@ wire type changed in either body, or where either body's structure changed; `com
 otherwise; and `None` where a changed body has nothing to compare on one side (no body, or
 `{"several": [...]}`) and nothing else said `breaking`.
 
-One `rows(kind)` per kind per side — fourteen reads — and the join is a dictionary on
-identity (§3e).
+One `rows(kind)` per kind per side — six named kind reads per side (`module` is read off
+the metadata, no query), plus the shared reads a side makes once on first use and every kind
+then shares: `shape_fields`, `endpoint_metadata`, `endpoint_conditions` and the two
+document joins, five more, so at most eleven reads a side and twenty-two in all — and the
+join is a dictionary on identity (§3e).
 """
 
 import json
@@ -117,8 +129,8 @@ class Diff:
     def to_json(self) -> dict[str, object]:
         """The spec's §3b document, keys in its order. Each side's `producer` carries
         `redaction_recorded` beside `redaction_set_hash`: `true` for a bundle, whose hash
-        the exporter recorded, `false` for a workspace, whose hash is the rule set the diff
-        masked it under — nothing recorded one at `analyze`."""
+        the exporter recorded, `false` for a workspace, whose hash is its own module's rule
+        set as the diff computed it — nothing recorded one at `analyze`."""
         return {
             "boundary_vocabulary_version": self.boundary_vocabulary_version,
             "a": self.a,
@@ -150,14 +162,18 @@ class Diff:
 def diff_sources(
     a: BoundarySource,
     b: BoundarySource,
-    redactor: Redactor,
+    redactor_a: Redactor,
+    redactor_b: Redactor,
     *,
     allow_producer_change: bool = False,
 ) -> Diff:
-    """What changed at the boundary from `a` to `b`. `redactor` is the exit's: the module's
-    own for a workspace side, the built-ins for two bundles. Raises `DiffRefused`."""
-    stamps_a, stamps_b = _stamps(a, redactor), _stamps(b, redactor)
+    """What changed at the boundary from `a` to `b`. `redactor_a`/`redactor_b` are each
+    side's exit: its module's own rules for a workspace side, the built-ins for a bundle.
+    Raises `DiffRefused`."""
+    stamps_a, stamps_b = _stamps(a, redactor_a), _stamps(b, redactor_b)
     producer_changed = _refuse_or_allow(a, b, stamps_a, stamps_b, allow_producer_change)
+    # Equal rule sets make this either side's own; differing ones (allowed) make it both.
+    redactor = redactor_a.union(redactor_b)
     entries: list[Entry] = []
     for kind in KINDS.values():
         before = _indexed(kind, a.rows(kind), redactor)

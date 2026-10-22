@@ -195,7 +195,11 @@ workspace side from its own `.sextant.yml`, exactly as `export` would have maske
 bundle side is already masked and passes through unchanged), and the diff's own output is
 masked the same way. Two sides masked under different rule sets (`redaction_set_hash`)
 refuse by default with the other producer stamps (§3c), because "the value changed" and "the
-mask changed" cannot be told apart.
+mask changed" cannot be told apart. *Ruled at the branch's final review (2026-10-22):* allowed,
+both sides are masked by the UNION of the two rule sets, so nothing either side's rules hide
+leaves in the clear (a bundle carries its rules' hash, not the rules, so its own additions
+reach only its own side); a workspace outside its module's `.sextant` directory is refused by
+name, since which `.sextant.yml` masks it is unknown.
 
 **`analyze` starts writing `catalog_hash` into `metadata.json`.** Today only the exporter
 computes it, from the catalogs installed at export time, so a workspace side would have no
