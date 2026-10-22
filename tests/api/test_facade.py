@@ -738,6 +738,25 @@ def test_observability_of_a_workspace_without_the_map_is_the_labelled_degraded_o
     assert result.kinds["endpoint"].verdict == "partial"
 
 
+def test_render_reads_each_skips_cause_back_from_the_metadata(rendered_root: Path):
+    """`render` reconstructs the report from `metadata.json` (M00's "no analysis" rule), so
+    the cause `analyze` recorded is the cause it holds; a skip written before the field has
+    none, which the map counts as a gap."""
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    workspace = DuckDbWorkspace(rendered_root / ".sextant" / "workspace.duckdb")
+    try:
+        _, report = api._reconstructed_report(rendered_root, workspace, metadata)
+        recorded = {s["catalog_id"]: s["cause"] for s in metadata["skipped_catalogs"]}
+        assert {s.catalog_id: s.cause for s in report.skipped_catalogs} == recorded
+        for skipped in metadata["skipped_catalogs"]:
+            del skipped["cause"]
+        _, old = api._reconstructed_report(rendered_root, workspace, metadata)
+    finally:
+        workspace.close()
+    assert old.skipped_catalogs and all(s.cause is None for s in old.skipped_catalogs)
+
+
 def test_observability_before_analyze_raises_notanalyzederror(tmp_path: Path):
     with pytest.raises(api.NotAnalyzedError):
         api.observability(tmp_path)

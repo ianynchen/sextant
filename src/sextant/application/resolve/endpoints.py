@@ -7,12 +7,16 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sextant.application.boundary.observability import (
+    SKIP_MISSING_CAPABILITY,
+    SKIP_SUPERSEDED,
+)
 from sextant.application.boundary.vocabulary import kinds_fed_by
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
 from sextant.application.resolve.channel_bindings import mint_channel_rows
-from sextant.application.resolve.dependencies import _declared_coordinates, unmet_dependency
+from sextant.application.resolve.dependencies import _declared_coordinates, dependency_gate
 from sextant.application.resolve.engines import (
     annotation_driven,
     combinator,
@@ -100,6 +104,11 @@ class SkippedCatalog:
     # The boundary kinds this catalog would have fed had it run (spec 2026-10-22 §4b),
     # recorded here because the catalog is in hand and a bundle's reader will not have it.
     feeds: tuple[str, ...] = ()
+    # WHICH gate skipped it, one of `observability.SKIP_CAUSES` (ruled 2026-10-22): the map
+    # reads it to tell a framework simply not used from a gap, so it is data, never parsed
+    # from `missing_capabilities`' prose. `None` only where nothing recorded one — a
+    # skip read back from a `metadata.json` written before the field existed.
+    cause: str | None = None
 
 
 def _feeds(catalog: Catalog) -> tuple[str, ...]:
@@ -192,7 +201,9 @@ def derive_endpoints_with_runs(
     for catalog, engine in ordered:
         missing = missing_capabilities(catalog, capabilities)
         if missing:
-            skipped.append(SkippedCatalog(catalog.id, missing, _feeds(catalog)))
+            skipped.append(
+                SkippedCatalog(catalog.id, missing, _feeds(catalog), SKIP_MISSING_CAPABILITY)
+            )
             continue
         # The second gate (2O design §2a, ruling R9), reported through the
         # same channel as the first: a style whose framework rule is
@@ -200,9 +211,10 @@ def derive_endpoints_with_runs(
         # does not declare it, and must not degrade silently when the question
         # cannot be answered. `resolve/dependencies.py` states why this is a
         # property of the style rather than of every catalog.
-        unmet = unmet_dependency(workspace, catalog)
+        unmet = dependency_gate(workspace, catalog)
         if unmet is not None:
-            skipped.append(SkippedCatalog(catalog.id, (unmet,), _feeds(catalog)))
+            cause, reason = unmet
+            skipped.append(SkippedCatalog(catalog.id, (reason,), _feeds(catalog), cause))
             continue
         # The third gate (B/C Task 10 fix round 1): `detect.superseded_by`'s
         # negative twin of `detect.coordinates`. Two catalogs may read the
@@ -217,7 +229,9 @@ def derive_endpoints_with_runs(
         superseded = _superseded_by(workspace, catalog)
         if superseded is not None:
             skipped.append(
-                SkippedCatalog(catalog.id, (f"superseded by {superseded}",), _feeds(catalog))
+                SkippedCatalog(
+                    catalog.id, (f"superseded by {superseded}",), _feeds(catalog), SKIP_SUPERSEDED
+                )
             )
             continue
         running.append((catalog, engine))

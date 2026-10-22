@@ -34,6 +34,7 @@ BASE: dict[str, object] = {
             "catalog_id": "spring-rsocket",
             "missing_capabilities": ["artifact:spring-messaging-rsocket"],
             "feeds": ["endpoint", "data-contract"],
+            "cause": "missing_capability",
         }
     ],
     "catalogs_run": {
@@ -100,9 +101,11 @@ def test_declared_dependencies_degrade_only_dependency_and_data_contract():
 def test_a_kind_whose_every_catalog_was_skipped_is_not_observable():
     run = {"endpoint": 0, "dependency": 3, "schedule": 1}
     skipped = [
-        {"catalog_id": "b-cat", "missing_capabilities": ["y"], "feeds": ["endpoint"]},
-        {"catalog_id": "a-cat", "missing_capabilities": ["x1", "x2"], "feeds": ["endpoint"]},
-    ]
+        {"catalog_id": "b-cat", "missing_capabilities": ["y"], "feeds": ["endpoint"],
+         "cause": "missing_capability"},
+        {"catalog_id": "a-cat", "missing_capabilities": ["x1", "x2"], "feeds": ["endpoint"],
+         "cause": "missing_capability"},
+    ]  # fmt: skip
     m = observability_of(_with(catalogs_run=run, skipped_catalogs=skipped))
 
     assert m.kinds["endpoint"] == Verdict(
@@ -117,6 +120,82 @@ def test_a_skipped_catalog_does_not_make_a_kind_not_observable_while_another_ran
     m = observability_of(BASE)
 
     assert m.kinds["endpoint"].verdict == "partial"
+
+
+# --- why a catalog was skipped (`cause`, ruled at the final review 2026-10-22) -------------
+
+_ABSENT = (
+    "a build declaration of one of org.springframework.kafka:spring-kafka — none is in this "
+    "module's dependency set as the build tool resolved it, transitives included"
+)
+
+
+def _skip(catalog_id: str, cause: str | None, reason: str, feeds: list[str]) -> dict[str, object]:
+    skip: dict[str, object] = {"catalog_id": catalog_id, "missing_capabilities": [reason],
+                               "feeds": feeds}  # fmt: skip
+    if cause is not None:
+        skip["cause"] = cause
+    return skip
+
+
+@pytest.mark.parametrize("source", ["maven", "gradle"])
+def test_a_framework_absent_from_a_resolved_classpath_is_not_a_gap(source: str):
+    """(a) The build tool resolved the classpath, transitives included, and the catalog's
+    framework is not on it: there is nothing to observe, so the skip neither degrades the
+    kind nor counts toward `not-observable` — even where no catalog feeding it ran."""
+    skipped = [_skip("spring-kafka", "framework_absent", _ABSENT, ["endpoint", "dependency"])]
+    module = {"id": "com.acme:orders-service", "dependency_source": source}
+    m = observability_of(
+        _with(module=module, skipped_catalogs=skipped, catalogs_run={"endpoint": 3})
+    )
+
+    assert m.kinds["endpoint"] == Verdict("observable", ())
+    assert m.kinds["dependency"] == Verdict("observable", ())
+
+
+def test_a_missing_extractor_capability_still_degrades_the_kinds_it_feeds():
+    """(b) The framework may well be in use; the extractor could not read what the catalog
+    needs. That is a gap whatever the classpath says."""
+    skipped = [_skip("grpc-java", "missing_capability", "proto_services", ["endpoint"])]
+    m = observability_of(_with(skipped_catalogs=skipped, catalogs_run={}))
+
+    assert m.kinds["endpoint"] == Verdict(
+        "not-observable", ("catalog skipped: grpc-java (proto_services)",)
+    )
+
+
+def test_on_a_declared_classpath_a_framework_absent_skip_stays_a_reason():
+    """(c) Maven could not be asked (OI-167's boundary): the dependency set is the build
+    FILE's, a starter's transitives are not in it, and absence is not proven."""
+    skipped = [_skip("spring-kafka", "framework_absent", _ABSENT, ["endpoint"])]
+    module = {"id": "com.acme:orders-service", "dependency_source": "declared"}
+    m = observability_of(_with(module=module, skipped_catalogs=skipped))
+
+    assert m.kinds["endpoint"] == Verdict(
+        "partial", (f"catalog skipped: spring-kafka ({_ABSENT})",)
+    )
+
+
+@pytest.mark.parametrize("cause", ["dependencies_unrecorded", "superseded"])
+def test_the_other_gates_still_degrade_on_a_resolved_classpath(cause: str):
+    """Recorded no coordinates at all: the question was never answered. Superseded: not a
+    framework-absence ruling, so the old behaviour stands."""
+    skipped = [_skip("jax-rs", cause, "why", ["endpoint"])]
+    m = observability_of(_with(skipped_catalogs=skipped))
+
+    assert m.kinds["endpoint"] == Verdict("partial", ("catalog skipped: jax-rs (why)",))
+
+
+def test_a_skip_recorded_without_a_cause_is_a_gap_and_says_why():
+    """An old manifest's skips carry no `cause`: each is counted as a gap, the old rule,
+    honest for data that cannot say otherwise — and the reason says so."""
+    skipped = [_skip("spring-kafka", None, _ABSENT, ["endpoint"])]
+    m = observability_of(_with(skipped_catalogs=skipped))
+
+    assert m.kinds["endpoint"] == Verdict(
+        "partial",
+        (f"catalog skipped: spring-kafka ({_ABSENT}; cause unrecorded, counted as a gap)",),
+    )
 
 
 @pytest.mark.pins("boundary.the-static-GAP-list-is-stated-never-a-verdict")

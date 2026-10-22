@@ -4351,7 +4351,10 @@ def test_a_catalog_skipped_by_capability_gating_contributes_no_shapes(tmp_path: 
     # shape model's blocks, is `endpoint` and `data-contract`.
     assert (
         SkippedCatalog(
-            "invented-demanding", ("constant_propagation",), ("endpoint", "data-contract")
+            "invented-demanding",
+            ("constant_propagation",),
+            ("endpoint", "data-contract"),
+            "missing_capability",
         )
         in report.skipped_catalogs
     )
@@ -4438,7 +4441,10 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     # Re-pinned 2026-10-22, for the same cause as above: equality now includes `feeds`.
     assert (
         SkippedCatalog(
-            "spring-web", ("annotation_args", "type_annotations"), ("endpoint", "data-contract")
+            "spring-web",
+            ("annotation_args", "type_annotations"),
+            ("endpoint", "data-contract"),
+            "missing_capability",
         )
         in report.skipped_catalogs
     )

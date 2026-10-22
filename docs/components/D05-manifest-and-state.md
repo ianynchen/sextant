@@ -164,7 +164,7 @@ it, never by presentation.
                 "peer_unresolved": 1, "outbound_total": 7 },
   "gaps": ["call_graph_not_implemented"],
   "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"],
-                         "feeds": ["dependency"] }],
+                         "feeds": ["dependency"], "cause": "missing_capability" }],
   "catalogs_run": { "endpoint": 12, "dependency": 4, "data-contract": 9, "schedule": 1 },
   "observability": { "boundary_vocabulary_version": 1,
                      "kinds": { "endpoint": { "verdict": "observable", "reasons": [] },
@@ -185,7 +185,7 @@ worse than none. **`coverage`** says how much of this to trust, and since W38 th
 **`gaps`** names what Sextant knowingly did not do, so a catalog that is complete-looking
 and incomplete cannot pass as complete.
 
-**Six additions serve the boundary vocabulary and the observability map** (spec
+**Seven additions serve the boundary vocabulary and the observability map** (spec
 [2026-10-22](../superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md), FR-21 to
 FR-23), all written by `analyze` and all read by something that runs long after the catalogs
 are gone:
@@ -206,7 +206,16 @@ are gone:
   `style`, `direction` and whether it declares a shape model (any of `serialization`,
   `nullability`, `known_types`) already say what it writes (D02), so this is a function over
   fields the catalogs carry and not a new declaration; it is recorded because a bundle's
-  reader has no catalogs to ask.
+  reader has no catalogs to ask. A catalog that declares no `direction` (the `config_join`
+  catalogs `spring-integration` and `spring-kafka-media`) feeds both `endpoint` and
+  `dependency`, because its rows are either direction and which is known only per row.
+- **`skipped_catalogs[].cause`** — which gate skipped the catalog, a closed set:
+  `missing_capability` (the extractor cannot read what the catalog needs), `framework_absent`
+  (none of its `detect.coordinates` is in the recorded dependency set — `dependency_source`
+  says which set), `dependencies_unrecorded` (no dependency set was recorded to ask) and
+  `superseded` (a `detect_superseded_by` coordinate is in the build). Data the map reads, so
+  nothing parses the reason in `missing_capabilities`; absent for a skip read back from
+  metadata written before the field.
 - **`coverage.format_unresolved`, `inbound_total`, `peer_unresolved`, `outbound_total`** — the
   two shares the map's per-attribute verdicts read, measured off the same rows the
   `endpoints` counts use. `inbound_total` counts the rows the `endpoint` kind holds (a `both`
@@ -218,9 +227,13 @@ are gone:
   dictionary above it (`application/boundary/observability.py`), so the map for a bundle can be
   computed from its manifest alone, and `export` copies it rather than re-deriving it. A
   verdict is `partial` for any reason (uncovered source files, partial documents, a skipped
-  catalog that feeds the kind, and, for `dependency` and `data-contract` alone,
+  catalog that feeds the kind and is a gap, and, for `dependency` and `data-contract` alone,
   `dependency_source: declared`) and `not-observable` only
-  where a catalog feeding the kind was skipped and none feeding it ran. `module` and
+  where a catalog feeding the kind was skipped as a gap and none feeding it ran. Every skip is
+  a gap but one: a skip whose `cause` is `framework_absent` on a classpath the build tool resolved (`dependency_source` `maven` or `gradle`) is not — the framework is simply not used, so there
+  is nothing to observe (ruled 2026-10-22). On a `declared` classpath the same absence is not
+  proven and stays a reason; a skip with no recorded `cause` is a gap and its reason says the
+  cause was unrecorded. `module` and
   `boundary-property` are always `observable`: they are read off files, not derived by a
   catalog that can be skipped. Metadata that predates `catalogs_run` gets `partial` for every
   code-grounded kind with the reason *catalog kinds unrecorded: manifest predates boundary

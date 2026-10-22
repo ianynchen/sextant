@@ -386,7 +386,11 @@ frameworks.
 a pure function of the measurements beside it — uncovered files, partial documents, skipped
 catalogs and the kinds each would have fed, `dependency_source` — with the reasons; the
 exporter copies it into the manifest, and `sextant.api.observability` answers it in process.
-`KNOWN_GAPS` is listed as stated boundaries and never folded into a verdict. The per-attribute
+`KNOWN_GAPS` is listed as stated boundaries and never folded into a verdict. A skipped
+catalog counts by its recorded `cause`: one skipped because its framework is absent from a
+classpath the build tool resolved is not a gap (nothing to observe) and moves no verdict, while
+a missing extractor capability, an absence on a `declared` classpath, and every other cause
+still degrade (ruled 2026-10-22). The per-attribute
 clause is met where a measurement names one (`endpoint.format`, `dependency.peer`); the
 shipped coverage cells of `docs/COVERAGE.md` are not an input, because a cell describes
 Sextant and the map describes this analysis. See

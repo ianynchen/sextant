@@ -190,6 +190,18 @@ def test_each_skipped_catalog_names_the_kinds_it_would_have_fed(analyzed_workspa
     assert all("feeds" in skipped for skipped in metadata["skipped_catalogs"])
 
 
+def test_each_skipped_catalog_records_which_gate_skipped_it(analyzed_workspace_copy: Path):
+    """The cause is data the map reads (ruled 2026-10-22), never parsed from the reason. On
+    the fixture both skips are the dependency gate on a classpath Maven resolved: neither
+    RSocket nor Spring Cloud Gateway is on it."""
+    metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
+    assert metadata["module"]["dependency_source"] == "maven"
+    assert {s["catalog_id"]: s["cause"] for s in metadata["skipped_catalogs"]} == {
+        "spring-rsocket": "framework_absent",
+        "spring-cloud-gateway-properties": "framework_absent",
+    }
+
+
 def test_the_manifest_carries_feeds_with_the_skipped_catalogs(analyzed_workspace_copy: Path):
     result = CliRunner().invoke(
         cli,
@@ -199,6 +211,7 @@ def test_the_manifest_carries_feeds_with_the_skipped_catalogs(analyzed_workspace
     manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
     rsocket = next(s for s in manifest["skipped_catalogs"] if s["catalog_id"] == "spring-rsocket")
     assert rsocket["feeds"] == ["endpoint", "data-contract"]
+    assert rsocket["cause"] == "framework_absent"
 
 
 def test_catalogs_run_counts_per_kind(analyzed_workspace_copy: Path):
@@ -241,11 +254,15 @@ def test_metadata_and_manifest_carry_the_map(analyzed_workspace_copy: Path):
     assert observability["boundary_vocabulary_version"] == 1
     # `metadata.json` is written with sorted keys, so the file cannot hold registry order.
     assert set(observability["kinds"]) == set(KINDS)
-    # `spring-rsocket` is skipped on the fixture and feeds `endpoint`; other catalogs ran.
-    endpoint = observability["kinds"]["endpoint"]
-    assert endpoint["verdict"] == "partial"
-    assert any("spring-rsocket" in reason for reason in endpoint["reasons"])
-    assert observability["kinds"]["boundary-property"] == {"verdict": "observable", "reasons": []}
+    # Re-measured 2026-10-22 (the cause ruling): the fixture's two skipped catalogs,
+    # `spring-rsocket` and `spring-cloud-gateway-properties`, are skipped because their
+    # frameworks are absent from the classpath Maven resolved — nothing to observe — so no
+    # kind is degraded and every one reads `observable`. Before the ruling `endpoint` and
+    # `data-contract` read `partial` on these two skips alone.
+    assert {
+        name: kind["verdict"] for name, kind in observability["kinds"].items()
+    } == dict.fromkeys(KINDS, "observable")
+    assert all(kind["reasons"] == [] for kind in observability["kinds"].values())
     assert observability["stated_boundaries"] == metadata["gaps"]
     # The two counts the attribute verdicts read are measured off the rows, beside the rest
     # of `coverage`, and the map is computed from them.

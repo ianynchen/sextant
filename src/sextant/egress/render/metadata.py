@@ -246,6 +246,10 @@ def write_metadata(
                 # What the skipped catalog would have fed (spec 2026-10-22 §4b): the map
                 # reads this when the catalogs are not in hand.
                 "feeds": list(skipped.feeds),
+                # Which gate skipped it (`SkippedCatalog.cause`), so the map tells a
+                # framework simply not used from a gap without parsing the reason above.
+                # Absent, never null, for a skip read back with none recorded.
+                **({} if skipped.cause is None else {"cause": skipped.cause}),
             }
             for skipped in report.skipped_catalogs
         ],

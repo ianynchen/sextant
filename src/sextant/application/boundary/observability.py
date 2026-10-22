@@ -17,9 +17,17 @@ value are read off files rather than derived by a catalog that can be skipped, a
 the measured inputs reaches them. A class file left uncovered says nothing about whether a
 `.properties` file was read.
 
+A skipped catalog is a gap by its recorded `cause` (ruled 2026-10-22): one skipped because
+its framework is ABSENT from a classpath the build tool resolved (`module.dependency_source`
+`maven` or `gradle`) is not — there is nothing to observe — and takes no part in the map; one
+skipped for a missing extractor capability is; on a `declared` classpath (Maven could not be
+asked) an absence is not proven, so that skip stays a reason, as do the unrecorded-coordinates
+and superseded gates. A skip recorded without a `cause` (metadata written before the field)
+is a gap, the old rule, and its reason says the cause was unrecorded.
+
 For a code-grounded kind: any reason makes it `partial`; it is `not-observable` when no
 catalog that feeds it ran (`catalogs_run` has none for it) and at least one skipped catalog
-feeds it. A kind with no catalog run and none skipped is `observable` with no reasons —
+that is a gap feeds it. A kind with no catalog run and none skipped is `observable` with no reasons —
 nothing could have fed it on this module, which is the truth. Metadata without
 `catalogs_run` predates the vocabulary: every code-grounded kind is `partial` with one
 reason saying so, never a verdict from the catalogs the machine happens to have today.
@@ -38,6 +46,23 @@ from sextant.application.boundary.vocabulary import KINDS
 from sextant.domain.version import BOUNDARY_VOCABULARY_VERSION
 
 _UNRECORDED = "catalog kinds unrecorded: manifest predates boundary vocabulary 1"
+_CAUSE_UNRECORDED = "cause unrecorded, counted as a gap"
+
+# Why a catalog was skipped (`SkippedCatalog.cause`, written into `metadata.json`'s
+# `skipped_catalogs[]`): one value per gate `derive_endpoints_with_runs` asks, the second
+# gate split by what it found. A closed set — the map reads it as data, never the message.
+SKIP_MISSING_CAPABILITY = "missing_capability"  # the extractor cannot read what it needs
+SKIP_FRAMEWORK_ABSENT = "framework_absent"  # none of `detect.coordinates` is in the set
+SKIP_DEPENDENCIES_UNRECORDED = "dependencies_unrecorded"  # no coordinates were recorded
+SKIP_SUPERSEDED = "superseded"  # a `detect_superseded_by` coordinate is in the build
+SKIP_CAUSES = (
+    SKIP_MISSING_CAPABILITY,
+    SKIP_FRAMEWORK_ABSENT,
+    SKIP_DEPENDENCIES_UNRECORDED,
+    SKIP_SUPERSEDED,
+)
+# The dependency sets a build tool resolved, transitives included: an absence there is real.
+_RESOLVED_BY_THE_BUILD_TOOL = ("maven", "gradle")
 _DECLARED = "dependencies declared, not resolved by the build tool"
 # The kinds whose evidence is a type one hop out from the code read (OI-167's own boundary).
 _FED_BY_DEPENDENCIES = ("dependency", "data-contract")
@@ -107,8 +132,18 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
     coverage = _mapping(metadata.get("coverage"))
     run = _mapping(metadata.get("catalogs_run"))
     uncovered = sorted(str(path) for path in cast(list[object], metadata.get("uncovered") or []))
-    skipped = [_mapping(one) for one in cast(list[object], metadata.get("skipped_catalogs") or [])]
-    declared = _mapping(metadata.get("module")).get("dependency_source") == "declared"
+    source = _mapping(metadata.get("module")).get("dependency_source")
+    declared = source == "declared"
+    # A framework absent from a classpath the build tool resolved is nothing to observe:
+    # not a gap, and no part of the map (ruled 2026-10-22, the branch's final review).
+    skipped = [
+        _mapping(one)
+        for one in cast(list[object], metadata.get("skipped_catalogs") or [])
+        if not (
+            _mapping(one).get("cause") == SKIP_FRAMEWORK_ABSENT
+            and source in _RESOLVED_BY_THE_BUILD_TOOL
+        )
+    ]
 
     shared: list[str] = []
     if uncovered:
@@ -125,10 +160,10 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
         reasons = list(shared)
         feeding = [one for one in skipped if name in cast(list[object], one.get("feeds") or [])]
         for one in feeding:
-            missing = "; ".join(
-                str(m) for m in cast(list[object], one.get("missing_capabilities") or [])
-            )
-            reasons.append(f"catalog skipped: {one.get('catalog_id')} ({missing})")
+            said = [str(m) for m in cast(list[object], one.get("missing_capabilities") or [])]
+            if "cause" not in one:
+                said.append(_CAUSE_UNRECORDED)
+            reasons.append(f"catalog skipped: {one.get('catalog_id')} ({'; '.join(said)})")
         if declared and name in _FED_BY_DEPENDENCIES:
             reasons.append(_DECLARED)
         if feeding and _count(run, name) == 0:

@@ -1039,7 +1039,10 @@ to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`
 
 **The vocabulary is DATA.** One registry is read by the diff, the observability map and
 `analyze` (which records the kinds each skipped catalog feeds, from the catalog's own `style`,
-`direction` and whether it declares a shape model), so no reader keeps its own list of kinds. Each kind's rows come from ONE named
+`direction` and whether it declares a shape model), so no reader keeps its own list of kinds.
+A catalog that declares no `direction` — the `config_join` catalogs `spring-integration` and
+`spring-kafka-media`, whose rows are either direction, known only per row — feeds both
+`endpoint` and `dependency`. Each kind's rows come from ONE named
 query in `storage/duckdb/workspace.py`'s registry (`boundary_endpoint`, `boundary_dependency`,
 `boundary_contract`, `boundary_property`, `boundary_schedule`, `boundary_error_handler`;
 `module` is read off `metadata.json`), written as plain `SELECT`s over the exported tables'

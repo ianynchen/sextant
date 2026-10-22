@@ -1014,6 +1014,9 @@ def _reconstructed_report(
             tuple(skipped["missing_capabilities"]),
             # Absent from a `metadata.json` written before 2026-10-22; nothing was recorded.
             tuple(skipped.get("feeds", ())),
+            # Absent before the final review of 2026-10-22: `None`, which the map counts
+            # as a gap and says so.
+            skipped.get("cause"),
         )
         for skipped in metadata.get("skipped_catalogs", [])
     ]

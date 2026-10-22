@@ -118,7 +118,7 @@ columnar need per fact kind is stated.
   "gaps": ["call_graph_not_implemented"],
   "uncovered": ["src/main/java/…/LegacyController.java"],
   "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"],
-                         "feeds": ["dependency"] }],
+                         "feeds": ["dependency"], "cause": "missing_capability" }],
   "catalogs_run": { "endpoint": 12, "dependency": 4, "data-contract": 9, "schedule": 1 },
   "observability": { "boundary_vocabulary_version": 1,
                      "kinds": { "endpoint": { "verdict": "partial",
@@ -154,7 +154,8 @@ them: a bundle exported from a workspace analysed before the map existed carries
 placeholder would read as a measurement. `catalogs_run` travels beside the map because
 `sextant.api.observability` computes a bundle's map from its manifest alone, and without the
 counts that would be the degraded one. Each `skipped_catalogs` entry gains `feeds`, the kinds
-it would have fed, for the same reason: a bundle's reader has no catalogs to ask.
+it would have fed, and `cause`, which gate skipped it, for the same reason: a bundle's reader
+has no catalogs to ask ([D05](D05-manifest-and-state.md) §3 says what each holds).
 
 **`redaction_set_hash` is written by the exporter**, beside `catalog_hash` and for the same
 reason: it is what the exporter itself applied, not what `analyze` recorded. Under 2K design

@@ -230,7 +230,7 @@ in-process: `api.observability(path) -> ObservabilityMap`.
 |---|---|---|
 | `uncovered` (source files no class file accounts for) | this analysis | every kind whose evidence is code: `endpoint`, `dependency`, `data-contract`, `schedule`, `error-handler` → at best `partial`, naming the files |
 | `coverage.partial_documents > 0` | this analysis | the same five kinds → `partial`, with the count |
-| `skipped_catalogs` | this analysis | the kinds the skipped catalog FEEDS (§4b) → `partial`, naming the catalog and its reason; `not-observable` when EVERY catalog that could feed the kind on this module's languages was skipped |
+| `skipped_catalogs` | this analysis | the kinds the skipped catalog FEEDS (§4b) → `partial`, naming the catalog and its reason; `not-observable` when EVERY catalog that could feed the kind on this module's languages was skipped. *Ruled at the branch's final review (2026-10-22):* by the skip's recorded `cause` (`missing_capability`, `framework_absent`, `dependencies_unrecorded`, `superseded` — one per gate, data, never parsed from the reason), a catalog skipped because its framework is ABSENT from a classpath the build tool resolved (`dependency_source` `maven` or `gradle`) is not a gap — nothing to observe — and neither degrades the kind nor counts toward `not-observable`; on a `declared` classpath that absence is not proven and stays a reason, as every other cause does; a skip recorded without a `cause` is a gap and says so |
 | `dependency_source: declared` (Maven could not be asked) | this analysis | `dependency` and `data-contract` → `partial`: a type one hop out may be unread (OI-167's own boundary) |
 | `KNOWN_GAPS` | **Sextant, not this analysis** | listed on the map under `stated_boundaries`, never folded into a verdict — a verdict about THIS module made from a sentence about the tool would be documentation masquerading as measurement, which `meridian-integration.md` FR-23 forbids in so many words |
 
@@ -244,7 +244,9 @@ boundary). Everything else is per kind. Decision 4, §7.
 A catalog's `style`, `direction` and whether it declares a shape model already say what it writes:
 `style: scheduled_work` → `schedule`; `style: error_advice` → `error-handler`; every other
 style writes `endpoints` and feeds `endpoint` for `direction: inbound`, `dependency` for
-`outbound`, both for `both`; a shape model declared (any of `serialization`, `nullability`, `known_types`) → `data-contract` too. The mapping is a
+`outbound`, both for `both` — and both for a catalog that declares NO `direction` (the
+`config_join` catalogs `spring-integration` and `spring-kafka-media`, whose rows are either
+direction, known only per row); a shape model declared (any of `serialization`, `nullability`, `known_types`) → `data-contract` too. The mapping is a
 function over fields the catalogs carry today (D02), not a new declaration.
 
 The catalogs are in hand at `analyze` and NOT in hand when a bundle's manifest is read

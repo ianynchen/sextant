@@ -4321,7 +4321,9 @@ def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missin
     # Re-pinned 2026-10-22: a `SkippedCatalog` also carries the kinds the catalog would have
     # fed (`feeds`, spec 2026-10-22 §4b), so equality names them. This hand-built catalog is
     # inbound and carries no shape blocks, so it feeds `endpoint` alone.
-    assert skipped == [SkippedCatalog("spring-web", ("annotation_args",), ("endpoint",))]
+    assert skipped == [
+        SkippedCatalog("spring-web", ("annotation_args",), ("endpoint",), "missing_capability")
+    ]
 
 
 def test_derive_endpoints_sql_names_no_framework_when_read():
@@ -6110,7 +6112,12 @@ def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
 
     # Re-pinned 2026-10-22, same cause: equality now includes `feeds` (outbound, shape model).
     assert skipped == [
-        SkippedCatalog("spring-ws-template", ("annotation_args",), ("dependency", "data-contract"))
+        SkippedCatalog(
+            "spring-ws-template",
+            ("annotation_args",),
+            ("dependency", "data-contract"),
+            "missing_capability",
+        )
     ]
 
 
@@ -9572,7 +9579,7 @@ def test_jakarta_jaxrs_derives_nothing_where_quarkus_rest_is_declared(tmp_path: 
     ]
     workspace.close()
     assert rows == [], f"jakarta-jaxrs derived rows on a Quarkus REST module: {rows}"
-    assert [s.catalog_id for s in skipped] == ["jakarta-jaxrs"]
+    assert [(s.catalog_id, s.cause) for s in skipped] == [("jakarta-jaxrs", "superseded")]
 
 
 @pytest.mark.declines("jakarta-jws")
