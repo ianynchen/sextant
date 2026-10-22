@@ -698,6 +698,14 @@ def test_impact_through_a_dispatch_that_narrowed_to_two_bodies_is_possible(rende
 
 
 def test_an_unknown_question_is_refused_naming_the_six(rendered_root: Path):
+    assert api.QUESTIONS == (
+        "source",
+        "callers",
+        "callees",
+        "implementations",
+        "uses",
+        "impact",
+    )
     with pytest.raises(
         api.ConfigurationError, match="source, callers, callees, implementations, uses, impact"
     ):

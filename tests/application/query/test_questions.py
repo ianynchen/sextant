@@ -146,7 +146,9 @@ def test_implementations_and_uses_compare_the_bare_type_the_tables_spell(
 ):
     """`type_hierarchy` and a signature name a type BARE (D00 §5a) while the question names
     it in full, so the answer exists only if the comparison is on the bare descriptor. A
-    type is used by what returns it, takes it, holds it, and extends it."""
+    type is used by what returns it, takes it, holds it, and extends it — and a type named
+    only inside a type argument is still named: a handler returning `List<Payload>` or
+    taking `Map<String, Payload>` depends on it as much as one returning it bare."""
     payload, child = "com/acme/q/Payload#", "com/acme/q/Detailed#"
     reference = TypeRef(symbol=payload)
     _symbols(
@@ -181,6 +183,29 @@ def test_implementations_and_uses_compare_the_bare_type_the_tables_spell(
         ),
         SymbolFact(
             document_id=_DOCUMENT,
+            symbol=_method("lists"),
+            construct_kind=ConstructKind.METHOD,
+            signature=Signature(returns=TypeRef(symbol="java/util/List#", arguments=[reference])),
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
+            symbol=_method("maps"),
+            construct_kind=ConstructKind.METHOD,
+            signature=Signature(
+                parameters=[
+                    Parameter(
+                        name="byId",
+                        type=TypeRef(
+                            symbol="java/util/Map#",
+                            arguments=[TypeRef(symbol="java/lang/String#"), reference],
+                        ),
+                    )
+                ],
+                returns=TypeRef(symbol="void#"),
+            ),
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
             symbol=_method("unrelated"),
             construct_kind=ConstructKind.METHOD,
             signature=Signature(returns=TypeRef(symbol="com/acme/q/Other#")),
@@ -195,6 +220,8 @@ def test_implementations_and_uses_compare_the_bare_type_the_tables_spell(
         [
             _MODULE + child,
             f"{_MODULE}com/acme/q/Walk#held.",
+            _method("lists"),
+            _method("maps"),
             _method("returns"),
             _method("takes"),
         ]
@@ -251,15 +278,17 @@ def test_a_path_through_narrowed_dispatch_is_possible_and_the_strongest_path_win
     assert _names(result["possible"]) == [_method(n) for n in ("n", "x")]
 
 
-def test_the_unknown_regions_are_an_unresolved_call_and_an_ancestor_nobody_read(
+def test_the_unknown_regions_are_an_unread_callee_and_a_direct_ancestor_nobody_read(
     workspace: DuckDbWorkspace, tmp_path: Path
 ):
-    """What the walk cannot see past is listed, never folded into either partition: a call
-    whose dispatch was not resolved but whose target names the walked method may reach it,
-    and a walked type whose ancestor was never scanned may be called through that ancestor
-    by code this workspace holds no body for."""
+    """What the walk cannot see past is listed, never folded into either partition — the
+    upstream walk's boundary stops. A call whose target names the walked method but whose
+    callee body was never read may dispatch to it, and nothing confirms that it does; the
+    caller is named in full. A walked type whose direct ancestor was never scanned may be
+    called through that ancestor by code this workspace holds no body for; the ancestor is
+    named bare, as `type_hierarchy` spells it."""
     _methods(workspace, tmp_path, "t", "u")
-    _call(workspace, _method("u"), None, "unresolved", target="com/acme/q/Walk#t(sig_00000001).")
+    _call(workspace, _method("u"), None, target="com/acme/q/Walk#t(sig_00000001).")
     _extends(workspace, _DOCUMENT, "org/lib/Callback#", scanned=False)
 
     result = answer(workspace, "impact", symbol=_method("t"))
@@ -268,9 +297,50 @@ def test_the_unknown_regions_are_an_unresolved_call_and_an_ancestor_nobody_read(
         "possible": [],
         "unknown_regions": [
             {"symbol": "org/lib/Callback#", "reason": "ancestor not scanned"},
-            {"symbol": _method("u"), "reason": "unresolved call"},
+            {"symbol": _method("u"), "reason": "callee body not read — dispatch unconfirmed"},
         ],
     }
+
+
+def test_impact_of_a_type_reaches_the_callers_of_its_members(
+    workspace: DuckDbWorkspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Changing a type changes what its methods' callers depend on, so the walk from a type
+    starts at the type and at every member it encloses — read once, before the first hop.
+    The members are the subject, never its impact."""
+    money = "com/acme/q/Money#"
+    amount = f"{_MODULE}com/acme/q/Money#amount(sig_00000003)."
+    _symbols(
+        workspace,
+        tmp_path,
+        SymbolFact(
+            document_id=_DOCUMENT, symbol=_MODULE + money, construct_kind=ConstructKind.CLASS
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
+            symbol=amount,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + money,
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT, symbol=_method("pays"), construct_kind=ConstructKind.METHOD
+        ),
+    )
+    _call(workspace, _method("pays"), amount)
+
+    asked: list[str] = []
+    real = workspace.query
+
+    def counted(name: str, **params: object) -> list[dict[str, object]]:
+        asked.append(name)
+        return real(name, **params)
+
+    monkeypatch.setattr(workspace, "query", counted)
+    result = answer(workspace, "impact", symbol=_MODULE + money)
+    assert isinstance(result, dict)
+    assert _names(result["definite"]) == [_method("pays")]
+    assert asked[:2] == ["question_source", "question_members"]
+    assert asked.count("question_members") == 1
 
 
 def test_impact_reads_the_workspace_once_per_hop(

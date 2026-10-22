@@ -131,6 +131,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.query.questions import QUESTIONS as _QUESTIONS
 from sextant.application.query.questions import QuestionRefused, answer
 from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
@@ -1751,6 +1752,11 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     )
 
 
+# The questions `query` answers, in their order — re-exported so a caller reads the set
+# from the facade it calls rather than from the application layer behind it.
+QUESTIONS = _QUESTIONS
+
+
 def query(
     path: Path, question: str, *, symbol: str
 ) -> list[dict[str, object]] | dict[str, list[dict[str, object]]]:
@@ -1759,8 +1765,10 @@ def query(
     left at `path` — in process, with no CLI equivalent (spec 2026-10-22 §5).
 
     A list of `{"symbol", "file", "line_start", "line_end"}` sorted by symbol, or for
-    `impact` the three partitions `{"definite", "possible", "unknown_regions"}`. Reads the
-    workspace and never re-analyzes. Raises `NotAnalyzedError` where `render` would, and
+    `impact` the three partitions `{"definite", "possible", "unknown_regions"}`. Each
+    `unknown_regions` entry is `{"symbol", "reason"}`, whose `symbol` is a caller's full
+    symbol for a call whose callee body was not read, and an ancestor's bare descriptor for
+    an ancestor this workspace never scanned. Reads the workspace and never re-analyzes. Raises `NotAnalyzedError` where `render` would, and
     `ConfigurationError` for a question that is not one of the six or a symbol the
     workspace does not hold."""
     workspace_dir = _workspace_dir_of(path, None)

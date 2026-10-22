@@ -1009,18 +1009,22 @@ _NAMED_QUERIES = {
         ORDER BY symbol, file
     """,
     # What references a BARE type: a member whose signature names it as a parameter's type
-    # or as what it returns (a field's own type is its `returns`), and a direct subtype.
-    # Each symbol's referenced types are unnested once and equi-joined, so the scan of
-    # `symbols` is one pass rather than a JSON extraction per pair.
+    # or as what it returns (a field's own type is its `returns`) — at ANY depth of type
+    # arguments, so `List<Money>` and `Map<String, Money>` both name `Money` — and a direct
+    # subtype. `json_tree` walks each signature once; a `symbol` key counts only where its
+    # path is a type reference (a return or a parameter's `type`, then any chain of
+    # `arguments[i]`), so a symbol inside an annotation's arguments never does. Measured on
+    # mall-admin (25,377 symbols): the whole relation is 48,332 rows in 12ms, and 8 of the
+    # 20 signatures naming `PmsProduct` name it only inside a type argument.
     "question_uses": """
         WITH subject AS (SELECT ?::VARCHAR AS type),
         referenced AS (
-            SELECT symbol,
-                   unnest(list_prepend(
-                       json_extract_string(signature, '$.returns.symbol'),
-                       json_extract_string(signature, '$.parameters[*].type.symbol')
-                   )) AS type
-            FROM symbols
+            SELECT s.symbol AS symbol, json_extract_string(t.value, '$') AS type
+            FROM symbols s, json_tree(s.signature) t
+            WHERE t.key = 'symbol'
+              AND regexp_matches(
+                  t.path, '^\\$\\.(returns|parameters\\[[0-9]+\\]\\.type)(\\.arguments\\[[0-9]+\\])*$'
+              )
         ),
         users AS (
             SELECT r.symbol AS symbol FROM referenced r JOIN subject ON r.type = subject.type
@@ -1037,17 +1041,23 @@ _NAMED_QUERIES = {
         LEFT JOIN documents d ON d.document_id = s.document_id
         ORDER BY symbol, file
     """,
+    # A type's own members — what `impact` of a type seeds its walk with beside the type,
+    # because a change to the type is a change to what its members' callers depend on.
+    "question_members": """
+        SELECT symbol FROM symbols WHERE enclosing = ? ORDER BY symbol
+    """,
     # One hop of `impact`'s upstream walk, for the WHOLE frontier at once: `walked` is a
     # list of `{symbol, bare, owner}` (the caller splits the symbol, through the one seam
     # that knows its grammar), and every row names the walked symbol it came from.
     #
     #   caller      a call edge whose callee is the walked symbol, with its resolution
     #   use         a member whose signature names the walked type, or its direct subtype
-    #   unresolved  a call edge whose dispatch was NOT resolved and whose target names the
-    #               walked symbol — it may reach it, and the walk cannot say
-    #   unscanned   an ancestor of the walked symbol's own type (or of the type itself)
-    #               that this workspace never read, through which code it holds no body
-    #               for may call in
+    #   unread      a call edge whose target names the walked symbol and whose callee is
+    #               NULL — the callee's body was not read, so whether the call dispatches
+    #               to the walked symbol is unconfirmed
+    #   unscanned   a DIRECT ancestor of the walked symbol's own type (or of the type
+    #               itself) that this workspace never read, through which code it holds no
+    #               body for may call in (`type_hierarchy` rows are direct only)
     #
     # The last two are where the walk cannot see, and the caller lists them rather than
     # walking them.
@@ -1059,12 +1069,12 @@ _NAMED_QUERIES = {
             )
         ),
         referenced AS (
-            SELECT symbol,
-                   unnest(list_prepend(
-                       json_extract_string(signature, '$.returns.symbol'),
-                       json_extract_string(signature, '$.parameters[*].type.symbol')
-                   )) AS type
-            FROM symbols
+            SELECT s.symbol AS symbol, json_extract_string(t.value, '$') AS type
+            FROM symbols s, json_tree(s.signature) t
+            WHERE t.key = 'symbol'
+              AND regexp_matches(
+                  t.path, '^\\$\\.(returns|parameters\\[[0-9]+\\]\\.type)(\\.arguments\\[[0-9]+\\])*$'
+              )
         ),
         reached AS (
             SELECT 'caller' AS arm, w.symbol AS walked, e.caller AS symbol,
@@ -1079,9 +1089,9 @@ _NAMED_QUERIES = {
             JOIN walked w ON t.ancestor = w.bare
             LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
             UNION ALL
-            SELECT 'unresolved', w.symbol, e.caller, e.resolution
+            SELECT 'unread', w.symbol, e.caller, e.resolution
             FROM call_edges e JOIN walked w ON e.target = w.bare
-            WHERE e.resolution = 'unresolved'
+            WHERE e.callee IS NULL
             UNION ALL
             SELECT 'unscanned', w.symbol, t.ancestor, NULL
             FROM type_hierarchy t JOIN walked w ON t.child = w.owner
@@ -1539,6 +1549,7 @@ _FACT_ONLY = frozenset(
         "selected_documents",
         "constants",
         "question_source",
+        "question_members",
     }
 )
 
