@@ -30,9 +30,11 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shadow import record_value_resolutions
+from sextant.application.resolve.shapes.arguments import channel_of_answer, url_of_answer
 from sextant.application.resolve.values import (
     _REASONS,
     RECEIVER,
+    Answer,
     Binding,
     resolve_site,
     value_index,
@@ -2435,6 +2437,8 @@ def test_shadow_mode_asks_about_a_position_no_catalog_names_and_records_nothing(
 # --- Capability 9.19: a merged value with a common root (spec 2026-10-21) ---------------
 
 
+@pytest.mark.pins("values.a-MERGE-is-read-not-skipped")
+@pytest.mark.pins("values.a-rooted-merge-is-INEXACT-never-exact")
 def test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexactly(walked):
     """§3b. `send`'s consumer sees the parameter OR `substring`'s result, and `substring`'s
     own site says its receiver IS that parameter — so both candidates are the same value,
@@ -2448,6 +2452,7 @@ def test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexac
     assert all(b.slots[0].kind == "literal" for b in bindings)
 
 
+@pytest.mark.pins("values.a-merge-without-a-ROOT-is-never-picked-from")
 def test_a_merge_of_two_literals_has_no_root_and_stays_non_enumerable(walked):
     """Ruling 1, unchanged: two literals on two branches are two possible values and no
     single one. The candidates are in the fact for a reader; the walk picks neither."""
@@ -2465,17 +2470,22 @@ def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
     ]
 
 
-def test_an_inexact_address_publishes_at_partial_and_an_inexact_channel_is_refused():
-    """What `inexact` does downstream (§3b): a url reader publishes the text at `partial`
-    — the word the resolution set has for "part of this address was read" — and a channel
-    reader refuses it, because a broker resolves a destination it is GIVEN and a name some
-    call may have re-rendered is not one."""
-    from sextant.application.resolve.shapes.arguments import channel_of_answer, url_of_answer
-    from sextant.application.resolve.values import Answer
+_INEXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string", inexact=True)
+_EXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string")
 
-    inexact = Answer(kind="literal", value="/billing/ledger", literal_kind="string", inexact=True)
-    exact = Answer(kind="literal", value="/billing/ledger", literal_kind="string")
-    assert url_of_answer(inexact) == (None, "/billing/ledger", "partial")
-    assert url_of_answer(exact) == (None, "/billing/ledger", "resolved")
-    assert channel_of_answer(inexact) == (None, None, "unresolved")
-    assert channel_of_answer(exact) == (None, "/billing/ledger", "resolved")
+
+@pytest.mark.pins("shapes.an-INEXACT-address-publishes-at-partial")
+def test_an_inexact_address_publishes_at_partial():
+    """What `inexact` does downstream (§3b): a url reader publishes the text at `partial`
+    — the word the resolution set has for "part of this address was read" — where the same
+    text read exactly publishes at `resolved`."""
+    assert url_of_answer(_INEXACT) == (None, "/billing/ledger", "partial")
+    assert url_of_answer(_EXACT) == (None, "/billing/ledger", "resolved")
+
+
+@pytest.mark.pins("shapes.an-INEXACT-channel-is-refused")
+def test_an_inexact_channel_is_refused():
+    """A channel reader refuses an inexact literal, because a broker resolves a destination
+    it is GIVEN and a name some call may have re-rendered is not one."""
+    assert channel_of_answer(_INEXACT) == (None, None, "unresolved")
+    assert channel_of_answer(_EXACT) == (None, "/billing/ledger", "resolved")

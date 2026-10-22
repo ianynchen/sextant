@@ -1272,8 +1272,29 @@ and nothing re-recorded the pins. Five weeks of red.
 **All six pins pass**, which is the first time the field check has been green since
 `apollo-portal` joined it.
 
-### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape
+### OI-143 — a project's own HTTP client wrapper derives nothing, and it is the dominant real shape · **CLOSED 2026-10-21**
 **Major · entered 2026-10-18, measured on `apolloconfig/apollo` (530 non-test Java files, 8 modules, commit `ea35677`) · `src/sextant/application/resolve/values.py::_joined`**
+
+> **CLOSED 2026-10-21 — the fifth cause, by the design the user ruled "take your partial
+> approach"** (spec `docs/superpowers/specs/2026-10-21-merged-values-design.md`). The
+> extractor writes a merged value's CANDIDATES (capability 9.19) instead of a sourceless
+> `unresolved`; the walk resolves a merge whose candidates share a ROOT — `x` beside a call
+> on `x`, read off two facts and never off what the call does — to `x`'s answers marked
+> inexact, published at `partial`; a merge with no root stays `unresolved`, ruling 1
+> unchanged. No `substring` entry anywhere: the user refused one parser per string
+> manipulation, and the rule never asks what `f` is. Found on the way: the wrapper hands the
+> VERB through as a parameter too, so `single_call` now reads it from the same walked
+> binding as the path.
+>
+> **Measured through `analyze` on `apollo-portal` at `ea35677`:** the two addressless
+> wrapper rows are **68 rows at `partial`, every one with its verb** — GET 39, POST 14,
+> DELETE 8, PUT 7; 65 distinct verb + path pairs — against 68 call sites in the module's
+> main sources. The falsifier this entry set ("publishing the 64 call sites' own paths") is
+> met, at this commit's 68. `partial`, not `resolved`, on purpose: the authority is a
+> discovered service (decision 6 stands) and what `substring` did to the path was never
+> read — the row carries each caller's literal as written. The field pin
+> (`apollo-portal.json`) moved 10 → 69 outbound rows with this cause beside it.
+
 
 **The inbound half works on real production code and the outbound half does not.** Measured
 across Apollo's four code-bearing modules:

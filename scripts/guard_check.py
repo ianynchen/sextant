@@ -645,6 +645,85 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- a merged value with a common root (spec 2026-10-21) --------------------------
+    "values.a-MERGE-is-read-not-skipped": Guard(
+        what="the walk reads capability 9.19's `merge` kind rather than falling through to "
+        "the sourceless `not_readable` the bare kind used to get",
+        why="without the branch every merged value is a wall again, and `apollo-portal`'s 68 "
+        "outgoing calls with their paths written at the call publish as two unknown "
+        "destinations — OI-143 as it stood for a month",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find='        if kind == "merge":\n            return self._merged(argument, method, origin, trail, frames)\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return self._merged(argument, method, origin, trail, frames)\n",
+            ),
+        ),
+    ),
+    "values.a-merge-without-a-ROOT-is-never-picked-from": Guard(
+        what="a merge whose candidates share no root is `non_enumerable`; nothing picks a branch",
+        why="ruling 1 of the value-resolution design: two literals on two branches are two "
+        "possible values and no single one, and publishing the first would be a confident "
+        "wrong address at `resolved` — the one fabrication this whole work risks",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        return None\n\n    def _is_a_call_on(\n",
+                replace="        return candidates[0]  # guard disabled by scripts/guard_check.py\n\n    def _is_a_call_on(\n",
+            ),
+        ),
+    ),
+    "values.a-rooted-merge-is-INEXACT-never-exact": Guard(
+        what="every answer a rooted merge yields is marked `inexact`",
+        why="the root is `x` and the other branch is `f(x)` for an unread `f`; without the "
+        "mark the url reader publishes the literal at `resolved`, claiming a rendering nobody "
+        "checked — on Apollo, 68 rows asserting the slash the wrapper strips",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="                replace(answer, inexact=True) if answer.kind in (LITERAL, EXPRESSION) else answer,\n",
+                replace="                answer,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "shapes.an-INEXACT-address-publishes-at-partial": Guard(
+        what="`url_of_answer` publishes an inexact literal at `partial`, never `resolved`",
+        why="`partial` is the word D00 §4 has for 'part of this address was read'; `resolved` "
+        "would promise the exact text sent, which the walk never read",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="        if answer.inexact and resolution == str(Resolution.RESOLVED):\n            resolution = str(Resolution.PARTIAL)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            resolution = str(Resolution.PARTIAL)\n",
+            ),
+        ),
+    ),
+    "shapes.an-INEXACT-channel-is-refused": Guard(
+        what="`channel_of_answer` refuses an inexact literal as a destination",
+        why="a broker resolves a destination it is GIVEN; a topic name some call may have "
+        "re-rendered is not one, and publishing it would address a queue that may not exist",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='    if answer.inexact:\n        return None, None, "unresolved"\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        return None, None, "unresolved"\n',
+            ),
+        ),
+    ),
+    "single_call.the-VERB-rides-the-same-binding-as-the-path": Guard(
+        what="where the verb argument is a parameter, the row's verb is read from the same "
+        "walked binding as its path",
+        why="measured on `apollo-portal`: 51 of the wrapper's 61 rows carried a path and no "
+        "verb, `unresolved` for a declared capture that had failed, when the verb was the enum "
+        "the wrapper's own `post()`/`put()`/`delete()` handed in on that very path",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/single_call.py",
+                find="                            else _verb_from_answer(binding.slots.get(method_slot)),\n",
+                replace="                            else None,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "storage.a-TYPE-HEADER-joins-the-superclass-walk": Guard(
         what="`type_header` facts are unioned into the `superclasses` query, so a module "
         "class extending a library class — or a handler parameter typed as one — reaches a "

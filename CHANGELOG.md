@@ -14,6 +14,27 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A value merged from two branches resolves when both branches are the same value** —
+  `OI-143` closed (spec `2026-10-21-merged-values-design.md`; ruled "take your partial
+  approach", 2026-10-21). A parameter reassigned on one branch — `if (path.startsWith("/"))
+  path = path.substring(1);` — reached its consuming call as a sourceless `unresolved`, and
+  `apolloconfig/apollo`'s own HTTP wrapper funnels every outgoing call through exactly that:
+  68 call sites with the verb and path written at the call published as two unknown
+  destinations. The extractor now writes the merge's CANDIDATES (capability 9.19) and
+  chooses none; the walk resolves a merge whose candidates share a root — `x` beside a call
+  on `x`, read off two facts, never off what the call does — to `x`'s answers marked
+  inexact; `url_of_answer` publishes an inexact address at `partial` and `channel_of_answer`
+  refuses one. A merge with no root stays `unresolved`, as ruled. No method is modelled
+  anywhere: the user refused one parser per string manipulation.
+
+  **Measured on `apollo-portal`: 2 → 68 outbound rows for the wrapper, every one at
+  `partial` with its verb** (GET 39, POST 14, DELETE 8, PUT 7). The verb was the second
+  finding: the wrapper hands it through as a parameter too, so `single_call` reads it from
+  the same walked binding as the path — the first build had 51 of 61 rows with a path and no
+  verb. Across six pinned corpora merges are at most 1.5% of arguments and the rooted shape a
+  minority of those; the one that mattered sat in front of 68 calls, and the 285 that are a
+  genuine fork (`doExecute`'s body built two ways) are refused as before.
+
 - **The Maven dependency set is what Maven resolved, asked of Maven** (`OI-167` closed; spec
   `2026-10-21-maven-classpath-design.md`, three rulings 2026-10-21). The detector runs
   `mvn -o dependency:build-classpath` once per analysis from the reactor root and reads the

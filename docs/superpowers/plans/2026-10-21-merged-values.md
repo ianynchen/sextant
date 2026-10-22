@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Status: ruled 2026-10-21** ("take your partial approach"; spec §6).
+**Status: BUILT 2026-10-21** — ruled "take your partial approach"; all four tasks done; the
+measured result (68 of 68 on `apollo-portal`) is in the spec's §7 BUILT block and `OI-143` is closed.
 
 **Goal:** `OI-143`. Apollo's wrapper reassigns `path` on one branch, the extractor collapses
 the merge to a sourceless `unresolved`, and 68 outgoing calls with their paths written at the
@@ -46,30 +47,30 @@ is what was dropped and must not creep back (no method is ever modelled), §4 th
 
 ---
 
-## Task 1 — the extractor writes the candidates
+## Task 1 — the extractor writes the candidates · **DONE**
 
-- [ ] `MethodFlow.argumentJson`: a value with more than one producer renders each producer
+- [x] `MethodFlow.argumentJson`: a value with more than one producer renders each producer
       through the existing single-producer body (factored out, not duplicated) and emits
       `{kind: merge, candidates: [...]}`, identical candidates folded to one. A merge of one
       distinct candidate is that candidate.
-- [ ] `Capabilities`: `merge_candidates`, sorted; the capability pin in `test_asm_scanner`.
-- [ ] `ClassScannerTest`: a sample method reassigning a parameter on one branch; the argument
+- [x] `Capabilities`: `merge_candidates`, sorted; the capability pin in `test_asm_scanner`.
+- [x] `ClassScannerTest`: a sample method reassigning a parameter on one branch; the argument
       at the consuming call is a `merge` whose candidates are the parameter and the call's
       result, in that order.
-- [ ] Probe `cp41_merge_candidates`: §5.4 provenance (JDK from the installation's own
+- [x] Probe `cp41_merge_candidates`: §5.4 provenance (JDK from the installation's own
       `release`), measured on the fixture class and on `RetryableRestTemplate#execute`.
-- [ ] `CallArgument` accepts the kind and `candidates`; D00 §5a row and prose; M03 row.
-- [ ] Gate.
+- [x] `CallArgument` accepts the kind and `candidates`; D00 §5a row and prose; M03 row.
+- [x] Gate.
 
-## Task 2 — the walk resolves a rooted merge, inexactly
+## Task 2 — the walk resolves a rooted merge, inexactly · **DONE**
 
-- [ ] `Answer.inexact: bool = False`, carried through every hop like `yields`.
-- [ ] `_entry`: `kind == "merge"` → the root check (spec §3b) over the index's `sites`
+- [x] `Answer.inexact: bool = False`, carried through every hop like `yields`.
+- [x] `_entry`: `kind == "merge"` → the root check (spec §3b) over the index's `sites`
       (receiver, `receiver_parameter`, arguments); root found → `_entry(root, …)` with every
       answer marked inexact; none → `unresolved(non_enumerable)`.
-- [ ] `_joined`: an inexact string literal fills its hole; `whole` is false when any filler
+- [x] `_joined`: an inexact string literal fills its hole; `whole` is false when any filler
       is inexact, so the result is an `expression`.
-- [ ] `url_of_answer`: an inexact literal publishes through the `expression` path at
+- [x] `url_of_answer`: an inexact literal publishes through the `expression` path at
       `partial`; `channel_of_answer` refuses it with the reason an expression gets.
 - [x] ~~`shadow.record_value_resolutions` records inexact answers distinguishably~~ — not
       done: the table's columns are fixed and the inexact answer records as the literal it
@@ -77,29 +78,29 @@ is what was dropped and must not creep back (no method is ever modelled), §4 th
 - [x] `single_call` mints `(verb, destination)` pairs per binding, so a verb that is a
       parameter is read through the same walk as the path (found on Apollo: 51 of 61 rows
       had no verb; now 68 of 68 do).
-- [ ] Unit tests on hand-built facts (`test_values.py`): the rooted merge resolves; an
+- [x] Unit tests on hand-built facts (`test_values.py`): the rooted merge resolves; an
       unrooted merge is `non_enumerable`; two identical literals resolve exactly; the
       multiplicity through a parameter root; the channel refusal.
-- [ ] Gate.
+- [x] Gate.
 
-## Task 3 — the fixture, the document, the guards
+## Task 3 — the fixture, the document, the guards · **DONE**
 
-- [ ] `NormalisingBillingClient` in `orders-service`: `if (path.startsWith("/")) path =
+- [x] `NormalisingBillingClient` in `orders-service`: `if (path.startsWith("/")) path =
       path.substring(1); restTemplate.exchange(baseUrl + path, …)` with callers passing
       `"/billing/ledger"` and `"billing/ledger/{id}"`; the e2e pin: rows at `partial` with
       each caller's literal, and the document's outbound section showing them.
-- [ ] Every moved pin (document count, reach, dispatch, origins) re-pinned with its cause.
-- [ ] Guards: the candidates are written; a rooted merge resolves; an unrooted one does not;
+- [x] Every moved pin (document count, reach, dispatch, origins) re-pinned with its cause.
+- [x] Guards: the candidates are written; a rooted merge resolves; an unrooted one does not;
       inexact never reaches `resolved`; a channel refuses inexact.
-- [ ] Gate, guards.
+- [x] Gate, guards.
 
-## Task 4 — measured close-out
+## Task 4 — measured close-out · **DONE**
 
-- [ ] `apollo-portal` through `analyze`: the outbound rows, counted and listed; the spec's
+- [x] `apollo-portal` through `analyze`: the outbound rows, counted and listed; the spec's
       §7 prediction checked.
-- [ ] Across every pinned corpus: merges that gained a root vs none (from the fact stream and
+- [x] Across every pinned corpus: merges that gained a root vs none (from the fact stream and
       a shadow run), recorded in the spec.
-- [ ] Field pins re-run; moved expectations re-recorded with cause.
-- [ ] `OI-143` closed or re-measured; the value-resolution spec's §1 amended; COVERAGE's
+- [x] Field pins re-run; moved expectations re-recorded with cause.
+- [x] `OI-143` closed or re-measured; the value-resolution spec's §1 amended; COVERAGE's
       outbound rows; CHANGELOG.
-- [ ] Full gate, full guard sweep, six field pins.
+- [x] Full gate, full guard sweep, six field pins.

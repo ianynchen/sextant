@@ -178,7 +178,27 @@ fan-out the data shows to matter arrives as a reason word with the measurement b
 > POST 14, DELETE 8, PUT 7; 65 distinct verb + path pairs. `OI-143`'s own falsifier was
 > "`apollo-portal` publishing the 64 call sites' own paths"; at this commit the module has 68
 > and publishes 68. The first build published 61 with 51 verbs missing, which is how §3b's
-> last paragraph was found. Full corpus measurement and the pins are Task 4.
+> last paragraph was found.
+>
+> **The rule's reach across the pinned corpora**, from the fact stream after a re-analysis
+> with capability 9.19 (`merge` arguments by candidate shape; `param+call` is the rooted
+> shape, `lit+lit` the fork ruling 1 refuses, `other` everything else — instances, fields,
+> calls beside calls):
+>
+> | module | arguments | merges | param+call | lit+lit | other |
+> |---|---|---|---|---|---|
+> | `apollo-portal` | 15,172 | 229 | 15 | 95 | 119 |
+> | `yudao-module-system` | 25,015 | 174 | 25 | 17 | 132 |
+> | `spring-petclinic-rest` | 2,569 | 15 | 7 | 0 | 8 |
+> | `jhipster-sample-app` | 1,388 | 8 | 1 | 1 | 6 |
+> | `mall-admin` | 37,667 | 7 | 0 | 0 | 7 |
+> | `genai` | 113 | 1 | 0 | 1 | 0 |
+>
+> Merges are rare (1.5% of arguments at most) and the rooted shape is a minority of them;
+> the one that mattered sat in front of 68 calls. The shadow run also shows the refusal
+> working where it should: 285 asked positions on `apollo-portal` sit directly on a merge of
+> a parameter and two `new HttpEntity(…)` constructions — `doExecute`'s BODY slot, a genuine
+> fork built differently on two branches — and every one is `non_enumerable`, as ruled.
 
 `apollo-portal`: the two addressless wrapper rows become the 68 call sites' own addresses at
 `partial`, one row per (caller, verb, path) as `single_call` dedups — between 32 and 68,

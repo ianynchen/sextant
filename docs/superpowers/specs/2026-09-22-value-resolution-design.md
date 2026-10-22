@@ -221,6 +221,16 @@ So multiplicity has exactly one rule, and it is about paths:
   constant yields elements; built in a loop, populated on a branch, left partly unwritten, or handed
   to another method first yields `unresolved` with no element list at all.
 
+  > **Amended 2026-10-21** (spec `2026-10-21-merged-values-design.md`, ruled "take your partial
+  > approach"): a branch-merged value is `unresolved` **where its branches are different values**.
+  > Where the extractor's candidates (capability 9.19) show the branches to be the SAME value —
+  > `x` beside a call ON `x`, read off the producing site's receiver or arguments, never off the
+  > call's semantics — the merge resolves to `x`'s answers marked `inexact`, which a url reader
+  > publishes at `partial` and a channel reader refuses. `if (path.startsWith("/")) path =
+  > path.substring(1);` is the shape, and `apollo-portal`'s 68 wrapped calls are the measure.
+  > Two literals on two branches, or a parameter beside an unrelated call, are still
+  > `non_enumerable`: this amendment picks no branch.
+
 **Memoisation is per (position, path), never per position.** Memoising per position is precisely what
 discards the correlation and reintroduces M-1.
 
@@ -231,7 +241,7 @@ A closed set; each names a different thing a reader can act on:
 | reason | means |
 |---|---|
 | `not_readable` | the producer is there; its value cannot be named (today's bare `unresolved`) |
-| `non_enumerable` | a loop, a branch-merged value, a partly-written array |
+| `non_enumerable` | a loop, a branch-merged value whose branches differ (one whose candidates share a root resolves inexactly — amendment 2026-10-21), a partly-written array |
 | `escapes` | the value reached a method that might mutate it before use. **Across a callee's RETURN the whole tail counts** (T-6): a return has no position in control flow to bound the window with, so any call on the value after its producer refuses |
 | `no_writer` | a binding nothing in this module writes — **today: no writer edge exists to follow at all** (T-4), because `written_by` waits on capability 9.19 (§4). It narrows to the left-hand meaning when that lands, and until then a reader must not take it as a property of the code |
 | `external` | the producer is outside what was scanned — a dependency jar |

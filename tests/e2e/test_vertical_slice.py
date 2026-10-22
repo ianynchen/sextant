@@ -2161,3 +2161,25 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(full_run: Path)
         "| `jms parsed-relay-queue` | `ParsedPayloadListeners#onRelayed` | "
         "— → — | unresolved | resolved |"
     ) in document
+
+
+def test_a_wrappers_merged_path_reaches_the_document_with_its_verb(full_run: Path):
+    """The document is the result (ruling 2026-10-17), for `OI-143`'s shape (spec
+    2026-10-21 merged values). `NormalisingBillingClient#send` reassigns `path` on one branch
+    and hands `exchange` both the path AND the verb as parameters; two callers reach it with
+    literals differing only by the slash the wrapper strips. Each caller's literal is a row,
+    as written, at `partial` — behind `<host>`, the unread `baseUrl` — and each carries the
+    verb its caller handed in, read from the SAME walked binding as the path (measured on
+    `apollo-portal`: without that read 51 of 61 rows had a path and no verb). Nothing here
+    knows what `substring` does; the slash is reported as each caller wrote it."""
+    document = (full_run / "render" / "architecture.md").read_text()
+    assert (
+        "| `GET <host>/billing/ledger` | none recorded | "
+        "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
+        "json (assumed) | partial |"
+    ) in document
+    assert (
+        "| `GET <host>billing/ledger/{id}` | none recorded | "
+        "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
+        "json (assumed) | partial |"
+    ) in document
