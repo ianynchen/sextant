@@ -85,5 +85,21 @@ def test_a_shape_model_adds_data_contract_to_any_wire_style_and_only_there():
     assert kinds_fed_by("error_advice", "inbound", True) == ("error-handler",)
 
 
-def test_a_wire_catalog_with_no_direction_feeds_no_wire_kind():
-    assert kinds_fed_by("annotation_driven", None, False) == ()
+def test_an_unknown_direction_feeds_both_endpoint_kinds():
+    """A `config_join` catalog (`spring-integration`, `spring-kafka-media`) declares no
+    direction because its rows are of either: the direction is known per row, not per
+    catalog. Feeding nothing would let a skipped one read as "no kind could be affected"."""
+    assert kinds_fed_by("config_join", None, False) == ("endpoint", "dependency")
+    assert kinds_fed_by("config_join", "", False) == ("endpoint", "dependency")
+    assert kinds_fed_by("annotation_driven", None, True) == (
+        "endpoint",
+        "dependency",
+        "data-contract",
+    )
+
+
+def test_a_both_direction_row_belongs_to_both_endpoint_kinds():
+    """No pass writes a `both` row today; the linking tier will, and a row that is both
+    exposed and called is one wire identity on each side."""
+    assert KINDS["endpoint"].where == "direction IN ('inbound', 'both')"
+    assert KINDS["dependency"].where == "direction IN ('outbound', 'both')"

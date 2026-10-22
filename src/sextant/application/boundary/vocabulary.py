@@ -61,7 +61,7 @@ _KIND_LIST = (
     Kind(
         name="endpoint",
         table="endpoints",
-        where="direction = 'inbound'",
+        where="direction IN ('inbound', 'both')",
         # The exposed address, per protocol: a topic for a broker, the operation name for
         # GraphQL, the operation's QName for SOAP. The handler is evidence, not identity.
         identity=("protocol", "method", "path"),
@@ -81,7 +81,7 @@ _KIND_LIST = (
     Kind(
         name="dependency",
         table="endpoints",
-        where="direction = 'outbound'",
+        where="direction IN ('outbound', 'both')",
         # `peer` stays: `POST /v1/orders` on `billing` and on `ledger` are two dependencies.
         identity=("protocol", "method", "path", "peer"),
         attributes=("request_body", "response_body", "format", "headers", "resolution"),
@@ -136,16 +136,19 @@ def kinds_fed_by(style: str, direction: str | None, has_shape_model: bool) -> tu
 
     `scheduled_work` writes `scheduled_work` and `error_advice` writes `error_handlers`, so
     each feeds exactly its own kind. Every other style writes `endpoints`: `inbound` feeds
-    `endpoint`, `outbound` feeds `dependency`, `both` feeds both. A declared `shape_model`
-    additionally feeds `data-contract`. The result follows registry order."""
+    `endpoint`, `outbound` feeds `dependency`, `both` feeds both — and so does a catalog
+    that declares no direction, because a `config_join` catalog (`spring-integration`,
+    `spring-kafka-media`) writes rows of either direction and which one is known only per
+    row. A declared `shape_model` additionally feeds `data-contract`. The result follows
+    registry order."""
     if style == "scheduled_work":
         return ("schedule",)
     if style == "error_advice":
         return ("error-handler",)
     fed = set[str]()
-    if direction in ("inbound", "both"):
+    if direction in ("inbound", "both", None, ""):
         fed.add("endpoint")
-    if direction in ("outbound", "both"):
+    if direction in ("outbound", "both", None, ""):
         fed.add("dependency")
     if has_shape_model:
         fed.add("data-contract")
