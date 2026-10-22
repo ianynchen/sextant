@@ -26,9 +26,17 @@ Which classes are beans, and which conditions apply — the container's own rule
   skipped configuration registers none of its factory methods (row 4, the reader returns
   before it reads them).
 * A class merely constructed is never handed to the evaluator (row 4), so its own
-  annotations are not consulted on that route — and a class constructed by a conditional
-  factory AND registered or constructed any other way runs its code wherever either
-  happens: every one of its rows is `unresolved`, the evidence naming the routes.
+  annotations are not consulted on that route.
+
+A class registered more than one way EXISTS wherever ANY of its routes registers it (ruled
+2026-10-22: each scan, import or factory registers its own bean definition, and the code
+runs wherever one exists). So every route of a class with at least one conditional route is
+written: a conditional route as its evaluated conditions (AND within the route), an
+unconditional bean route (a stereotype class or a factory method with no condition) as one
+condition-less row per environment holding `true`, and a plain `new` outside any factory
+body as one condition-less `constructed` row per environment, `unresolved` — which bean's
+code path runs it is not known. The `bean_presence` view folds them per environment (OR
+across routes); the per-condition rows stay what the documents spell.
 
 What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; unchanged by the move):
 
@@ -71,12 +79,13 @@ UNRESOLVED = "unresolved"
 # The characters that make a profile string an EXPRESSION rather than a name (CP-42 row 3):
 # a composition over several active profiles, which this analysis does not evaluate.
 _COMPOSITION = set("&|()")
-# `bean_kind`: where a condition on the bean was written (spec §2).
+# `bean_kind`: where a condition on the bean was written (spec §2) — or, on a condition-less
+# row, the route itself.
 CLASS = "class"
 FACTORY = "factory"
 CONFIGURATION = "configuration"
-# The route of a class constructed anywhere but a factory that returns it.
-_CONSTRUCTED = "constructed"
+# The route of a class constructed outside any factory method's body.
+CONSTRUCTED = "constructed"
 # The JVM's own name for a constructor, which a member descriptor carries verbatim.
 _CONSTRUCTOR = "<init>"
 
@@ -95,20 +104,13 @@ class ConditionModel:
 @dataclass(frozen=True)
 class _Route:
     """One way a class comes to exist at run time: scanned (`class`), returned by a factory
-    method (`factory`, `via` the method), or constructed anywhere else (`via` the method
-    whose body runs the `new`). `conditions` are the (bean_kind, model, args) the container
-    evaluates on that route — empty for an unconditional one."""
+    method (`factory`, `via` the method), or constructed outside any factory body (`via` the
+    method whose body runs the `new`). `conditions` are the (bean_kind, model, args) the
+    container evaluates on that route — empty for an unconditional one."""
 
     route: str
     via: str | None
     conditions: tuple[tuple[str, ConditionModel, dict[str, Any]], ...]
-
-    def described(self) -> str:
-        if self.route == CLASS:
-            return "scanned"
-        if self.route == FACTORY:
-            return f"returned by factory {self.via}"
-        return f"constructed in {self.via}"
 
 
 def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -171,7 +173,7 @@ def _routes(
     ancestors: dict[str, list[str]],
 ) -> dict[str, list[_Route]]:
     """Every class with at least one CONDITIONAL route, mapped to all of its routes —
-    conditional or not, since a second route is what makes the first undecidable."""
+    conditional or not, since an unconditional second route decides where it exists."""
     conditions = _models(model)
     stereotypes = {type_descriptor(str(name)) for name in model.get("stereotypes", ())}
     if model.get("configuration_annotation"):
@@ -210,8 +212,10 @@ def _routes(
                 and _assignable(bare_descriptor(built), factory.erased_return, ancestors)
             ):
                 routes.setdefault(built, []).append(_Route(FACTORY, caller, route_conditions))
-            elif not _delegates(caller, built, ancestors):
-                routes.setdefault(built, []).append(_Route(_CONSTRUCTED, caller, ()))
+            elif factory is None and not _delegates(caller, built, ancestors):
+                # A `new` outside every factory body (the ruling's "plain `new`"). One inside
+                # a factory body that does not return it is a helper of that bean, no route.
+                routes.setdefault(built, []).append(_Route(CONSTRUCTED, caller, ()))
     return {
         bean: found for bean, found in routes.items() if any(route.conditions for route in found)
     }
@@ -223,28 +227,42 @@ def _rows_for(
     config: dict[str, dict[str, str | None]],
     environments: list[str],
 ) -> list[dict[str, Any]]:
-    """One row per (route, condition, environment). A bean with ONE route is evaluated; a
-    bean with several is `unresolved` on every row, the evidence naming each route."""
+    """One row per (route, condition, environment), evaluated; one condition-less row per
+    (route, environment) for a route with no condition — `true` for a bean route,
+    `unresolved` for a plain `new`. `bean_presence` folds them."""
     distinct = sorted(
         {(route.route, route.via or ""): route for route in routes}.values(),
         key=lambda route: (route.route, route.via or ""),
     )
-    reason = None
-    if len(distinct) > 1:
-        reason = "registered more than one way: " + "; ".join(
-            route.described() for route in distinct
-        )
     rows: list[dict[str, Any]] = []
     for route in distinct:
+        if not route.conditions:
+            for environment in environments:
+                constructed = route.route == CONSTRUCTED
+                rows.append(
+                    {
+                        "bean": bean,
+                        "bean_kind": route.route,
+                        "via": route.via,
+                        "kind": None,
+                        "expression": None,
+                        "environment": environment,
+                        "holds": UNRESOLVED if constructed else HOLDS,
+                        "resolution": UNRESOLVED if constructed else "resolved",
+                        "evidence": (
+                            f"also constructed outside any factory, in {route.via}"
+                            if constructed
+                            else "compiler"
+                        ),
+                    }
+                )
+            continue
         for bean_kind, model, args in route.conditions:
             kind, expression = _expression(model, args)
             for environment in environments:
-                if reason is None:
-                    holds, resolution = _holds(
-                        kind, expression, config.get(environment, {}), environment
-                    )
-                else:
-                    holds, resolution = UNRESOLVED, UNRESOLVED
+                holds, resolution = _holds(
+                    kind, expression, config.get(environment, {}), environment
+                )
                 rows.append(
                     {
                         "bean": bean,
@@ -255,7 +273,7 @@ def _rows_for(
                         "environment": environment,
                         "holds": holds,
                         "resolution": resolution,
-                        "evidence": reason or "compiler",
+                        "evidence": "compiler",
                     }
                 )
     return rows

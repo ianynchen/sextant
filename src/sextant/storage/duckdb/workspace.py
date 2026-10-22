@@ -866,6 +866,13 @@ _NAMED_QUERIES = {
         ORDER BY bean, bean_kind, via, kind, expression, environment, holds, resolution,
                  evidence
     """,
+    # Where each conditional bean exists, per environment — the view folding the rows above
+    # (OR across routes, AND within one; ruled 2026-10-22).
+    "bean_presence": """
+        SELECT bean, environment, holds, resolution, evidence
+        FROM bean_presence
+        ORDER BY bean, environment
+    """,
     # The constructor calls a `@Bean` method's body makes, and every other one in the module
     # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
     # that class is also constructed anywhere else. Read once per resolve, restricted here to
@@ -1220,6 +1227,7 @@ _EXPORT_QUERIES = {
     # view every endpoint row reads them through (spec 2026-10-22-conditional-beans).
     "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
     "bean_conditions": _NAMED_QUERIES["bean_conditions"],
+    "bean_presence": _NAMED_QUERIES["bean_presence"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`

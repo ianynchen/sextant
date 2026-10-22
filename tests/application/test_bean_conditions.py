@@ -13,6 +13,8 @@ coordinates on every declared symbol, bare descriptors on every call target).
 
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.bean_conditions import record_bean_conditions
 from sextant.application.resolve.call_edges import record_call_edges
@@ -190,7 +192,9 @@ def _catalogs(*ids: str) -> list[Catalog]:
     return [c for c in YamlCatalogSource(CATALOGS).load() if c.id in ids]
 
 
-def _resolved(tmp_path: Path, facts: list[object], *ids: str) -> DuckDbWorkspace:
+def _resolved(
+    tmp_path: Path, facts: list[object], *ids: str, environments: tuple[str, ...] = ("prod",)
+) -> DuckDbWorkspace:
     """The facts through the passes the conditions pass reads after: configuration (the
     environments), the call graph and the hierarchy (what a factory constructs, and what it
     is assignable to), and the rows themselves."""
@@ -199,7 +203,8 @@ def _resolved(tmp_path: Path, facts: list[object], *ids: str) -> DuckDbWorkspace
         root / "doc.jsonl", _document("doc", "com/acme/orders/All.java", "java", "asm"), facts
     )
     _config(root, "application.yml", {"orders.legacy": "false"})
-    _config(root, "application-prod.yml", {"orders.legacy": "true"})
+    for profile in environments:
+        _config(root, f"application-{profile}.yml", {"orders.legacy": "true"})
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(root)
     catalogs = _catalogs("spring-web", *ids)
@@ -361,37 +366,98 @@ def test_a_factory_in_a_conditional_configuration_inherits_the_class_condition(t
     }
 
 
-# --- a class registered more than one way ------------------------------------------------
+# --- a class registered more than one way: it exists wherever ANY route registers it -----
 
 
-def test_a_class_registered_two_ways_is_unresolved(tmp_path: Path):
-    """Review focus 2. `KafkaOrderPublisher` is ALSO a `@Component` — scanned, unconditional —
-    while a `@Profile("prod")` factory constructs it. Whether a `prod`-less environment runs
-    its code depends on which registration the container keeps, which this analysis does not
-    decide: `unresolved`, the reason naming both routes — never conditional, never not."""
+def _presence(workspace: DuckDbWorkspace, bean: str) -> dict[str, tuple[object, ...]]:
+    return {
+        str(r["environment"]): (r["holds"], r["resolution"])
+        for r in workspace.query("bean_presence")
+        if r["bean"] == _MODULE + bean
+    }
+
+
+def test_two_exclusive_profile_factories_make_the_class_exist_in_each_profile(tmp_path: Path):
+    """Ruled 2026-10-22: OR across routes. `@Bean @Profile("prod")` and `@Bean
+    @Profile("staging")` each register their own definition of `KafkaOrderPublisher`, so it
+    exists in `prod` and in `staging` and nowhere else — decided, not `unresolved`. Each
+    factory's own condition rows stay, evaluated, under its own `via`."""
+    staging = ORDERS + "StagingConfig#"
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
-        *_type(KAFKA, [_marker(COMPONENT)], interfaces=(PUBLISHER,)),
+        *_type(KAFKA, interfaces=(PUBLISHER,)),
+        *_type(MESSAGING, [_marker(CONFIGURATION)]),
+        *_method(MESSAGING, "publisher", PUBLISHER, [_marker(BEAN), _profile("prod")], [KAFKA]),
+        *_type(staging, [_marker(CONFIGURATION)]),
+        *_method(staging, "publisher", PUBLISHER, [_marker(BEAN), _profile("staging")], [KAFKA]),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("prod", "staging"))
+    presence = _presence(workspace, KAFKA)
+    rows = [r for r in workspace.query("bean_conditions") if r["bean"] == _MODULE + KAFKA]
+    workspace.close()
+
+    assert presence == {
+        "default": ("false", "resolved"),
+        "prod": ("true", "resolved"),
+        "staging": ("true", "resolved"),
+    }
+    assert {(r["via"], r["environment"], r["holds"]) for r in rows} == {
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "default", "false"),
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "prod", "true"),
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "staging", "false"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "default", "false"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "prod", "false"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "staging", "true"),
+    }
+
+
+@pytest.mark.parametrize("unconditional", ["factory", "scanned"])
+def test_an_unconditional_route_beside_a_conditional_factory_makes_the_class_exist_everywhere(
+    tmp_path: Path, unconditional: str
+):
+    """Review focus 2, as ruled: a conditional factory of `KafkaOrderPublisher` beside an
+    unconditional `@Bean` of it — or beside its own unconditional `@Component` — means the
+    class exists in every environment, resolved. The conditional route's rows are still
+    written and still evaluated; the bean's presence is what changes."""
+    plain = ORDERS + "DefaultConfig#"
+    facts = [
+        *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
+        *_type(
+            KAFKA,
+            [_marker(COMPONENT)] if unconditional == "scanned" else [],
+            interfaces=(PUBLISHER,),
+        ),
         *_type(MESSAGING, [_marker(CONFIGURATION)]),
         *_method(MESSAGING, "publisher", PUBLISHER, [_marker(BEAN), _profile("prod")], [KAFKA]),
     ]
+    if unconditional == "factory":
+        facts += [
+            *_type(plain, [_marker(CONFIGURATION)]),
+            *_method(plain, "fallback", PUBLISHER, [_marker(BEAN)], [KAFKA]),
+        ]
     workspace = _resolved(tmp_path, facts)
-    beans = workspace.query("bean_conditions")
+    presence = _presence(workspace, KAFKA)
+    conditional = [
+        r
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + KAFKA and r["kind"] is not None
+    ]
     workspace.close()
 
-    rows = [r for r in beans if r["bean"] == _MODULE + KAFKA]
-    assert {(r["environment"], r["holds"], r["resolution"]) for r in rows} == {
-        ("default", "unresolved", "unresolved"),
-        ("prod", "unresolved", "unresolved"),
+    assert presence == {"default": ("true", "resolved"), "prod": ("true", "resolved")}
+    assert {(r["environment"], r["holds"], r["resolution"]) for r in conditional} == {
+        ("default", "false", "resolved"),
+        ("prod", "true", "resolved"),
     }
-    [evidence] = {str(r["evidence"]) for r in rows}
-    assert "scanned" in evidence
-    assert _factory_symbol(MESSAGING, "publisher", PUBLISHER) in evidence
 
 
-def test_a_class_also_constructed_outside_any_factory_is_unresolved(tmp_path: Path):
-    """The other half of the same rule: a plain `new KafkaOrderPublisher()` in an ordinary
-    method runs that class's code whether or not the conditional factory's bean exists."""
+def test_a_plain_new_outside_any_factory_leaves_the_class_open_where_the_factory_fails(
+    tmp_path: Path,
+):
+    """A plain `new KafkaOrderPublisher()` in an ordinary method runs that class's code on a
+    path no bean decides. Where the conditional factory holds (`prod`) the class exists
+    regardless; where it fails (`default`) whether its code runs is not known — `unresolved`,
+    the evidence naming the method that constructs it."""
     plain = ORDERS + "Fallback#"
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
@@ -402,12 +468,13 @@ def test_a_class_also_constructed_outside_any_factory_is_unresolved(tmp_path: Pa
         *_method(plain, "make", PUBLISHER, [], [KAFKA]),
     ]
     workspace = _resolved(tmp_path, facts)
-    beans = workspace.query("bean_conditions")
+    rows = [r for r in workspace.query("bean_presence") if r["bean"] == _MODULE + KAFKA]
     workspace.close()
 
-    rows = [r for r in beans if r["bean"] == _MODULE + KAFKA]
-    assert {(r["holds"], r["resolution"]) for r in rows} == {("unresolved", "unresolved")}
-    assert all(_factory_symbol(plain, "make", PUBLISHER) in str(r["evidence"]) for r in rows)
+    by = {str(r["environment"]): r for r in rows}
+    assert (by["prod"]["holds"], by["prod"]["resolution"]) == ("true", "resolved")
+    assert (by["default"]["holds"], by["default"]["resolution"]) == ("unresolved", "unresolved")
+    assert _factory_symbol(plain, "make", PUBLISHER) in str(by["default"]["evidence"])
 
 
 def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_path: Path):

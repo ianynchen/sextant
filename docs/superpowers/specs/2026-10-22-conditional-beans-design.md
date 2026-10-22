@@ -75,9 +75,8 @@ bean | bean_kind | kind | expression | environment | holds | resolution | eviden
 * `bean` is the class symbol (the registered type) — for a `@Bean` factory, the class it
   constructs; `bean_kind` is `class` (a condition on the class), `factory` (a condition on
   the `@Bean` method), or `configuration` (inherited from the enclosing configuration class).
-  A class constructed by a conditional factory AND anywhere else without one is written
-  with `resolution = unresolved` and that reason in `evidence` — never as conditional, never
-  as unconditional.
+  A class registered more than one way exists wherever any of its routes registers it —
+  §2a, and the `bean_presence` view.
 * `kind`, `expression`, `holds`, `resolution`: exactly PR #61's encoding (`profile`,
   `property`, `other`; CP-42, CP-43; `other` verbatim and `unresolved`).
 * Rows (endpoints in both directions, scheduled work, error handlers) and call-edge
@@ -101,8 +100,18 @@ So a `bean_conditions` row names the class whose code runs: a conditional scanne
 (`bean_kind = class`), or the class a conditional `@Bean` method constructs and returns —
 the constructed classes assignable to the method's declared return type (`type_hierarchy`),
 which is a structural rule, never a model of what a builder does (`bean_kind = factory` or
-`configuration`). A class constructed by a conditional factory and ALSO registered another way
-(scanned, or constructed by an unconditional factory) is written `unresolved` with that reason.
+`configuration`).
+
+**A class registered more than one way exists wherever ANY of its routes registers it** (ruled
+2026-10-22, replacing "registered two ways → `unresolved`"; as built): each scan, import or
+`@Bean` registers its own definition, so the verdict is OR across routes and AND across one
+route's conditions. Every route of a class with at least one conditional route is written to
+`bean_conditions` — conditional routes as their evaluated condition rows, an unconditional bean
+route (a stereotype class or `@Bean` with no condition) as a condition-less row holding `true`,
+a plain `new` outside any `@Bean` body as a condition-less `constructed` row, `unresolved` — and
+the view `bean_presence(bean, environment, holds, resolution, evidence)` folds them: `true`
+where any route holds, `false` where every route fails, `unresolved` otherwise (a plain `new`
+leaves the class `unresolved` wherever no other route decides `true`).
 
 **Framework knowledge is data.** PR #61 declared the condition annotations on the two HTTP
 catalogs (`matches.mapping.conditions`); that was the special case. They move to the Spring

@@ -530,9 +530,12 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- returns it) or `configuration` (on that method's configuration class); `via` is that
 -- method, NULL for `class`. `kind`, `expression` and `holds` are the conditions pass's
 -- encoding (CP-42, CP-43): `profile`, `property` or `other`, the expression JSON typed per
--- kind, and the framework's own verdict for that environment or `unresolved`. A class
--- registered more than one way is `unresolved`, its `evidence` naming the routes (CP-44).
--- Replaced whole per resolve, as `endpoint_metadata` is.
+-- kind, and the framework's own verdict for that environment or `unresolved`. A route with
+-- NO condition — an unconditional scan or factory of a class that also has a conditional
+-- route, or a plain `new` of it outside any factory (`bean_kind = constructed`) — is one row
+-- per environment with `kind` NULL: `true`, or `unresolved` for a plain `new`. Written only
+-- for a class with at least one conditional route. Replaced whole per resolve, as
+-- `endpoint_metadata` is.
 CREATE TABLE IF NOT EXISTS bean_conditions (
     bean        TEXT,
     bean_kind   TEXT,
@@ -1209,4 +1212,38 @@ SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.
        b.environment, b.holds, b.resolution, b.evidence, e.caller
 FROM endpoints e
 JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
-JOIN bean_conditions b ON b.bean = s.enclosing;
+JOIN bean_conditions b ON b.bean = s.enclosing
+WHERE b.kind IS NOT NULL;
+
+-- Where each conditional bean EXISTS, per environment (ruled 2026-10-22): a class exists
+-- wherever ANY of its registration routes registers it — OR across routes, AND across one
+-- route's conditions — because each scan, import or factory registers its own definition.
+-- A route is a bean's rows under one `via` (NULL for the scanned class). A route holds
+-- where every condition of it holds, fails where any fails, and is `unresolved` otherwise;
+-- a condition-less bean route holds everywhere and a plain `new` is `unresolved`. The bean
+-- holds where any route holds, fails where every route fails, and is `unresolved` otherwise,
+-- its evidence then naming what left it open.
+CREATE OR REPLACE VIEW bean_presence AS
+WITH routes AS (
+    SELECT bean, coalesce(via, '') AS route, environment,
+           CASE WHEN bool_or(holds = 'false') THEN 'false'
+                WHEN bool_and(holds = 'true') THEN 'true'
+                ELSE 'unresolved' END AS holds,
+           string_agg(DISTINCT evidence, '; ' ORDER BY evidence)
+               FILTER (WHERE evidence <> 'compiler') AS reason
+    FROM bean_conditions
+    GROUP BY bean, coalesce(via, ''), environment
+)
+SELECT bean, environment,
+       CASE WHEN bool_or(holds = 'true') THEN 'true'
+            WHEN bool_and(holds = 'false') THEN 'false'
+            ELSE 'unresolved' END AS holds,
+       CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'resolved'
+            ELSE 'unresolved' END AS resolution,
+       CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'compiler'
+            ELSE coalesce(
+                string_agg(DISTINCT reason, '; ' ORDER BY reason),
+                'a condition this analysis does not evaluate'
+            ) END AS evidence
+FROM routes
+GROUP BY bean, environment;
