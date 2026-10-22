@@ -49,7 +49,7 @@
 | `src/sextant/egress/export/manifest.py` | carries the new metadata fields into the manifest untouched |
 | `src/sextant/application/stages/analyze.py` | hands `catalog_hash`, `catalogs_run`, `feeds` to `write_metadata` |
 | `src/sextant/api.py` | `AnalyzeOptions`, `DiffOptions`, `DiffResult`, `diff()`, `observability()`, `query()` |
-| `src/sextant/cli/app.py` | `module diff <a> <b> [--out] [--format json|text] [--allow-producer-change]` |
+| `src/sextant/cli/app.py` | `module diff <a> <b> [--out] [--format json or text] [--allow-producer-change]` |
 | `scripts/field_check.py`, `scripts/field-expectations/spring-petclinic-rest.json` | the seventh pin: `diff_against` an older commit |
 | `scripts/guard_check.py` | guards `boundary.*`, `query.*` |
 | docs | D01 (§3 vocabulary, §7 stamp row), D05 (`metadata.json` fields), D06 (manifest `observability`), M00 (`module diff`), M09 (six questions shipped), `PROJECT.md`, `REQUIREMENTS.md` (FR-10, FR-21–24), register, CHANGELOG |
@@ -233,7 +233,7 @@ def test_entries_are_sorted_by_kind_change_identity(…); def test_to_json_has_e
 - Test: `tests/api/test_facade.py`, `tests/cli/test_app.py`
 
 **Interfaces:**
-- Produces: `@dataclass(frozen=True) class DiffOptions(allow_producer_change: bool = False)`; `@dataclass(frozen=True) class DiffResult(diff: Diff, written: Path | None)`; `def diff(a: Path, b: Path, *, options: DiffOptions = DiffOptions(), out: Path | None = None) -> DiffResult` — writes `diff.json` to `out` when given; CLI `sextant module diff A B [--out PATH] [--format json|text] [--allow-producer-change]`, JSON to stdout by default, `click.ClickException` on `DiffRefused`.
+- Produces: `@dataclass(frozen=True) class DiffOptions(allow_producer_change: bool = False)`; `@dataclass(frozen=True) class DiffResult(diff: Diff, written: Path | None)`; `def diff(a: Path, b: Path, *, options: DiffOptions = DiffOptions(), out: Path | None = None) -> DiffResult` — writes `diff.json` to `out` when given; CLI `sextant module diff A B [--out PATH] [--format json or text] [--allow-producer-change]`, JSON to stdout by default, `click.ClickException` on `DiffRefused`.
 
 - [ ] **Step 1: Write the failing tests**
 
