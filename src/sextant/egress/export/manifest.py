@@ -91,5 +91,12 @@ def write_manifest(
         "uncovered": metadata.get("uncovered", []),
         "skipped_catalogs": metadata.get("skipped_catalogs", []),
     }
+    # Copied, never recomputed, and only where `analyze` wrote them: metadata from before
+    # the map existed has neither, and a placeholder would read as a measurement. The counts
+    # travel with the map because `api.observability` computes a bundle's map from the
+    # manifest alone, and without `catalogs_run` that would be the degraded one.
+    for name in ("catalogs_run", "observability"):
+        if name in metadata:
+            document[name] = metadata[name]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

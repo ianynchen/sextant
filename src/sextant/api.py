@@ -116,6 +116,7 @@ from pydantic import ValidationError
 
 from sextant.agents import AGENT_REGISTRY, DEFAULT_MAX_TURNS
 from sextant.application.boundary.diff import Diff, DiffRefused, diff_sources
+from sextant.application.boundary.observability import ObservabilityMap, observability_of
 from sextant.application.boundary.source import BoundarySource, NotABoundarySource
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
@@ -1773,3 +1774,27 @@ def diff(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(found.to_json(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return DiffResult(diff=found, written=out)
+
+
+def observability(path: Path) -> ObservabilityMap:
+    """Which boundary kinds this analysis could see, per kind and with the reasons — the
+    library equivalent of reading `observability` out of `metadata.json` (FR-23). `path` is
+    a module, its `.sextant` workspace, or an exported bundle directory.
+
+    The map is computed from the measurements the analysis recorded (a workspace's
+    `metadata.json`, or a bundle's `manifest.json`, which carries the same keys), so a side
+    written before the map existed gets the labelled degraded map, never an error.
+
+    Raises `NotAnalyzedError` where `path` holds neither a bundle nor a workspace."""
+    if (path / "manifest.json").is_file():
+        document = path / "manifest.json"
+    else:
+        found = [one / "metadata.json" for one in (path, path / ".sextant")]
+        document = next((one for one in found if one.is_file()), found[0])
+    try:
+        recorded = json.loads(document.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as refused:
+        raise NotAnalyzedError(
+            f"no analysis found at {path} — run `sextant module analyze {path}` first."
+        ) from refused
+    return observability_of(recorded)

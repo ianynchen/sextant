@@ -7,6 +7,7 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from sextant.application.boundary.observability import observability_of
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
@@ -91,6 +92,22 @@ def write_metadata(
         if direction in ("outbound", "both"):
             outbound[protocol] = outbound.get(protocol, 0) + 1
 
+    # The two shares the map's attribute verdicts read (spec 2026-10-22 §4a), measured off
+    # the same rows counted above: the ladder's `unresolved` formats over every row, and the
+    # outbound rows with no peer over every outbound row (`both` counts on the outbound side).
+    coverage = dict(report.coverage)
+    coverage["format_unresolved"] = sum(
+        1 for endpoint in report.endpoints if endpoint.get("format_resolution") == "unresolved"
+    )
+    coverage["endpoints_total"] = len(report.endpoints)
+    outbound_rows = [
+        endpoint for endpoint in report.endpoints if endpoint["direction"] in ("outbound", "both")
+    ]
+    coverage["peer_unresolved"] = sum(
+        1 for endpoint in outbound_rows if endpoint.get("peer") is None
+    )
+    coverage["outbound_total"] = len(outbound_rows)
+
     document: dict[str, object] = {
         "schema_version": GRAPH_SCHEMA_VERSION,
         # The vocabulary generation (FR-21) the boundary entries a reader derives from
@@ -164,7 +181,7 @@ def write_metadata(
                 for one in scanners
             ],
         },
-        "coverage": report.coverage,
+        "coverage": coverage,
         # The profiles this module resolved (D06 §3 "environments" — the
         # sibling field the bundle manifest carries), sorted rather than
         # left in `resolved_config`'s own environment-then-key order: this
@@ -236,5 +253,8 @@ def write_metadata(
     # it. Absent, never a placeholder, where a caller did not compute one.
     if catalog_hash is not None:
         document["catalog_hash"] = catalog_hash
+    # Last, computed from the dictionary as written (spec 2026-10-22 §4): the map is a pure
+    # function of these measurements, and `export` copies it rather than re-deriving it.
+    document["observability"] = observability_of(document).to_json()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from sextant.application.boundary.vocabulary import KINDS
 from sextant.cli.app import cli
 from sextant.egress.export.manifest import write_manifest
 
@@ -228,3 +229,91 @@ def test_export_recomputes_the_catalog_hash_only_for_a_workspace_analysed_before
     assert result.exit_code == 0, result.output
     manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
     assert manifest["producer"]["catalog_hash"] == recorded
+
+
+def test_metadata_and_manifest_carry_the_map(analyzed_workspace_copy: Path):
+    """`analyze` writes the map into `metadata.json` from the measurements it has in hand
+    (spec 2026-10-22 §4); `export` COPIES it, so a sentinel planted in `metadata.json` must
+    come out of the manifest unchanged — an exporter that recomputed would not carry it."""
+    metadata_path = analyzed_workspace_copy / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    observability = metadata["observability"]
+    assert observability["boundary_vocabulary_version"] == 1
+    # `metadata.json` is written with sorted keys, so the file cannot hold registry order.
+    assert set(observability["kinds"]) == set(KINDS)
+    # `spring-rsocket` is skipped on the fixture and feeds `endpoint`; other catalogs ran.
+    endpoint = observability["kinds"]["endpoint"]
+    assert endpoint["verdict"] == "partial"
+    assert any("spring-rsocket" in reason for reason in endpoint["reasons"])
+    assert observability["kinds"]["boundary-property"] == {"verdict": "observable", "reasons": []}
+    assert observability["stated_boundaries"] == metadata["gaps"]
+    # The two counts the attribute verdicts read are measured off the rows, beside the rest
+    # of `coverage`, and the map is computed from them.
+    coverage = metadata["coverage"]
+    assert 0 < coverage["format_unresolved"] <= coverage["endpoints_total"]
+    assert observability["attributes"]["endpoint"]["format"] == {
+        "verdict": "partial",
+        "reasons": [
+            f"{coverage['format_unresolved']} of {coverage['endpoints_total']} formats unresolved"
+        ],
+    }
+
+    observability["stated_boundaries"] = ["planted-sentinel"]
+    metadata_path.write_text(json.dumps(metadata))
+    result = CliRunner().invoke(
+        cli,
+        ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
+    assert manifest["observability"] == observability
+    assert manifest["catalogs_run"] == metadata["catalogs_run"]
+
+
+def test_the_manifest_copies_the_map_and_the_catalog_counts_it_was_computed_from(tmp_path: Path):
+    metadata = {
+        "module": {"id": "com.acme:orders-service", "kind": "service", "languages": ["java"]},
+        "provenance": {"commit": "a3f91c", "sextant_version": "0.1.0"},
+        "coverage": {"documents": 4, "partial_documents": 0},
+        "gaps": [],
+        "uncovered": [],
+        "skipped_catalogs": [],
+        "catalogs_run": {"endpoint": 2},
+        "observability": {"kinds": {"endpoint": {"verdict": "observable", "reasons": []}}},
+    }
+    write_manifest(
+        tmp_path / "manifest.json",
+        metadata,
+        source={"repo": "r", "commit": "a3f91c"},
+        catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
+        module_commit="a3f91c",
+        tables=[],
+        facts_files=0,
+    )
+    written = json.loads((tmp_path / "manifest.json").read_text())
+    assert written["observability"] == metadata["observability"]
+    assert written["catalogs_run"] == {"endpoint": 2}
+
+
+def test_a_manifest_from_metadata_without_a_map_carries_no_map(tmp_path: Path):
+    """Metadata written before the map existed has neither key; the manifest then has
+    neither, rather than a placeholder — `api.observability` computes the labelled degraded
+    map from what is there."""
+    metadata = {
+        "module": {"id": "com.acme:orders-service", "kind": "service", "languages": ["java"]},
+        "provenance": {"commit": "a3f91c", "sextant_version": "0.1.0"},
+        "coverage": {"documents": 4, "partial_documents": 0},
+    }
+    write_manifest(
+        tmp_path / "manifest.json",
+        metadata,
+        source={"repo": "r", "commit": "a3f91c"},
+        catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
+        module_commit="a3f91c",
+        tables=[],
+        facts_files=0,
+    )
+    written = json.loads((tmp_path / "manifest.json").read_text())
+    assert "observability" not in written and "catalogs_run" not in written

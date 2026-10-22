@@ -566,3 +566,47 @@ def test_diff_of_two_stamps_that_cannot_be_compared_raises_diffrefusederror(
         api.diff(rendered_root, stale)
 
     assert "graph_schema_version" in str(refused.value)
+
+
+# --------------------------------------------------------------------------
+# observability
+# --------------------------------------------------------------------------
+
+
+def test_observability_of_a_workspace_is_the_map_analyze_wrote(rendered_root: Path):
+    stored = json.loads((rendered_root / ".sextant" / "metadata.json").read_text("utf-8"))
+
+    result = api.observability(rendered_root)
+
+    assert isinstance(result, api.ObservabilityMap)
+    assert result.to_json() == stored["observability"]
+    assert api.observability(rendered_root / ".sextant").to_json() == stored["observability"]
+    assert set(result.kinds) == set(KINDS)
+
+
+def test_observability_reads_a_bundle_as_well_as_a_workspace(rendered_root: Path):
+    stored = json.loads((rendered_root / ".sextant" / "metadata.json").read_text("utf-8"))
+    bundle = api.export(rendered_root).bundle
+
+    result = api.observability(bundle)
+
+    assert result.to_json() == stored["observability"]
+
+
+def test_observability_of_a_workspace_without_the_map_is_the_labelled_degraded_one(
+    rendered_root: Path,
+):
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    del metadata["catalogs_run"], metadata["observability"]
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = api.observability(rendered_root)
+
+    assert "predates boundary vocabulary 1" in result.kinds["endpoint"].reasons[0]
+    assert result.kinds["endpoint"].verdict == "partial"
+
+
+def test_observability_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError):
+        api.observability(tmp_path)
