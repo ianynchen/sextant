@@ -155,3 +155,76 @@ def test_metadata_and_manifest_carry_the_vocabulary_version(analyzed_workspace_c
     assert result.exit_code == 0, result.output
     manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
     assert manifest["producer"]["boundary_vocabulary_version"] == 1
+
+
+def test_metadata_carries_the_catalog_hash_the_exporter_then_copies(
+    analyzed_workspace_copy: Path,
+):
+    """`analyze` records the hash of the framework knowledge it ran with, because the diff
+    (spec 2026-10-22 §3d) reads it when the catalogs are no longer in hand; `export` COPIES it
+    into `producer`. The sentinel written into `metadata.json` is not any hash of the
+    shipped catalogs, so an exporter that recomputed would fail here."""
+    metadata_path = analyzed_workspace_copy / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["catalog_hash"].startswith("sha256:")
+    metadata["catalog_hash"] = "sha256:recorded-at-analyze"
+    metadata_path.write_text(json.dumps(metadata))
+    result = CliRunner().invoke(
+        cli,
+        ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
+    assert manifest["producer"]["catalog_hash"] == "sha256:recorded-at-analyze"
+
+
+def test_each_skipped_catalog_names_the_kinds_it_would_have_fed(analyzed_workspace_copy: Path):
+    """The map's `not-observable` needs to know what a skipped catalog would have fed, and a
+    bundle's reader has no catalogs. `spring-rsocket` is skipped on the fixture; it is an
+    inbound `annotation_driven` catalog naming a shape model, so it feeds the endpoint and
+    data-contract kinds, in registry order (not alphabetical)."""
+    metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
+    rsocket = next(s for s in metadata["skipped_catalogs"] if s["catalog_id"] == "spring-rsocket")
+    assert rsocket["feeds"] == ["endpoint", "data-contract"]
+    assert all("feeds" in skipped for skipped in metadata["skipped_catalogs"])
+
+
+def test_the_manifest_carries_feeds_with_the_skipped_catalogs(analyzed_workspace_copy: Path):
+    result = CliRunner().invoke(
+        cli,
+        ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
+    rsocket = next(s for s in manifest["skipped_catalogs"] if s["catalog_id"] == "spring-rsocket")
+    assert rsocket["feeds"] == ["endpoint", "data-contract"]
+
+
+def test_catalogs_run_counts_per_kind(analyzed_workspace_copy: Path):
+    """How many catalogs that RAN feed each kind. `module` and `boundary-property` are not
+    catalog-fed, so they never appear; a kind nothing ran for does not appear either."""
+    metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
+    run = metadata["catalogs_run"]
+    assert run["schedule"] == 1
+    assert run["endpoint"] > 5
+    assert "module" not in run and "boundary-property" not in run
+    assert all(count > 0 for count in run.values())
+
+
+def test_export_recomputes_the_catalog_hash_only_for_a_workspace_analysed_before_it_was_recorded(
+    analyzed_workspace_copy: Path,
+):
+    """A workspace analysed before `analyze` recorded `catalog_hash` has no such key. The
+    exporter then falls back to hashing the catalogs it has now, as it always did — a
+    labelled legacy path, not the normal one."""
+    metadata_path = analyzed_workspace_copy / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    recorded = metadata.pop("catalog_hash")
+    metadata_path.write_text(json.dumps(metadata))
+    result = CliRunner().invoke(
+        cli,
+        ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
+    assert manifest["producer"]["catalog_hash"] == recorded

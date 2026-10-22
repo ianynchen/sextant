@@ -4318,7 +4318,10 @@ def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missin
     skipped = derive_endpoints(workspace, [catalog], capabilities=set())
     workspace.close()
 
-    assert skipped == [SkippedCatalog("spring-web", ("annotation_args",))]
+    # Re-pinned 2026-10-22: a `SkippedCatalog` also carries the kinds the catalog would have
+    # fed (`feeds`, spec 2026-10-22 §4b), so equality names them. This hand-built catalog is
+    # inbound and carries no shape blocks, so it feeds `endpoint` alone.
+    assert skipped == [SkippedCatalog("spring-web", ("annotation_args",), ("endpoint",))]
 
 
 def test_derive_endpoints_sql_names_no_framework_when_read():
@@ -6105,7 +6108,10 @@ def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
     )
     workspace.close()
 
-    assert skipped == [SkippedCatalog("spring-ws-template", ("annotation_args",))]
+    # Re-pinned 2026-10-22, same cause: equality now includes `feeds` (outbound, shape model).
+    assert skipped == [
+        SkippedCatalog("spring-ws-template", ("annotation_args",), ("dependency", "data-contract"))
+    ]
 
 
 # --- 2O Task 7: the messaging and annotation catalogs, proved against the

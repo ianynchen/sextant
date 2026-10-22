@@ -679,6 +679,8 @@ def _run_analyze(
             descriptors_not_interpreted=result.descriptors_not_interpreted,
             libraries_not_scanned=result.libraries_not_scanned,
             detect_notes=result.notes,
+            # Recorded here, where the catalogs this run used are in hand; `export` copies it.
+            catalog_hash=_catalog_hash(catalogs_dir()),
         )
     finally:
         workspace.close()
@@ -924,7 +926,12 @@ def _reconstructed_report(
         dependency_source_reason=module_info.get("dependency_source_reason"),
     )
     skipped_catalogs = [
-        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
+        SkippedCatalog(
+            skipped["catalog_id"],
+            tuple(skipped["missing_capabilities"]),
+            # Absent from a `metadata.json` written before 2026-10-22; nothing was recorded.
+            tuple(skipped.get("feeds", ())),
+        )
         for skipped in metadata.get("skipped_catalogs", [])
     ]
     report = ResolveReport(
@@ -1530,7 +1537,9 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
         bundle / "manifest.json",
         metadata,
         source={"repo": _remote_of(path), "commit": commit},
-        catalog_hash=_catalog_hash(catalogs_dir()),
+        # Copied from what `analyze` recorded. Recomputed ONLY for a workspace analysed before
+        # `analyze` recorded it, whose metadata has no such key.
+        catalog_hash=metadata.get("catalog_hash") or _catalog_hash(catalogs_dir()),
         redaction_set_hash=redactor.rule_set_hash,
         module_commit=_module_commit_of(path),
         tables=tables,

@@ -3,9 +3,11 @@
 Adding a style is an engine function and a registry entry, and `_engine_for`
 refuses any catalog naming a style that is not in it."""
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sextant.application.boundary.vocabulary import kinds_fed_by
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
@@ -95,6 +97,22 @@ _STAGED = "annotation_driven"
 class SkippedCatalog:
     catalog_id: str
     missing_capabilities: tuple[str, ...]
+    # The boundary kinds this catalog would have fed had it run (spec 2026-10-22 §4b),
+    # recorded here because the catalog is in hand and a bundle's reader will not have it.
+    feeds: tuple[str, ...] = ()
+
+
+def _feeds(catalog: Catalog) -> tuple[str, ...]:
+    """What `kinds_fed_by` says of this catalog. `Catalog` carries a `shape_model`'s three
+    blocks resolved, not the model's name, so "names a shape model" is read as "has any of
+    the three". A catalog could declare the blocks itself instead of naming a model, and
+    would then feed `data-contract` all the same, since it expands shapes; none shipped
+    does, so today the two readings select the same 70 catalogs."""
+    return kinds_fed_by(
+        catalog.style,
+        catalog.direction,
+        bool(catalog.serialization or catalog.nullability or catalog.known_types),
+    )
 
 
 def derive_endpoints(
@@ -102,6 +120,16 @@ def derive_endpoints(
 ) -> list[SkippedCatalog]:
     """Runs each catalog whose required capabilities are met, and reports the
     rest. A skipped catalog is never silent (M04, FR-17)."""
+    return derive_endpoints_with_runs(workspace, catalogs, capabilities)[0]
+
+
+def derive_endpoints_with_runs(
+    workspace: Workspace, catalogs: list[Catalog], capabilities: set[str]
+) -> tuple[list[SkippedCatalog], dict[str, int]]:
+    """`derive_endpoints`, and also how many catalogs that RAN feed each kind — the other
+    half of what the observability map needs (spec 2026-10-22 §4b): `not-observable` is
+    "nothing that feeds this kind ran", which only the run count can say. Only kinds with
+    a count appear."""
     # Every style is resolved before anything is written. A catalog naming an
     # engine that does not exist is a broken file, and a broken file must not
     # leave a half-emptied endpoints table behind it.
@@ -164,7 +192,7 @@ def derive_endpoints(
     for catalog, engine in ordered:
         missing = missing_capabilities(catalog, capabilities)
         if missing:
-            skipped.append(SkippedCatalog(catalog.id, missing))
+            skipped.append(SkippedCatalog(catalog.id, missing, _feeds(catalog)))
             continue
         # The second gate (2O design §2a, ruling R9), reported through the
         # same channel as the first: a style whose framework rule is
@@ -174,7 +202,7 @@ def derive_endpoints(
         # property of the style rather than of every catalog.
         unmet = unmet_dependency(workspace, catalog)
         if unmet is not None:
-            skipped.append(SkippedCatalog(catalog.id, (unmet,)))
+            skipped.append(SkippedCatalog(catalog.id, (unmet,), _feeds(catalog)))
             continue
         # The third gate (B/C Task 10 fix round 1): `detect.superseded_by`'s
         # negative twin of `detect.coordinates`. Two catalogs may read the
@@ -188,7 +216,9 @@ def derive_endpoints(
         # catalog must not run at all rather than win — or lose — that race.
         superseded = _superseded_by(workspace, catalog)
         if superseded is not None:
-            skipped.append(SkippedCatalog(catalog.id, (f"superseded by {superseded}",)))
+            skipped.append(
+                SkippedCatalog(catalog.id, (f"superseded by {superseded}",), _feeds(catalog))
+            )
             continue
         running.append((catalog, engine))
     # Both gates are asked before any engine runs, so that the staged style
@@ -232,7 +262,8 @@ def derive_endpoints(
     # a path this module serves collided with the same path anywhere else in the world.
     # The two rows now stand, and `record_self_exchange` asks the question instead.
     workspace.derive("borrowed_endpoints_drop")
-    return skipped
+    ran = Counter(kind for catalog, _ in running for kind in _feeds(catalog))
+    return skipped, dict(ran)
 
 
 def _superseded_by(workspace: Workspace, catalog: Catalog) -> str | None:

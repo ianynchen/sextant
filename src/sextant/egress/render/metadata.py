@@ -71,6 +71,7 @@ def write_metadata(
     descriptors_not_interpreted: tuple[str, ...] = (),
     libraries_not_scanned: tuple[str, ...] = (),
     detect_notes: tuple[str, ...] = (),
+    catalog_hash: str | None = None,
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -220,10 +221,20 @@ def write_metadata(
             {
                 "catalog_id": skipped.catalog_id,
                 "missing_capabilities": list(skipped.missing_capabilities),
+                # What the skipped catalog would have fed (spec 2026-10-22 §4b): the map
+                # reads this when the catalogs are not in hand.
+                "feeds": list(skipped.feeds),
             }
             for skipped in report.skipped_catalogs
         ],
+        # How many catalogs that ran feed each kind; a kind nothing ran for is absent.
+        "catalogs_run": dict(sorted(report.catalogs_run.items())),
         "query": ["sextant module render"],
     }
+    # The identity of the framework knowledge this run used (spec 2026-10-22 §3d), recorded
+    # here because the diff reads it long after the catalogs are gone, and `export` copies
+    # it. Absent, never a placeholder, where a caller did not compute one.
+    if catalog_hash is not None:
+        document["catalog_hash"] = catalog_hash
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
