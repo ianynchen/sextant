@@ -5,6 +5,7 @@ from typing import TypeVar, cast
 
 import duckdb
 
+from sextant.application.boundary.source import STAMPS, NotABoundarySource
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
 
@@ -723,6 +724,76 @@ _NAMED_QUERIES = {
         FROM error_handlers
         ORDER BY advice, handler, exception, status, response_shape,
                  declared_by, scope::VARCHAR, resolution, evidence, catalog_id
+    """,
+    # Spec 2026-10-22-boundary-vocabulary-and-diff §2: one query per boundary kind, read by
+    # `application/boundary/source.py` over a workspace and over a bundle's Parquet alike,
+    # so each is plain SELECT over the exported tables' columns. One row per table row —
+    # grouping on identity is the reader's, because it must treat NULL as equal to NULL
+    # and SQL equality does not.
+    #
+    # The ORDER BY is identity, then every attribute, then the evidence columns: the reader
+    # takes the first row of a group for the group's scalar attributes, and an order that
+    # put a handler symbol ahead of them would make a moved controller change the answer.
+    # The `direction` test is the same text as `Kind.where` in the vocabulary (a test pins
+    # it): a `both` row is one wire identity on each side.
+    "boundary_endpoint": """
+        SELECT protocol, method, path, request_shape, response_shape, consumes, produces,
+               format, resolution, direction, handler, caller, catalog_id
+        FROM endpoints WHERE direction IN ('inbound', 'both')
+        ORDER BY protocol, method, path, request_shape, response_shape, consumes, produces,
+                 format, resolution, direction, handler, caller, catalog_id
+    """,
+    "boundary_dependency": """
+        SELECT protocol, method, path, peer, request_shape, response_shape, format,
+               resolution, direction, handler, caller, catalog_id
+        FROM endpoints WHERE direction IN ('outbound', 'both')
+        ORDER BY protocol, method, path, peer, request_shape, response_shape, format,
+                 resolution, direction, handler, caller, catalog_id
+    """,
+    "boundary_contract": """
+        SELECT shape_id, content_hash, origin_tier FROM shapes
+        ORDER BY shape_id, content_hash, origin_tier
+    """,
+    "boundary_property": """
+        SELECT key, environment, value, unresolved_reason, source FROM resolved_config
+        ORDER BY key, environment, value, unresolved_reason, source
+    """,
+    "boundary_schedule": """
+        SELECT handler, trigger, expression, resolution, catalog_id FROM scheduled_work
+        ORDER BY handler, trigger, expression, resolution, catalog_id
+    """,
+    "boundary_error_handler": """
+        SELECT handler, exception, advice, scope, status, response_shape, catalog_id
+        FROM error_handlers
+        ORDER BY handler, exception, advice, status, response_shape, scope::VARCHAR,
+                 catalog_id
+    """,
+    # The documents that declare the symbols the boundary rows name — every handler and
+    # caller an endpoint row carries, and the handler of a schedule and of an error
+    # handler — so the reader learns each row's documents and their `origin_tier` in one
+    # read rather than one per row. `symbols` is already limited to the documents the
+    # multi-release selection kept. A symbol declared in two documents is two rows.
+    "boundary_symbol_documents": """
+        SELECT DISTINCT s.symbol AS symbol, d.relative_path, d.origin_tier
+        FROM symbols s JOIN documents d ON d.document_id = s.document_id
+        WHERE s.symbol IN (
+            SELECT handler FROM endpoints UNION SELECT caller FROM endpoints
+            UNION SELECT handler FROM scheduled_work UNION SELECT handler FROM error_handlers
+        )
+        ORDER BY s.symbol, d.relative_path, d.origin_tier
+    """,
+    # A shape's declaring document. The shape id is the symbol with its module prefix
+    # (`<scanner> <build> <coordinates> <version> `) removed, and the prefix holds the only
+    # spaces a symbol has, so the last space-separated token of the symbol IS the shape id —
+    # an equality, which the engine hashes, where a suffix test would be a scan per shape.
+    # A declared schema's bare name matches no symbol and has no row here, which is right:
+    # no class file declares it.
+    "boundary_shape_documents": """
+        SELECT DISTINCT sh.shape_id AS shape_id, d.relative_path, d.origin_tier
+        FROM shapes sh
+        JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = sh.shape_id
+        JOIN documents d ON d.document_id = s.document_id
+        ORDER BY sh.shape_id, d.relative_path, d.origin_tier
     """,
     # 2Q `I1`'s root set — the methods a trace starts at, with the kind of
     # thing that starts it and the wire address that reaches it. Ordered on the
@@ -1519,6 +1590,210 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _run_named(
+    connection: duckdb.DuckDBPyConnection, name: str, params: dict[str, object]
+) -> list[dict[str, object]]:
+    cursor = connection.execute(_NAMED_QUERIES[name], list(_bound(params).values()) or None)
+    columns = [column[0] for column in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    for column in _DECODED_COLUMNS.get(name, ()):
+        for row in rows:
+            text = row[column]
+            row[column] = None if text is None else json.loads(str(text))
+    return rows
+
+
+# The tables the boundary queries read (spec 2026-10-22 §2): the ten a bundle ships as
+# `graph/<name>.parquet` and a workspace holds as tables or views of the same name. The set
+# the `boundary_*` queries above name and nothing else, so a read-only open creates only
+# what the diff can ask for.
+READ_ONLY_TABLES = (
+    "documents",
+    "endpoint_conditions",
+    "endpoint_metadata",
+    "endpoints",
+    "error_handlers",
+    "resolved_config",
+    "scheduled_work",
+    "shape_fields",
+    "shapes",
+    "symbols",
+)
+
+
+def _sql_string(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+_WORKSPACE_FILE = "workspace.duckdb"
+_LOOKED_FOR = (
+    "a workspace (a directory holding workspace.duckdb and metadata.json, usually "
+    "<module>/.sextant) or a bundle (a directory holding manifest.json and graph/)"
+)
+
+
+def _json_document(directory: Path, name: str) -> dict[str, object]:
+    file = directory / name
+    if not file.is_file():
+        raise NotABoundarySource(directory, f"{name} is missing")
+    return cast(dict[str, object], json.loads(file.read_text(encoding="utf-8")))
+
+
+def _block(document: dict[str, object], *path: str) -> dict[str, object]:
+    for step in path:
+        document = cast(dict[str, object], document.get(step) or {})
+    return document
+
+
+def _required(where: Path, document: dict[str, object], *path: str) -> str:
+    value = _block(document, *path[:-1]).get(path[-1])
+    if value is None:
+        raise NotABoundarySource(where, f"its {path[0]} document names no {'.'.join(path)}")
+    return str(value)
+
+
+def _names(document: dict[str, object], key: str) -> list[str]:
+    return [str(name) for name in cast(list[object], document.get(key, []))]
+
+
+class ReadOnlyGraph:
+    """A workspace or an exported bundle opened to be read and never changed, behind the
+    `GraphReader` port. The named queries run on either unchanged because both are presented
+    as views called what the queries call them."""
+
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        *,
+        module: dict[str, object],
+        commit: str,
+        producer: dict[str, object],
+        environments: list[str],
+        is_bundle: bool,
+        module_root: Path | None,
+    ) -> None:
+        self._connection = connection
+        self._module = module
+        self._commit = commit
+        self._producer = producer
+        self._environments = environments
+        self._is_bundle = is_bundle
+        self._module_root = module_root
+
+    @property
+    def module(self) -> dict[str, object]:
+        return self._module
+
+    @property
+    def commit(self) -> str:
+        return self._commit
+
+    @property
+    def producer(self) -> dict[str, object]:
+        return self._producer
+
+    @property
+    def environments(self) -> list[str]:
+        return self._environments
+
+    @property
+    def is_bundle(self) -> bool:
+        return self._is_bundle
+
+    @property
+    def module_root(self) -> Path | None:
+        return self._module_root
+
+    def query(self, name: str, **params: object) -> list[dict[str, object]]:
+        return _run_named(self._connection, name, params)
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def _views(connection: duckdb.DuckDBPyConnection, definition: Callable[[str], str]) -> None:
+    for table in READ_ONLY_TABLES:
+        connection.execute(f"CREATE VIEW {table} AS {definition(table)}")
+
+
+def open_read_only(path: Path) -> ReadOnlyGraph:
+    """`path` is `<module>/.sextant`, `<module>` (whose `.sextant` is used) or a bundle
+    directory. Nothing is created, migrated or written: a workspace is attached READ_ONLY
+    (which `DuckDbWorkspace.__init__` is not — it runs the schema on every open) and a
+    bundle's Parquet is only read. Raises `NotABoundarySource` for anything else."""
+    if (path / "manifest.json").is_file():
+        return _open_bundle(path)
+    for workspace in (path, path / ".sextant"):
+        if (workspace / _WORKSPACE_FILE).is_file():
+            return _open_workspace(workspace)
+    raise NotABoundarySource(path, f"neither is there {_LOOKED_FOR}")
+
+
+def _open_workspace(workspace: Path) -> ReadOnlyGraph:
+    metadata = _json_document(workspace, "metadata.json")
+    provenance = _block(metadata, "provenance")
+    found: dict[str, object] = {
+        "sextant_version": provenance.get("sextant_version"),
+        "fact_schema_version": provenance.get("fact_schema_version"),
+        "graph_schema_version": metadata.get("schema_version"),
+        "boundary_vocabulary_version": metadata.get("boundary_vocabulary_version"),
+        "catalog_hash": metadata.get("catalog_hash"),
+    }
+    _required(workspace, metadata, "module", "id")
+    commit = _required(workspace, metadata, "provenance", "commit")
+    connection = duckdb.connect()
+    try:
+        # READ_ONLY is the guarantee: the engine refuses any write.
+        connection.execute(
+            f"ATTACH {_sql_string(str(workspace / _WORKSPACE_FILE))} AS w (READ_ONLY)"
+        )
+        _views(connection, lambda table: f"SELECT * FROM w.{table}")
+    except duckdb.Error as error:
+        connection.close()
+        raise NotABoundarySource(workspace, f"it could not be opened read-only: {error}") from error
+    return ReadOnlyGraph(
+        connection,
+        module=_block(metadata, "module"),
+        commit=commit,
+        producer={name: value for name, value in found.items() if value is not None},
+        environments=_names(metadata, "environments"),
+        is_bundle=False,
+        module_root=workspace.parent,
+    )
+
+
+def _open_bundle(bundle: Path) -> ReadOnlyGraph:
+    manifest = _json_document(bundle, "manifest.json")
+    _required(bundle, manifest, "module", "id")
+    commit = _required(bundle, manifest, "source", "commit")
+    missing = [t for t in READ_ONLY_TABLES if not (bundle / "graph" / f"{t}.parquet").is_file()]
+    if missing:
+        raise NotABoundarySource(
+            bundle, f"its graph/ lacks {', '.join(missing)} (exported by an older Sextant)"
+        )
+    producer = _block(manifest, "producer")
+    connection = duckdb.connect()
+    try:
+        _views(
+            connection,
+            lambda table: (
+                f"SELECT * FROM read_parquet({_sql_string(str(bundle / 'graph' / f'{table}.parquet'))})"
+            ),
+        )
+    except duckdb.Error as error:
+        connection.close()
+        raise NotABoundarySource(bundle, f"it could not be opened read-only: {error}") from error
+    return ReadOnlyGraph(
+        connection,
+        module=_block(manifest, "module"),
+        commit=commit,
+        producer={name: producer[name] for name in STAMPS if producer.get(name) is not None},
+        environments=_names(manifest, "environments"),
+        is_bundle=True,
+        module_root=None,
+    )
+
+
 class StaleParticipantError(RuntimeError):
     """`federate` was handed a participant workspace lacking a table the system views read:
     derived by an older Sextant, before that table existed. Named, with the command to run,
@@ -1772,16 +2047,7 @@ class DuckDbWorkspace:
         return value
 
     def _read(self, name: str, params: dict[str, object]) -> list[dict[str, object]]:
-        cursor = self._connection.execute(
-            _NAMED_QUERIES[name], list(_bound(params).values()) or None
-        )
-        columns = [column[0] for column in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        for column in _DECODED_COLUMNS.get(name, ()):
-            for row in rows:
-                text = row[column]
-                row[column] = None if text is None else json.loads(str(text))
-        return rows
+        return _run_named(self._connection, name, params)
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         graph = destination / "graph"
