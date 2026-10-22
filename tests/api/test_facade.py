@@ -715,6 +715,22 @@ def test_observability_of_a_workspace_is_the_map_analyze_wrote(rendered_root: Pa
     assert set(result.kinds) == set(KINDS)
 
 
+def test_observability_returns_the_recorded_map_and_never_re_derives_it(rendered_root: Path):
+    """The map `analyze` recorded is the answer, for a workspace and for the bundle that
+    copied it: a sentinel planted in it comes back unchanged, which a re-derived map would
+    not carry."""
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    metadata["observability"]["stated_boundaries"] = ["planted-sentinel"]
+    metadata["observability"]["kinds"]["schedule"] = {"verdict": "partial", "reasons": ["planted"]}
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert api.observability(rendered_root).to_json() == metadata["observability"]
+    assert (
+        api.observability(api.export(rendered_root).bundle).to_json() == metadata["observability"]
+    )
+
+
 def test_observability_reads_a_bundle_as_well_as_a_workspace(rendered_root: Path):
     stored = json.loads((rendered_root / ".sextant" / "metadata.json").read_text("utf-8"))
     bundle = api.export(rendered_root).bundle

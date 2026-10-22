@@ -649,6 +649,30 @@ conditional controller.
 **Closes** when the config layer publishes the module's environments as a fact of its own
 (the profile files it saw, `default` included) and both the pass and the document read it.
 
+### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim
+**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
+`src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES`, `src/sextant/application/boundary/source.py`**
+
+`export` passes `endpoints.path` (and `peer`) through the `_REDACTED_ADDRESSES` map, while
+`endpoint_metadata` and `endpoint_conditions` are exported whole, `path` included. Both are
+tied to their endpoint by carrying its identity columns rather than a key, and the boundary
+source joins them on `path` — so on a BUNDLE side, an endpoint whose path the redactor
+changed (userinfo in a path, a value pattern matching it) carries the masked path while its
+requirement and condition rows carry the verbatim one, and the join misses them: the
+endpoint reads with no requirements and no conditions, and a diff against the workspace it
+came from reports them removed.
+
+**What happens today:** measured by the reviewer, 0 such paths across 44 workspaces — no
+inbound path in the corpus is changed by masking, so nothing misses.
+
+**Real triggering input:** an endpoint path the redactor rewrites, e.g. a `redact:` value
+pattern a route segment matches, on a module with a requirement or a condition on that route.
+
+**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES\|"endpoint_conditions": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
+**Closes** when the exporter masks `endpoints.path`, `endpoint_metadata.path` and
+`endpoint_conditions.path` through the one `_REDACTED_ADDRESSES` map, so the three stay
+spelled alike in a bundle.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

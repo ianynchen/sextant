@@ -68,9 +68,12 @@ _DECLARED = "dependencies declared, not resolved by the build tool"
 _FED_BY_DEPENDENCIES = ("dependency", "data-contract")
 
 
+VerdictName = Literal["observable", "partial", "not-observable"]
+
+
 @dataclass(frozen=True)
 class Verdict:
-    verdict: Literal["observable", "partial", "not-observable"]
+    verdict: VerdictName
     reasons: tuple[str, ...]
 
     def to_json(self) -> dict[str, object]:
@@ -95,6 +98,40 @@ class ObservabilityMap:
             "stated_boundaries": list(self.stated_boundaries),
         }
 
+    @classmethod
+    def from_json(cls, document: Mapping[str, object]) -> "ObservabilityMap":
+        """The map `to_json` wrote, read back as it was — for the RECORDED map, which is
+        the answer and is never re-derived (`metadata.json` sorts its keys, so the kinds
+        are put back in registry order)."""
+        order = {name: position for position, name in enumerate(KINDS)}
+
+        def verdicts(found: Mapping[str, object]) -> dict[str, Verdict]:
+            return {
+                name: Verdict(
+                    cast(VerdictName, _mapping(one)["verdict"]),
+                    tuple(str(r) for r in cast(list[object], _mapping(one).get("reasons", []))),
+                )
+                for name, one in found.items()
+            }
+
+        kinds = _mapping(document.get("kinds"))
+        return cls(
+            boundary_vocabulary_version=int(cast(int, document["boundary_vocabulary_version"])),
+            kinds=verdicts(
+                {
+                    name: kinds[name]
+                    for name in sorted(kinds, key=lambda n: (order.get(n, len(order)), n))
+                }
+            ),
+            attributes={
+                kind: verdicts(_mapping(found))
+                for kind, found in _mapping(document.get("attributes")).items()
+            },
+            stated_boundaries=tuple(
+                str(name) for name in cast(list[object], document.get("stated_boundaries") or [])
+            ),
+        )
+
 
 def _mapping(value: object) -> Mapping[str, object]:
     return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
@@ -116,8 +153,22 @@ def _share(
     return Verdict("partial", (f"{count} of {_count(coverage, total)} {noun} unresolved",))
 
 
+def _recorded_version(metadata: Mapping[str, object]) -> int:
+    """The vocabulary generation the analysis recorded — `metadata.json`'s own key, or a
+    manifest's `producer` — and the current one only where neither did: the map describes
+    the analysis it was computed from."""
+    for found in (
+        metadata.get("boundary_vocabulary_version"),
+        _mapping(metadata.get("producer")).get("boundary_vocabulary_version"),
+    ):
+        if isinstance(found, int):
+            return found
+    return BOUNDARY_VOCABULARY_VERSION
+
+
 def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
     stated = tuple(str(name) for name in cast(list[object], metadata.get("gaps") or []))
+    version = _recorded_version(metadata)
     code_grounded = [name for name, kind in KINDS.items() if kind.grounded_in_code]
 
     if "catalogs_run" not in metadata:
@@ -127,7 +178,7 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
             else Verdict("observable", ())
             for name in KINDS
         }
-        return ObservabilityMap(BOUNDARY_VOCABULARY_VERSION, degraded, {}, stated)
+        return ObservabilityMap(version, degraded, {}, stated)
 
     coverage = _mapping(metadata.get("coverage"))
     run = _mapping(metadata.get("catalogs_run"))
@@ -167,7 +218,7 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
         if declared and name in _FED_BY_DEPENDENCIES:
             reasons.append(_DECLARED)
         if feeding and _count(run, name) == 0:
-            verdict: Literal["observable", "partial", "not-observable"] = "not-observable"
+            verdict: VerdictName = "not-observable"
         else:
             verdict = "partial" if reasons else "observable"
         kinds[name] = Verdict(verdict, tuple(sorted(reasons)))
@@ -180,4 +231,4 @@ def observability_of(metadata: Mapping[str, object]) -> ObservabilityMap:
         found = _share(coverage, unresolved, total, noun)
         if found is not None:
             attributes[kind] = {attribute: found}
-    return ObservabilityMap(BOUNDARY_VOCABULARY_VERSION, kinds, attributes, stated)
+    return ObservabilityMap(version, kinds, attributes, stated)

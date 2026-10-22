@@ -40,14 +40,16 @@ def write_manifest(
         "sextant_version": provenance.get("sextant_version"),
         "fact_schema_version": provenance.get("fact_schema_version"),
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
-        # Copied from what `analyze` wrote, never recomputed: the vocabulary the
-        # entries were named in is the one that was current when the workspace was
-        # built, which a later build of this exporter may not be.
-        "boundary_vocabulary_version": metadata.get("boundary_vocabulary_version"),
         "scanners": provenance.get("scanners", []),
         "catalog_hash": catalog_hash,
         "redaction_set_hash": redaction_set_hash,
     }
+    # Copied from what `analyze` wrote, never recomputed: the vocabulary the entries were
+    # named in is the one that was current when the workspace was built, which a later
+    # build of this exporter may not be. Absent, never `null`, for a workspace analysed
+    # before the vocabulary existed — the rule `catalogs_run` follows below.
+    if "boundary_vocabulary_version" in metadata:
+        producer["boundary_vocabulary_version"] = metadata["boundary_vocabulary_version"]
 
     coverage = dict(cast(dict[str, object], metadata.get("coverage", {})))
     partial = coverage.get("partial")
@@ -93,8 +95,9 @@ def write_manifest(
     }
     # Copied, never recomputed, and only where `analyze` wrote them: metadata from before
     # the map existed has neither, and a placeholder would read as a measurement. The counts
-    # travel with the map because `api.observability` computes a bundle's map from the
-    # manifest alone, and without `catalogs_run` that would be the degraded one.
+    # travel with the map because the map is a pure function of the manifest's own keys
+    # (`api.observability` returns the copied map, and computes one only where none was
+    # recorded), and without `catalogs_run` that function gives the degraded one.
     for name in ("catalogs_run", "observability"):
         if name in metadata:
             document[name] = metadata[name]

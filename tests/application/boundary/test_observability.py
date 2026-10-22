@@ -9,7 +9,11 @@ import json
 
 import pytest
 
-from sextant.application.boundary.observability import Verdict, observability_of
+from sextant.application.boundary.observability import (
+    ObservabilityMap,
+    Verdict,
+    observability_of,
+)
 from sextant.application.boundary.vocabulary import KINDS
 from sextant.domain.version import BOUNDARY_VOCABULARY_VERSION
 
@@ -255,6 +259,25 @@ def test_to_json_is_the_documented_shape_in_registry_order():
     }
     assert out["stated_boundaries"] == ["config_as_code_not_read"]
     json.dumps(out)
+
+
+def test_the_map_is_stamped_with_the_vocabulary_version_the_metadata_recorded():
+    """The map describes the analysis it was computed from, so its stamp is that analysis's
+    — `metadata.json`'s top-level key, or a manifest's `producer` — and the current
+    constant only where neither recorded one."""
+    assert observability_of(_with(boundary_vocabulary_version=7)).boundary_vocabulary_version == 7
+    manifest = {k: v for k, v in BASE.items() if k != "boundary_vocabulary_version"}
+    manifest["producer"] = {"boundary_vocabulary_version": 6}
+    assert observability_of(manifest).boundary_vocabulary_version == 6
+    del manifest["producer"]
+    assert observability_of(manifest).boundary_vocabulary_version == BOUNDARY_VOCABULARY_VERSION
+    old = {k: v for k, v in manifest.items() if k != "catalogs_run"}
+    assert observability_of(old).boundary_vocabulary_version == BOUNDARY_VOCABULARY_VERSION
+
+
+def test_a_recorded_map_reads_back_as_the_map_it_was():
+    out = observability_of(BASE).to_json()
+    assert ObservabilityMap.from_json(out).to_json() == out
 
 
 def test_the_metadata_is_not_mutated():

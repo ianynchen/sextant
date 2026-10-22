@@ -1891,9 +1891,10 @@ def observability(path: Path) -> ObservabilityMap:
     library equivalent of reading `observability` out of `metadata.json` (FR-23). `path` is
     a module, its `.sextant` workspace, or an exported bundle directory.
 
-    The map is computed from the measurements the analysis recorded (a workspace's
-    `metadata.json`, or a bundle's `manifest.json`, which carries the same keys), so a side
-    written before the map existed gets the labelled degraded map, never an error.
+    The map is the one the analysis RECORDED (a workspace's `metadata.json`, or a bundle's
+    `manifest.json`, which copied it), returned as written and never re-derived. Only a file
+    written before the map existed has none, and then it is computed from the measurements
+    that file carries — the labelled degraded map, never an error.
 
     Raises `NotAnalyzedError` where `path` holds neither a bundle nor a workspace."""
     if (path / "manifest.json").is_file():
@@ -1911,4 +1912,6 @@ def observability(path: Path) -> ObservabilityMap:
         raise NotAnalyzedError(
             f"{document} is not a JSON object — run `sextant module analyze {path}` again."
         )
+    if isinstance(recorded.get("observability"), dict):
+        return ObservabilityMap.from_json(recorded["observability"])
     return observability_of(recorded)

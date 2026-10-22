@@ -151,9 +151,9 @@ which a later build of this exporter may not be.
 **`catalogs_run` and `observability` are copied, never re-derived**
 ([D05](D05-manifest-and-state.md) §3 says what they hold), and only where `analyze` wrote
 them: a bundle exported from a workspace analysed before the map existed carries neither, and a
-placeholder would read as a measurement. `catalogs_run` travels beside the map because
-`sextant.api.observability` computes a bundle's map from its manifest alone, and without the
-counts that would be the degraded one. Each `skipped_catalogs` entry gains `feeds`, the kinds
+placeholder would read as a measurement. `sextant.api.observability` returns the copied map as
+recorded, never re-derived; `catalogs_run` travels beside it because the map is a pure function
+of the manifest's own keys, and without the counts that function gives the degraded one. Each `skipped_catalogs` entry gains `feeds`, the kinds
 it would have fed, and `cause`, which gate skipped it, for the same reason: a bundle's reader
 has no catalogs to ask ([D05](D05-manifest-and-state.md) §3 says what each holds).
 

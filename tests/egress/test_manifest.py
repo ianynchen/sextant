@@ -144,6 +144,28 @@ def test_the_manifest_producer_copies_the_vocabulary_version_from_metadata(tmp_p
     assert written["producer"]["boundary_vocabulary_version"] == 7
 
 
+def test_metadata_without_a_vocabulary_version_leaves_the_stamp_absent(tmp_path: Path):
+    """A workspace analysed before the vocabulary existed recorded no version: the producer
+    then carries no key at all, as `catalogs_run` is left out — never `null`, which reads
+    as a recorded value."""
+    metadata = {
+        "module": {"id": "com.acme:orders-service", "kind": "service", "languages": ["java"]},
+        "provenance": {"sextant_version": "0.1.0", "fact_schema_version": 5, "scanners": []},
+    }
+    write_manifest(
+        tmp_path / "manifest.json",
+        metadata,
+        source={},
+        catalog_hash="sha256:abc",
+        redaction_set_hash="sha256:rules",
+        module_commit="a3f91c",
+        tables=[],
+        facts_files=0,
+    )
+    written = json.loads((tmp_path / "manifest.json").read_text())
+    assert "boundary_vocabulary_version" not in written["producer"]
+
+
 def test_metadata_and_manifest_carry_the_vocabulary_version(analyzed_workspace_copy: Path):
     """End to end on the real fixture: `analyze` stamps `metadata.json` and `export` carries
     the same number into the bundle manifest's `producer`."""
