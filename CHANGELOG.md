@@ -39,7 +39,7 @@ here would restate those documents rather than add anything.
   three partitions and never one count; `uses` reads type arguments at every depth (`PmsProduct`
   on `mall-admin` 13 → 21). The CLI form, `path`, the endpoint family and the agent plugin stay
   behind the language gate, which was reopened for the function alone. Measured: petclinic's six months
-  read endpoint +2 and data-contract +2 and nothing else, pinned as the seventh field check.
+  read endpoint +2 and data-contract +2 and nothing else, pinned as a second check on the `spring-petclinic-rest` field pin.
 
 - **A controller that exists in one environment only says so** (COVERAGE `conditional-controllers`
   C → ✅; spec `2026-10-21-conditional-controllers-design.md`, ruled 2026-10-22). A controller under

@@ -203,8 +203,9 @@ are gone:
 - **`catalogs_run`** — `{kind: count}`: how many catalogs that feed each boundary kind
   actually ran on this module. A kind nothing ran for is absent.
 - **`skipped_catalogs[].feeds`** — the kinds each skipped catalog would have fed. A catalog's
-  `style`, `protocol` and `direction` already say what it writes (D02), so this is a function
-  over fields the catalogs carry and not a new declaration; it is recorded because a bundle's
+  `style`, `direction` and whether it declares a shape model (any of `serialization`,
+  `nullability`, `known_types`) already say what it writes (D02), so this is a function over
+  fields the catalogs carry and not a new declaration; it is recorded because a bundle's
   reader has no catalogs to ask.
 - **`coverage.format_unresolved`, `inbound_total`, `peer_unresolved`, `outbound_total`** — the
   two shares the map's per-attribute verdicts read, measured off the same rows the
@@ -217,7 +218,8 @@ are gone:
   dictionary above it (`application/boundary/observability.py`), so the map for a bundle can be
   computed from its manifest alone, and `export` copies it rather than re-deriving it. A
   verdict is `partial` for any reason (uncovered source files, partial documents, a skipped
-  catalog that feeds the kind, `dependency_source: declared`) and `not-observable` only
+  catalog that feeds the kind, and, for `dependency` and `data-contract` alone,
+  `dependency_source: declared`) and `not-observable` only
   where a catalog feeding the kind was skipped and none feeding it ran. `module` and
   `boundary-property` are always `observable`: they are read off files, not derived by a
   catalog that can be skipped. Metadata that predates `catalogs_run` gets `partial` for every

@@ -1039,7 +1039,7 @@ to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`
 
 **The vocabulary is DATA.** One registry is read by the diff, the observability map and
 `analyze` (which records the kinds each skipped catalog feeds, from the catalog's own `style`,
-`protocol` and `direction`), so no reader keeps its own list of kinds. Each kind's rows come from ONE named
+`direction` and whether it declares a shape model), so no reader keeps its own list of kinds. Each kind's rows come from ONE named
 query in `storage/duckdb/workspace.py`'s registry (`boundary_endpoint`, `boundary_dependency`,
 `boundary_contract`, `boundary_property`, `boundary_schedule`, `boundary_error_handler`;
 `module` is read off `metadata.json`), written as plain `SELECT`s over the exported tables'
@@ -1064,8 +1064,8 @@ literals are already extracted for endpoint paths; storing all of them is nearly
 
 ## 5. Named queries
 
-> **PARTLY BUILT — six of the ten below exist, five of them under shorter names; four do
-> not.** `callers_of`, `callees_of`, `implementations_of`, `uses_of` and `impact_of` ship as
+> **PARTLY BUILT — six of the ten below have a reader, five of them new and under shorter
+> names; four do not.** `callers_of`, `callees_of`, `implementations_of`, `uses_of` and `impact_of` ship as
 > `question_callers`, `question_callees`, `question_implementations`, `question_uses` and
 > `question_impact_step` in `storage/duckdb/workspace.py`'s `_NAMED_QUERIES`, answered at MODULE
 > scope by `application/query/questions.py` and reached through `api.query` (spec
@@ -1111,7 +1111,8 @@ TYPE seeds its walk with the type's members, because a change to the type is a c
 its members' callers depend on.
 
 **`uses` reads type arguments at every nesting depth**, so `List<Money>` and `Map<String,
-Money>` both use `Money`. Measured on `mall-admin`, `PmsProduct` went from 13 uses to 21 once
+Money>` both use `Money`; it also returns the type's direct subtypes, which `type_hierarchy`
+records. Measured on `mall-admin`, `PmsProduct` went from 13 uses to 21 once
 it did. The depth is walked in Python, not SQL: the dependency floor (`duckdb>=1.1`) has no
 `json_tree`, so `question_uses` selects every member whose signature TEXT contains the bare
 type, which a true match always does, and the parsed signature confirms each — the text test
@@ -1121,8 +1122,9 @@ can only admit, the walk decides.
 one read, and `impact` is one read per hop of the whole frontier — never one per symbol
 reached. A symbol rejoins the frontier only when its classification improves, which happens
 once, so the walk ends on any graph, cycles included. Measured on `mall-admin` (25,377 symbols, 24,511
-call edges): the impact of its most-called method reached 776 symbols in six reads and 76 ms,
-and the impact of `PmsProduct` gave 49 definite, no possible and 13 unknown regions over
+call edges): the impact of its most-called method reached 776 symbols in six reads and 76 ms
+(measured before the floor fix to the `uses` query, commit 225e4161), and the impact of
+`PmsProduct`, after it, gave 49 definite, no possible and 13 unknown regions over
 four hops in 35 ms.
 
 ---

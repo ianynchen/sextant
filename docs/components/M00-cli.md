@@ -122,7 +122,10 @@ two sides analysed fresh by one build always agree and a stored side is the case
 the flags below.
 
 **The output is one JSON document, deterministic** (NFR-1): `boundary_vocabulary_version`,
-each side's `module`, `commit` and `producer`, `producer_changed`, the `entries` sorted by
+each side's `module`, `commit` and `producer` (the stamps compared, plus `redaction_recorded`:
+`true` for a bundle side, whose `redaction_set_hash` the exporter recorded, and `false` for a
+workspace side, whose `redaction_set_hash` is the rule set the diff itself masked it under,
+since `analyze` records none), `producer_changed`, the `entries` sorted by
 kind, change and identity, and a `summary` row per kind of `added`, `removed` and `changed`
 counts. Every kind is present even at zero, so an empty diff is `{"entries": [], "summary":
 {all zeros}}` and never an absent file (NFR-7). A `changed` entry's `from` and `to` carry only

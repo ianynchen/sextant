@@ -237,10 +237,10 @@ boundary). Everything else is per kind. Decision 4, §7.
 
 ### 4b. Which kinds a catalog feeds — recorded at `analyze`, no new catalog key
 
-A catalog's `style`, `protocol` and `direction` already say what it writes:
+A catalog's `style`, `direction` and whether it declares a shape model already say what it writes:
 `style: scheduled_work` → `schedule`; `style: error_advice` → `error-handler`; every other
 style writes `endpoints` and feeds `endpoint` for `direction: inbound`, `dependency` for
-`outbound`, both for `both`; `shape_model` present → `data-contract` too. The mapping is a
+`outbound`, both for `both`; a shape model declared (any of `serialization`, `nullability`, `known_types`) → `data-contract` too. The mapping is a
 function over fields the catalogs carry today (D02), not a new declaration.
 
 The catalogs are in hand at `analyze` and NOT in hand when a bundle's manifest is read
@@ -355,7 +355,7 @@ operations and two options objects. Checked at the end, not assumed (`verify-wha
 is empty. Measured with both sides built by the field checker (network allowed, so Maven's
 classpath is read and `module` reads unchanged): on `spring-petclinic-rest`, `f957c77` against
 the pinned `4cd8e1b`, the diff reads endpoint +2 and data-contract +2 and every other kind
-zero — §1b's numbers, pinned as the seventh field check. One divergence worth keeping: a side
+zero — §1b's numbers, pinned as a second check (`diff_against`) on the `spring-petclinic-rest` field pin. One divergence worth keeping: a side
 built OFFLINE on a machine without the dependencies cached read `module` as changed 1
 (`dependency_source` declared → maven), which is the labelled fallback doing its job and is
 why the pin states its method. For `query`: `uses` of `PmsProduct` on `mall-admin` reads 21,
@@ -363,7 +363,11 @@ where reading only the top level of a signature read 13, because it now follows 
 at every depth; the walk is in Python since the DuckDB floor (`>=1.1`) has no `json_tree`.
 `impact` of the same type gave 49 definite, none possible and 13 unknown regions over four
 hops in 35 ms, and of the most-called method 776 symbols in six reads (76 ms) — one read per
-hop of the frontier, §8.7's cost held. Five of the ten D01 §5 named queries now ship and
+hop of the frontier, §8.7's cost held (the 776-symbol figure was measured before the floor fix of
+commit 225e4161; the `PmsProduct` figures are after it). Six of the ten D01 §5 names now have a
+reader — `trace_of`, which was already a function, and five that ship in process (`callers_of`,
+`callees_of`, `implementations_of`, `uses_of`, `impact_of`) — beside a sixth question, `source`,
+that is FR-10's and not one of the ten.
 `PROJECT.md`, `REQUIREMENTS.md`, D01, D05, D06, M00, M06 (a cross-reference), M09, the delivery
 list and the changelog say so; FR-24's clause table reads four of four operations and the
 configuration-object clause met, with "no global state" still never measured.

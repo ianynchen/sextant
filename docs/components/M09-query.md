@@ -56,7 +56,9 @@ Answers, as text for a terminal and JSON when piped.
 > objection that a surface shaped by one extractor's facts would be shaped wrong; the objection
 > was put and overruled.
 >
-> An answer is a list of `{"symbol", "file", "line_start", "line_end"}` sorted by symbol
+> `uses` answers both what names the type in a signature (a parameter or a return, at any depth
+of type arguments) and the type's direct subtypes. An answer is a list of `{"symbol", "file",
+"line_start", "line_end"}` sorted by symbol
 > (a line is `null` where the class file states none, as for a type or a field), or for
 > `impact` the three partitions below. A question naming a symbol the workspace does not hold
 > is refused by name rather than answered empty: an empty answer would read as *nothing calls

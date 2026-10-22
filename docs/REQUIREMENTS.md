@@ -629,7 +629,7 @@ Component designs live in [components/](components/README.md).
 | FR-19 | Exclusion and redaction | [D04](components/D04-config-and-exclusion.md), [M03](components/M03-scanner.md) |
 | FR-20 | Command surface | [M00](components/M00-cli.md) |
 | FR-21 | Boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) |
-| FR-22 | Derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) |
+| FR-22 | Derivation diff | [M00](components/M00-cli.md), [D06](components/D06-bundle-format.md) |
 | FR-23 | Observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) |
 | FR-24 | Library embedding | [M00](components/M00-cli.md), `sextant.api` |
 
