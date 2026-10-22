@@ -103,6 +103,21 @@ def test_the_document_says_which_environment_it_resolved_values_for(system_docum
     assert "`default` environment" in system_document
 
 
+@pytest.mark.pins("conditions.a-LINK-states-where-its-inbound-endpoint-exists")
+def test_a_link_to_a_conditional_endpoint_states_where_the_endpoint_exists(system_document):
+    """`BalanceController` is under `@Profile("prod")` and `billing-api` resolves two
+    environments (`default`, `prod`). Ruling 2 (spec 2026-10-21-conditional-controllers): the
+    link is matched and kept as any other — nothing about either side's implementation or
+    environment enters the join — and the condition, a property of the INBOUND endpoint,
+    travels with it as data: the row states where the endpoint exists, read from
+    `billing-api`'s own `endpoint_conditions` through the federated view."""
+    row = next(
+        line for line in system_document.splitlines() if "`orders-api` GET `/balances`" in line
+    )
+    assert "`billing-api`" in row, row
+    assert "exists in `prod`; not in `default`" in row, row
+
+
 def test_a_reactor_nobody_analyzed_is_refused_naming_the_command_to_run(tmp_path):
     """The `no analysis` refusal (M00's own rule), and why it is a refusal rather than an
     empty document: "no links" would be a claim about the system, when the truth is that

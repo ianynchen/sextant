@@ -21,3 +21,6 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
       value-deserializer: io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer
+# The legacy controller exists only where this is `true` (conditional-controllers fixture).
+orders:
+  legacy: true

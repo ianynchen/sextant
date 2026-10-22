@@ -283,9 +283,12 @@ def test_spring_rest_inbound_reads_as_the_rollup_says():
     # Partial today for exactly two reasons a reader can act on, both named in the line:
     # the `@ConditionalOnProperty` / `@Profile` row is tier C, and the register holds
     # `conditional-controllers` open against it. Everything else on that line is shipped.
-    assert "| ◐ partial |" in spring[0], spring[0]
-    assert "`conditional-controllers`" in spring[0], spring[0]
-    assert "not shipped: 1 at C" in spring[0], spring[0]
+    # ✅ since 2026-10-22: `conditional-controllers` shipped (spec 2026-10-21-conditional-
+    # controllers-design.md), the delivery block names no open REST-inbound item, and the
+    # one stated boundary (meta-annotations) costs no ✅ by COVERAGE §1's own rule.
+    assert "| ✅ full |" in spring[0], spring[0]
+    assert "14/14" in spring[0], spring[0]
+    assert "1 stated boundary" in spring[0], spring[0]
 
 
 # --- §2c, the family × protocol grid ---------------------------------------------------------

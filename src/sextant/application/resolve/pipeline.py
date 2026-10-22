@@ -10,6 +10,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
+from sextant.application.resolve.endpoint_conditions import record_endpoint_conditions
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
@@ -65,6 +66,10 @@ class ResolveReport:
     # which is the same answer their pre-declared tables give.
     scheduled_work: list[dict[str, object]] = field(default_factory=list)
     error_handlers: list[dict[str, object]] = field(default_factory=list)
+    # The conditions an inbound endpoint's handler type carries, one row per environment
+    # (spec 2026-10-21-conditional-controllers): the document's detail lines are derived
+    # from these rows and from nothing else.
+    endpoint_conditions: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -186,6 +191,8 @@ def resolve(
     # resolve whose calls carry no metadata leaves an empty table rather than the previous
     # run's rows.
     workspace.derive("endpoint_metadata_reset")
+    # Spec 2026-10-21-conditional-controllers: replaced whole per resolve, the same discipline.
+    workspace.derive("endpoint_conditions_reset")
     # Its feeder, the combinator's `route_requirements` stash (spec 2026-09-19 §4d/§5a),
     # is re-created by `derive_endpoints` beside `endpoints_reset` — the engines write it
     # there, and `record_request_requirements` below joins it to `endpoints` once every
@@ -258,6 +265,11 @@ def resolve(
     # `derive_endpoints`, above the hint pass — W29's order, unchanged here.)
     with _timed("record_request_requirements"):
         record_request_requirements(workspace, declared)
+    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22), and BELOW
+    # `apply_protocol_hints` for the same reason: a condition row names its endpoint by the
+    # identity columns, `protocol` among them.
+    with _timed("record_endpoint_conditions"):
+        record_endpoint_conditions(workspace, declared)
     # Spec 2026-09-22 §1f, and BELOW `apply_protocol_hints` for the reason the pass above
     # gives in full: a qualifying attribute names its row by the row's identity columns,
     # `protocol` among them, and that pass reclassifies `protocol` on rows the engines
@@ -339,6 +351,7 @@ def resolve(
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),
+        endpoint_conditions=workspace.query("endpoint_conditions"),
         # Both passes root payload types and both expand what they root, so
         # both can meet a type nothing opens. Reported as one list, deduped:
         # the gap is in the type, not in how many passes walked into it —

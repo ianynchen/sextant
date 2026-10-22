@@ -211,6 +211,18 @@ the expression and every resolution side by side**. Either way, the document sta
 is showing — a catalog silently showing development values is a lying document. At system
 scope there is no choice: the system's declared environment is used, and named.
 
+### A conditional endpoint is rendered in words, from the table
+
+`endpoint_conditions` (D01) is the structured result; the documents are its one verbose
+rendering (spec `2026-10-21-conditional-controllers-design.md`, ruling 1). The module
+document's inbound detail block gains two lines derived from the rows and nothing else —
+*Exists only when: the active profile matches one of: `prod`* and *Of this module's
+environments: holds in 1 of 2 environments — not in `default`* — and an unconditional row
+gains nothing. The system document's link row states where its inbound endpoint exists
+(*exists in `prod`; not in `default`*), read through the federated view (M06). The inbound
+table's columns are unchanged: a condition is a fact about where the row exists, not a
+column every unconditional row would carry empty.
+
 ### Every reduced output states that it was reduced
 
 A simplified diagram says how many steps were hidden. A truncated list says how many were

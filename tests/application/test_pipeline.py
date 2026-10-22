@@ -315,6 +315,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # the unread `baseUrl` (`<host>`). Two rows, two addresses, no claim about the slash.
         ("GET", "<host>/billing/ledger"),
         ("GET", "<host>billing/ledger/{id}"),
+        # the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): each exists in one
+        # environment only, which `endpoint_conditions` states — the ROWS are unconditional here,
+        # by ruling: stated, not decided.
+        ("GET", "/ops/status"),
+        ("GET", "/legacy/orders/all"),
         ("POST", "/billing/settlements"),
         ("PUT", "/billing/settlements/{id}"),
         ("POST", "/billing/batch"),
@@ -1100,7 +1105,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 215 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): `send`'s `exchange(baseUrl + path, …)`, reached by
     # two callers whose literals differ, is two rows at `partial` (Task 2 resolved the
     # merge; Task 1 alone had it as one addressless row).
-    assert len(report.endpoints) == 215
+    # 217 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers), one inbound row each.
+    assert len(report.endpoints) == 217
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -2031,7 +2037,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 118 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
         # the two handlers carrying every `params=`/`headers=` expression form.
         # 121 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two callers.
-        "http": 121,
+        # 123 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two inbound rows.
+        "http": 123,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2079,7 +2086,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 215
+    assert sum(counts.values()) == len(report.endpoints) == 217
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3909,7 +3916,9 @@ def test_the_format_ladder_answers_every_live_row(
     # 68 since spec 2026-09-21 §7a (`dsl-media-route`): the servlet `accept(JSON) { h }`
     # row, `unresolved` here while it was the address-less gap row, now carries the media
     # its guard declares and answers `json`; its new reactive twin answers `json` too.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 68
+    # 70 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two `String`-returning handlers
+    # with no media declared — the ladder answers nothing for a bare string, as for the others.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 70
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -4626,6 +4635,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_environment_divergence",
         "apply_protocol_hints",
         "record_request_requirements",
+        # Spec 2026-10-21-conditional-controllers: the conditions pass, beside the two that
+        # also write per-row facts below the protocol hints.
+        "record_endpoint_conditions",
         "record_endpoint_attributes",
         "record_self_exchange",
         "record_routing_conflicts",

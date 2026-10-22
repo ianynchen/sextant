@@ -27,7 +27,11 @@ from sextant.egress.export.index import write_index
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb import workspace as workspace_module
-from sextant.storage.duckdb.workspace import _FACT_VIEWS, DuckDbWorkspace
+from sextant.storage.duckdb.workspace import (
+    _FACT_VIEWS,
+    DuckDbWorkspace,
+    StaleParticipantError,
+)
 
 
 def _fixture_facts(root: Path) -> None:
@@ -3015,3 +3019,28 @@ def test_the_edge_query_binds_no_parameter_where_a_site_only_captures(tmp_path: 
     # And it still binds nothing, while the ordinary call beside it binds four.
     assert [row["to_ordinal"] for row in rows if row["kind"] == "bound_to_parameter"] == [0] * 4
     workspace.close()
+
+
+@pytest.mark.pins("stitch.a-participant-derived-by-an-OLDER-build-is-refused-by-name")
+def test_federating_a_participant_without_a_federated_table_is_refused_by_name(tmp_path: Path):
+    """A view binds at creation. A participant workspace an older build derived — here, one
+    whose `endpoint_conditions` table never existed — would otherwise make the first system
+    query raise a bare `Catalog Error`. `federate` refuses first, naming the participant and
+    the command to run (review fix, Major 2; D01 §7's answer for a stale workspace)."""
+    old = tmp_path / "old-module.duckdb"
+    DuckDbWorkspace(old).close()
+    with duckdb.connect(str(old)) as connection:
+        connection.execute("DROP TABLE endpoint_conditions")
+    current = tmp_path / "current-module.duckdb"
+    DuckDbWorkspace(current).close()
+    system = DuckDbWorkspace(tmp_path / "system.duckdb")
+    try:
+        with pytest.raises(StaleParticipantError) as refused:
+            system.federate({"current-module": current, "old-module": old})
+    finally:
+        system.close()
+    message = str(refused.value)
+    assert "`old-module`" in message
+    assert "`endpoint_conditions`" in message
+    assert "module analyze" in message
+    assert "current-module" not in message

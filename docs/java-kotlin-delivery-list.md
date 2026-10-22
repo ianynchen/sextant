@@ -43,7 +43,7 @@ feature's next spec touches the seam — never silently dropped, never a blocker
 `ktor-route-with-verb` was the first to close that way (2026-09-20, the Kotlin/Ktor spec).
 
 ```delivery
-REST inbound       | REST in    | conditional-controllers
+REST inbound       | REST in    |
 REST outbound      | REST out   | apache-camel
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
@@ -62,11 +62,20 @@ Async              | Async      | quartz akka-pekko-actors
 the only remaining gaps are in languages this target does not cover. gRPC's are Go, Python,
 Rust and Swift; there is no Java gap left in it.
 
+**REST inbound joined this block on 2026-10-22**, when `conditional-controllers` — its last open
+id — closed. The cell still reads `◐ (1B 3C)` for four §5.1 rows that were never on this
+register: Vert.x Web (`B`) and Akka HTTP (`C`) are frameworks outside the Spring Boot target;
+Spring Data REST's *projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers,
+QueryDSL web support* row and the Servlet *`@WebServlet`'s other attributes, `@WebFilter` /
+`@WebListener`* row are boundaries their own designs STATE at `C` (2O design §2c; CP-9), not
+open work. Every Spring Boot REST inbound row that was work is shipped.
+
 **SSE is NOT here any more.** Its gap is JAX-RS `@Produces(SERVER_SENT_EVENTS)`, which is
 Java — so it is real work, sequenced after Spring Boot, not something scoped away.
 
 ```scoped-out
 gRPC
+REST inbound
 ```
 
 **Not blocking any feature** — tracked so "no open Critical or Major" can be claimed
@@ -395,7 +404,7 @@ shipped on the delivery branch (`javalin-routing`, `jaxws-public-final`,
 `jaxws-inherited-unannotated`, `G-31`, `alpakka-pekko`, `micronaut-sqs`, `G-44`) passed their
 intention tests in CI run 34703991222 and are in ```closed; their rows below say so.
 
-### REST inbound — NOT DELIVERED (largest)
+### REST inbound — DELIVERED (`conditional-controllers`, the last open id, closed 2026-10-22; the matrix cell stays `◐ (1B 3C)` for four rows that were never on this register — the ```scoped-out block names them)
 
 | # | issue | what it costs |
 |---|---|---|
@@ -407,7 +416,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | `gateway-and-of-two-paths` | **logged (PR A2 Task 6/7, Minor)** — `path("/a").and().path("/b")` folds to one route, `/a/b` — the framework serves neither path alone, so the folded route is dead on real traffic | a spurious resolved row rather than the two the framework actually refuses to route |
 | `gateway-order-mid-chain` | **logged (PR A2 Task 6/7, Minor)** — `order(int)` returns `PredicateSpec`, so a predicate after it does not extend its result; written mid-chain, the pass-through is reached unconsumed by the body fold and yields a spurious unresolved row beside the route's own resolved one. At the head of the chain it is stepped over cleanly | one extra row per such route |
 | `gateway-detect-4x-coordinate` | **logged (PR A2 Task 9, Minor)** — `spring-cloud-gateway.yml` is a `combinator` catalog, and `detect.coordinates` is inert for that style (`src/sextant/application/resolve/dependencies.py` ~46-70: the rules apply on any module whose bytecode names the matched types, coordinate list or not), so listing `spring-cloud-gateway-server` (the pre-5.0 combined artifact) alongside the 5.x split artifacts changes nothing either way. The real gap is that `measured:` only javap's `spring-cloud-gateway-server-webflux:5.0.0` — the catalog's rules are unverified against a 4.x jar's bytecode | a 4.x module is read by rules measured on 5.0.0 alone, unverified at that version |
-| `conditional-controllers` | `@ConditionalOnProperty` / `@Profile` controllers | tier C — no mechanism in the code |
+| `conditional-controllers` | `@ConditionalOnProperty` / `@Profile` controllers | **DONE 2026-10-22** — `endpoint_conditions`, the condition stated on the row as structured data with a per-environment verdict (spec `2026-10-21-conditional-controllers-design.md`) |
 | `kotlin-null-handler` | **closed** (Kotlin/Ktor spec 2026-09-19 §3b, commits `eefca79` + `e6497f0`; pinned by `test_ktor_routing_derives_every_route_under_its_nested_prefixes` and `tests/application/test_pipeline.py`'s Kotlin router pins; CI run 35541934750) — Kotlin routes carried a **NULL handler**, all 3 of `orders-service`'s and 8 of 8 of `orders-ktor`'s; no Kotlin symbol reached `roots` or `reachability`. kotlinc 2.2.0 compiles every suspend handler to a CLASS (CP-23), the extractor now marks that class's type fact with the `invokeSuspend` holding its body (`lambda_body`, D00 §5), and `resolve/effective_calls.py` hands every engine the `instance` as that `lambda` — so `handler_arg` names the body and `roots`/`reachability` walk it; 28 of 28 `orders-ktor` rows name their handler. The function-reference handler (`GET("/orders", ::listOrders)`, a `FunctionReferenceImpl`) closed with CP-23 Q9: 3 of 3 on `orders-service` | Java functional routes name theirs; Kotlin ones now do too |
 | `quarkus-jaxrs` | **closed** — implemented, pinned by `test_a_jaxrs_resource_derives_every_operation`, `test_the_javax_spelling_derives_the_same_operations`, `test_a_class_implementing_a_path_interface_derives_the_interfaces_operations`, `test_quarkus_rest_binds_the_body_the_way_quarkus_does` (`tests/e2e/test_rest_inbound_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — three catalogs (`jakarta-jaxrs.yml`, `javax-jaxrs.yml`, `quarkus-rest.yml`) read `@Path`/`@GET`/`@Produces` as siblings of one method via `produces_from_siblings`/`consumes_from_siblings`/`type_media_from_siblings`, with `sole_unbound` as the request-body fallback (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §3, §4) | every Quarkus, Helidon, Jersey and RESTEasy resource derives nothing — deliberately, since a catalog of the existing forms would put every GET onto the class `@Path` |
 | `ktor-routing` | **shipped** (PR A2 Task 5, commit `812a175`) — `ktor-routing.yml` walks a nested `route("/api") { get("/orders") { … } }` through `receiver_arg`, checking each inner call's receiver against the enclosing block's own `Route`, to arbitrary nesting depth; handler NULL stated at the time (no Kotlin symbol reached it — `kotlin-null-handler`, closed 2026-09-20, every row names its `invokeSuspend` body now). **closed** on CI run 34793215476 | a `single_call` row would publish `/x` alone, a wrong row |
@@ -791,7 +800,7 @@ with the spec already written first.
 | 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument — **DONE 2026-09-21** (spec `docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md`: not a `config_join` extension after all but `fluent` extended with registration words and a bean fold, which also closed `dsl-media-route` and `gateway-properties-routes` as ride-alongs; CI run 35663682722, PR #34) | `pubsub-channel-adapter` (1) | **Pub/Sub closes** — and REST inbound −2: the row now holds `conditional-controllers` alone |
 | 4 | **D. New `Protocol` members and two naming words** — **DONE 2026-09-22** (spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`; CI run pending). Two members, `temporal` and `eventbus`; **four** naming words where this table predicted two — `declaring_type_simple_name`, `declaring_type_qualified_name`, `prefixed_capitalized_construct_name` and `declaring_type_scoped_name` — plus one `members` word and three catalog keys (*corrected at the branch review; this row said "one naming word, not two"*) | `temporal-cadence` `vertx-eventbus` (2) | **Async did NOT close.** Both ids closed and the row's blockers emptied — and §5.12 then showed two Java frameworks with no catalog at all, `quartz` and `akka-pekko-actors`, which are now the row's blockers. The `smallrye-reactive-messaging` shape: a row cannot close while its own COVERAGE section carries an uncatalogued library, and the two new ids are what that clause was hiding behind the two old ones |
 | 5 | **G. Kotlin routes with a NULL handler** — short spec — **DONE 2026-09-20** (spec `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`, which also closed `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-class-lambdas`, `kotlin-default-bridge-calls`, `ktor-route-with-verb` and the new `inbound-request-requirements`; CI run 35541934750) | `kotlin-null-handler` (1) | REST inbound −1 — and −4 more: the row now holds `conditional-controllers`, `dsl-media-route`, `gateway-properties-routes` |
-| 6 | **F. Conditional controllers** — the hardest design question | `conditional-controllers` (1) | **REST inbound closes** |
+| 6 | **F. Conditional controllers** — the hardest design question — **DONE 2026-10-22** (spec `docs/superpowers/specs/2026-10-21-conditional-controllers-design.md`, two rulings: a structured `endpoint_conditions` table a machine reads, the document its one verbose rendering; matching never reads a condition, the link states it) | `conditional-controllers` (1) | **REST inbound closes** — closed |
 | 7 | **H. Meridian** | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty |
 
 Each group is one spec → one plan → one PR, on the per-item loop; a group starts only

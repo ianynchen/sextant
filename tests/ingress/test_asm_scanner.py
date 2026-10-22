@@ -109,6 +109,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LegacyOrdersController.jsonl",
         "LiveEndpoint.jsonl",
         # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
         # expression form on two handlers — one class file.
@@ -120,6 +121,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "NestedScopedDetail.jsonl",
         "NormalisingBillingClient.jsonl",
         "NotificationsSubscriber.jsonl",
+        "OpsController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
@@ -278,7 +280,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 142 since spec 2026-10-21 (merged values, capability 9.19): `clients/
     # NormalisingBillingClient`, the wrapper that reassigns `path` on one branch — one
     # class file.
-    assert report.documents == 142
+    # 144 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): one class file each.
+    assert report.documents == 144
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -364,6 +367,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyBillingWebService.jsonl",
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
+        "LegacyOrdersController.jsonl",
         "LiveEndpoint.jsonl",
         # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
         # expression form on two handlers — one class file.
@@ -375,6 +379,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "NestedScopedDetail.jsonl",
         "NormalisingBillingClient.jsonl",
         "NotificationsSubscriber.jsonl",
+        "OpsController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",

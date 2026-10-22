@@ -519,6 +519,29 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- resolution and evidence, so a header whose value could not be read is visibly
 -- unresolved rather than absent — which is the difference between "this call sends no
 -- Authorization header" and "it sends one we could not read".
+-- A controller that exists in one environment only (spec 2026-10-21-conditional-controllers,
+-- ruled 2026-10-22): the CONDITION an inbound endpoint's handler type carries, stated as a
+-- fact about the row — structured for a machine, one row per (endpoint, condition,
+-- environment the module resolves) — and never deciding whether the row exists. `kind` is
+-- `profile`, `property` or `other`; `expression` is JSON typed per kind (the catalog's
+-- `conditions` block says which annotation members fill it); `holds` is what the
+-- framework's own rule (CP-42, CP-43) says for that environment, or `unresolved` where this
+-- analysis does not evaluate the shape. The architecture document is the one verbose
+-- rendering of these rows. Replaced whole per resolve, as `endpoint_metadata` is.
+CREATE TABLE IF NOT EXISTS endpoint_conditions (
+    protocol    TEXT,
+    direction   TEXT,
+    method      TEXT,
+    path        TEXT,
+    handler     TEXT,
+    kind        TEXT,
+    expression  TEXT,
+    environment TEXT,
+    holds       TEXT,
+    resolution  TEXT,
+    evidence    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS endpoint_metadata (
     -- The endpoint this belongs to, by the columns that identify one (D01 §3). Carried
     -- rather than joined on a surrogate key, the `open_questions` reasoning: a foreign

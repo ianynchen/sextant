@@ -724,6 +724,120 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- a controller that exists in one environment only (spec 2026-10-21) ------------
+    "conditions.the-PASS-writes-a-row-per-condition-and-environment": Guard(
+        what="`record_endpoint_conditions` runs in the pipeline and writes `endpoint_conditions`",
+        why='without it a `@Profile("prod")` controller publishes its endpoints as if they '
+        "always existed — the cell as it stood for a month, and the one real instance "
+        "(Apollo's `HomePageController`) read `resolved` in the two environments where it 404s",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find='    if rows:\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
+            ),
+        ),
+    ),
+    "conditions.a-NEGATED-profile-holds-everywhere-but-that-environment": Guard(
+        what="`!prod` holds in every environment but `prod` (CP-42 row 3)",
+        why="`@Profile(\"!prod\")` is the ordinary spelling of 'not in production'; read as a "
+        "name it would hold in NO environment the module resolves, and the document would say "
+        "the endpoint exists nowhere",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find="                verdicts.append(environment != text[1:].strip())\n",
+                replace="                verdicts.append(environment == text[1:].strip())  # guard disabled\n",
+            ),
+        ),
+    ),
+    "conditions.an-ABSENT-key-is-decided-by-match-if-missing": Guard(
+        what="a `property` whose key an environment never defines holds exactly when "
+        "`match_if_missing` is true (CP-43 row 3)",
+        why="the framework's own rule; without it an absent key would read as holding, and a "
+        "controller gated on a key the deployment never sets would be published as served there",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find='                if not expression["match_if_missing"]:\n                    return FAILS, "resolved"\n',
+                replace='                if False:  # guard disabled by scripts/guard_check.py\n                    return FAILS, "resolved"\n',
+            ),
+        ),
+    ),
+    "conditions.a-COMPOSED-profile-expression-is-stated-not-evaluated": Guard(
+        what="a profile expression with `&`, `|` or parentheses is `unresolved`, never a verdict",
+        why="an environment is ONE profile by the config layer's filename rule; evaluating a "
+        "composition over several active profiles would be a verdict about a deployment this "
+        "analysis does not see (CP-42 row 3)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find="            if any(char in _COMPOSITION for char in text):\n                composed = True\n                continue\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n                composed = True\n                continue\n",
+            ),
+        ),
+    ),
+    "conditions.a-LINK-states-where-its-inbound-endpoint-exists": Guard(
+        what="a link to an inbound endpoint under a condition states, beside the link, the "
+        "environments the endpoint exists in — read from the participant's own "
+        "`endpoint_conditions` through the federated view (ruling 2)",
+        why="matching never reads a condition — an endpoint is an endpoint — so the condition "
+        "travels with the inbound endpoint as data and the link is where a reader of the "
+        "system document learns `billing-api`'s `/balances` exists in `prod` only; without "
+        "this the link reads as served everywhere, which is the published-as-if-it-always-"
+        "existed failure one tier up",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='        links = _with_inbound_conditions(links, workspace.query("system_endpoint_conditions"))\n',
+                replace="        links = links  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-DECLARED-placeholder-nobody-filled-is-unresolved": Guard(
+        what="a `property` key an environment DECLARES as `${REF}` that nothing fills is "
+        "`unresolved` there, never decided by `match_if_missing`",
+        why="the config layer resolves that row `missing_key` too, but WITH its file as "
+        "`source`; dropped like a never-declared key, `orders.legacy: ${ORDERS_LEGACY}` read "
+        "as absent and the controller as `false · resolved` — a verdict about a value the "
+        "framework would see and this analysis does not (review fix, 2026-10-22)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find='        if value is None and reason == "missing_key" and row.get("source") is None:\n',
+                replace='        if value is None and reason == "missing_key":  # guard disabled\n',
+            ),
+        ),
+    ),
+    "conditions.an-UNEVALUATED-condition-still-writes-its-row": Guard(
+        what="a controller under a condition this analysis does not evaluate (`other`: "
+        "`@ConditionalOnExpression`, `@Conditional(X.class)`, …) writes its rows verbatim "
+        "with `holds = unresolved`",
+        why="without the `other` kind the catalog could not name them and the endpoint read "
+        "as unconditional in both documents — exactly the pre-change behaviour the cell "
+        "closes, for sixteen of the nineteen conditions CP-43 row 5 enumerates",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoint_conditions.py",
+                find="                for name in names:\n                    symbol = type_descriptor(str(name))\n",
+                replace="                for name in ():  # guard disabled by scripts/guard_check.py\n                    symbol = type_descriptor(str(name))\n",
+            ),
+        ),
+    ),
+    "stitch.a-participant-derived-by-an-OLDER-build-is-refused-by-name": Guard(
+        what="`federate` refuses a participant workspace lacking a federated table, naming "
+        "the participant and the command to run",
+        why="a view binds at creation, so without the check the first system query raised a "
+        "bare `Catalog Error: Table with name endpoint_conditions does not exist` on any "
+        "reactor whose modules were analysed before the table existed",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="            if missing:\n                raise StaleParticipantError(\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n                raise StaleParticipantError(\n",
+            ),
+        ),
+    ),
     "storage.a-TYPE-HEADER-joins-the-superclass-walk": Guard(
         what="`type_header` facts are unioned into the `superclasses` query, so a module "
         "class extending a library class — or a handler parameter typed as one — reaches a "

@@ -628,6 +628,27 @@ Maven itself performs — scopes, `optional`, exclusions — which is why it is 
 not a line in this one. **Falsified by** `genai` reading headers for the Spring types its
 handlers and clients name, and `yudao-module-system` reading more than zero.
 
+### OI-168 — a module resolving NO configuration key still gets a `default` verdict per condition
+**Minor · logged 2026-10-22 (review of spec 2026-10-21-conditional-controllers, Minor 3) ·
+`src/sextant/application/resolve/endpoint_conditions.py::record_endpoint_conditions`**
+
+The pass takes its environments from `resolved_config`'s rows and falls back to `["default"]`
+when there are none, so a `@Profile("prod")` controller in a module whose config files
+declare no key at all gets one row, `default | false`, while the same document's coverage
+section says *Environments resolved: none.* Two statements about the same module that do not
+agree. The fallback is there on purpose — Spring's `default` profile is active whatever the
+files say, and dropping the row would make the condition invisible — but the environment list
+should come from one place.
+
+**What happens today:** every fixture and corpus declares at least one key; nothing wrong on them.
+
+**Real triggering input:** a Boot module with an empty `application.yml` (or none) and a
+conditional controller.
+
+**Verify:** `grep -n 'or \["default"\]' src/sextant/application/resolve/endpoint_conditions.py`.
+**Closes** when the config layer publishes the module's environments as a fact of its own
+(the profile files it saw, `default` included) and both the pass and the document read it.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 
@@ -3919,6 +3940,15 @@ question for `@ConditionalOnProperty`/`@Profile` controllers, one table over.
 **Verify:** `grep -n "Profile\|Conditional" src/sextant/application/resolve/beans.py` — empty.
 **Closes** with `conditional-controllers`' mechanism: a row's existence conditional on
 configuration, stated on the row rather than decided.
+
+**2026-10-22 — the mechanism exists, this issue stays open.** `conditional-controllers`
+shipped (spec `2026-10-21-conditional-controllers-design.md`): the `endpoint_conditions`
+table, the `mapping.conditions` catalog block with CP-42/CP-43, and `_holds` in
+`resolve/endpoint_conditions.py` evaluate `@Profile` and `@ConditionalOnProperty` per
+environment for a CONTROLLER. The bean fold is the next consumer of the same table — 68 of
+the 69 conditional classes measured across the cloned corpora are beans, not controllers —
+and it is not written: `beans.py` still reads nothing conditional. Closes when a `@Bean`
+under `@Profile`/`@ConditionalOnProperty` writes rows stating where it exists.
 
 ### OI-109 — a spec configurer adding queues is a miss
 **Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §5 (adversarial B5) ·

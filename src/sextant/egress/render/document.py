@@ -21,7 +21,7 @@ byte-identical to what this renderer produced before any of this existed.
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -700,6 +700,89 @@ def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
     return _text(_handler_fallback(endpoint))
 
 
+def _conditions_by_handler(
+    rows: "Sequence[Mapping[str, object]]",
+) -> dict[tuple[str, str | None, str | None], list[Mapping[str, object]]]:
+    """`endpoint_conditions` rows keyed by the endpoint they belong to (handler, method,
+    path) — the identity an inbound row carries — in the table's own order."""
+    by_endpoint: dict[tuple[str, str | None, str | None], list[Mapping[str, object]]] = {}
+    for row in rows:
+        key = (str(row["handler"]), _opt(row.get("method")), _opt(row.get("path")))
+        by_endpoint.setdefault(key, []).append(row)
+    return by_endpoint
+
+
+def _opt(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _condition_entries(
+    endpoint: Mapping[str, object],
+    by_endpoint: dict[tuple[str, str | None, str | None], list[Mapping[str, object]]],
+) -> list[DetailEntry]:
+    """The VERBOSE rendering of `endpoint_conditions` (spec 2026-10-21-conditional-controllers
+    §2, ruling 1 of 2026-10-22): the stored form is the table a machine reads; the document
+    says the same thing in words, two lines per condition — the condition as the code spells
+    it, and where it HOLDS among the environments this module resolves. Absent on an
+    unconditional row, which is almost every row.
+    """
+    handler = endpoint.get("handler")
+    if handler is None:
+        return []
+    rows = by_endpoint.get((str(handler), _opt(endpoint.get("method")), _opt(endpoint.get("path"))))
+    if not rows:
+        return []
+    entries: list[DetailEntry] = []
+    # One condition is one (kind, expression); its rows are its environments.
+    conditions: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+    for row in rows:
+        conditions.setdefault((str(row["kind"]), str(row["expression"])), []).append(row)
+    for (kind, expression), per_environment in conditions.items():
+        entries.append(
+            DetailEntry(_text("Exists only when"), _runs(_condition_words(kind, expression)), None)
+        )
+        holds = sorted(str(r["environment"]) for r in per_environment if str(r["holds"]) == "true")
+        fails = sorted(str(r["environment"]) for r in per_environment if str(r["holds"]) == "false")
+        unread = sorted(
+            str(r["environment"]) for r in per_environment if str(r["holds"]) == "unresolved"
+        )
+        total = len(per_environment)
+        if unread and len(unread) == total:
+            verdict = f"not evaluated by this analysis in any of the {total} environments"
+        else:
+            verdict = f"holds in {len(holds)} of {total} environments"
+            if fails:
+                verdict += " — not in " + ", ".join(f"`{e}`" for e in fails)
+            if unread:
+                verdict += "; not evaluated in " + ", ".join(f"`{e}`" for e in unread)
+        entries.append(DetailEntry(_text("Of this module's environments"), _runs(verdict), None))
+    return entries
+
+
+def _condition_words(kind: str, expression: str) -> str:
+    """The condition in words, from its structured expression."""
+    try:
+        parsed = json.loads(expression)
+    except ValueError:
+        return expression
+    if kind == "profile":
+        listed = ", ".join(f"`{e}`" for e in parsed.get("expressions", []))
+        return f"the active profile matches one of: {listed}"
+    if kind == "property":
+        keys = ", ".join(f"`{k}`" for k in parsed.get("keys", []))
+        having = parsed.get("having_value") or ""
+        value = f"is `{having}`" if having else "is set and not `false`"
+        missing = " (or is absent)" if parsed.get("match_if_missing") else ""
+        return f"the configuration key {keys} {value}{missing}"
+    # `other`: the annotation as the code spells it, with its arguments verbatim — named,
+    # never evaluated (spec §4: code, not configuration).
+    symbol = str(parsed.get("annotation", expression))
+    name = simple_name(symbol)
+    args = parsed.get("args") or {}
+    spelled = f"@{name}({json.dumps(args, sort_keys=True)})" if args else f"@{name}"
+    return f"`{spelled}` holds — a condition this analysis does not evaluate"
+
+
 def _detail_header(identity: str, symbol_or_fallback: tuple[Run, ...]) -> DetailEntry:
     """A detail block's own header line: the wire identity, then the full
     symbol (or its fallback text) that used to be a table column's whole
@@ -1180,6 +1263,7 @@ def assemble_module_document(
         # longer spells out lives here instead, and with one block per row in
         # table order, correlating a block back to its row needs no shared
         # identity between them.
+        conditions_by_handler = _conditions_by_handler(report.endpoint_conditions)
         for endpoint in inbound:
             request = _descriptor_entry(
                 "Request", endpoint.get("request_shape"), fields_by_shape, shape_names
@@ -1190,9 +1274,10 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
+            conditions = _condition_entries(endpoint, conditions_by_handler)
             entries = [
                 entry
-                for entry in (via, request, response, streaming, fails_with)
+                for entry in (via, request, response, streaming, fails_with, *conditions)
                 if entry is not None
             ]
             identity = _wire_identity(endpoint, redactor)
