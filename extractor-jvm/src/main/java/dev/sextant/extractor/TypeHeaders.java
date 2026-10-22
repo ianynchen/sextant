@@ -102,6 +102,12 @@ final class TypeHeaders {
             }
             while (!queue.isEmpty()) {
                 String name = queue.poll();
+                // A type whose class file sits in a DIRECTORY entry — a reactor sibling's own
+                // `target/classes` — is scanned whole as a library root by the Python side,
+                // so no header is written for it here and it is not "in no archive" either:
+                // it was read, in full, elsewhere. Counting it unlocated said "203 unread"
+                // on a module whose siblings were every one of them read (`mall-admin`).
+                if (scannedElsewhere(name, classpath)) continue;
                 Located located = locate(name, classpath, opened);
                 if (located == null) {
                     unlocated++;
@@ -121,6 +127,17 @@ final class TypeHeaders {
     }
 
     private record Located(Entry entry, byte[] bytes) {}
+
+    /** Whether some directory entry on the classpath holds {@code name}'s class file. */
+    private static boolean scannedElsewhere(String name, List<Entry> classpath) {
+        for (Entry entry : classpath) {
+            if (Files.isDirectory(entry.archive())
+                    && Files.isRegularFile(entry.archive().resolve(name + ".class"))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /** First jar on the classpath holding {@code name}, which is the JVM's own rule. Jars are
      *  opened on first use and kept open for the run. */

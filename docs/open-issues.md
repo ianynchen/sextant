@@ -582,6 +582,8 @@ itself after the build:**
 | `mall-admin` | — | 233 / 113 | **declared** — Maven refused offline: the dependency plugin version its POM pins is not in the local repository; `--allow-resolve` fetches it |
 | `spring-petclinic-api-gateway` | — | 0 / 64 | **declared** — Maven refused offline on a TEST-scoped artifact `mvn compile` never fetched (spec §2, fact 1); same escape |
 
+*Both fallbacks closed 2026-10-21: the field checker primes the classpath goal beside `mvn compile` (the one step it may reach the network from), and the default offline analysis then answers from the file — `mall-admin` 139 headers, `petclinic-api-gateway` 68, both `dependency_source: maven`. Nothing about `analyze` changed.*
+
 The two fallbacks are the ruling working as ruled: the weaker set, named as such, in the
 document's own coverage line. The "in no archive" that remains on Maven's answer is the
 platform's own types, which the walk stops at on purpose. Both `@ControllerAdvice` rows now
