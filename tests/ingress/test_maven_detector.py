@@ -1662,8 +1662,12 @@ def test_mavens_file_feeds_archives_coordinates_and_siblings(
 
     assert detected.dependency_source == "maven"
     assert detected.dependency_source_reason is None
+    # The jar, and the SIBLING's directory beside it: the extractor reads no header from a
+    # directory (the sibling is scanned whole as a library root), but a referenced type it
+    # finds there is a type that was read and must not be counted "in no archive".
     assert detected.dependency_archives == (
         LibraryRoot(coordinate="org.example:lib", version="1.2", archive=jar),
+        LibraryRoot("com.acme:sib", "1.0.0", sibling / "target" / "classes"),
     )
     assert detected.dependency_coordinates == ("org.example:lib",)
     assert detected.dependency_versions == {"org.example:lib": "1.2"}

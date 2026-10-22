@@ -253,18 +253,36 @@ def _ensure_compiled(
     on the path that runs one: a module already compiled at the pinned commit needs no
     JDK at all, and refusing it there turned "this machine cannot BUILD this pin" into
     "this pin cannot be validated", which is a different and untrue statement."""
-    if not force and ((module or repo) / "target" / "classes").is_dir():
+    built = ((module or repo) / "target" / "classes").is_dir()
+    primed = ((module or repo) / "target" / "sextant-classpath.txt").is_file()
+    if not force and built and primed:
         return
     if jdk is not None:
         _refused_if_wrong_jdk(repo, maven, jdk)
-    offline = _run([maven, "-q", "-o", "compile"], cwd=repo)
+    # `compile` AND the resolved classpath (spec 2026-10-21-maven-classpath-design.md §3a),
+    # in the one step this script is allowed to reach the network from. The detector asks
+    # Maven offline and falls back to the POM-declared set, LABELLED, where Maven refuses —
+    # and Maven refuses offline on any pin whose test- or runtime-scoped artifacts `mvn
+    # compile` never fetched (`mall-admin`'s pinned plugin version, `petclinic-api-gateway`'s
+    # `spring-boot-starter-webflux-test`). Priming them here is what makes the pinned
+    # document the DEFAULT analysis's answer rather than the fallback's: the file is left
+    # beside the classes and re-used offline while no POM is newer. Nothing changes about
+    # `analyze` itself, which still runs offline below.
+    goal = [
+        "compile",
+        "dependency:build-classpath",
+        "-Dmdep.outputFile=target/sextant-classpath.txt",
+        "-Dmdep.includeScope=compile",
+        "-Dmdep.regenerateFile=true",
+    ]
+    offline = _run([maven, "-q", "-o", *goal], cwd=repo)
     if offline.returncode == 0:
         return
-    online = _run([maven, "-q", "compile"], cwd=repo)
+    online = _run([maven, "-q", *goal], cwd=repo)
     if online.returncode != 0:
         raise FieldCheckFailure(
-            f"`mvn compile` failed in {repo} even with the network allowed:\n"
-            f"{online.stdout}\n{online.stderr}"
+            f"`mvn compile dependency:build-classpath` failed in {repo} even with the "
+            f"network allowed:\n{online.stdout}\n{online.stderr}"
         )
 
 

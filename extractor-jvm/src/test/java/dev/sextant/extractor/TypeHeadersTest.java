@@ -76,6 +76,24 @@ class TypeHeadersTest {
         assertFalse(fact.contains("\"call_site\""), "no member of the type is read");
     }
 
+    /** A reactor sibling's {@code target/classes} is a DIRECTORY entry: the type is scanned
+     *  whole by the Python side, so this read writes no header for it and does not count it
+     *  "in no archive" either — it was read, elsewhere. Measured on {@code mall-admin}, whose
+     *  siblings were every one of them read and reported as 203 unread. */
+    @Test
+    void a_type_found_in_a_directory_entry_is_neither_a_header_nor_unlocated(@TempDir Path dir)
+            throws IOException {
+        Path classes = dir.resolve("sibling/target/classes");
+        Path file = classes.resolve(internal(ParameterOnly.class) + ".class");
+        Files.createDirectories(file.getParent());
+        Files.write(file, bytesOf(ParameterOnly.class));
+        TypeHeaders.Result result = TypeHeaders.resolve(
+            Set.of(internal(ParameterOnly.class)), Set.of(),
+            List.of(new TypeHeaders.Entry("com.acme:sibling", "1.0", classes)), "doc");
+        assertEquals(0, result.headers());
+        assertEquals(0, result.unlocated());
+    }
+
     @Test
     void a_type_the_module_itself_compiled_is_never_looked_up(@TempDir Path dir) throws IOException {
         Path jar = dir.resolve("lib-1.0.jar");

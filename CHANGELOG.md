@@ -14,6 +14,14 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The field pins prime Maven's classpath, so the pinned documents are the default analysis's
+  answer** (2026-10-21). `mall-admin` and `petclinic-api-gateway` sat on the labelled declared
+  fallback because Maven refuses offline on artifacts `mvn compile` never fetched; the field
+  checker now runs `dependency:build-classpath` beside `compile` in the one step it may reach
+  the network from, and both read Maven's set offline afterwards (139 and 68 headers). A type
+  living in a reactor sibling's `target/classes` — scanned whole as a library root — is no
+  longer counted "in no archive" by the header read.
+
 - **A value merged from two branches resolves when both branches are the same value** —
   `OI-143` closed (spec `2026-10-21-merged-values-design.md`; ruled "take your partial
   approach", 2026-10-21). A parameter reassigned on one branch — `if (path.startsWith("/"))

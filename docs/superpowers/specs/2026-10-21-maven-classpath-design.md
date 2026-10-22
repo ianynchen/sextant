@@ -55,7 +55,18 @@ the same way, from the same file.
 > | `spring-petclinic-api-gateway` | 0 / 64 | `declared` — offline refusal on a test-scoped artifact `mvn compile` never fetched (§2, fact 1) | 2.4s |
 >
 > The three predictions held to the number (§1 was the extractor on the same files). The two
-> fallbacks are §3c as ruled — labelled, with the reason, in the document. `orders-service`'s
+> fallbacks are §3c as ruled — labelled, with the reason, in the document.
+>
+> **The two fallbacks closed 2026-10-21 by priming, not by changing `analyze`:** the field
+> checker's compile step now runs the classpath goal beside `mvn compile`, offline first and
+> online where the pin may (`_ensure_compiled`), so the file is left beside the classes and
+> the DEFAULT offline analysis answers from it. `mall-admin` reads 139 headers (43 in no
+> archive), `petclinic-api-gateway` 68 (24); both `dependency_source: maven`. One more count
+> correction with it: a referenced type that lives in a reactor SIBLING's `target/classes` is
+> scanned whole as a library root, so the extractor now skips it in both counts rather than
+> reporting it "in no archive" — `mall-admin`'s siblings are also installed jars, and the
+> declared set had read 233 headers from those jars where Maven's answer, listing them as
+> directories, read 128 and called 203 unread. `orders-service`'s
 > `spring-integration` catalog, skipped for a month on a framework that was on its classpath
 > through `spring-cloud-stream`, runs; the Data REST boundary row and `dependencies.py`'s
 > caveat now describe the fallback only.

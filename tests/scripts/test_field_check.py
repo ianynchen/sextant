@@ -81,13 +81,50 @@ def test_ensure_compiled_skips_the_rebuild_when_head_did_not_move(
     means whatever is already in `target/classes` was compiled from the
     commit that is still checked out, so `./mvnw` is never invoked."""
     repo = tmp_path / "repo"
-    (repo / "target" / "classes").mkdir(parents=True)
+    _built_and_primed(repo)
     calls: list[list[str]] = []
     monkeypatch.setattr(field_check, "_run", _stub_run(calls))
 
     field_check._ensure_compiled(repo, force=False)
 
     assert calls == []
+
+
+def _built_and_primed(module: Path) -> None:
+    """As `_ensure_compiled` leaves a module: classes, and the classpath file the goal
+    beside `compile` writes (spec 2026-10-21-maven-classpath-design.md §3d)."""
+    (module / "target" / "classes").mkdir(parents=True)
+    (module / "target" / "sextant-classpath.txt").write_text("", encoding="utf-8")
+
+
+def test_a_built_but_unprimed_module_runs_the_classpath_goal_beside_compile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Priming is the one step this script may reach the network from, so the resolved
+    classpath is written HERE and the pinned document is the default offline analysis's
+    answer, not the labelled fallback's — `mall-admin` and `petclinic-api-gateway` sat on
+    the fallback because Maven refuses offline on artifacts `mvn compile` never fetched.
+    A built module without the file runs the goal, offline first, with `compile` attached
+    (a reactor's siblings resolve only as built artifacts of the same session)."""
+    repo = tmp_path / "repo"
+    (repo / "target" / "classes").mkdir(parents=True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=False)
+
+    assert calls == [
+        [
+            "./mvnw",
+            "-q",
+            "-o",
+            "compile",
+            "dependency:build-classpath",
+            "-Dmdep.outputFile=target/sextant-classpath.txt",
+            "-Dmdep.includeScope=compile",
+            "-Dmdep.regenerateFile=true",
+        ]
+    ]
 
 
 def test_ensure_compiled_rebuilds_unconditionally_when_head_moved(
@@ -118,7 +155,7 @@ def test_ensure_compiled_asks_the_MODULE_whether_it_is_already_built(
     MODULE's. Reading the root's instead would rebuild the whole reactor on
     every run of an already-built clone — the shortcut, silently never taken."""
     repo = tmp_path / "repo"
-    (repo / "mall-admin" / "target" / "classes").mkdir(parents=True)
+    _built_and_primed(repo / "mall-admin")
     calls: list[list[str]] = []
     monkeypatch.setattr(field_check, "_run", _stub_run(calls))
 
@@ -158,7 +195,7 @@ def test_an_already_built_module_is_not_refused_for_the_machines_jdk(
     was then verified by hand and matched exactly.
     """
     repo = tmp_path / "repo"
-    (repo / "target" / "classes").mkdir(parents=True)
+    _built_and_primed(repo)
     calls: list[list[str]] = []
     monkeypatch.setattr(field_check, "_run", _stub_run(calls))
 
