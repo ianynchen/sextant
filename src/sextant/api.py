@@ -87,7 +87,10 @@ subclass per refusal site:
 - `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
   malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
   `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
-  claim's own schema when rendering.
+  claim's own schema when rendering. Also a call this module cannot honour as
+  asked: `query` naming a question that is not one of the six or a symbol the
+  workspace does not hold, and `analyze` given both its flag and an options
+  object.
 - `EnrichmentError` — everything specific to `enrich`'s own run: the
   mutually-exclusive doors, a workspace with no rendered document, the tool
   jail's own setup, an unknown `--agent` name, a missing model, the agent's
@@ -128,6 +131,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.query.questions import QuestionRefused, answer
 from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport, coverage_of
@@ -218,7 +222,9 @@ class ConfigurationError(SextantError):
     """One of Sextant's own on-disk artifacts — `.sextant.yml`,
     `.sextant-enrichment.json` — is written in a way this module cannot
     read, or (renderer-side) a `redact:` rule collides with a claim's own
-    schema."""
+    schema; or a call's own arguments name nothing this module has (an
+    unknown `query` question or symbol) or contradict each other (`analyze`
+    given both `allow_resolve` and `options`)."""
 
 
 class EnrichmentError(SextantError):
@@ -238,6 +244,19 @@ class DiffRefusedError(SextantError):
 # --------------------------------------------------------------------------
 # Result objects — frozen, no methods, nothing printed by any of them.
 # --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnalyzeOptions:
+    """How `analyze` runs — the three knobs the CLI has (spec 2026-10-22 §5), and no
+    fourth. `allow_resolve` lets detection ask the build tool online once
+    (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
+    `workspace_dir` puts a single module's workspace there instead of `<path>/.sextant`
+    (`--workspace`), and is refused for a multi-module root as the CLI refuses it."""
+
+    allow_resolve: bool = False
+    shadow: bool = False
+    workspace_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -895,12 +914,30 @@ def _analyze(
     ), False
 
 
-def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
+def analyze(
+    path: Path, *, allow_resolve: bool = False, options: AnalyzeOptions | None = None
+) -> AnalyzeResult:
     """Analyzes `path` into its own `.sextant` workspace (or, for a
     multi-module root, every module it names into ITS own workspace) — the
     library equivalent of `sextant module analyze`. Silent: no progress is
-    printed anywhere. Raises `DetectionError` where the CLI would refuse."""
-    result, _multi_module = _analyze(path, workspace_dir=None, allow_resolve=allow_resolve)
+    printed anywhere. Raises `DetectionError` where the CLI would refuse.
+
+    `options` carries every knob; `allow_resolve` alone is the earlier form, kept for
+    compatibility. Given both, with the flag set, it raises `ConfigurationError` rather
+    than choose between them."""
+    if options is None:
+        options = AnalyzeOptions(allow_resolve=allow_resolve)
+    elif allow_resolve:
+        raise ConfigurationError(
+            "analyze was given allow_resolve=True and an AnalyzeOptions — set "
+            "allow_resolve on the options object alone"
+        )
+    result, _multi_module = _analyze(
+        path,
+        workspace_dir=options.workspace_dir,
+        allow_resolve=options.allow_resolve,
+        shadow=options.shadow,
+    )
     return result
 
 
@@ -1712,6 +1749,29 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         uncalled=len(uncalled),
         route_refusals=len(refusals),
     )
+
+
+def query(
+    path: Path, question: str, *, symbol: str
+) -> list[dict[str, object]] | dict[str, list[dict[str, object]]]:
+    """One of the six module-scope questions (`QUESTIONS`: source, callers, callees,
+    implementations, uses, impact) about `symbol`, answered from the workspace `analyze`
+    left at `path` — in process, with no CLI equivalent (spec 2026-10-22 §5).
+
+    A list of `{"symbol", "file", "line_start", "line_end"}` sorted by symbol, or for
+    `impact` the three partitions `{"definite", "possible", "unknown_regions"}`. Reads the
+    workspace and never re-analyzes. Raises `NotAnalyzedError` where `render` would, and
+    `ConfigurationError` for a question that is not one of the six or a symbol the
+    workspace does not hold."""
+    workspace_dir = _workspace_dir_of(path, None)
+    _refuse_if_unanalyzed(path, workspace_dir)
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return answer(workspace, question, symbol=symbol)
+    except QuestionRefused as refused:
+        raise ConfigurationError(str(refused)) from refused
+    finally:
+        workspace.close()
 
 
 def export(path: Path) -> ExportResult:

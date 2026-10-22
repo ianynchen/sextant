@@ -731,9 +731,10 @@ _NAMED_QUERIES = {
     # grouping on identity is the reader's, because it must treat NULL as equal to NULL
     # and SQL equality does not.
     #
-    # The ORDER BY is identity, then every attribute, then the evidence columns: the reader
-    # takes the first row of a group for the group's scalar attributes, and an order that
-    # put a handler symbol ahead of them would make a moved controller change the answer.
+    # The ORDER BY is identity, then every attribute, then the evidence columns, so the
+    # rows arrive in a fixed order (NFR-1). It decides no attribute: where the rows of a
+    # group disagree on one, the reader carries every distinct value, sorted, as
+    # `{"several": [...]}`, never the value of whichever row came first.
     # The `direction` test is the same text as `Kind.where` in the vocabulary (a test pins
     # it): a `both` row is one wire identity on each side.
     "boundary_endpoint": """
@@ -954,6 +955,145 @@ _NAMED_QUERIES = {
         SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence,
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
+    """,
+    # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
+    # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk
+    # behind `impact` one read per hop of its frontier, never one per symbol it reaches.
+    #
+    # A symbol is placed by its declaring document's path and the line extent its fact
+    # gives. A line of 0 is the class file stating none — always so for a type or a field —
+    # and comes back NULL, the export index's own rule (`located_symbols` above).
+    #
+    # `type_hierarchy` and a signature name a type BARE (D00 §5a) while `symbols`,
+    # `call_edges.caller` and `.callee` carry the module coordinates, so the caller hands a
+    # type over bare and a hierarchy row joins `symbols` on the symbol's last
+    # space-separated token, as `boundary_shape_documents` does. Every answer is ordered on
+    # the symbol, then the file, so a symbol two documents declare is two rows in a fixed
+    # order (NFR-1).
+    "question_source": """
+        SELECT s.symbol AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM symbols s JOIN documents d ON d.document_id = s.document_id
+        WHERE s.symbol = ?
+        ORDER BY symbol, file
+    """,
+    # One hop each way. A call that left the workspace has no callee — no body was read —
+    # and is not a symbol, so `question_callees` leaves it out.
+    "question_callers": """
+        SELECT DISTINCT e.caller AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM call_edges e
+        LEFT JOIN symbols s ON s.symbol = e.caller
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE e.callee = ?
+        ORDER BY symbol, file
+    """,
+    "question_callees": """
+        SELECT DISTINCT e.callee AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM call_edges e
+        LEFT JOIN symbols s ON s.symbol = e.callee
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE e.caller = ? AND e.callee IS NOT NULL
+        ORDER BY symbol, file
+    """,
+    # The direct subtypes of a BARE type — a class's superclass and every interface it
+    # declares are each a row, so this is "implements or extends".
+    "question_implementations": """
+        SELECT DISTINCT coalesce(s.symbol, t.child) AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM type_hierarchy t
+        LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE t.ancestor = ?
+        ORDER BY symbol, file
+    """,
+    # What references a BARE type: a member whose signature names it as a parameter's type
+    # or as what it returns (a field's own type is its `returns`), and a direct subtype.
+    # Each symbol's referenced types are unnested once and equi-joined, so the scan of
+    # `symbols` is one pass rather than a JSON extraction per pair.
+    "question_uses": """
+        WITH subject AS (SELECT ?::VARCHAR AS type),
+        referenced AS (
+            SELECT symbol,
+                   unnest(list_prepend(
+                       json_extract_string(signature, '$.returns.symbol'),
+                       json_extract_string(signature, '$.parameters[*].type.symbol')
+                   )) AS type
+            FROM symbols
+        ),
+        users AS (
+            SELECT r.symbol AS symbol FROM referenced r JOIN subject ON r.type = subject.type
+            UNION
+            SELECT coalesce(s.symbol, t.child) AS symbol
+            FROM type_hierarchy t
+            JOIN subject ON t.ancestor = subject.type
+            LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+        )
+        SELECT DISTINCT u.symbol AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM users u
+        LEFT JOIN symbols s ON s.symbol = u.symbol
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        ORDER BY symbol, file
+    """,
+    # One hop of `impact`'s upstream walk, for the WHOLE frontier at once: `walked` is a
+    # list of `{symbol, bare, owner}` (the caller splits the symbol, through the one seam
+    # that knows its grammar), and every row names the walked symbol it came from.
+    #
+    #   caller      a call edge whose callee is the walked symbol, with its resolution
+    #   use         a member whose signature names the walked type, or its direct subtype
+    #   unresolved  a call edge whose dispatch was NOT resolved and whose target names the
+    #               walked symbol — it may reach it, and the walk cannot say
+    #   unscanned   an ancestor of the walked symbol's own type (or of the type itself)
+    #               that this workspace never read, through which code it holds no body
+    #               for may call in
+    #
+    # The last two are where the walk cannot see, and the caller lists them rather than
+    # walking them.
+    "question_impact_step": """
+        WITH walked AS (
+            SELECT w.symbol AS symbol, w.bare AS bare, w.owner AS owner
+            FROM (
+                SELECT unnest(?::STRUCT(symbol VARCHAR, bare VARCHAR, owner VARCHAR)[]) AS w
+            )
+        ),
+        referenced AS (
+            SELECT symbol,
+                   unnest(list_prepend(
+                       json_extract_string(signature, '$.returns.symbol'),
+                       json_extract_string(signature, '$.parameters[*].type.symbol')
+                   )) AS type
+            FROM symbols
+        ),
+        reached AS (
+            SELECT 'caller' AS arm, w.symbol AS walked, e.caller AS symbol,
+                   e.resolution AS resolution
+            FROM call_edges e JOIN walked w ON e.callee = w.symbol
+            UNION ALL
+            SELECT 'use', w.symbol, r.symbol, 'resolved'
+            FROM referenced r JOIN walked w ON r.type = w.bare
+            UNION ALL
+            SELECT 'use', w.symbol, coalesce(s.symbol, t.child), 'resolved'
+            FROM type_hierarchy t
+            JOIN walked w ON t.ancestor = w.bare
+            LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+            UNION ALL
+            SELECT 'unresolved', w.symbol, e.caller, e.resolution
+            FROM call_edges e JOIN walked w ON e.target = w.bare
+            WHERE e.resolution = 'unresolved'
+            UNION ALL
+            SELECT 'unscanned', w.symbol, t.ancestor, NULL
+            FROM type_hierarchy t JOIN walked w ON t.child = w.owner
+            WHERE NOT t.scanned
+        )
+        SELECT DISTINCT r.arm AS arm, r.walked AS walked, r.symbol AS symbol,
+               r.resolution AS resolution, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM reached r
+        LEFT JOIN symbols s ON s.symbol = r.symbol
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        ORDER BY arm, walked, symbol, resolution, file
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
@@ -1398,6 +1538,7 @@ _FACT_ONLY = frozenset(
         "facts",
         "selected_documents",
         "constants",
+        "question_source",
     }
 )
 

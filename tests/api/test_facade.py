@@ -619,3 +619,120 @@ def test_observability_of_a_document_that_is_not_an_object_raises_notanalyzederr
 
     with pytest.raises(api.NotAnalyzedError, match="metadata.json"):
         api.observability(tmp_path)
+
+
+# --------------------------------------------------------------------------
+# query and AnalyzeOptions
+# --------------------------------------------------------------------------
+
+_MODULE_PREFIX = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+ORDER_CONTROLLER_GET = _MODULE_PREFIX + "com/acme/orders/OrderController#get(sig_4cb6f523)."
+ORDER_SERVICE_FIND = _MODULE_PREFIX + "com/acme/orders/OrderService#find(sig_4cb6f523)."
+ORDER_RESULT = _MODULE_PREFIX + "com/acme/orders/OrderResult#"
+SPLITTER = _MODULE_PREFIX + "com/acme/orders/trace/Splitter#"
+FIRST_SPLITTER_HEAD = _MODULE_PREFIX + "com/acme/orders/trace/FirstSplitter#head(sig_7b622a99)."
+
+
+def _symbols(rows: object) -> list[str]:
+    assert isinstance(rows, list)
+    return [str(row["symbol"]) for row in rows]
+
+
+def test_source_names_the_file_and_lines_of_a_method(rendered_root: Path):
+    [row] = cast(
+        list[dict[str, object]], api.query(rendered_root, "source", symbol=ORDER_CONTROLLER_GET)
+    )
+    assert str(row["file"]).endswith("OrderController.java")
+    assert cast(int, row["line_start"]) <= cast(int, row["line_end"])
+
+
+def test_callers_and_callees_are_one_hop_each_way(rendered_root: Path):
+    """The handler calls the service; the service is called by the handler. Each answer is
+    one hop: the service's callees are not among the handler's."""
+    callers = _symbols(api.query(rendered_root, "callers", symbol=ORDER_SERVICE_FIND))
+    callees = _symbols(api.query(rendered_root, "callees", symbol=ORDER_CONTROLLER_GET))
+    assert ORDER_CONTROLLER_GET in callers and callers == sorted(callers)
+    assert ORDER_SERVICE_FIND in callees
+    service_callees = set(_symbols(api.query(rendered_root, "callees", symbol=ORDER_SERVICE_FIND)))
+    assert not (service_callees - {ORDER_SERVICE_FIND}) & set(callees)
+
+
+def test_implementations_lists_the_types_implementing_an_interface(rendered_root: Path):
+    assert _symbols(api.query(rendered_root, "implementations", symbol=SPLITTER)) == [
+        _MODULE_PREFIX + "com/acme/orders/trace/FirstSplitter#",
+        _MODULE_PREFIX + "com/acme/orders/trace/SecondSplitter#",
+    ]
+
+
+def test_uses_asks_about_a_type_not_a_function(rendered_root: Path):
+    """A payload class's real question: what returns it, takes it, or extends it — the
+    handler and the service both return `OrderResult`, and the OpenAPI result extends it."""
+    users = _symbols(api.query(rendered_root, "uses", symbol=ORDER_RESULT))
+    assert {ORDER_CONTROLLER_GET, ORDER_SERVICE_FIND} <= set(users)
+    assert _MODULE_PREFIX + "com/acme/orders/openapi/DetailedOrderResult#" in users
+    assert users == sorted(users)
+
+
+def test_impact_returns_three_partitions_never_one_count(rendered_root: Path):
+    result = cast(
+        dict[str, list[dict[str, object]]], api.query(rendered_root, "impact", symbol=ORDER_RESULT)
+    )
+    assert set(result) == {"definite", "possible", "unknown_regions"} and result["definite"]
+    definite = _symbols(result["definite"])
+    # The service returns it; the legacy controller calls the service: two hops upstream.
+    assert ORDER_SERVICE_FIND in definite
+    assert _MODULE_PREFIX + "com/acme/orders/LegacyOrderController#amend(sig_4cb6f523)." in definite
+    assert not set(definite) & set(_symbols(result["possible"]))
+
+
+def test_impact_through_a_dispatch_that_narrowed_to_two_bodies_is_possible(rendered_root: Path):
+    """`TraceProbe#describe` calls `Splitter#head`, which the fixture implements twice: the
+    call may run either body, so it is a possible caller of each, never a definite one."""
+    result = cast(
+        dict[str, list[dict[str, object]]],
+        api.query(rendered_root, "impact", symbol=FIRST_SPLITTER_HEAD),
+    )
+    describe = _MODULE_PREFIX + "com/acme/orders/trace/TraceProbe#describe(sig_99bf8bb7)."
+    assert describe in _symbols(result["possible"])
+    assert describe not in _symbols(result["definite"])
+
+
+def test_an_unknown_question_is_refused_naming_the_six(rendered_root: Path):
+    with pytest.raises(
+        api.ConfigurationError, match="source, callers, callees, implementations, uses, impact"
+    ):
+        api.query(rendered_root, "trace", symbol="x")
+
+
+def test_an_unknown_symbol_is_refused_naming_it(rendered_root: Path):
+    with pytest.raises(api.ConfigurationError, match="OrderController#nothing"):
+        api.query(
+            rendered_root,
+            "callers",
+            symbol=_MODULE_PREFIX + "com/acme/orders/OrderController#nothing.",
+        )
+
+
+def test_query_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError, match="no analysis found"):
+        api.query(tmp_path, "source", symbol="x")
+
+
+def test_analyze_accepts_an_options_object_equivalent_to_the_flags(
+    module_root: Path, tmp_path: Path
+):
+    """The three knobs the CLI has, as one object (spec §5): the same analysis as the flag
+    form, and `workspace_dir` puts the workspace where it says."""
+    elsewhere = tmp_path / "elsewhere"
+
+    flags = api.analyze(module_root, allow_resolve=False)
+    options = api.analyze(module_root, options=api.AnalyzeOptions(workspace_dir=elsewhere))
+
+    assert options == flags
+    assert (elsewhere / "workspace.duckdb").is_file()
+
+
+def test_analyze_refuses_the_flag_and_an_options_object_together(module_root: Path):
+    with pytest.raises(api.ConfigurationError, match="allow_resolve"):
+        api.analyze(module_root, allow_resolve=True, options=api.AnalyzeOptions())
+    assert not (module_root / ".sextant").exists()
