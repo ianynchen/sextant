@@ -389,11 +389,19 @@ class CallArgument(BaseModel):
         # site's own call-site fact, reached by `source` -> `result`.
         "concat",
         "null",
+        # Capability 9.19 (spec 2026-10-21-merged-values-design.md): a value with SEVERAL
+        # producers — a local reassigned on one branch — with each producer in `candidates`,
+        # rendered in this same grammar. "One of these", chosen by nobody: the walk resolves
+        # a merge whose candidates share a root, inexactly, and leaves every other one
+        # `unresolved` exactly as the bare kind below used to say for all of them.
+        "merge",
         "unresolved",
     ]
     value: LiteralValue | None = None
     symbol: str | None = None
     source: int | None = None
+    # Capability 9.19's own key, on the `merge` kind alone.
+    candidates: list["CallArgument"] | None = None
     # Capability 9.15's own key, on the `array` kind alone: the argument list
     # a varargs call site's `ANEWARRAY`/`AASTORE` construction builds, each
     # element carrying the same kind it would carry as a single argument in

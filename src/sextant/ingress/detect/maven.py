@@ -824,6 +824,13 @@ class MavenDetector:
             "dependency:build-classpath",
             f"-Dmdep.outputFile={_CLASSPATH_FILE.as_posix()}",
             "-Dmdep.includeScope=compile",
+            # **The file is rewritten even when its content is unchanged.** The plugin's
+            # default (`regenerateFile=false`) leaves an unchanged file with its OLD mtime, so
+            # after a `git checkout` touched the POM the file stayed older than it and every
+            # re-ask ended "wrote nothing current" — MEASURED on `orders-advice`, which fell
+            # back to the declared set with Maven exiting 0. §3d's re-use rule is on mtimes,
+            # and this is what makes the mtime mean "answered for these POMs".
+            "-Dmdep.regenerateFile=true",
             *(["-pl", selected, "-am"] if selected is not None and in_reactor else []),
         ]
         first = MavenDetector._run_maven(root, ["mvn", "-o", *options])
@@ -922,6 +929,15 @@ class MavenDetector:
         if top[1].find("m:modules", _POM_NS) is None or not path.resolve().is_relative_to(
             root.resolve()
         ):
+            return path
+        # **And it must NAME this module**, directly or through a nested aggregator —
+        # containment alone is not aggregation. `fixtures/pom.xml` sits above every fixture
+        # and lists exactly one; told `-pl orders-advice` from there, Maven answered "Could
+        # not find the selected project in the reactor" and the module fell back to the
+        # declared set on a machine where its own directory would have answered. MEASURED,
+        # the day the file beside it went stale.
+        named = {leaf.resolve() for leaf in MavenDetector._leaf_dirs(root, top[1])}
+        if path.resolve() not in named:
             return path
         return root
 

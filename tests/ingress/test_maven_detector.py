@@ -1882,3 +1882,49 @@ def test_a_reactor_with_an_unbuilt_module_is_asked_for_the_built_ones_only(
     assert argv[argv.index("-pl") + 1] == "a" and "-am" in argv and "compile" in argv
     assert "nothing is built under" in (modules["com.acme:other"].dependency_source_reason or "")
     assert "wrote no current" in (modules["com.acme:thing"].dependency_source_reason or "")
+
+
+def test_an_aggregator_above_a_module_it_does_not_name_is_not_its_reactor_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`fixtures/pom.xml`'s shape: an aggregator that CONTAINS the module's directory and
+    is its `<parent>`, but names a different module. Told `-pl thing` from there, Maven
+    cannot find the project and the module falls back to the declared set — measured on
+    `orders-advice` the day its classpath file went stale. Containment is not aggregation:
+    Maven is started from the module's own directory, whole."""
+    monkeypatch.setattr(maven_module.shutil, "which", lambda _name: "/usr/bin/mvn")
+    root = tmp_path / "fixtures"
+    root.mkdir()
+    _module(
+        root,
+        _BARE_POM.replace(
+            "<artifactId>thing</artifactId>", "<artifactId>fixtures</artifactId>"
+        ).replace(
+            "</project>",
+            "<packaging>pom</packaging><modules><module>other</module></modules></project>",
+        ),
+    )
+    (root / "other").mkdir()
+    _module(
+        root / "other",
+        _CHILD_POM.replace("acme-parent", "fixtures")
+        .replace("2.3.0", "1.0.0")
+        .replace("<artifactId>thing</artifactId>", "<artifactId>other</artifactId>"),
+    )
+    module = _built(
+        root / "thing",
+        _CHILD_POM.replace("acme-parent", "fixtures")
+        .replace("2.3.0", "1.0.0")
+        .replace("</project>", f"{_DEPENDS}</project>"),
+    )
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(argv, *, cwd, **_kwargs):
+        calls.append((list(argv), Path(cwd)))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(maven_module.subprocess, "run", fake_run)
+    MavenDetector().detect(module)
+    [(argv, cwd)] = calls
+    assert cwd == module
+    assert "-pl" not in argv and "compile" not in argv

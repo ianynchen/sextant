@@ -419,7 +419,15 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
     if answer is None:
         return None, None, str(Resolution.UNRESOLVED)
     if answer.kind == LITERAL and answer.literal_kind == STRING:
-        return url_of({"kind": "string", "value": str(answer.value)})
+        peer, path, resolution = url_of({"kind": "string", "value": str(answer.value)})
+        # **An INEXACT literal is a partly-known address** (spec 2026-10-21 merged values,
+        # §3b): the text is the value the code states, reached through a merge whose root
+        # it is, and what the call on that root did to it was never read. `partial` is the
+        # word D00 §4's set already has for exactly that — "part of this address was read"
+        # — and `resolved` would claim a rendering nobody checked.
+        if answer.inexact and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.PARTIAL)
+        return peer, path, resolution
     if answer.kind == EXPRESSION:
         return url_of({"kind": EXPRESSION, "value": str(answer.value)})
     return None, None, str(Resolution.UNRESOLVED)
@@ -595,6 +603,11 @@ def channel_of_answer(answer: "Answer | None") -> tuple[None, str | None, str]:
     here and the same one-tuple unresolved answer.
     """
     if answer is None or answer.kind != LITERAL or answer.literal_kind != STRING:
+        return None, None, "unresolved"
+    # An INEXACT literal is refused by the same clause an expression is (spec 2026-10-21
+    # merged values, §3b): a broker resolves a destination it is GIVEN, and a topic name
+    # some call may have re-rendered is not one.
+    if answer.inexact:
         return None, None, "unresolved"
     return None, str(answer.value), "resolved"
 

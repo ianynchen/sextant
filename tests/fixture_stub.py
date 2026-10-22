@@ -88,6 +88,7 @@ def compile_and_install(*, offline: bool) -> Path:
             "dependency:build-classpath",
             "-Dmdep.outputFile=target/sextant-classpath.txt",
             "-Dmdep.includeScope=compile",
+            "-Dmdep.regenerateFile=true",
         ],
         cwd=STUB,
         check=True,

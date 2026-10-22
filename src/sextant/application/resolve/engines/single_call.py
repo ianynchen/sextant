@@ -582,6 +582,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # untouched and this is the pre-2F path unchanged.
         url_argument = address_argument(url_argument, field_sources, facts, caller)
         destinations: Sequence[tuple[str | None, str | None, str]]
+        # **The verb per destination, where the walk answered it** (spec 2026-10-21 merged
+        # values, measured on `apollo-portal`): the wrapper's `exchange(parseHost + path,
+        # method, …)` takes its VERB as a parameter too, and `_verb_of` reads the argument
+        # verbatim, so 51 of its 61 walked rows carried a path and no verb. The walk resolves
+        # every slot of a site per binding, so the verb's answer is already in the same
+        # binding as the path's — read from there, it is the enum literal the wrapper's own
+        # `post()`/`put()`/`delete()` handed in, on the same calling path as the path. None
+        # here means the loop below mints `(verb, destination)` pairs as it always has.
+        walked_pairs: list[tuple[str | None, tuple[str | None, str | None, str]]] | None = None
         read_destination = channel_of if _channel_declared(method) else url_of
         # 2I design §4, form 1: THE IDENTITY IS NOT AT THE CALL. Some
         # protocols name the operation on the payload rather than in the
@@ -786,16 +795,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # — the same split `read_destination` makes above, and for the same reason:
                 # a destination is an opaque identity kept whole, never a URL to split.
                 read_answer = channel_of_answer if _channel_declared(method) else url_of_answer
+                method_slot = method.get("method_arg")
                 walked = list(
                     dict.fromkeys(
-                        read_answer(binding.slots.get(url_slot))
+                        (
+                            verb
+                            if verb is not None or not isinstance(method_slot, int)
+                            else _verb_from_answer(binding.slots.get(method_slot)),
+                            read_answer(binding.slots.get(url_slot)),
+                        )
                         for binding in resolve_site(workspace, site, values, ())
                     )
                 )
                 # The walk may never take an answer away. Where it reached nothing the
                 # literal read above stands, which for a `concat` is the addressless row
                 # this engine has always derived.
-                answered = [tuple_ for tuple_ in walked if tuple_[1] is not None]
+                answered = [(row_verb, found) for row_verb, found in walked if found[1] is not None]
                 if answered:
                     # **The PEER is its own question** (`OI-138` cause 3). The walk above is
                     # handed NO identities on purpose, so an address assembled from an object
@@ -803,17 +818,21 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     # CALLED is asked separately, of the first operand alone, and only an
                     # answer that yields an authority is taken — the user's ruling of
                     # 2026-10-17, "peer and path from separate evidence".
-                    destinations = [
-                        with_authority(
-                            found,
-                            url_argument,
-                            str(site["caller"]),
-                            workspace,
-                            values,
-                            catalog.value_model or (),
+                    walked_pairs = [
+                        (
+                            row_verb,
+                            with_authority(
+                                found,
+                                url_argument,
+                                str(site["caller"]),
+                                workspace,
+                                values,
+                                catalog.value_model or (),
+                            ),
                         )
-                        for found in answered
+                        for row_verb, found in answered
                     ]
+                    destinations = [destination for _, destination in walked_pairs]
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
@@ -852,7 +871,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # `annotation_driven._derive_replies` already keeps for a listener's
         # declared reply destinations) — every row shares the same verb/body
         # /response captures; only the destination itself varies.
-        for peer, path, url_resolution in destinations:
+        minted = (
+            walked_pairs
+            if walked_pairs is not None
+            else [(verb, destination) for destination in destinations]
+        )
+        for row_verb, (peer, path, url_resolution) in minted:
             # 2O design §8: identity is the URL the framework serves, so the
             # path is canonicalized HERE — before the dedup key below is built
             # from it, and before the row is written. `domain/paths.py` states
@@ -889,7 +913,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # constructor whose payload slot could not be read narrows this
             # row's resolution the same way.
             captures_read = (
-                (verb is not None or verbless)
+                (row_verb is not None or verbless)
                 # The descriptors are what these captures PRODUCED, and passing them is
                 # what stops a row claiming a read failure over a column that was read
                 # (`OI-77`, W43's review).
@@ -940,7 +964,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # "Collapse only within one caller, where both sides are observable"
                 # (§6.1): one method calling one target twice is still one row, because
                 # the caller and the peer are equal there.
-                key = (catalog.protocol, row_direction, verb or "", path, caller, peer)
+                key = (catalog.protocol, row_direction, row_verb or "", path, caller, peer)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -955,7 +979,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     {
                         "protocol": catalog.protocol,
                         "direction": row_direction,
-                        "method": verb,
+                        "method": row_verb,
                         "path": path,
                         "caller": caller,
                         "kind": QUERY_KIND,
@@ -979,7 +1003,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 {
                     "protocol": catalog.protocol,
                     "direction": row_direction,
-                    "method": verb,
+                    "method": row_verb,
                     "path": path,
                     "handler": caller if inbound else None,
                     "caller": None if inbound else caller,
@@ -1937,6 +1961,16 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
+
+
+def _verb_from_answer(answer: Any) -> str | None:
+    """The verb a walked binding holds at the `method_arg` slot: an `enum` constant the
+    walk carried as a `symbol` literal (`org/springframework/http/HttpMethod#POST.` reads
+    as `POST`, exactly as `_verb_of` reads the same symbol off a call-site argument). None
+    for anything else — a verb the walk could not reach stays NULL, as it always has."""
+    if answer is None or answer.kind != "literal" or answer.literal_kind != "symbol":
+        return None
+    return member_name(str(answer.value))
 
 
 def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | None:

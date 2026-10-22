@@ -1974,7 +1974,15 @@ the field corpus) live in
   interior hole whose value the facts NAME is written `{ownerId}` (ruled 2026-10-18,
   `OI-153`), which is the route's own variable and the same text the server publishes for
   that route; one with no name to take stays `{}`, a runtime value inside a path segment.
-  Measured: `apollo-portal`'s eight outbound rows. **A `path` holding `<host>` or `{}` is a
+  Measured: `apollo-portal`'s eight outbound rows — and since 2026-10-21 its **76**: a project's
+  own HTTP wrapper that reassigns the path on one branch (`if (path.startsWith("/")) path =
+  path.substring(1)`) used to leave 68 call sites' written addresses behind a sourceless
+  merge; the extractor now writes the merge's candidates (capability 9.19) and the walk
+  resolves one whose candidates share a root — the parameter beside a call ON the parameter,
+  read off two facts and never off what the call does — to each caller's literal, INEXACT,
+  published at `partial` with the verb read from the same walked binding (spec
+  `2026-10-21-merged-values-design.md`, `OI-143` closed). A merge with no root stays
+  `unresolved`. **A `path` holding `<host>` or `{}` is a
   statement about PART of an address and is not an exact address** — a stitcher matching it
   as literal text would join two rows on a marker they share. A path holding only NAMED
   holes is an exact address in the only sense a URI template is one.

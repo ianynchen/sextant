@@ -1022,6 +1022,7 @@ recovered later. Kinds:
 | `array` | an array construction reaching the slot (JVM: `ANEWARRAY`/`NEWARRAY` plus its `xASTORE`s) | `elements` carries one entry per element, each an argument of this same grammar. **One slot, not N** — a varargs call passes one array |
 | `null` | ACONST_NULL | |
 | `concat` | invokedynamic via `StringConcatFactory` | **an address the code ASSEMBLES rather than states.** `"/api/" + version + "/orders"` is not built in the bytecode: javac emits one instruction plus a RECIPE holding the literal parts with a marker per runtime value. `value` is the template — `/api/{}/orders` — and the hole is deliberately UNNAMED: a path variable's name was never part of the address (a server routes `/api/owners/42` to `/api/owners/{ownerId}` by POSITION and may rename the variable freely), so `{}` is what both sides share and naming it would invent one the class file often does not carry. What FILLS the hole is the concat site's own call-site fact, reached by `source` → `result` |
+| `merge` | a value with SEVERAL producing instructions — a local reassigned on one branch | **one of these, chosen by nobody** (capability 9.19, spec `2026-10-21-merged-values-design.md`). `candidates` carries each producer in this same grammar, in instruction order, identical ones folded. The walk resolves a merge whose candidates share a ROOT — one is `x`, every other is a call whose receiver or argument is `x` — to `x`'s answers marked inexact (published at `partial`); any other merge stays `unresolved`, the Phase 2G ruling unchanged |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
 **`<init>` is the canonical constructor call-site name every extractor normalizes to** —
@@ -1094,6 +1095,19 @@ identically**, deliberately: javac erases the sugar at the call site and the cal
 `elements` states what the callee receives either way. Strictly additive: an engine that
 does not consult `array` treats it exactly as it always treated `unresolved`, which is
 what every varargs slot read as before 9.15.
+
+**`merge` is the canonical cross-language kind for "this argument came from one of several
+places"** (capability 9.19) — a value a branch reassigned, a conditional expression, any
+join of control flow where two producers meet. `candidates` carries each producer in this
+same grammar, so a reader sees exactly what the extractor saw and nothing it inferred. The
+JVM mapping: a frame slot whose `SourceValue` holds more than one instruction, each rendered
+as it would be alone; two branches producing the same literal fold to one candidate and the
+survivor is written as itself. **The extractor chooses nothing and evaluates nothing**: the
+ruling that a branch-merged value is `unresolved` (Phase 2G, value-resolution ruling 1) is
+kept at the walk, which resolves only a merge whose candidates share a root — `x` beside a
+call on `x` — and then only INEXACTLY, because the call's effect on the value was never read.
+Strictly additive: an engine that does not consult `merge` treats it exactly as it always
+treated `unresolved`.
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:

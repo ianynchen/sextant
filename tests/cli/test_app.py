@@ -245,7 +245,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # reads every class the jar holds, so it is one more document here too. NOT the header
     # document: that one is `header_only` and `coverage` leaves it out — the count would
     # read 156 if it did not, which is what `test_type_headers` pins.
-    assert metadata["coverage"]["documents"] == 155
+    # 156 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the wrapper that reassigns `path` on one
+    # branch — one class file.
+    assert metadata["coverage"]["documents"] == 156
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

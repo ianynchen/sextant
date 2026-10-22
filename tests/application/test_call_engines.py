@@ -13,8 +13,10 @@ from typing import Any
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import single_call as sc_engine
+from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
@@ -28,12 +30,14 @@ from sextant.domain.facts import (
     CallTarget,
     Document,
     FieldWriteFact,
+    MethodReturnFact,
     Parameter,
     Signature,
     SymbolFact,
     TypeRef,
 )
 from sextant.domain.redaction import REDACTED
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource, _hoisted
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -196,6 +200,155 @@ def test_an_assembled_url_publishes_the_path_half_it_states(tmp_path: Path):
     # hole dressed as a hostname (§5).
     assert endpoint["peer"] is None
     assert endpoint["resolution"] == "partial"
+
+
+def _resolve_walked(tmp_path: Path, facts: list):
+    """`_resolve`, with the two derived tables the walk's crossing edges read built first —
+    `bound_to_parameter` is derived from `call_edges`, and a test whose address lives in a
+    CALLER's literal needs it (the pipeline builds both before any engine runs)."""
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    skipped = derive_endpoints(workspace, [_catalog()], capabilities=CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+_WRAPPER = "com/acme/http/Wrapper#"
+_SEND_JVM = "(Lorg/springframework/http/HttpMethod;Ljava/lang/String;)V"
+_EXCHANGE_JVM = (
+    "(Ljava/lang/String;Lorg/springframework/http/HttpMethod;"
+    "Lorg/springframework/http/HttpEntity;Ljava/lang/Class;"
+    "[Ljava/lang/Object;)Lorg/springframework/http/ResponseEntity;"
+)
+
+
+def _declared_method(owner: str, name: str, jvm: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + method_descriptor(owner, name, jvm),
+        construct_kind="method",
+        enclosing=_MODULE + owner,
+    )
+
+
+@pytest.mark.pins("single_call.the-VERB-rides-the-same-binding-as-the-path")
+def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pair(
+    tmp_path: Path,
+):
+    """`OI-143`'s shape through the engine (spec 2026-10-21 merged values, §3b and its last
+    paragraph). `Wrapper#send(method, path)` does `if (path.startsWith("/")) path =
+    path.substring(1); exchange(base + path, method, null, OrderView.class)`: the url operand
+    is a MERGE of the parameter and `substring`'s result, and the VERB is a parameter too.
+    Two callers: `send(GET, "/a")` and `send(POST, "b")`.
+
+    The merge has a root (the parameter — `substring`'s site says its receiver is that
+    parameter), so the path resolves to each caller's literal, inexactly; the verb is read
+    from the SAME binding as the path, so each row carries its own caller's verb. Measured
+    on `apollo-portal` before this read existed: 51 of the wrapper's 61 rows had a path and
+    no verb. Both rows `partial` — the host is an unread field and the rendering of the path
+    was never read — and nothing here knows what `substring` does.
+    """
+    send = _MODULE + method_descriptor(_WRAPPER, "send", _SEND_JVM)
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _WRAPPER, construct_kind="class"),
+        _declared_method(_WRAPPER, "send", _SEND_JVM),
+        _declared_method(_WRAPPER, "get", "()V"),
+        _declared_method(_WRAPPER, "post", "()V"),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+        # path.substring(1) — a call ON parameter 1, its result value 10
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner="java/lang/String#", name="substring", descriptor="(I)Ljava/lang/String;"
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=None,
+            receiver_parameter=1,
+            result=10,
+            arguments=[CallArgument(kind="int", value=1)],
+        ),
+        # base + path — the concat whose second operand is the MERGE
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner="java/lang/invoke/StringConcatFactory#",
+                name="makeConcatWithConstants",
+                descriptor="(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            ),
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=19,
+            arguments=[
+                CallArgument(kind="field", symbol=_WRAPPER + "base."),
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="parameter", value=1),
+                        CallArgument(kind="unresolved", source=10),
+                    ],
+                ),
+            ],
+        ),
+        # exchange(base + path, method, null, OrderView.class)
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(owner=RESTTEMPLATE, name="exchange", descriptor=_EXCHANGE_JVM),
+            invoke_kind="virtual",
+            ordinal=2,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="concat", source=19, value="{}{}"),
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="null"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="array", elements=[]),
+            ],
+        ),
+        # the two callers
+        CallSiteFact(
+            document_id="doc_1",
+            caller=_MODULE + method_descriptor(_WRAPPER, "get", "()V"),
+            target=CallTarget(owner=_WRAPPER, name="send", descriptor=_SEND_JVM),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#GET."),
+                CallArgument(kind="string", value="/a"),
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=_MODULE + method_descriptor(_WRAPPER, "post", "()V"),
+            target=CallTarget(owner=_WRAPPER, name="send", descriptor=_SEND_JVM),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#POST."),
+                CallArgument(kind="string", value="b"),
+            ],
+        ),
+    ]
+    workspace = _resolve_walked(tmp_path, facts)
+    rows = sorted(
+        (e["method"], e["path"], e["resolution"])
+        for e in workspace.query("endpoints")
+        if e["caller"] == send
+    )
+    workspace.close()
+    assert rows == [("GET", "<host>/a", "partial"), ("POST", "<host>b", "partial")]
 
 
 # --- 2. exchange: an enum verb, the HttpEntity hop, and the PTR response --

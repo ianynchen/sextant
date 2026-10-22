@@ -972,6 +972,8 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
             "source": None,
             "elements": None,
             "captures": None,
+            # Capability 9.19's key, None on every kind but `merge`.
+            "candidates": None,
         },
         {
             "kind": "unresolved",
@@ -980,6 +982,8 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
             "source": 7,
             "elements": None,
             "captures": None,
+            # Capability 9.19's key, None on every kind but `merge`.
+            "candidates": None,
         },
     ]
 

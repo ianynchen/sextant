@@ -338,7 +338,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # the second class in the opted-in `orders-soap-client` jar, whose constructor's one
     # `RuntimeException.<init>` is an edge to the platform. The numerator is unmoved —
     # nothing in this module calls it; `orders-advice` is the module that does. Still 29%.
-    assert "Calls whose callee body this workspace read: 533 of 1813 (29%)" in document
+    # 535 of 1820 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): `send`'s `startsWith`,
+    # `substring`, `makeConcatWithConstants`, `exchange` and `getBody`, plus the two
+    # callers' calls into `send` (the numerator's +2) and the constructor's `Object.<init>`.
+    # Still 29%.
+    assert "Calls whose callee body this workspace read: 535 of 1820 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -387,7 +391,8 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # one `RuntimeException.<init>` in the opted-in library jar, `resolved` — the compiler
     # names a super-constructor exactly. `owner_not_scanned` below is unchanged: the
     # platform owner was already counted.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1811." in document
+    # 1818 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the seven edges above, all `resolved`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1818." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -397,8 +402,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # overload and the coroutine machinery it extends are two lookups on types this
     # module does not scan.
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 204, "
-        "inherited 2, owner_not_scanned 424."
+        # `declared_here` 205 and `owner_not_scanned` 427 since the merged-values wrapper:
+        # `send` is one more declared method; `startsWith`, `substring` and `getBody` are
+        # three more lookups on owners this module never scans.
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 205, "
+        "inherited 2, owner_not_scanned 427."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -735,7 +743,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # deleting outright (F5 §6.1 rule 1).
         # 36 since A2 Task 8: the JDK client's four chains and the Apache client's
         # three (`jdk-httpclient`, `apache-httpclient`).
-        "http": 36,
+        # 38 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange(baseUrl + path, …)`,
+        # two rows at `partial` — one per caller's literal — once the walk resolved the merge.
+        "http": 38,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -957,7 +967,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             ("inbound", 164),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
-            ("outbound", 68),
+            # 70 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two
+            # callers' literals, at `partial`.
+            ("outbound", 70),
         ]
     )
 
@@ -1789,7 +1801,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # holds facts from every jar on the classpath and so names no single `origin` — each
     # fact carries its own. It is NOT module output, and the bundle says so by the two
     # columns pinned beneath, which is what keeps this count readable.
-    assert (None, 154) in origins
+    # 155 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19), one class file.
+    assert (None, 155) in origins
     header = duckdb.sql(
         "SELECT origin_tier, origin FROM read_parquet("
         f"'{bundle / 'graph' / 'documents.parquet'}') WHERE header_only"
@@ -2147,4 +2160,26 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(full_run: Path)
     assert (
         "| `jms parsed-relay-queue` | `ParsedPayloadListeners#onRelayed` | "
         "— → — | unresolved | resolved |"
+    ) in document
+
+
+def test_a_wrappers_merged_path_reaches_the_document_with_its_verb(full_run: Path):
+    """The document is the result (ruling 2026-10-17), for `OI-143`'s shape (spec
+    2026-10-21 merged values). `NormalisingBillingClient#send` reassigns `path` on one branch
+    and hands `exchange` both the path AND the verb as parameters; two callers reach it with
+    literals differing only by the slash the wrapper strips. Each caller's literal is a row,
+    as written, at `partial` — behind `<host>`, the unread `baseUrl` — and each carries the
+    verb its caller handed in, read from the SAME walked binding as the path (measured on
+    `apollo-portal`: without that read 51 of 61 rows had a path and no verb). Nothing here
+    knows what `substring` does; the slash is reported as each caller wrote it."""
+    document = (full_run / "render" / "architecture.md").read_text()
+    assert (
+        "| `GET <host>/billing/ledger` | none recorded | "
+        "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
+        "json (assumed) | partial |"
+    ) in document
+    assert (
+        "| `GET <host>billing/ledger/{id}` | none recorded | "
+        "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
+        "json (assumed) | partial |"
     ) in document

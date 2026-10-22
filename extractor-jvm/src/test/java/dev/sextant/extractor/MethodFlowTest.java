@@ -172,6 +172,22 @@ class MethodFlowTest {
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
     }
 
+    /** Capability 9.19 (spec 2026-10-21-merged-values-design.md): a parameter REASSIGNED
+     *  on one branch reaches the consuming call with two producers — the parameter marker
+     *  and the {@code substring} call's result — and the fact now writes BOTH as
+     *  candidates rather than collapsing to a bare {@code unresolved} with no source. The
+     *  order is instruction order with the marker (which indexes nothing) first; nothing
+     *  is chosen; the second candidate keeps its {@code source} so the walk can see which
+     *  call produced it, which is the whole of the root check. */
+    @Test
+    void writes_every_producer_of_a_merged_value_as_a_candidate() throws Exception {
+        String line = last(callSites("reassignedOnABranch"));
+        assertTrue(line.contains("\"kind\":\"merge\""), line);
+        assertTrue(line.contains("\"candidates\":[{\"kind\":\"parameter\",\"value\":0},"
+                                 + "{\"kind\":\"unresolved\",\"source\":"), line);
+        assertFalse(line.contains("\"candidates\":[{\"kind\":\"unresolved\"}"), line);
+    }
+
     /** A static method's parameter 0 is local slot 0 — where an instance
      *  method keeps `this`. Reading the slot as the index (or assuming the
      *  instance offset) misnames every argument of every static call. */
@@ -199,26 +215,32 @@ class MethodFlowTest {
         assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
     }
 
-    /** Two different parameters merged on a branch are two producers, and the
-     *  merge rule outranks the new kind: naming either would be a fact about a
-     *  path that may never run, exactly as it would for two literals. */
+    /** Two different parameters merged on a branch are two producers, and naming
+     *  either would be a fact about a path that may never run, exactly as it
+     *  would for two literals. Since capability 9.19 the fact names BOTH as
+     *  candidates and chooses neither — the ruling that such a merge resolves
+     *  to nothing lives at the walk (spec 2026-10-21-merged-values-design.md
+     *  §3b: no common root, `unresolved`), where it can also see the one case
+     *  it should not refuse. */
     @Test
-    void reports_two_merged_parameters_as_unresolved() throws Exception {
+    void reports_two_merged_parameters_as_candidates_choosing_neither() throws Exception {
         String line = callSites("mergedParameters").get(0);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertTrue(line.contains("\"arguments\":[{\"candidates\":[{\"kind\":\"parameter\",\"value\":2},"
+            + "{\"kind\":\"parameter\",\"value\":1}],\"kind\":\"merge\"}]"), line);
     }
 
-    /** A parameter merged with a literal is two producers, so it is
-     *  `unresolved` — the arity the new kind changes, pinned deliberately.
-     *  9.8 reported `/default` here, because a parameter contributed no
-     *  producer at all and the literal was left standing alone: a fact about
-     *  the else-branch, asserted for an argument that is the parameter
-     *  whenever the condition holds. Recall drops; honesty is the trade the
-     *  whole pass is built on (D00 §5). */
+    /** A parameter merged with a literal is two producers. 9.8 reported
+     *  `/default` here, because a parameter contributed no producer at all and
+     *  the literal was left standing alone: a fact about the else-branch,
+     *  asserted for an argument that is the parameter whenever the condition
+     *  holds. Since 9.19 both stand as candidates and the literal never stands
+     *  ALONE as the argument — which is the leak this test exists to catch. */
     @Test
-    void reports_a_parameter_merged_with_a_literal_as_unresolved() throws Exception {
+    void reports_a_parameter_merged_with_a_literal_as_two_candidates() throws Exception {
         String line = callSites("mergedParameterAndLiteral").get(0);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertTrue(line.contains("\"candidates\":[{\"kind\":\"parameter\",\"value\":1},"
+            + "{\"kind\":\"string\",\"value\":\"/default\"}],\"kind\":\"merge\""), line);
+        assertFalse(line.contains("\"arguments\":[{\"kind\":\"string\",\"value\":\"/default\"}]"), line);
     }
 
     /** `this` sits in slot 0 of an instance method and is a parameter of no
@@ -242,28 +264,31 @@ class MethodFlowTest {
      *  branch merges, the slot has two producing instructions and no single
      *  answer. Both are string literals, so a pass that took "the first one" or
      *  "any one" would emit a confident, wrong URL — and would look right in
-     *  every test that only ever sees straight-line code. */
+     *  every test that only ever sees straight-line code. Since 9.19 both are
+     *  written, as CANDIDATES of a merge, and neither stands alone as the
+     *  argument: the fact says "one of these" and the choice is nobody's. */
     @Test
-    void reports_a_branch_merged_argument_as_unresolved_with_no_source() throws Exception {
+    void reports_a_branch_merged_argument_as_two_candidates_and_picks_neither() throws Exception {
         String line = callSites("conditionalArgument").get(0);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
-        // Neither branch's literal leaked into the fact.
-        assertTrue(!line.contains("/a") && !line.contains("/b"), line);
+        assertTrue(line.contains("\"arguments\":[{\"candidates\":[{\"kind\":\"string\",\"value\":\"/a\"},"
+            + "{\"kind\":\"string\",\"value\":\"/b\"}],\"kind\":\"merge\"}]"), line);
+        assertFalse(line.contains("\"arguments\":[{\"kind\":\"string\""), line);
     }
 
     /** Transparency must not turn a branch merge into a confident answer. A
      *  local assigned on two paths still reaches the invoke with two producing
      *  instructions — the store and the reload no longer collapse them into
-     *  one — so the slot stays honestly unresolved and neither literal leaks.
-     *  This is the case that would break first if the interpreter had made
-     *  copies transparent by *picking* a source rather than by passing the
+     *  one — so the slot carries both as candidates and neither literal stands
+     *  alone. This is the case that would break first if the interpreter had
+     *  made copies transparent by *picking* a source rather than by passing the
      *  whole set through. */
     @Test
-    void reports_a_branch_merged_local_as_unresolved_after_a_store_and_a_reload()
+    void reports_a_branch_merged_local_as_two_candidates_after_a_store_and_a_reload()
             throws Exception {
         String line = callSites("conditionalThroughLocal").get(0);
-        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
-        assertTrue(!line.contains("/a") && !line.contains("/b"), line);
+        assertTrue(line.contains("\"candidates\":[{\"kind\":\"string\",\"value\":\"/a\"},"
+            + "{\"kind\":\"string\",\"value\":\"/b\"}],\"kind\":\"merge\""), line);
+        assertFalse(line.contains("\"arguments\":[{\"kind\":\"string\""), line);
     }
 
     /** The join that makes a split builder chain reconstructable: the argument
@@ -929,8 +954,11 @@ class MethodFlowTest {
         assertTrue(empty.contains("\"value\":null"), empty);
         assertFalse(empty.contains("\"unresolved\""), empty);
 
+        // A merged return is "one of these" since 9.19 — still not `null`, and still
+        // not a value this pass named: the candidates are named, the choice is not.
         String unread = methodReturns("returnsAMergedValue").get(0);
-        assertTrue(unread.contains("\"value\":{\"kind\":\"unresolved\""), unread);
+        assertTrue(unread.contains("\"value\":{\"candidates\":["), unread);
+        assertTrue(unread.contains("\"kind\":\"merge\"}"), unread);
         assertFalse(unread.contains("\"value\":null"), unread);
     }
 
