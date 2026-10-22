@@ -19,7 +19,10 @@ so, and it moves with any such edit here.
 
 The tokens in `attributes` are the spec's terms, not always column names: "request_body"
 is the field set a `request_shape` expands to, and "requirements" the set
-`endpoint_metadata` holds. The query that reads each kind (`boundary_<kind>`, in the
+`endpoint_metadata` holds. A body is ALSO compared as `request_shape`/`response_shape`, the
+descriptor's structure with every type symbol erased, because the field set alone cannot
+tell an `OrderView` from a list of them (ruled 2026-10-22, Task 4 review): a container or
+scalar change shows, a DTO rename does not. The query that reads each kind (`boundary_<kind>`, in the
 workspace's query registry) is what turns a token into rows; this module only names them.
 
 Enrichment never enters: components, prose and overlays are judgements, not facts.
@@ -68,6 +71,8 @@ _KIND_LIST = (
         attributes=(
             "request_body",
             "response_body",
+            "request_shape",
+            "response_shape",
             "consumes",
             "produces",
             "format",
@@ -84,7 +89,15 @@ _KIND_LIST = (
         where="direction IN ('outbound', 'both')",
         # `peer` stays: `POST /v1/orders` on `billing` and on `ledger` are two dependencies.
         identity=("protocol", "method", "path", "peer"),
-        attributes=("request_body", "response_body", "format", "headers", "resolution"),
+        attributes=(
+            "request_body",
+            "response_body",
+            "request_shape",
+            "response_shape",
+            "format",
+            "headers",
+            "resolution",
+        ),
         evidence=("caller", "documents"),
         grounded_in_code=True,
     ),

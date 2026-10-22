@@ -9,6 +9,7 @@ scenario the diff exists for (a CI bundle against a local workspace, §3d).
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
@@ -74,10 +75,15 @@ def _endpoint(workspace: DuckDbWorkspace, **columns: object) -> None:
 
 
 def _field(
-    workspace: DuckDbWorkspace, shape: str, ordinal: int, name: str, required: bool = False
+    workspace: DuckDbWorkspace,
+    shape: str,
+    ordinal: int,
+    name: str,
+    required: bool = False,
+    wire_type: str = "string",
 ) -> None:
     _insert(workspace, "shape_fields", shape_id=shape, ordinal=ordinal, wire_name=name,
-            wire_type="string", wire_format=None, required=required, nullable=False,
+            wire_type=wire_type, wire_format=None, required=required, nullable=False,
             resolution="resolved", evidence="declared")  # fmt: skip
 
 
@@ -187,8 +193,9 @@ def test_a_moved_controller_is_no_entry_and_a_new_route_is_added(
     (added,) = diff.entries
     assert added.identity == {"protocol": "http", "method": "GET", "path": "/api/v2/owners"}
     assert added.from_ is None and added.to is not None
-    assert set(added.to) == {"request", "response", "consumes", "produces", "format",
-                             "requirements", "conditions", "resolution"}  # fmt: skip
+    assert set(added.to) == {"request", "response", "request_shape", "response_shape",
+                             "consumes", "produces", "format", "requirements", "conditions",
+                             "resolution"}  # fmt: skip
     assert added.evidence["symbols"] == ["com/acme/rest/v2/OwnerControllerV2#page()."]
     assert added.compatibility is None  # an added route is not a body change
 
@@ -209,14 +216,29 @@ def test_a_removed_route_carries_the_evidence_of_the_side_it_was_on(
 # --- bodies, field by field ---------------------------------------------------------------
 
 
-def _owner_route(fields: list[tuple[str, bool]], body: str) -> Callable[[DuckDbWorkspace], None]:
-    """`GET /owners` whose `body` (`request` or `response`) is a shape of `fields`."""
+_Fields = list[tuple[str, bool]] | list[tuple[str, bool, str]]
+
+
+def _array_of(descriptor: str) -> str:
+    return json.dumps(
+        {"item": json.loads(descriptor), "nullable": True, "wire_format": "", "wire_type": "array"}
+    )
+
+
+def _owner_route(
+    fields: _Fields,
+    body: str,
+    shape: str = "com/acme/Owner#",
+    descriptor: Callable[[str], str] = _shape,
+) -> Callable[[DuckDbWorkspace], None]:
+    """`GET /owners` whose `body` (`request` or `response`) is `descriptor(shape)`, `shape`
+    having `fields` as (wire name, required[, wire type])."""
 
     def build(workspace: DuckDbWorkspace) -> None:
-        for ordinal, (name, required) in enumerate(fields):
-            _field(workspace, "com/acme/Owner#", ordinal, name, required)
+        for ordinal, (name, required, *wire_type) in enumerate(fields):
+            _field(workspace, shape, ordinal, name, required, *wire_type)
         _endpoint(workspace, method="GET", path="/owners", handler="H#owners().",
-                  **{f"{body}_shape": _shape("com/acme/Owner#")})  # fmt: skip
+                  **{f"{body}_shape": descriptor(shape)})  # fmt: skip
 
     return build
 
@@ -224,8 +246,8 @@ def _owner_route(fields: list[tuple[str, bool]], body: str) -> Callable[[DuckDbW
 def _changed_owner(
     root: Path,
     sources: Callable[[Path], BoundarySource],
-    before: list[tuple[str, bool]],
-    after: list[tuple[str, bool]],
+    before: _Fields,
+    after: _Fields,
     body: str,
 ):
     a = sources(_built(root / "a", _owner_route(before, body)))
@@ -276,6 +298,58 @@ def test_a_response_field_removed_is_breaking(
     assert entry.compatibility == "breaking"
 
 
+def test_an_existing_request_field_that_becomes_required_is_breaking(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """A client that never sent `tz` now fails, though no field was added."""
+    entry = _changed_owner(tmp_path, sources, [("id", True), ("tz", False)],
+                           [("id", True), ("tz", True)], "request")  # fmt: skip
+    assert entry.compatibility == "breaking"
+
+
+@pytest.mark.parametrize("body", ["request", "response"])
+def test_an_existing_fields_wire_type_change_is_breaking(
+    body: str, tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    entry = _changed_owner(tmp_path, sources, [("id", True, "string")],
+                           [("id", True, "integer")], body)  # fmt: skip
+    assert entry.compatibility == "breaking"
+
+
+@pytest.mark.parametrize("body", ["request", "response"])
+def test_a_body_that_becomes_a_list_of_the_same_dto_is_one_breaking_change(
+    body: str, tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """`OrderView` -> `List<OrderView>`: the field set is the item's either way, so only the
+    descriptor's structure can see it — compared with the type symbol erased."""
+    fields = [("id", True), ("name", False)]
+    a = sources(_built(tmp_path / "a", _owner_route(fields, body)))
+    b = sources(_built(tmp_path / "b", _owner_route(fields, body,
+                                                    descriptor=lambda s: _array_of(_shape(s)))))  # fmt: skip
+    (entry,) = diff_sources(a, b, REDACTOR).entries
+    assert (entry.kind, entry.change, entry.compatibility) == ("endpoint", "changed", "breaking")
+    assert entry.from_ is not None and entry.to is not None
+    assert set(entry.from_) == set(entry.to) == {f"{body}_shape"}
+    assert entry.to[f"{body}_shape"]["wire_type"] == "array"  # type: ignore[index]
+    assert "com/acme/Owner#" not in json.dumps([entry.from_, entry.to])
+
+
+@pytest.mark.parametrize("body", ["request", "response"])
+def test_a_renamed_dto_with_the_same_structure_is_no_entry(
+    body: str, tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Decision 1: implementation never matters. The class name is not on the wire."""
+    fields = [("id", True), ("name", False)]
+    a = sources(
+        _built(
+            tmp_path / "a", _owner_route(fields, body, descriptor=lambda s: _array_of(_shape(s)))
+        )
+    )
+    b = sources(_built(tmp_path / "b", _owner_route(fields, body, shape="com/acme/v1/OwnerV1#",
+                                                    descriptor=lambda s: _array_of(_shape(s)))))  # fmt: skip
+    assert diff_sources(a, b, REDACTOR).entries == ()
+
+
 def test_a_body_that_becomes_several_is_changed_with_no_label(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -293,6 +367,7 @@ def test_a_body_that_becomes_several_is_changed_with_no_label(
     b = sources(_built(tmp_path / "b", after))
     (entry,) = diff_sources(a, b, REDACTOR).entries
     assert entry.change == "changed" and entry.compatibility is None
+    # Both shapes are one structure with the symbol erased, so only the field sets differ.
     assert entry.to is not None and set(entry.to) == {"response"}
     assert len(entry.to["response"]["several"]) == 2  # type: ignore[call-overload, index]
 
@@ -399,8 +474,9 @@ def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
     one = sources(_built(tmp_path / "one", lambda w: _endpoint(
         w, direction="outbound", method="POST", path="/v1/charge", peer="https://billing",
         caller="A#a().", format="json")))  # fmt: skip
-    (entry,) = diff_sources(sources(workspace), one, REDACTOR).entries
-    assert entry.from_ == {"format": {"several": ["json", "xml"]}}
+    (entry,) = diff_sources(one, sources(workspace), REDACTOR).entries
+    assert entry.to == {"format": {"several": ["json", "xml"]}}
+    assert entry.evidence["symbols"] == ["A#a().", "B#b()."]  # both callers, joined
 
 
 def test_the_fixture_bundle_and_its_workspace_diff_empty(
@@ -420,7 +496,8 @@ def test_the_fixture_bundle_and_its_workspace_diff_empty(
     assert REDACTED in values.values()  # the bundle did mask something
     diff = diff_sources(masked, workspace, redactor)
     assert diff.entries == () and diff.producer_changed is False
-    assert diff.a["producer"] == diff.b["producer"]
+    recorded = {**cast(dict[str, object], diff.b["producer"]), "redaction_recorded": True}
+    assert diff.a["producer"] == recorded
 
 
 # --- refusals (§3c), before any row is read --------------------------------------------------
@@ -498,9 +575,10 @@ def test_a_bundle_masked_under_other_rules_refuses_on_the_redaction_set_hash(
         diff_sources(bundle, sources(workspace), REDACTOR)
     assert refused.value.stamps == ("redaction_set_hash",)
     side = sources(workspace)
-    assert diff_sources(side, side, REDACTOR).a["producer"]["redaction_set_hash"] == (  # type: ignore[index]
-        REDACTOR.rule_set_hash
-    )
+    producer = cast(dict[str, object], diff_sources(side, side, REDACTOR).a["producer"])
+    assert producer["redaction_set_hash"] == REDACTOR.rule_set_hash
+    # Computed by the diff for the rules it masked under, not recorded by an export.
+    assert producer["redaction_recorded"] is False
 
 
 def test_a_side_missing_a_stamp_is_refused_by_name(tmp_path: Path):

@@ -23,11 +23,19 @@ the bundle's own grouping already did. Such rows are joined after masking exactl
 source groups rows: an attribute they disagree on is `{"several": [...]}`, sets are unions,
 evidence is the union of both.
 
+**A body is compared twice**: as its field set by wire name (`request`/`response`), and as
+its descriptor's STRUCTURE (`request_shape`/`response_shape`) with every type symbol erased
+to `"<type>"` — wire type, format, nullability and nesting kept. So `OrderView` becoming
+`List<OrderView>` is a change, and a DTO renamed with the same structure is not (decision 1:
+implementation never matters). The stored descriptor names its type under `shape_id`.
+
 **`changed` is attribute-level**: `from`/`to` carry only the attributes that differ. An
-endpoint's or dependency's request/response change is labelled by M06 step 3's directional
-test read forwards in time: `breaking` where the request gained a required field or the
-response lost one, `compatible` otherwise, and `None` where a changed body has no field list
-on one side (no body, or `{"several": [...]}`) and nothing else said `breaking`.
+endpoint's or dependency's body change is labelled by M06 step 3's directional test read
+forwards in time: `breaking` where the request gained a required field or an existing
+request field became required, where the response lost a field, where an existing field's
+wire type changed in either body, or where either body's structure changed; `compatible`
+otherwise; and `None` where a changed body has nothing to compare on one side (no body, or
+`{"several": [...]}`) and nothing else said `breaking`.
 
 One `rows(kind)` per kind per side — fourteen reads — and the join is a dictionary on
 identity (§3e).
@@ -53,6 +61,10 @@ _PRODUCER = ("sextant_version", "catalog_hash", "redaction_set_hash")
 # The attributes that are sets, not values: rows joined by masking take their union.
 _SETS = ("requirements", "conditions", "headers")
 _BODIES = ("request", "response")
+_DESCRIPTORS = ("request_shape", "response_shape")
+# What a type symbol becomes in a descriptor's structure, and the keys that hold one.
+_ERASED = "<type>"
+_SYMBOL_KEYS = ("shape_id", "symbol")
 
 
 class DiffRefused(ValueError):
@@ -103,7 +115,10 @@ class Diff:
     summary: dict[str, dict[str, int]]
 
     def to_json(self) -> dict[str, object]:
-        """The spec's §3b document, keys in its order."""
+        """The spec's §3b document, keys in its order. Each side's `producer` carries
+        `redaction_recorded` beside `redaction_set_hash`: `true` for a bundle, whose hash
+        the exporter recorded, `false` for a workspace, whose hash is the rule set the diff
+        masked it under — nothing recorded one at `analyze`."""
         return {
             "boundary_vocabulary_version": self.boundary_vocabulary_version,
             "a": self.a,
@@ -161,8 +176,8 @@ def diff_sources(
         summary[entry.kind][entry.change] += 1
     return Diff(
         boundary_vocabulary_version=int(str(stamps_b["boundary_vocabulary_version"])),
-        a={"module": a.module_id, "commit": a.commit, "producer": stamps_a},
-        b={"module": b.module_id, "commit": b.commit, "producer": stamps_b},
+        a={"module": a.module_id, "commit": a.commit, "producer": _described(a, stamps_a)},
+        b={"module": b.module_id, "commit": b.commit, "producer": _described(b, stamps_b)},
         producer_changed=producer_changed,
         entries=tuple(entries),
         summary=summary,
@@ -177,6 +192,10 @@ def _stamps(side: BoundarySource, redactor: Redactor) -> dict[str, object]:
     if not side.is_bundle:
         stamps["redaction_set_hash"] = redactor.rule_set_hash
     return stamps
+
+
+def _described(side: BoundarySource, stamps: dict[str, object]) -> dict[str, object]:
+    return {**stamps, "redaction_recorded": side.is_bundle}
 
 
 def _refuse_or_allow(
@@ -258,18 +277,38 @@ def _masked(kind: Kind, row: dict[str, object], redactor: Redactor) -> dict[str,
         projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))
     if kind.name == "data-contract":
         projected["fields"] = _by_wire_name(projected["fields"])
+    if kind.name in ("endpoint", "dependency"):
+        # Not `error-handler.response_shape`: that column is a shape id, not a descriptor.
+        for column in _DESCRIPTORS:
+            projected[column] = _each(projected[column], _structure)
     for column in _SETS:
         if column in projected:
             projected[column] = _canonical(projected[column])
     return projected
 
 
-def _each(value: object, mask: Callable[[str], str]) -> object:
+def _each(value: object, mask: Callable[[str], object]) -> object:
     """`mask` applied to a value, or to each of `{"several": [...]}` — after which two that
     masked alike are one, as they would be in a bundle."""
     if value is None:
         return None
     return _agreed(None if v is None else mask(str(v)) for v in _flat([value]))
+
+
+def _structure(descriptor: str) -> object:
+    """A payload descriptor with every type symbol erased, at every level of nesting."""
+
+    def erased(node: object) -> object:
+        if isinstance(node, dict):
+            return {
+                key: _ERASED if key in _SYMBOL_KEYS else erased(value)
+                for key, value in node.items()
+            }
+        if isinstance(node, list):
+            return [erased(value) for value in node]
+        return node
+
+    return erased(json.loads(descriptor))
 
 
 def _flat(values: Iterable[object]) -> list[object]:
@@ -392,6 +431,11 @@ def _compatibility(
     if kind.name not in ("endpoint", "dependency"):
         return None
     verdicts = [_body_verdict(body, old[body], new[body]) for body in _BODIES if body in differing]
+    verdicts += [
+        _structure_verdict(old[column], new[column])
+        for column in _DESCRIPTORS
+        if column in differing
+    ]
     if "breaking" in verdicts:
         return "breaking"
     if verdicts and all(verdict == "compatible" for verdict in verdicts):
@@ -401,14 +445,44 @@ def _compatibility(
 
 def _body_verdict(body: str, old: object, new: object) -> Compatibility | None:
     """M06 step 3 forwards in time, on field lists keyed by wire name; `None` where a side
-    has no field list to compare."""
+    has no field list to compare. A request field is required if any field of its name is."""
     if not isinstance(old, list) or not isinstance(new, list):
         return None
-    old_names = {field["wire_name"] for field in old}
-    new_names = {field["wire_name"] for field in new}
+    old_by, new_by = _by_name(old), _by_name(new)
+    shared = old_by.keys() & new_by.keys()
+    if any(_wire_types(old_by[name]) != _wire_types(new_by[name]) for name in shared):
+        return "breaking"
     if body == "request":
-        gained_required = any(
-            field["required"] is True for field in new if field["wire_name"] not in old_names
+        # A new required field, or an existing one that became required: an old client
+        # never sent it.
+        newly_required = any(
+            _required(fields) and not _required(old_by.get(name, []))
+            for name, fields in new_by.items()
         )
-        return "breaking" if gained_required else "compatible"
-    return "breaking" if old_names - new_names else "compatible"
+        return "breaking" if newly_required else "compatible"
+    return "breaking" if old_by.keys() - new_by.keys() else "compatible"
+
+
+def _structure_verdict(old: object, new: object) -> Compatibility | None:
+    """A container or scalar change of a body breaks a client either way it points; `None`
+    where a side has no single structure (no body, or several)."""
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return None
+    if set(old) == {"several"} or set(new) == {"several"}:
+        return None
+    return "breaking"
+
+
+def _by_name(fields: list[dict[str, object]]) -> dict[object, list[dict[str, object]]]:
+    grouped: dict[object, list[dict[str, object]]] = {}
+    for field in fields:
+        grouped.setdefault(field["wire_name"], []).append(field)
+    return grouped
+
+
+def _wire_types(fields: list[dict[str, object]]) -> set[object]:
+    return {field["wire_type"] for field in fields}
+
+
+def _required(fields: list[dict[str, object]]) -> bool:
+    return any(field["required"] is True for field in fields)
