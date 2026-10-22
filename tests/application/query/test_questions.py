@@ -231,6 +231,49 @@ def test_implementations_and_uses_compare_the_bare_type_the_tables_spell(
 # --- impact ------------------------------------------------------------------------------
 
 
+def test_a_type_whose_descriptor_only_occurs_inside_another_is_not_used(
+    workspace: DuckDbWorkspace, tmp_path: Path
+):
+    """`uses` is about the TYPE, not its spelling. `MoneyView` is a different type, and so is
+    a shaded copy whose descriptor contains `Money`'s whole — the signature text contains the
+    descriptor, and only the signature's own type references decide. Neither is a use, and
+    neither reaches `impact`."""
+    money = "com/acme/q/Money#"
+    _symbols(
+        workspace,
+        tmp_path,
+        SymbolFact(
+            document_id=_DOCUMENT, symbol=_MODULE + money, construct_kind=ConstructKind.CLASS
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
+            symbol=_method("view"),
+            construct_kind=ConstructKind.METHOD,
+            signature=Signature(returns=TypeRef(symbol="com/acme/q/MoneyView#")),
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
+            symbol=_method("shaded"),
+            construct_kind=ConstructKind.METHOD,
+            signature=Signature(
+                returns=TypeRef(
+                    symbol="java/util/List#", arguments=[TypeRef(symbol="shaded/" + money)]
+                )
+            ),
+        ),
+        SymbolFact(
+            document_id=_DOCUMENT,
+            symbol=_method("real"),
+            construct_kind=ConstructKind.METHOD,
+            signature=Signature(returns=TypeRef(symbol=money)),
+        ),
+    )
+    assert _names(answer(workspace, "uses", symbol=_MODULE + money)) == [_method("real")]
+    result = answer(workspace, "impact", symbol=_MODULE + money)
+    assert isinstance(result, dict)
+    assert _names(result["definite"]) == [_method("real")]
+
+
 def test_impact_terminates_on_recursion(workspace: DuckDbWorkspace, tmp_path: Path):
     """`a` calls `b` and `b` calls `a`. The walk upstream from `a` reaches `b`, then `a`
     again, and stops there: the subject is never its own impact."""

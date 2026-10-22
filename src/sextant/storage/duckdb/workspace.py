@@ -1009,37 +1009,36 @@ _NAMED_QUERIES = {
         ORDER BY symbol, file
     """,
     # What references a BARE type: a member whose signature names it as a parameter's type
-    # or as what it returns (a field's own type is its `returns`) — at ANY depth of type
-    # arguments, so `List<Money>` and `Map<String, Money>` both name `Money` — and a direct
-    # subtype. `json_tree` walks each signature once; a `symbol` key counts only where its
-    # path is a type reference (a return or a parameter's `type`, then any chain of
-    # `arguments[i]`), so a symbol inside an annotation's arguments never does. Measured on
-    # mall-admin (25,377 symbols): the whole relation is 48,332 rows in 12ms, and 8 of the
-    # 20 signatures naming `PmsProduct` name it only inside a type argument.
+    # or as what it returns (a field's own type is its `returns`), at ANY depth of type
+    # arguments — `List<Money>` and `Map<String, Money>` both name `Money` — and a direct
+    # subtype.
+    #
+    # **The signature rows are CANDIDATES, confirmed by the caller.** A recursive walk of
+    # the JSON in SQL needs `json_tree`, which the dependency floor (`duckdb>=1.1`) does
+    # not have, so this read selects every member whose signature TEXT contains the bare
+    # type — which a true match always does, the descriptor being written verbatim in the
+    # JSON — and hands the text over; `application/query/questions.py` walks the parsed
+    # signature and drops a row that merely contains it (`com/a/Money#` inside
+    # `com/b/com/a/Money#`, or inside an annotation's arguments). `kind` says which arm a
+    # row came from: `signature` rows are to be confirmed, `subtype` rows are answers.
     "question_uses": """
         WITH subject AS (SELECT ?::VARCHAR AS type),
-        referenced AS (
-            SELECT s.symbol AS symbol, json_extract_string(t.value, '$') AS type
-            FROM symbols s, json_tree(s.signature) t
-            WHERE t.key = 'symbol'
-              AND regexp_matches(
-                  t.path, '^\\$\\.(returns|parameters\\[[0-9]+\\]\\.type)(\\.arguments\\[[0-9]+\\])*$'
-              )
-        ),
         users AS (
-            SELECT r.symbol AS symbol FROM referenced r JOIN subject ON r.type = subject.type
+            SELECT 'signature' AS kind, s.symbol AS symbol, s.signature::VARCHAR AS signature
+            FROM symbols s JOIN subject ON contains(s.signature::VARCHAR, subject.type)
             UNION
-            SELECT coalesce(s.symbol, t.child) AS symbol
+            SELECT 'subtype' AS kind, coalesce(s.symbol, t.child) AS symbol, NULL AS signature
             FROM type_hierarchy t
             JOIN subject ON t.ancestor = subject.type
             LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
         )
-        SELECT DISTINCT u.symbol AS symbol, d.relative_path AS file,
+        SELECT DISTINCT u.kind AS kind, u.symbol AS symbol, u.signature AS signature,
+               d.relative_path AS file,
                nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
         FROM users u
         LEFT JOIN symbols s ON s.symbol = u.symbol
         LEFT JOIN documents d ON d.document_id = s.document_id
-        ORDER BY symbol, file
+        ORDER BY symbol, file, kind
     """,
     # A type's own members — what `impact` of a type seeds its walk with beside the type,
     # because a change to the type is a change to what its members' callers depend on.
@@ -1051,7 +1050,9 @@ _NAMED_QUERIES = {
     # that knows its grammar), and every row names the walked symbol it came from.
     #
     #   caller      a call edge whose callee is the walked symbol, with its resolution
-    #   use         a member whose signature names the walked type, or its direct subtype
+    #   signature   a CANDIDATE member whose signature text contains the walked type, with
+    #               that text, for the caller to confirm (`question_uses` says why)
+    #   use         a direct subtype of the walked type
     #   unread      a call edge whose target names the walked symbol and whose callee is
     #               NULL — the callee's body was not read, so whether the call dispatches
     #               to the walked symbol is unconfirmed
@@ -1068,37 +1069,33 @@ _NAMED_QUERIES = {
                 SELECT unnest(?::STRUCT(symbol VARCHAR, bare VARCHAR, owner VARCHAR)[]) AS w
             )
         ),
-        referenced AS (
-            SELECT s.symbol AS symbol, json_extract_string(t.value, '$') AS type
-            FROM symbols s, json_tree(s.signature) t
-            WHERE t.key = 'symbol'
-              AND regexp_matches(
-                  t.path, '^\\$\\.(returns|parameters\\[[0-9]+\\]\\.type)(\\.arguments\\[[0-9]+\\])*$'
-              )
-        ),
         reached AS (
             SELECT 'caller' AS arm, w.symbol AS walked, e.caller AS symbol,
-                   e.resolution AS resolution
+                   e.resolution AS resolution, NULL AS signature
             FROM call_edges e JOIN walked w ON e.callee = w.symbol
             UNION ALL
-            SELECT 'use', w.symbol, r.symbol, 'resolved'
-            FROM referenced r JOIN walked w ON r.type = w.bare
+            -- Only a walked TYPE is looked for in signature text (a type's bare descriptor
+            -- is its own owner): a member's descriptor is no type a signature names, and
+            -- containment is the one join here that is not an equality.
+            SELECT 'signature', w.symbol, s.symbol, 'resolved', s.signature::VARCHAR
+            FROM symbols s JOIN walked w
+              ON w.bare = w.owner AND contains(s.signature::VARCHAR, w.bare)
             UNION ALL
-            SELECT 'use', w.symbol, coalesce(s.symbol, t.child), 'resolved'
+            SELECT 'use', w.symbol, coalesce(s.symbol, t.child), 'resolved', NULL
             FROM type_hierarchy t
             JOIN walked w ON t.ancestor = w.bare
             LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
             UNION ALL
-            SELECT 'unread', w.symbol, e.caller, e.resolution
+            SELECT 'unread', w.symbol, e.caller, e.resolution, NULL
             FROM call_edges e JOIN walked w ON e.target = w.bare
             WHERE e.callee IS NULL
             UNION ALL
-            SELECT 'unscanned', w.symbol, t.ancestor, NULL
+            SELECT 'unscanned', w.symbol, t.ancestor, NULL, NULL
             FROM type_hierarchy t JOIN walked w ON t.child = w.owner
             WHERE NOT t.scanned
         )
         SELECT DISTINCT r.arm AS arm, r.walked AS walked, r.symbol AS symbol,
-               r.resolution AS resolution, d.relative_path AS file,
+               r.resolution AS resolution, r.signature AS signature, d.relative_path AS file,
                nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
         FROM reached r
         LEFT JOIN symbols s ON s.symbol = r.symbol

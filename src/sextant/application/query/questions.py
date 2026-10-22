@@ -16,6 +16,16 @@ Every list item is `{"symbol", "file", "line_start", "line_end"}`, sorted by sym
 else is built here — no `path` between two symbols, no endpoint family — and the spec names
 what waits.
 
+## Why a signature is matched here and not in SQL
+
+A type can be named at any depth of a signature's type arguments, and walking JSON to an
+unknown depth in SQL needs DuckDB's `json_tree`, which the dependency floor (`duckdb>=1.1`)
+does not have. So `uses`, and `impact`'s type references, read in ONE query every member
+whose signature TEXT contains the bare type — a true match always does — and `_names` below
+confirms each candidate by walking the parsed signature: every parameter's `type` and the
+`returns`, then their `arguments` recursively. The text test can only admit; the walk is
+what decides, so a type whose descriptor merely occurs inside another's is not a use.
+
 ## `impact`'s three partitions
 
 A symbol the walk reaches is `definite` when some path to it crossed only `resolved` call
@@ -43,10 +53,13 @@ folded into a partition — the upstream walk's own boundary stops:
 
 **Cost (GUIDELINES §8.7), decided here.** One read places the subject; every other question
 is then one read, and `impact` is one read per hop of the whole frontier — never one per
-symbol reached — plus, for a type, the one read of its members. A symbol joins the frontier when it is first reached and again only if its
-classification improves, which can happen once, so the walk terminates on any graph,
-cycles included, within two hops per symbol upstream.
+symbol reached — plus, for a type, the one read of its members. A symbol joins the frontier
+when it is first reached and again only if its classification improves, which can happen
+once, so the walk terminates on any graph, cycles included, within two hops per symbol
+upstream.
 """
+
+import json
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.closed_sets import Resolution
@@ -93,8 +106,28 @@ def answer(
     if question == "implementations":
         return _items(workspace.query("question_implementations", ancestor=bare_descriptor(symbol)))
     if question == "uses":
-        return _items(workspace.query("question_uses", type=bare_descriptor(symbol)))
+        rows = workspace.query("question_uses", type=bare_descriptor(symbol))
+        return _items(
+            [row for row in rows if row["kind"] == "subtype" or _names(row["signature"], symbol)]
+        )
     return _impact(workspace, symbol)
+
+
+def _names(signature: object, type_symbol: str) -> bool:
+    """Whether the signature text names `type_symbol` as a parameter's type or the return,
+    at any depth of type arguments — the confirmation the text match cannot give."""
+    parsed = json.loads(str(signature))
+    wanted = bare_descriptor(type_symbol)
+    pending = [parameter["type"] for parameter in parsed.get("parameters") or ()]
+    pending.append(parsed.get("returns"))
+    while pending:
+        reference = pending.pop()
+        if reference is None:
+            continue
+        if bare_descriptor(str(reference["symbol"])) == wanted:
+            return True
+        pending.extend(reference.get("arguments") or ())
+    return False
 
 
 def _items(rows: list[dict[str, object]]) -> list[Item]:
@@ -132,6 +165,8 @@ def _impact(workspace: Workspace, subject: str) -> dict[str, list[Item]]:
                 regions.add((reached, _REGIONS[arm]))
                 continue
             if reached in seeds:
+                continue
+            if arm == "signature" and not _names(row["signature"], str(row["walked"])):
                 continue
             located.setdefault((reached, row["file"]), {key: row[key] for key in _ITEM})
             strong = definite[str(row["walked"])] and row["resolution"] == Resolution.RESOLVED
