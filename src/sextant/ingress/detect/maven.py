@@ -417,7 +417,13 @@ class MavenDetector:
             # local repository. One that is not is simply absent —
             # `dependencies_not_resolved` already names the version case, and a jar Maven
             # has not fetched is a jar nothing on this machine can read.
-            dependency_archives=resolved.archives
+            # Reactor SIBLINGS ride along as directories (spec 2026-10-21 §3b, amended): the
+            # extractor reads no header from one — a sibling is scanned WHOLE as a library
+            # root above — but a referenced type it finds there is a type that was read, and
+            # must not be counted "in no archive". MEASURED on `mall-admin`: its siblings are
+            # also installed jars, so the declared set read 233 headers from them while
+            # Maven's answer, listing them as directories, read 128 and reported 203 unread.
+            dependency_archives=resolved.archives + resolved.siblings
             if resolved is not None
             else tuple(
                 LibraryRoot(coordinate=coordinate, version=version, archive=archive)
