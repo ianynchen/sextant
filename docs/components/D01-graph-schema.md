@@ -713,14 +713,13 @@ condition not decided by the environment's own name `unresolved`. A profile the 
 (`spring.profiles.group`) are not read.
 
 **Exported.** All six travel in the bundle, by the export
-ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"). Five of them hold
-symbols, closed-set values and environment names only, so redaction has nothing to reach.
-**`endpoint_conditions` is the exception:** it carries the endpoint's `path` and `method`,
-and the exporter writes it as the view holds it, while `endpoints.path` goes out masked
-(`_REDACTED_ADDRESSES`). Now that the view holds outbound rows too, an address with URL
-userinfo reaches `graph/endpoint_conditions.parquet` unmasked where `endpoints.parquet`
-masks it. The exporter's masking does not reach this view yet; that is an open issue (PR #62
-logs it), not a property of the design.
+ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"). `symbol_beans` and
+`interface_beans` hold symbols only. The other four are masked on export: the outbound rows
+of `endpoint_conditions` carry the endpoint's `path`, which can hold an address with URL
+userinfo, so it masks through the address map `endpoints.path` uses (`_REDACTED_ADDRESSES`);
+`expression` quotes a condition's annotation arguments verbatim and passes through
+`redact_json`, as `annotations.args` does; `evidence`, free text repeating an expression or a
+placeholder's raw spelling, passes through `redact_text`.
 
 ### Traces — a named query, not a table
 

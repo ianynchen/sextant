@@ -14,6 +14,7 @@ coordinates on every declared symbol, bare descriptors on every call target).
 import json
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from sextant.application.ports.catalogs import Catalog
@@ -47,6 +48,7 @@ from sextant.domain.facts import (
     TypeHeaderFact,
     TypeRef,
 )
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -2140,3 +2142,84 @@ def test_an_unconditional_repository_interface_answers_its_calls_everywhere(tmp_
         (None, proxy, "default"): ("true", "resolved"),
         (None, proxy, "prod"): ("true", "resolved"),
     }
+
+
+# --- what the exported bundle carries of a condition (D06; the exporter's masking) -------
+
+BILLING = ORDERS + "Billing#"
+LIVE_BILLING = ORDERS + "LiveBilling#"
+STUB_BILLING = ORDERS + "StubBilling#"
+_CHARGES = "https://user:secret@billing.internal/charges"
+_VAULT = "https://ops:s3cr3t@vault.internal/token"
+
+
+def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_export(
+    tmp_path: Path,
+):
+    """Whole-branch review, Important: the conditions views went out verbatim. A conditional
+    client calling `https://user:secret@billing.internal/charges`, under
+    `@ConditionalOnProperty(name = "billing.vault", havingValue = "https://ops:s3cr3t@…")` on a
+    key whose placeholder nothing fills — so the address reaches `endpoint_conditions.path`,
+    and the argument `bean_conditions.expression`, `endpoint_conditions.expression`, and the
+    reason `bean_presence` and `candidate_presence` give (the call through `Billing` narrows
+    to the live and the stub body). `endpoints.path` and `annotations.args` mask both; no
+    exported file may carry either in the clear.
+
+    The address is set on the row WHOLE, `peer` NULL — the shape a base-url composition
+    writes (2F design §4) — because a literal URL is split into `peer` and `path`, and
+    building a composed client here would test the fluent engine, not the exporter."""
+    charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
+    push = method_descriptor(NOTICES, "push", _VOID)
+    on_vault = AnnotationUse(
+        annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+        args={"name": ["billing.vault"], "havingValue": _VAULT},
+    )
+    facts = [
+        *_type(BILLING, kind=ConstructKind.INTERFACE),
+        _declaration(BILLING, "charge"),
+        *_type(LIVE_BILLING, [_marker(COMPONENT), on_vault], interfaces=(BILLING,)),
+        *_body(LIVE_BILLING, "charge"),
+        CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + charge,
+            target=CallTarget(owner=RESTTEMPLATE, name="getForObject", descriptor=_GET_FOR_OBJECT),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="/charges"),
+                CallArgument(kind="class", symbol="java/lang/String#"),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        *_type(STUB_BILLING, [_marker(COMPONENT)], interfaces=(BILLING,)),
+        *_body(STUB_BILLING, "charge"),
+        *_type(NOTICES, [_marker(SERVICE)]),
+        *_body(NOTICES, "push"),
+        *_calls(push, BILLING, "charge"),
+    ]
+    workspace = _resolved(
+        tmp_path, facts, "spring-resttemplate", base={"billing.vault": "${BILLING_VAULT}"}
+    )
+    workspace._connection.execute(
+        "UPDATE endpoints SET path = ?, peer = NULL WHERE caller = ?", [_CHARGES, _MODULE + charge]
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    workspace.close()
+
+    exported = {}
+    for table in ("endpoint_conditions", "bean_conditions", "bean_presence", "candidate_presence"):
+        exported[table] = duckdb.sql(
+            f"SELECT * FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        assert exported[table], f"{table} exported no row, so this proves nothing"
+    assert any("billing.internal/charges" in str(row) for row in exported["endpoint_conditions"])
+    assert any("vault.internal" in str(row) for row in exported["bean_presence"])
+    assert any("vault.internal" in str(row) for row in exported["candidate_presence"])
+    for parquet in sorted((bundle / "graph").glob("*.parquet")):
+        cells = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
+        assert not any(
+            "user:secret@" in str(cell) or "s3cr3t" in str(cell) for row in cells for cell in row
+        ), f"{parquet.name} shipped a credential in the clear"

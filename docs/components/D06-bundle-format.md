@@ -270,12 +270,15 @@ tables `bean_conditions` and `interface_beans` and the views `bean_presence`, `s
 `candidate_presence` and `endpoint_conditions` ([D01](D01-graph-schema.md), "Conditional beans")
 are in `contents.tables` like every other, and the export ratchet covers views as it covers
 tables (`endpoint_conditions` is a view since graph schema version 4). None needed an exclusion.
-Four of them need no redaction rule either: they hold symbols, closed-set values and
-environment names. **`endpoint_conditions` is exempt from that claim:** it carries `path` and
-`method`, and it is exported as the view holds it, while `endpoints.path` is masked. Its
-outbound rows (new in version 4) can carry an address with URL userinfo, so the masking of
-`endpoints.parquet` does not reach `endpoint_conditions.parquet` yet. That is an open issue
-(PR #62 logs it); until it is fixed the bundle is not clean of it.
+Two of them, `symbol_beans` and `interface_beans`, hold symbols only and need no redaction
+rule. The other four are masked on export by the map each value belongs to:
+`endpoint_conditions.path` is the endpoint row's own `path` — an outbound row's address can
+carry URL userinfo — and masks through the same address map as `endpoints.path`;
+`expression` quotes a condition's annotation arguments verbatim, so `bean_conditions` and
+`endpoint_conditions` pass it through `redact_json` as `annotations.args` is; and the
+`evidence` of `bean_conditions`, `endpoint_conditions`, `bean_presence` and
+`candidate_presence`, free text that repeats an expression or a placeholder's raw spelling,
+passes through `redact_text`.
 
 **The ratchet runs the direction that catches the defect.** A table in the schema and absent
 from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall

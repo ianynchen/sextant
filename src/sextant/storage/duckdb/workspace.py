@@ -1026,9 +1026,13 @@ _NAMED_QUERIES = {
 # query below says why. THREE MAPS, one per rule, because the rule is the thing
 # that must not be duplicated — not the column:
 #
-#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`
+#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
+#                `endpoint_conditions.path`
 #   the grammar  `call_sites.arguments`, `annotations.args`,
-#                `return_flows.value`, `method_returns.value`
+#                `return_flows.value`, `method_returns.value`,
+#                `bean_conditions.expression` (and the view repeating it)
+#   evidence     `bean_conditions.evidence`, `bean_presence.evidence` and the
+#                views repeating them — free text quoting the grammar
 #   config       `resolved_config.value`, `config_entries.value`, and
 #                `config_entry` fact payloads (`_stage_fact_redactions`, joined
 #                by BOTH the `facts/*.parquet` stream and `graph/raw_facts`)
@@ -1054,6 +1058,10 @@ _REDACTED_CONFIG_VALUES = "redacted_config_values"
 _REDACTED_ADDRESSES = "redacted_addresses"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
+# Free text that QUOTES the grammar — a condition's `evidence`, which repeats its expression
+# (`bean_presence`'s "the configured value is unknown here: …") or a placeholder's raw
+# spelling — masked by `redact_text`, since it is not a JSON document `redact_json` can walk.
+_REDACTED_EVIDENCE = "redacted_evidence"
 # `config_entries` is the RAW half of what `resolved_config` holds resolved —
 # the same values, before the resolver joined them — so it masks by the same
 # rule through the same `Redactor.redact_value`, keyed on the entry's own
@@ -1268,13 +1276,48 @@ _EXPORT_QUERIES = {
     # are, the document being the one verbose rendering of them — the bean's own rows and the
     # view every endpoint row reads them through (spec 2026-10-22-conditional-beans), the
     # symbol-to-bean rule both views use, and the per-environment candidates of every narrowed
-    # call site a trace block states. Symbols, closed-set values and environment names only:
-    # nothing here for redaction to reach.
-    "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
-    "bean_conditions": _NAMED_QUERIES["bean_conditions"],
-    "bean_presence": _NAMED_QUERIES["bean_presence"],
+    # call site a trace block states. Three of their columns reach a value redaction exists
+    # for, and each is masked by the map its value belongs to. `endpoint_conditions.path` is
+    # the endpoint row's own `path` — an outbound row's address, URL userinfo and all — so it
+    # masks by the address map `endpoints.path` uses. `expression` quotes a condition's
+    # annotation arguments verbatim (a `havingValue` is a string out of bytecode), so it takes
+    # the `redact_json` pass `annotations.args` takes. `evidence` is free text quoting that
+    # expression, or the raw spelling of a placeholder in the configuration, so it takes
+    # `redact_text` — the same strip, over text that is not a JSON document
+    # (`_REDACTED_EVIDENCE`). `symbol_beans` and `interface_beans` hold symbols only.
+    "endpoint_conditions": f"""
+        SELECT c.* REPLACE (coalesce(a.masked, c.path) AS path,
+                            coalesce(j.masked, c.expression) AS expression,
+                            coalesce(t.masked, c.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["endpoint_conditions"]}) c
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = c.path
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = c.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = c.evidence
+        ORDER BY c.protocol, c.direction, c.method, c.path, c.handler, c.kind, c.expression,
+                 c.environment, c.caller, c.via, c.bean_kind, c.bean
+    """,
+    "bean_conditions": f"""
+        SELECT b.* REPLACE (coalesce(j.masked, b.expression) AS expression,
+                            coalesce(t.masked, b.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["bean_conditions"]}) b
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = b.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = b.evidence
+        ORDER BY b.bean, b.bean_kind, b.via, b.kind, b.expression, b.environment, b.holds,
+                 b.resolution, b.evidence
+    """,
+    "bean_presence": f"""
+        SELECT p.* REPLACE (coalesce(t.masked, p.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["bean_presence"]}) p
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = p.evidence
+        ORDER BY p.bean, p.environment
+    """,
     "symbol_beans": _NAMED_QUERIES["symbol_beans"],
-    "candidate_presence": _NAMED_QUERIES["candidate_presence"],
+    "candidate_presence": f"""
+        SELECT p.* REPLACE (coalesce(t.masked, p.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["candidate_presence"]}) p
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = p.evidence
+        ORDER BY p.caller, p.ordinal, p.callee NULLS LAST, p.bean, p.environment
+    """,
     "interface_beans": _NAMED_QUERIES["interface_beans"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
@@ -1917,6 +1960,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _REDACTED_EVIDENCE,
             )
         return list(_EXPORTED_TABLES)
 
@@ -1940,7 +1984,7 @@ class DuckDbWorkspace:
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name NOT IN "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1948,6 +1992,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _REDACTED_EVIDENCE,
                 _ENDPOINT_CANDIDATES,
                 _ROUTE_REQUIREMENTS,
                 _CHANNEL_BINDINGS,
@@ -2058,7 +2103,8 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -2067,6 +2113,25 @@ class DuckDbWorkspace:
                 (str(original), masked)
                 for (original,) in json_rows
                 if (masked := redactor.redact_json(str(original))) != str(original)
+            ],
+        )
+
+        # A condition's evidence, from the table and the view that composes it: the view's
+        # reasons are built from the table's expressions, so each composed string is staged
+        # as the view spells it rather than masked piecewise. `candidate_presence` carries
+        # `bean_presence`'s evidence or `compiler`, and `endpoint_conditions` the table's, so
+        # both are covered without evaluating either view a second time.
+        evidence_rows = self._connection.execute(
+            "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
+            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_EVIDENCE,
+            "original VARCHAR, masked VARCHAR",
+            [
+                (str(original), masked)
+                for (original,) in evidence_rows
+                if (masked := redactor.redact_text(str(original))) != str(original)
             ],
         )
 
