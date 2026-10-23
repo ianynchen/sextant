@@ -14,6 +14,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A placeholder inside a default is resolved, as Spring resolves it** (final review of spec
+  2026-10-23-configured-schedules). The one placeholder rule ended a placeholder at the FIRST
+  closing delimiter, so `${missing:${a}}` read as the literal `${a}` — in `resolved_config`
+  and in a scheduled job's per-environment value alike. Spring's `PlaceholderParser` ends a
+  placeholder at the closer that balances it and resolves a default's placeholders through
+  the same resolver (CP-48, `spring-core` 7.0.9), so
+  `${jobs.sweep.cron:${jobs.default.cron}}` now reads `jobs.default.cron`'s value where
+  `jobs.sweep.cron` is unset, an opener with no end stays text without hiding a later
+  placeholder, and a cycle through a default is still `placeholder_cycle`. The counted opener
+  is catalog data, `placeholders.nest`.
 - **A password written into a literal URL no longer leaks into the peer column, the
   documents or the bundle** (found 2026-10-23). `split_url` kept the authority's userinfo, so
   `RestTemplate.postForObject("https://svc:s3cret@billing.internal/charges", …)` derived

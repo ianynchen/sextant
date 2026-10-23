@@ -966,6 +966,24 @@ on one method, an ordinary way to run a job twice a day.
 **Closes** by adding `expression` to the kind's identity — a change to what a diff entry
 IS, so a `BOUNDARY_VOCABULARY_VERSION` 2 → 3 decision for the user, not made here.
 
+### OI-184 — `substitute` does not model two `PlaceholderParser` behaviours CP-48 read: the whole-inside lookup and the escape character
+**Minor · logged 2026-10-23 (final review of configured schedules, CP-48 rows 9-10) · `src/sextant/application/resolve/config.py::substitute`**
+
+CP-48 read Spring's placeholder parser to make `substitute` match it on nesting and defaults.
+Two more of its behaviours are not modelled. Row 9: for `${a:b}` with no placeholder inside,
+`SimplePlaceholderPart` first looks up a property named `a:b` — the whole inside — and only
+then `a`. Row 10: the parser skips an opener or separator preceded by its escape character;
+which character, if any, Boot's binder and the bean factory's embedded value resolver pass is
+a constructor argument CP-48 did not read.
+
+**What happens today:** not measured on the fixtures or the corpus. A configuration declaring
+a key spelled with the separator in it reads the key before the separator instead; an escaped
+`\${…}` is substituted where Spring leaves it as text.
+**Real triggering input:** row 9, a key spelled with a colon (a quoted YAML key `"a:b"`); row
+10, a value meant to carry a literal `${`, written `\${literal}`.
+**Closes** when a probe reads the escape character the two callers construct the parser with,
+and `substitute` honours it and the whole-inside lookup, each pinned.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

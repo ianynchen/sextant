@@ -4756,7 +4756,12 @@ config_model:
     default_keys: [spring.profiles.default]   # active only where no profile is
     group_prefix: spring.profiles.group       # `<prefix>.<name>`: active wherever `<name>` is
     by: scripts/probes/cp45_active_profiles.md
-  placeholders: { open: "${", close: "}", default_separator: ":" }
+  placeholders:
+    open: "${"
+    close: "}"
+    nest: "{"                      # the opener counted for depth (CP-48 row 2)
+    default_separator: ":"
+    by: scripts/probes/cp48_placeholder_nesting.md
   key_matching: relaxed          # relaxed | exact
 ```
 
@@ -4797,10 +4802,17 @@ cycle ends — and a member takes the certainty of the profile activating it (ac
 `unresolved` with the reason naming the group). A model with no `active_keys` leaves each
 environment's active profile its file's name alone.
 
-**`placeholders` declares the open/close delimiters and the default-value separator** a
-`${key:default}` expression resolves through — nothing more. No ecosystem-specific
-escaping rules live here; a delimiter pair and one separator character are what every
-surveyed placeholder grammar reduces to.
+**`placeholders` declares the open/close delimiters, the opener counted for nesting and the
+default-value separator** a `${key:default}` expression resolves through — nothing more
+(`by:` is CP-48, which read Spring's rule off `PlaceholderParser`). A placeholder ends at the
+closer that BALANCES it, each `nest` passed on the way raising the depth: Spring counts the
+closer's partner `{`, not the whole `${`, so a bare brace inside a placeholder nests too.
+`nest` defaults to `open`. An opener with no closer is text, and the scan resumes after it.
+The key is the text before the first separator (a placeholder there resolved first), the
+default all that follows; where the key resolves to nothing the default is resolved in turn
+through the same lookup, so `${a:${b}}` is `b`'s value — a cycle through it still a cycle. No
+escaping rules live here (CP-48 row 10 records Spring's, not modelled); delimiters and one
+separator are what every surveyed placeholder grammar reduces to.
 
 **`key_matching` is a closed two-value set governing how a `config_entry`'s normalized
 `key_path` ([D00](D00-fact-schema.md) §5c) is compared against a catalog-declared key

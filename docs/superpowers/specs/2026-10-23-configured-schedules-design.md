@@ -37,7 +37,14 @@ configurable cron is the ordinary production form, and the COVERAGE row cites it
 
 `resolve/config.py::_substitute` is the project's placeholder rule: the catalog's delimiters
 and `default_separator` (D02 §2i), `${key:default}`, a literal default never re-substituted,
-nested references, cycles, and relaxed or exact key matching per the model. Today it can only
+nested references, cycles, and relaxed or exact key matching per the model. *Amended
+2026-10-23 (final review, ruled):* "a literal default never re-substituted" was the walk's
+behaviour, not Spring's. The walk ended a placeholder at the first closer, so
+`${missing:${a}}` gave the literal `${a}`; CP-48 (`spring-core` 7.0.9) measured that
+`PlaceholderParser` ends a placeholder at the closer that balances it (counting the catalog's
+new `placeholders.nest`, `{`) and resolves a default's placeholders through the same
+resolver. `substitute` now does both, and the change moves `resolve_config` on a nested
+default as well as the schedules. Today it can only
 look a key up in the layered map `resolve_config` builds and discards.
 
 It is split into the parsing rule and the lookup:

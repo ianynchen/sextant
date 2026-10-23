@@ -365,7 +365,15 @@ config_model:
     default_keys: [spring.profiles.default]
     group_prefix: spring.profiles.group
     by: scripts/probes/cp45_active_profiles.md
-  placeholders: { open: "${", close: "}", default_separator: ":" }
+  # A placeholder ends at the closer that BALANCES it, and the depth is counted by `nest` —
+  # for `${…}` the closer's partner `{`, not the whole opener — so a bare brace inside one
+  # nests as `${` does (CP-48 rows 2-3, `PlaceholderParser.nextValidEndPrefix`).
+  placeholders:
+    open: "${"
+    close: "}"
+    nest: "{"
+    default_separator: ":"
+    by: scripts/probes/cp48_placeholder_nesting.md
   key_matching: relaxed          # relaxed | exact
   # `spring.config.import`-shaped prefixes (2F design §2's `remote_source`
   # reason): a winning value starting with one of these names a config-server

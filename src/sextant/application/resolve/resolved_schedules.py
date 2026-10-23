@@ -10,8 +10,8 @@ of `resolved_config`), carrying the job's own `handler`, `trigger` and `expressi
 
 **One placeholder rule.** The expression is substituted by `resolve/config.py::substitute`,
 the walk `resolve_config` itself uses, with the config model's own delimiters and
-`default_separator` (D02 §2i) — so `${key:default}`, a literal default and an unclosed
-opener mean here exactly what they mean in a configuration file. Only the LOOKUP is this
+`default_separator` (D02 §2i) — so `${key:default}`, a default holding a placeholder and an
+unclosed opener mean here exactly what they mean in a configuration file (CP-48). Only the LOOKUP is this
 pass's: one environment's `resolved_config` rows, keyed as the model's `key_matching` says.
 Those values are already fully substituted, so the lookup never recurses.
 

@@ -471,3 +471,30 @@ def test_a_schedule_under_an_ordinary_key_ships_its_value_in_the_bundle(tmp_path
     workspace.close()
 
     assert values == ["0 0 3 * * *"]
+
+
+@pytest.mark.pins("placeholders.a-DEFAULT-holding-a-placeholder-is-resolved")
+def test_a_nested_default_schedule_reads_the_default_key_where_the_job_key_is_unset(
+    tmp_path: Path,
+):
+    """CP-48 row 7: `${jobs.sweep.cron:${jobs.default.cron}}` is the job's own key where an
+    environment sets it and the shared default's elsewhere — and `keys` names both where both
+    were asked, so either key naming a secret masks the value."""
+    expression = "${jobs.sweep.cron:${jobs.default.cron}}"
+    workspace = _resolved(
+        tmp_path,
+        {"cron": expression},
+        {
+            "application.yml": {"jobs.default.cron": "0 0 * * * *"},
+            "application-prod.yml": {"jobs.sweep.cron": "0 */5 * * * *"},
+        },
+    )
+    rows = _rows(workspace)
+    keys = [json.loads(str(r["keys"])) for r in workspace.query("resolved_schedules")]
+    workspace.close()
+
+    assert rows == [
+        (SWEEP, "cron", expression, "default", "0 0 * * * *", None),
+        (SWEEP, "cron", expression, "prod", "0 */5 * * * *", None),
+    ]
+    assert keys == [["jobs.sweep.cron", "jobs.default.cron"], ["jobs.sweep.cron"]]

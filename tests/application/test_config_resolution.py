@@ -14,10 +14,11 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.config import resolve_config, substitute
+from sextant.application.resolve.config import placeholder_rule, resolve_config, substitute
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import ConfigEntryFact, Document
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -200,6 +201,26 @@ def test_a_missing_placeholder_with_no_default_resolves_missing_key(tmp_path: Pa
     row = _row(rows, "k", "default")
     assert row["value"] is None
     assert row["unresolved_reason"] == "missing_key"
+
+
+def test_a_default_holding_a_placeholder_resolves_through_the_layered_map(tmp_path: Path):
+    """CP-48 row 7, through `resolve_config`'s own lookup: the default's placeholder is
+    resolved in the same profile's layering."""
+    files = {"app.yml": [("k", "${missing:${b}}", 0), ("b", "literal-value", 0)]}
+    model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
+    rows = _resolve(tmp_path, files, model)
+    row = _row(rows, "k", "default")
+    assert (row["value"], row["unresolved_reason"]) == ("literal-value", None)
+
+
+def test_a_cycle_through_a_default_is_still_a_placeholder_cycle(tmp_path: Path):
+    """CP-48 row 8: `a: ${b:${a}}` with no `b` resolves its default inside `a`'s own chain
+    and comes back to `a` — Spring's `Circular placeholder reference`."""
+    files = {"app.yml": [("a", "${b:${a}}", 0)]}
+    model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
+    rows = _resolve(tmp_path, files, model)
+    row = _row(rows, "a", "default")
+    assert (row["value"], row["unresolved_reason"]) == (None, "placeholder_cycle")
 
 
 def test_a_two_key_cycle_resolves_placeholder_cycle_for_both_keys(tmp_path: Path):
@@ -473,11 +494,74 @@ def test_substitute_replaces_a_reference_with_the_lookups_value():
     assert substitute("${a}", _DOLLAR_BRACES, _dict_lookup({"a": "1"})) == ("1", None)
 
 
-def test_substitute_takes_a_missing_keys_default_literally():
+def test_substitute_takes_a_missing_keys_default():
     lookup = _dict_lookup({"a": "1"})
     assert substitute("${missing:fallback}", _DOLLAR_BRACES, lookup) == ("fallback", None)
-    # A literal default (D02 §2i) is never itself substituted.
-    assert substitute("${missing:${a}}", _DOLLAR_BRACES, lookup) == ("${a}", None)
+
+
+@pytest.mark.pins("placeholders.a-DEFAULT-holding-a-placeholder-is-resolved")
+def test_substitute_resolves_a_placeholder_inside_a_default():
+    """CP-48 rows 3 and 7 (`spring-core` 7.0.9): a placeholder ends at the closer that
+    balances it, and `NestedPlaceholderPart.resolve` resolves a default's parts through the
+    same resolver — so `${missing:${a}}` is `a`'s value, not the literal `${a}` a walk that
+    ended at the first closer read (re-pinned, final review of spec
+    2026-10-23-configured-schedules)."""
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("${missing:${a}}", _DOLLAR_BRACES, lookup) == ("1", None)
+
+
+@pytest.mark.pins("placeholders.a-DEFAULT-holding-a-placeholder-is-resolved")
+def test_substitute_resolves_a_nested_default_cron():
+    lookup = _dict_lookup({"jobs.default.cron": "0 0 * * * *"})
+    expression = "${jobs.sweep.cron:${jobs.default.cron}}"
+    assert substitute(expression, _DOLLAR_BRACES, lookup) == ("0 0 * * * *", None)
+    set_too = _dict_lookup({"jobs.sweep.cron": "0 */5 * * * *", "jobs.default.cron": "x"})
+    assert substitute(expression, _DOLLAR_BRACES, set_too) == ("0 */5 * * * *", None)
+
+
+def test_a_nested_default_whose_key_is_missing_takes_its_own_default_or_fails():
+    """CP-48 row 7: the inner placeholder is resolved in its turn — its own default applies,
+    and with none it is unresolvable, which fails the whole value."""
+    lookup = _dict_lookup({})
+    assert substitute("${a:${b:x}}", _DOLLAR_BRACES, lookup) == ("x", None)
+    assert substitute("${a:${b}}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
+    assert substitute("${a:p-${b:q}-r}", _DOLLAR_BRACES, lookup) == ("p-q-r", None)
+
+
+@pytest.mark.pins("placeholders.a-placeholder-ENDS-at-the-closer-that-balances-it")
+def test_a_placeholder_ends_at_the_closer_that_balances_it():
+    """CP-48 rows 2-3: the end search counts the model's `nest` opener — `{` for Spring,
+    the closer's partner — so a bare brace inside a placeholder nests as `${` does, and
+    text after the placeholder stays text."""
+    spring = {**_DOLLAR_BRACES, "nest": "{"}
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("${k{x}:d}", spring, lookup) == ("d", None)
+    assert substitute("${missing:${a}} tail}", spring, lookup) == ("1 tail}", None)
+
+
+@pytest.mark.pins("spring-web.the-placeholder-NEST-opener-is-the-frameworks-own")
+def test_the_shipped_spring_model_counts_a_bare_brace_for_depth():
+    """CP-48 row 2: Spring's `simplePrefix` for `${`/`}` is `{`, so the shipped model
+    declares `nest: "{"` — `${k{x}:d}` is the key `k{x}` with default `d`, where counting
+    `${` would end the placeholder after `x`."""
+    catalogs = YamlCatalogSource(Path(__file__).parents[2] / "src" / "sextant" / "catalogs")
+    [spring] = [c for c in catalogs.load() if c.id == "spring-web"]
+    placeholders, _ = placeholder_rule(spring.config_model)
+    assert substitute("${k{x}:d}", placeholders, _dict_lookup({})) == ("d", None)
+
+
+def test_an_opener_with_no_end_is_text_and_the_scan_goes_on():
+    """CP-48 row 4: the opener is kept as written and the search resumes after it."""
+    lookup = _dict_lookup({"b": "2"})
+    assert substitute("${a ${b}", _DOLLAR_BRACES, lookup) == ("${a 2", None)
+
+
+def test_a_placeholder_in_a_key_is_resolved_first():
+    """CP-48 rows 6-7: text before the separator and any placeholder there are the key, the
+    key's parts resolved before it is looked up."""
+    lookup = _dict_lookup({"env": "prod", "prod.cron": "0 0 1 * * *"})
+    assert substitute("${${env}.cron}", _DOLLAR_BRACES, lookup) == ("0 0 1 * * *", None)
+    assert substitute("${${missing}.cron:d}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
 
 
 def test_substitute_splits_a_default_at_the_first_separator_only():

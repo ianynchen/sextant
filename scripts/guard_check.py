@@ -156,6 +156,7 @@ _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
+_CONFIG = "sextant/application/resolve/config.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _PATH_PREFIX = "sextant/application/resolve/path_prefix.py"
 _SPRING_BOOT_SERVER_MODEL = "sextant/catalogs/server-models/spring-boot.yml"
@@ -3199,6 +3200,50 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/boundary/diff.py",
                 find='    if kind.name == "schedule":\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "placeholders.a-DEFAULT-holding-a-placeholder-is-resolved": Guard(
+        what="a placeholder's default is resolved through the same lookup as its key, so "
+        "`${a:${b}}` is `b`'s value where `a` is unset (CP-48 row 7)",
+        why="Spring's `NestedPlaceholderPart.resolve` resolves the default's parts; taken as "
+        'text, `@Scheduled(cron = "${jobs.sweep.cron:${jobs.default.cron}}")` and a '
+        "configuration value written the same way read as a literal `${…}` in every "
+        "environment that sets only the shared default",
+        edits=(
+            Edit(
+                path=_CONFIG,
+                find="    return _resolved_parts(default_parts, separator, lookup)\n",
+                replace='    return "".join(p for p in default_parts if isinstance(p, str)), None'
+                "  # guard disabled\n",
+            ),
+        ),
+    ),
+    "placeholders.a-placeholder-ENDS-at-the-closer-that-balances-it": Guard(
+        what="a placeholder ends at the closer at depth zero, each `nest` opener passed "
+        "raising the depth (CP-48 row 3, `nextValidEndPrefix`)",
+        why="ended at the first closer, `${missing:${a}}` reads the inside `missing:${a` and "
+        "keeps the trailing `}` — the literal `${a}` the branch shipped before its final "
+        "review, where Spring substitutes `a`",
+        edits=(
+            Edit(
+                path=_CONFIG,
+                find="            if depth == 0:\n                return index\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                "                return index\n",
+            ),
+        ),
+    ),
+    "spring-web.the-placeholder-NEST-opener-is-the-frameworks-own": Guard(
+        what='Spring\'s config model declares `placeholders.nest: "{"`, the opener '
+        "`PlaceholderParser` counts for depth (CP-48 row 2)",
+        why="without it the depth is counted by the whole opener `${`, and a bare brace inside "
+        "a placeholder (`${k{x}:d}`) ends it early — a key and default Spring never reads",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-web.yml",
+                find='    nest: "{"\n',
+                replace="",
             ),
         ),
     ),
