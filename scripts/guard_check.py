@@ -747,8 +747,13 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/bean_conditions.py",
-                find="                verdicts.append(environment != text[1:].strip())\n",
-                replace="                verdicts.append(environment == text[1:].strip())  # guard disabled\n",
+                find="            state = FAILS if negated else HOLDS\n",
+                replace="            state = HOLDS  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="            state = HOLDS if negated else FAILS\n",
+                replace="            state = FAILS  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -773,8 +778,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/bean_conditions.py",
-                find="            if any(char in _COMPOSITION for char in text):\n                composed = True\n                continue\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n                composed = True\n                continue\n",
+                find="        if any(char in _COMPOSITION for char in text):\n            composed = True\n            continue\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            composed = True\n            continue\n",
             ),
         ),
     ),
@@ -955,6 +960,20 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/bean_conditions.py",
                 find='{**row, "bean": body, "via": row["via"] or heir}',
                 replace='{**row, "bean": body, "via": row["via"]}',
+            ),
+        ),
+    ),
+    "beans.ACTIVE-PROFILES-are-read-from-configuration": Guard(
+        what="a `@Profile` condition is judged against the profiles the base configuration's "
+        "active keys list (CP-45), not the environment's file name alone",
+        why="spring-petclinic-rest sets `spring.profiles.active=h2,spring-data-jpa`; read off "
+        "the file names alone, every Spring Data JPA repository was published as existing in "
+        "no environment although the container registers them wherever the module runs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    actives, active_open = listed(profiles.get("active_keys"))\n',
+                replace="    actives, active_open = [], []  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

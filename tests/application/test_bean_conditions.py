@@ -17,7 +17,16 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog
-from sextant.application.resolve.bean_conditions import record_bean_conditions
+from sextant.application.resolve.bean_conditions import (
+    FAILS,
+    HOLDS,
+    PROFILE,
+    UNRESOLVED,
+    _holds,
+    _profile_holds,
+    active_profiles,
+    record_bean_conditions,
+)
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.conditions import enclosing_type_of
 from sextant.application.resolve.config import resolve_config
@@ -200,6 +209,7 @@ def _resolved(
     *ids: str,
     environments: tuple[str, ...] = ("prod",),
     default_legacy: str = "false",
+    base: dict[str, str] | None = None,
 ) -> DuckDbWorkspace:
     """The facts through the passes the conditions pass reads after: configuration (the
     environments), the call graph and the hierarchy (what a factory constructs, and what it
@@ -208,7 +218,7 @@ def _resolved(
     write_fact_file(
         root / "doc.jsonl", _document("doc", "com/acme/orders/All.java", "java", "asm"), facts
     )
-    _config(root, "application.yml", {"orders.legacy": default_legacy})
+    _config(root, "application.yml", {"orders.legacy": default_legacy, **(base or {})})
     for profile in environments:
         _config(root, f"application-{profile}.yml", {"orders.legacy": "true"})
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -1734,3 +1744,190 @@ def test_a_narrowed_site_lists_an_inherited_body_with_an_unconditional_heir_as_p
     assert inherited not in mapped
     assert candidates[(inherited, "default")] == (None, "true")
     assert candidates[(inherited, "prod")] == (None, "true")
+
+
+# --- an environment's ACTIVE profiles, read from configuration (CP-45; Task 7b) ----------
+#
+# The keys come from the shipped config model (`config_model.profiles`), never from here.
+
+_PROFILES = next(c for c in _catalogs("spring-web") if c.config_model).config_model["profiles"]
+_PETCLINIC = ("default", "h2", "hsqldb", "mysql", "postgres")
+_OPEN_IN_MYSQL = "named only in the base's `spring.profiles.active` — the activation selecting `mysql` decides it"
+
+
+def _active(base: dict[str, str | None], environments: tuple[str, ...], **raw: list[str]):
+    config = {environment: dict(base) for environment in environments}
+    unfilled = {key.replace("__", "."): values for key, values in raw.items()}
+    return active_profiles(config, _PROFILES, list(environments), unfilled)
+
+
+def _profile_verdict(names: list[str], active) -> tuple[str, str]:
+    return _holds(PROFILE, {"expressions": names}, {}, "unused", active)
+
+
+def test_the_base_environment_is_active_in_the_profiles_its_configuration_lists():
+    """spring-petclinic-rest: `spring.profiles.active=h2,spring-data-jpa`. In the base
+    environment both are active, `default` is not (CP-45 row 5: the default profiles are
+    accepted only where none is active), and a profile named nowhere is not."""
+    active = _active({"spring.profiles.active": "h2, spring-data-jpa"}, _PETCLINIC)
+
+    assert _profile_verdict(["spring-data-jpa"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["h2"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["jdbc"], active["default"]) == (FAILS, "resolved")
+    assert _profile_verdict(["default"], active["default"]) == (FAILS, "resolved")
+
+
+def test_a_profile_named_only_in_the_bases_active_list_is_open_in_a_profile_file_environment():
+    """In `h2` or `mysql` the activation selecting the file (a command line, an environment
+    variable) replaces or extends the base's list, and which it does is the deployment's — so
+    `spring-data-jpa` is `unresolved` there, the file's own profile holds, and a profile named
+    in neither is not active."""
+    active = _active({"spring.profiles.active": "h2,spring-data-jpa"}, _PETCLINIC)
+
+    assert _profile_verdict(["h2"], active["h2"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["spring-data-jpa"], active["h2"]) == (UNRESOLVED, "unresolved")
+    assert _profile_verdict(["spring-data-jpa"], active["mysql"]) == (UNRESOLVED, "unresolved")
+    assert _profile_verdict(["h2"], active["mysql"]) == (UNRESOLVED, "unresolved")
+    assert _profile_verdict(["jdbc"], active["mysql"]) == (FAILS, "resolved")
+    assert _profile_holds({"expressions": ["spring-data-jpa"]}, active["mysql"]) == (
+        UNRESOLVED,
+        "unresolved",
+        _OPEN_IN_MYSQL,
+    )
+
+
+def test_an_unfilled_placeholder_leaves_every_profile_not_otherwise_decided_open():
+    """Apollo: `spring.profiles.active: ${apollo_profile}`, which nothing in the module
+    fills. `ldap` is `unresolved` in every environment, the file's own profile holds in its
+    environment, and the evidence names the placeholder."""
+    environments = ("default", "github", "ldap-openldap-sample")
+    active = _active(
+        {"spring.profiles.active": None},
+        environments,
+        spring__profiles__active=["${apollo_profile}"],
+    )
+
+    for environment in environments:
+        assert _profile_verdict(["ldap"], active[environment]) == (UNRESOLVED, "unresolved")
+    assert _profile_verdict(["github"], active["github"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["github"], active["default"]) == (UNRESOLVED, "unresolved")
+    assert _profile_holds({"expressions": ["oidc"]}, active["github"])[2] == (
+        "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+    )
+
+
+def test_with_no_profile_key_set_an_environment_is_its_own_profile_only():
+    """PR #61's behaviour exactly: `default` is active in the base environment alone, and a
+    profile file's environment is its own profile."""
+    active = _active({"orders.legacy": "true"}, ("default", "prod"))
+
+    assert _profile_verdict(["default"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["default"], active["prod"]) == (FAILS, "resolved")
+    assert _profile_verdict(["prod"], active["prod"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["prod"], active["default"]) == (FAILS, "resolved")
+    assert _profile_verdict(["!prod"], active["default"]) == (HOLDS, "resolved")
+
+
+def test_an_included_profile_is_active_in_every_environment():
+    """CP-45 row 6: `spring.profiles.include` joins the active list whatever it is, so it is
+    active in a profile file's environment too — and, being active, keeps `default` from
+    being accepted in the base."""
+    active = _active({"spring.profiles.include": "metrics"}, ("default", "prod"))
+
+    assert _profile_verdict(["metrics"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["metrics"], active["prod"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["default"], active["default"]) == (FAILS, "resolved")
+
+
+def test_the_default_profiles_key_names_the_profile_active_where_none_is():
+    active = _active({"spring.profiles.default": "local"}, ("default", "prod"))
+
+    assert _profile_verdict(["local"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["default"], active["default"]) == (FAILS, "resolved")
+    assert _profile_verdict(["local"], active["prod"]) == (FAILS, "resolved")
+
+
+def test_a_yaml_list_names_each_profile():
+    """CP-45 row 4: the key binds as a list too, which the config reader flattens to
+    `spring.profiles.active[0]`, `[1]`."""
+    active = _active(
+        {"spring.profiles.active[0]": "h2", "spring.profiles.active[1]": "spring-data-jpa"},
+        ("default", "h2"),
+    )
+
+    assert _profile_verdict(["spring-data-jpa"], active["default"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["spring-data-jpa"], active["h2"]) == (UNRESOLVED, "unresolved")
+
+
+def test_a_negated_open_profile_stays_open_and_any_of_takes_a_holding_term():
+    active = _active({"spring.profiles.active": "h2,spring-data-jpa"}, _PETCLINIC)
+
+    assert _profile_verdict(["!spring-data-jpa"], active["mysql"]) == (UNRESOLVED, "unresolved")
+    assert _profile_verdict(["!spring-data-jpa"], active["default"]) == (FAILS, "resolved")
+    assert _profile_verdict(["jdbc", "spring-data-jpa"], active["mysql"]) == (
+        UNRESOLVED,
+        "unresolved",
+    )
+    assert _profile_verdict(["mysql", "spring-data-jpa"], active["mysql"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["jdbc", "jpa"], active["mysql"]) == (FAILS, "resolved")
+
+
+@pytest.mark.pins("beans.ACTIVE-PROFILES-are-read-from-configuration")
+def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_path: Path):
+    """Through `resolve_config` and the shipped catalog: petclinic's shape. The Spring Data
+    JPA repository exists in the base environment and is open in the profile file's, its
+    evidence naming why; the JDBC one exists nowhere."""
+    jpa, jdbc = ORDERS + "SpringDataOwnerRepository#", ORDERS + "JdbcOwnerRepository#"
+    facts = [
+        *_type(jpa, [_marker(COMPONENT), _profile("spring-data-jpa")]),
+        *_type(jdbc, [_marker(COMPONENT), _profile("jdbc")]),
+    ]
+    workspace = _resolved(
+        tmp_path,
+        facts,
+        environments=("mysql",),
+        base={"spring.profiles.active": "h2,spring-data-jpa"},
+    )
+    rows = workspace.query("bean_conditions")
+    presence = {
+        (r["bean"], r["environment"]): (r["holds"], r["evidence"])
+        for r in workspace.query("bean_presence")
+    }
+    workspace.close()
+
+    assert _verdicts(rows, jpa) == {
+        "default": ("class", None, "profile", "true", "resolved"),
+        "mysql": ("class", None, "profile", "unresolved", "unresolved"),
+    }
+    assert _verdicts(rows, jdbc) == {
+        "default": ("class", None, "profile", "false", "resolved"),
+        "mysql": ("class", None, "profile", "false", "resolved"),
+    }
+    assert presence[(_MODULE + jpa, "mysql")] == (
+        "unresolved",
+        _OPEN_IN_MYSQL,
+    )
+
+
+def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: Path):
+    """Apollo's shape through the whole pass: the evidence names `${apollo_profile}`, read
+    off the configuration the module ships."""
+    ldap = ORDERS + "LdapUserService#"
+    facts = [*_type(ldap, [_marker(SERVICE), _profile("ldap")])]
+    workspace = _resolved(
+        tmp_path,
+        facts,
+        environments=("github",),
+        base={"spring.profiles.active": "${apollo_profile}"},
+    )
+    presence = {
+        r["environment"]: (r["holds"], r["evidence"])
+        for r in workspace.query("bean_presence")
+        if r["bean"] == _MODULE + ldap
+    }
+    workspace.close()
+
+    reason = (
+        "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+    )
+    assert presence == {"default": ("unresolved", reason), "github": ("unresolved", reason)}
