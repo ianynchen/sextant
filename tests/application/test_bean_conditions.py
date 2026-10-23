@@ -24,6 +24,7 @@ from sextant.application.resolve.bean_conditions import (
     PROFILE,
     UNRESOLVED,
     _holds,
+    _models,
     _profile_holds,
     active_profiles,
     record_bean_conditions,
@@ -2362,3 +2363,26 @@ def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_exp
         assert not any(
             "user:secret@" in str(cell) or "s3cr3t" in str(cell) for row in cells for cell in row
         ), f"{parquet.name} shipped a credential in the clear"
+
+
+def test_the_shipped_bean_model_states_which_condition_kinds_a_deployment_sets():
+    """CP-47: an active profile and a property are set by the deployment (an environment
+    variable or a command-line argument outranks any file the module ships), and a bean's
+    presence is decided by what the code registers. That is catalog data, not a rule the
+    resolve pass knows: `profile` and `property` carry `set_by: deployment`, with the probe
+    that measured it beside the probe of the evaluation rule; `presence` carries neither."""
+    spring = next(
+        c.bean_model
+        for c in YamlCatalogSource(CATALOGS).load()
+        if c.bean_model.get("id") == "spring"
+    )
+    models = {model.kind: model for model in _models(spring).values()}
+
+    for kind in ("profile", "property"):
+        assert models[kind].members["set_by"] == "deployment"
+        assert models[kind].members["set_by_probe"] == (
+            "scripts/probes/cp47_deployment_overrides.md"
+        )
+        assert models[kind].members["by"] != models[kind].members["set_by_probe"]
+    assert "set_by" not in models["presence"].members
+    assert "set_by" not in models["other"].members
