@@ -1101,7 +1101,7 @@ compared by nothing).
 |---|---|---|---|---|
 | `module` | `metadata.json`'s `module` | the module id | kind, languages, `dependency_source` | none |
 | `endpoint` | `endpoints`, inbound | protocol, method, path: the exposed address, which is a topic for a broker, the operation name for GraphQL, the operation's QName for SOAP | the request and response body as field sets by wire name, the same two bodies as descriptors with every type symbol erased, consumes, produces, format, the requirement set (`endpoint_metadata`), the condition set (`endpoint_conditions`), resolution | handler symbols, documents |
-| `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), resolution | caller symbols, documents |
+| `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
 | `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
 | `schedule` | `scheduled_work` | handler, trigger | expression, resolution | catalog |
@@ -1141,6 +1141,15 @@ four handlers behind one wire carry different request shapes, or one method has 
 never whichever row the query happened to order first — M06's no-silent-choice rule, applied
 to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`) are unions.
 
+**A condition set is what the code DECLARES** (spec
+[2026-10-23](../superpowers/specs/2026-10-23-deployment-set-conditions-design.md), rulings 2
+and 3; vocabulary 2). Conditions belong to beans, so an `endpoint` and a `dependency` both
+carry the `{kind, expression}` of the bean their code lives in — a dependency's matched on its
+row and its `caller`, since an outbound row has no handler. Each environment's verdict
+(`environment`, `holds`) is evidence: it stays in the workspace, the bundle and the documents
+and leaves the compared attribute, so a configuration change is reported once, as the
+`boundary-property` change it is, and only a code change is a `conditions` change.
+
 **Enrichment never enters.** Components, prose and overlays are judgements, not facts
 (`meridian-integration.md` §0a), and `open_questions` and `roots` are Sextant's working state.
 
@@ -1154,7 +1163,7 @@ query in `storage/duckdb/workspace.py`'s registry (`boundary_endpoint`, `boundar
 `boundary_contract`, `boundary_property`, `boundary_schedule`, `boundary_error_handler`;
 `module` is read off `metadata.json`), written as plain `SELECT`s over the exported tables'
 columns so the same query serves a workspace and a bundle's Parquet. `boundary_vocabulary_version`
-(currently `1`) moves with any edit that adds a kind or moves a column between the three
+(currently `2`) moves with any edit that adds a kind or moves a column between the three
 sets, which changes what a comparison means without changing a table — §7 says where it is
 stamped and who compares it.
 

@@ -18,10 +18,20 @@ def test_the_seven_kinds_in_their_order():
     ]
 
 
-def test_the_vocabulary_version_is_one():
+def test_the_vocabulary_version_is_two():
     """The stamp lives in `domain/version.py` with the other three; the registry does not
-    keep a second copy of it (the Step 0 lesson: copies of one stamp drift)."""
-    assert BOUNDARY_VOCABULARY_VERSION == 1
+    keep a second copy of it (the Step 0 lesson: copies of one stamp drift). Version 2 is
+    `dependency` gaining `conditions` (spec 2026-10-23-deployment-set-conditions, ruling 2)."""
+    assert BOUNDARY_VOCABULARY_VERSION == 2
+
+
+@pytest.mark.pins("boundary.a-DEPENDENCY-carries-its-callers-conditions")
+def test_a_dependency_carries_conditions_as_an_endpoint_does():
+    """Ruling 2: conditions belong to beans, so a row of either direction carries them."""
+    assert "conditions" in KINDS["dependency"].attributes
+    assert KINDS["dependency"].attributes.index("conditions") == (
+        KINDS["dependency"].attributes.index("resolution") - 1
+    )
 
 
 def test_every_kind_is_keyed_by_its_own_name():

@@ -151,7 +151,7 @@ it, never by presentation.
 ```json
 {
   "schema_version": "1.0.0",
-  "boundary_vocabulary_version": 1,
+  "boundary_vocabulary_version": 2,
   "catalog_hash": "…",
   "module": { "id": ":services:orders", "kind": "service", "languages": ["java", "kotlin"] },
   "provenance": { "commit": "a3f91c…", "generated_at": "…", "sextant_version": "0.4.0",
@@ -166,7 +166,7 @@ it, never by presentation.
   "skipped_catalogs": [{ "catalog_id": "spring-webclient", "missing_capabilities": ["string_constants"],
                          "feeds": ["dependency"], "cause": "missing_capability" }],
   "catalogs_run": { "endpoint": 12, "dependency": 4, "data-contract": 9, "schedule": 1 },
-  "observability": { "boundary_vocabulary_version": 1,
+  "observability": { "boundary_vocabulary_version": 2,
                      "kinds": { "endpoint": { "verdict": "observable", "reasons": [] },
                                 "dependency": { "verdict": "partial",
                                                 "reasons": ["catalog skipped: spring-webclient (string_constants)"] } },

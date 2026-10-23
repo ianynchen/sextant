@@ -172,6 +172,7 @@ _DOCUMENT = "sextant/egress/render/document.py"
 _VALUES = "sextant/application/resolve/values.py"
 _VOCABULARY = "sextant/application/boundary/vocabulary.py"
 _DIFF = "sextant/application/boundary/diff.py"
+_BOUNDARY_SOURCE = "sextant/application/boundary/source.py"
 _OBSERVABILITY = "sextant/application/boundary/observability.py"
 _QUESTIONS = "sextant/application/query/questions.py"
 
@@ -3789,6 +3790,50 @@ GUARDS: dict[str, Guard] = {
                 path=_DIFF,
                 find="        summary[entry.kind][entry.change] += 1\n",
                 replace="        summary.setdefault(entry.kind, dict.fromkeys(_CHANGES, 0))[entry.change] += 1\n",
+            ),
+        ),
+    ),
+    # --- vocabulary 2: a dependency's conditions, compared as declared (spec 2026-10-23) ---
+    "boundary.a-DEPENDENCY-carries-its-callers-conditions": Guard(
+        what="the `dependency` kind's attributes include `conditions`, so a diff compares the "
+        "conditions of the bean an outbound call is made from (ruling 2, vocabulary 2)",
+        why="conditions belong to beans, and a bean's outbound calls exist only where it "
+        "does: without the attribute a call that gained `@ConditionalOnProperty` — and so "
+        "stops being made in a deployment that leaves the property off — is no change at all",
+        edits=(
+            Edit(
+                path=_VOCABULARY,
+                find='            "headers",\n            "conditions",\n',
+                replace='            "headers",  # guard disabled: no conditions\n',
+            ),
+        ),
+    ),
+    "boundary.a-DEPENDENCY-condition-is-matched-on-its-CALLER": Guard(
+        what="a dependency's conditions are matched on its `endpoints` row plus its `caller`",
+        why="an outbound row has no handler, so two calls to one address from two callers "
+        "share a NULL handler: matched without the caller, a call from an unconditional class "
+        "carries another class's `@ConditionalOnProperty` and reads as switched off with it",
+        edits=(
+            Edit(
+                path=_BOUNDARY_SOURCE,
+                find='_DEPENDENCY_CONDITION_KEY = (*_CONDITION_KEY, "caller")\n',
+                replace="_DEPENDENCY_CONDITION_KEY = _CONDITION_KEY  # guard disabled\n",
+            ),
+        ),
+    ),
+    "boundary.CONDITIONS-diff-as-declared-expressions": Guard(
+        what="an endpoint's or dependency's `conditions` is the declared `{kind, expression}` "
+        "set; each environment's `environment`/`holds` is evidence (ruling 3)",
+        why="a verdict follows the configuration, so with it in the attribute one flipped "
+        "property in the prod file reads twice — a `boundary-property` change and a "
+        "`conditions` change on every route and call the bean produces — and a reader cannot "
+        "tell a code change from a config change",
+        edits=(
+            Edit(
+                path=_BOUNDARY_SOURCE,
+                find='            entry = {"kind": row["kind"], "expression": row["expression"]}\n',
+                replace='            entry = {"kind": row["kind"], "expression": row["expression"], '
+                '"environment": row["environment"], "holds": row["holds"]}  # guard disabled\n',
             ),
         ),
     ),

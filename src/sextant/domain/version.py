@@ -123,6 +123,8 @@ SEXTANT_VERSION = version("sextant")
 #             between those three sets changes what a diff or an observability map means
 #             without changing a single table or fact: a consumer comparing two bundles
 #             reads this stamp to know whether the same words were used on both sides.
+#     2       `dependency` gains `conditions`; `conditions` is the declared
+#             `{kind, expression}` set (spec 2026-10-23, rulings 2 and 3).
 FACT_SCHEMA_VERSION = 5
 GRAPH_SCHEMA_VERSION = 6
-BOUNDARY_VOCABULARY_VERSION = 1
+BOUNDARY_VOCABULARY_VERSION = 2
