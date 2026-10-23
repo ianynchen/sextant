@@ -2241,8 +2241,8 @@ def test_a_conditional_controller_states_where_it_exists_in_the_document(full_ru
     assert (
         document.count(
             "  - Of this module's environments: holds in 1 of 2 environments; not evaluated in "
-            "`default` — active profiles are set by the deployment; this module's own "
-            "configuration activates `default` here\n"
+            "`default` — active profiles are set by the deployment; this module activates "
+            "none\n"
         )
         == 2
     )
@@ -2304,8 +2304,7 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
     assert "  - Exists only when: the active profile matches one of: `prod`\n" in events
     assert (
         "  - Of this module's environments: holds in 1 of 2 environments; not evaluated in "
-        "`default` — active profiles are set by the deployment; this module's own "
-        "configuration activates `default` here\n"
+        "`default` — active profiles are set by the deployment; this module activates none\n"
     ) in events
 
     notify = block("— inbound_endpoint, reached by `POST /notify`")
@@ -2328,7 +2327,7 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
         "`PromoPricing`, `StandardPricing`\n"
         "  - in `prod`: `PromoPricing` (decided from this module's beans only)\n"
         "  - not evaluated in `default`: `PromoPricing` — active profiles are set by the "
-        "deployment; this module's own configuration activates `default` here; "
+        "deployment; this module activates none; "
         "`StandardPricing` — not decided from this module's beans: a competing bean's own "
         "existence here is open\n"
     ) in pricing

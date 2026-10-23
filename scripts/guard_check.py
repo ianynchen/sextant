@@ -866,6 +866,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "conditions.the-RESERVED-default-profile-is-no-activation-the-module-makes": Guard(
+        what="a module naming no profile reads `this module activates none` in a deployment-set "
+        "profile's evidence: the reserved `default` profile, active in its base environment only "
+        "because it names none (CP-45 row 5), is not stated as an activation",
+        why="every module without `spring.profiles.active` (the orders-service fixture, most "
+        "services) had its documents say it `activates `default``, a claim about the module "
+        "that is the framework's fallback, not anything the module configures (ruled at review)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="    if names == [default_profile]:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "conditions.a-QUOTED-configured-value-is-masked-by-its-key": Guard(
         what="the value a property condition's evidence quotes is masked by its own key where "
         "it is written (`redact_value`), as every origin of a configured value is",

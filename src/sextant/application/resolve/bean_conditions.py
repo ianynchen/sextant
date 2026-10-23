@@ -268,6 +268,9 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     environments = sorted(config) or ["default"]
     active = _active_by_environment(workspace, catalogs, config, environments)
     default_environment = str(_profiles_model(catalogs).get("default_profile", "default"))
+    reading = deployment_reading(
+        active.get(default_environment, ActiveProfiles(known=frozenset())), default_environment
+    )
     constructed = _constructed_by(workspace)
     created = _lambdas_created_by(workspace)
     ancestors = _ancestors(workspace)
@@ -289,12 +292,19 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
             bean: found for bean, found in every.items() if any(route.conditions for route in found)
         }
         presence = _presence_verdicts(
-            registrations, ancestors, config, environments, active, default_environment
+            registrations, ancestors, config, environments, active, default_environment, reading
         )
         written: dict[str, list[dict[str, Any]]] = {}
         for bean in sorted(routes):
             written[bean] = _rows_for(
-                bean, routes[bean], config, environments, presence, active, default_environment
+                bean,
+                routes[bean],
+                config,
+                environments,
+                presence,
+                active,
+                default_environment,
+                reading,
             )
             rows.extend(written[bean])
         if dispatch is not None:
@@ -643,6 +653,7 @@ def _rows_for(
     presence: dict[tuple[str, str, str], _Presence],
     active: dict[str, ActiveProfiles],
     default_environment: str,
+    reading: str,
 ) -> list[dict[str, Any]]:
     """One row per (route, condition, environment), evaluated; one condition-less row per
     (route, environment) for a route with no condition — `true` for a bean route,
@@ -713,6 +724,7 @@ def _rows_for(
                     config.get(environment, {}),
                     active[environment],
                     default_environment,
+                    reading,
                 )
                 rows.append(
                     {
@@ -755,6 +767,7 @@ def _presence_verdicts(
     environments: list[str],
     active: dict[str, ActiveProfiles],
     default_environment: str,
+    reading: str,
 ) -> dict[tuple[str, str, str], _Presence]:
     """Every bean-presence condition the module's bean definitions carry, judged per
     environment from those definitions alone (spec §2c, decision 2; CP-44 rows 1-3).
@@ -824,6 +837,7 @@ def _presence_verdicts(
                     config.get(environment, {}),
                     active[environment],
                     default_environment,
+                    reading,
                 )[0]
                 for found, kind, expression in others
             ]
@@ -1315,6 +1329,7 @@ def _judged(
     config: dict[str, str | None],
     active: ActiveProfiles,
     default_environment: str,
+    reading: str,
 ) -> tuple[str, str, str]:
     """`(holds, resolution, evidence)` for one condition in one environment — the verdict the
     pass PUBLISHES (spec 2026-10-23-deployment-set-conditions §3b). `_holds` and
@@ -1325,27 +1340,18 @@ def _judged(
 
     * `profile` — decided only by the environment's own definition: in profile environment
       `p`, a term naming `p` holds and `!p` fails; nothing decides anything in
-      `default_environment`. Every other term is `unresolved`, its evidence the profiles the
-      module's own configuration activates there (`active`), or the reason a placeholder
-      leaves them unknown;
+      `default_environment`. Every other term is `unresolved`, its evidence `reading`: one
+      string per module, the same in every environment (`deployment_reading`);
     * `property` — `unresolved` in every environment, its evidence the value each key's
       environment configuration resolves (masked by its key, `_REDACTOR`), a placeholder
       the module does not fill, or that it sets none.
 
-    A kind without `set_by` keeps the framework rule's verdict."""
+    A kind without `set_by` keeps the framework rule's verdict, `active` being the
+    environment's active profiles by that rule."""
     if model.members.get("set_by") == "deployment":
         if kind == PROFILE:
-            reading = active.otherwise or (
-                "this module's own configuration activates "
-                f"{', '.join(f'`{name}`' for name in sorted(active.known)) or 'none'} here"
-            )
             own = frozenset() if environment == default_environment else frozenset({environment})
-            return _profile_holds(
-                expression,
-                ActiveProfiles(
-                    known=own, otherwise=f"active profiles are set by the deployment; {reading}"
-                ),
-            )
+            return _profile_holds(expression, ActiveProfiles(known=own, otherwise=reading))
         if kind == PROPERTY:
             return (
                 UNRESOLVED,
@@ -1367,6 +1373,24 @@ def _judged(
         return _profile_holds(expression, active)
     holds, resolution = _holds(kind, expression, config, environment)
     return holds, resolution, "compiler"
+
+
+def deployment_reading(base: ActiveProfiles, default_profile: str) -> str:
+    """The evidence of every `profile` condition a deployment sets, ONE string per module and
+    the same in every environment (spec 2026-10-23-deployment-set-conditions §3b, §3c, as
+    ruled at review): the module's own activation as read for its BASE environment (`base`,
+    CP-45) — the reason a placeholder leaves it unknown, or the profiles it activates. The
+    reserved `default_profile`, active there only because the module names none (CP-45 row
+    5), is no activation the module makes."""
+    prefix = "active profiles are set by the deployment; "
+    if base.otherwise:
+        return prefix + base.otherwise
+    names = sorted(base.known)
+    if names == [default_profile]:
+        names = []
+    if not names:
+        return prefix + "this module activates none"
+    return prefix + f"this module's own default is `{','.join(names)}`"
 
 
 def _profile_holds(expression: dict[str, Any], active: ActiveProfiles) -> tuple[str, str, str]:

@@ -31,6 +31,7 @@ from sextant.application.resolve.bean_conditions import (
     _models,
     _profile_holds,
     active_profiles,
+    deployment_reading,
     record_bean_conditions,
 )
 from sextant.application.resolve.call_edges import record_call_edges
@@ -2244,8 +2245,9 @@ def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_
 
     Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the active profiles
     the configuration lists are now the EVIDENCE, never the verdict — the deployment sets
-    them (CP-47) — so neither repository is evaluated in either environment, and each
-    environment's evidence states what the module's own configuration activates there."""
+    them (CP-47) — so neither repository is evaluated in either environment, and every
+    environment's evidence states one reading, the module's own activation as read for
+    its base environment (ruled at review)."""
     jpa, jdbc = ORDERS + "SpringDataOwnerRepository#", ORDERS + "JdbcOwnerRepository#"
     facts = [
         *_type(jpa, [_marker(COMPONENT), _profile("spring-data-jpa")]),
@@ -2272,20 +2274,13 @@ def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_
         "default": ("class", None, "profile", "unresolved", "unresolved"),
         "mysql": ("class", None, "profile", "unresolved", "unresolved"),
     }
-    assert presence[(_MODULE + jdbc, "default")] == (
-        "unresolved",
-        (
-            "active profiles are set by the deployment; this module's own configuration activates "
-            "`h2`, `spring-data-jpa` here"
-        ),
+    own = (
+        "active profiles are set by the deployment; this module's own default is "
+        "`h2,spring-data-jpa`"
     )
-    assert presence[(_MODULE + jpa, "mysql")] == (
-        "unresolved",
-        (
-            "active profiles are set by the deployment; this module's own configuration activates "
-            "`mysql` here"
-        ),
-    )
+    for bean in (jpa, jdbc):
+        for environment in ("default", "mysql"):
+            assert presence[(_MODULE + bean, environment)] == ("unresolved", own)
 
 
 def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: Path):
@@ -2401,8 +2396,7 @@ def test_a_repository_interface_is_a_bean_whose_implementation_answers_the_call(
         if r["bean"] == proxy and r["environment"] == "default" and r["kind"] == "profile"
     }
     assert evidence == (
-        "active profiles are set by the deployment; this module's own configuration activates "
-        "`spring-data-jpa` here"
+        "active profiles are set by the deployment; this module's own default is `spring-data-jpa`"
     )
 
 
@@ -2637,16 +2631,19 @@ _SET_BY_DEPLOYMENT = "active profiles are set by the deployment; "
 
 
 def _judged_profile(
-    names: list[str], environment: str, active: ActiveProfiles
+    names: list[str], environment: str, base: ActiveProfiles
 ) -> tuple[str, str, str]:
+    """`names` judged in `environment` of a module whose BASE environment's own reading is
+    `base` — the one reading every environment's evidence states."""
     return _judged(
         _PROFILE_BY_DEPLOYMENT,
         PROFILE,
         {"expressions": names},
         environment,
         {},
-        active,
+        base,
         "default",
+        deployment_reading(base, "default"),
     )
 
 
@@ -2662,6 +2659,7 @@ def _judged_property(
         config,
         ActiveProfiles(known=frozenset()),
         "default",
+        "unused: a property's evidence is its configured value",
     )
 
 
@@ -2677,31 +2675,31 @@ def test_a_profile_environment_decides_a_term_naming_itself():
 
 @pytest.mark.pins("conditions.a-DEPLOYMENT-set-condition-is-decided-only-by-its-environment")
 def test_a_profile_the_deployment_activates_is_not_evaluated_and_states_the_modules_reading():
-    """petclinic's `@Profile("jdbc")` in `mysql`: the module's own configuration activates
-    `mysql` and `spring-data-jpa` there, and an environment variable or a command-line
-    argument can activate `jdbc` beside them (CP-47) — so it is not evaluated, and the
-    module's reading is the evidence."""
-    reading = ActiveProfiles(known=frozenset({"mysql", "spring-data-jpa"}))
+    """petclinic's `@Profile("jdbc")` in `mysql`: an environment variable or a command-line
+    argument can activate `jdbc` (CP-47), so it is not evaluated, and the module's own
+    reading is the evidence — what `application.properties` activates, `h2,spring-data-jpa`,
+    stated as ONE string in every environment (ruled at review), so the document states the
+    five environments on one line (spec §3c)."""
+    base = ActiveProfiles(known=frozenset({"h2", "spring-data-jpa"}))
 
-    holds, resolution, evidence = _judged_profile(["jdbc"], "mysql", reading)
+    holds, resolution, evidence = _judged_profile(["jdbc"], "mysql", base)
 
     assert holds == UNRESOLVED
     assert resolution == "unresolved"
     assert evidence == (
-        "active profiles are set by the deployment; this module's own configuration "
-        "activates `mysql`, `spring-data-jpa` here"
+        "active profiles are set by the deployment; this module's own default is "
+        "`h2,spring-data-jpa`"
     )
+    for environment in ("default", "h2", "hsqldb", "postgres"):
+        assert _judged_profile(["jdbc"], environment, base)[2] == evidence
 
 
 def test_nothing_decides_a_profile_in_the_default_environment():
     """Ruled 1: `default` has no definition of its own to decide by — not even the reserved
     `default` profile, which Spring activates only where the deployment activates none."""
     reading = ActiveProfiles(known=frozenset({"h2", "spring-data-jpa"}))
-    named = (
-        _SET_BY_DEPLOYMENT
-        + "this module's own configuration activates `h2`, `spring-data-jpa` here"
-    )
-    none = _SET_BY_DEPLOYMENT + "this module's own configuration activates none here"
+    named = _SET_BY_DEPLOYMENT + "this module's own default is `h2,spring-data-jpa`"
+    none = _SET_BY_DEPLOYMENT + "this module activates none"
 
     assert _judged_profile(["default"], "default", reading) == (UNRESOLVED, "unresolved", named)
     assert _judged_profile(["!prod"], "default", reading) == (UNRESOLVED, "unresolved", named)
@@ -2709,6 +2707,24 @@ def test_nothing_decides_a_profile_in_the_default_environment():
         UNRESOLVED,
         "unresolved",
         none,
+    )
+
+
+@pytest.mark.pins("conditions.the-RESERVED-default-profile-is-no-activation-the-module-makes")
+def test_a_module_naming_no_profile_activates_none():
+    """CP-45 row 5: with no profile key set, the base environment's reading is the reserved
+    `default` profile — active there only because the module names none. That is no
+    activation the module makes, so the evidence says it activates none; a profile the
+    module does name beside it is stated."""
+    silent = _active({"orders.legacy": "true"}, ("default", "prod"))
+    named = _active({"spring.profiles.default": "local"}, ("default", "prod"))
+
+    assert silent["default"].known == frozenset({"default"})
+    assert _judged_profile(["prod"], "default", silent["default"])[2] == (
+        "active profiles are set by the deployment; this module activates none"
+    )
+    assert deployment_reading(named["default"], "default") == (
+        "active profiles are set by the deployment; this module's own default is `local`"
     )
 
 
@@ -2789,15 +2805,17 @@ def test_a_kind_no_deployment_sets_keeps_the_framework_rules_verdict():
     reading = ActiveProfiles(known=frozenset({"h2"}))
     profile = ConditionModel(kind=PROFILE, annotation="com/acme/Profile#", members={})
 
-    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default") == (
+    unused = "unused without `set_by`"
+
+    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default", unused) == (
         *_holds(PROPERTY, expression, config, "prod"),
         "compiler",
     )
-    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default") == (
+    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default", unused) == (
         FAILS,
         "resolved",
         "compiler",
     )
     assert _judged(
-        profile, PROFILE, {"expressions": ["jdbc"]}, "default", {}, reading, "default"
+        profile, PROFILE, {"expressions": ["jdbc"]}, "default", {}, reading, "default", unused
     ) == _profile_holds({"expressions": ["jdbc"]}, reading)
