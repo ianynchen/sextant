@@ -416,6 +416,9 @@ line, not a wrong one, and where a real input triggers one it has a register ent
 * **A body reached only through `super.m()` can read "no bean runs it"**: the inherited-body
   rule finds bodies a virtual or interface call reaches. The wording says only that this
   module's beans do not run it.
+* **A body declared on a conditional bean reads that bean's conditions only**, even where an
+  unconditional subclass bean inherits it: the inherited-body rule covers bodies declared on
+  no bean. A decided wrong answer; measured on 0 hierarchies. `OI-174`.
 * **A generic framework receiver over-lists.** A call declared on `JpaRepository<User, Long>`
   names `JpaRepository`, so every module repository extending it is a candidate; the type
   argument is not used to narrow. Measured on 0 of 69 `jhipster-sample-app` and 0 of 34

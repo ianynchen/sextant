@@ -767,6 +767,32 @@ a target is a column the extractors or `call_edges` carry (so no SQL cuts a symb
 two cuts are routed through one user-defined function declared next to `domain/symbols`'s
 grammar and tested against it.
 
+### OI-174 — a body a conditional bean declares and an unconditional subclass bean inherits reads only the declaring bean's conditions
+**Minor · logged 2026-10-23 (whole-branch review of `conditional-beans`) ·
+`src/sextant/application/resolve/bean_conditions.py::_inherited_rows`**
+
+`_inherited_rows` gives an inherited body the routes of the beans that run it only where the
+body's declaring class is NOT itself a bean (`if declaring in beans or body in routes:
+continue`). A body declared on a CONDITIONAL concrete bean `B` — say `@Component
+@Profile("prod") class B { void send() {…} }` — and inherited, not overridden, by an
+UNCONDITIONAL bean `@Component class S extends B` runs as part of `S` too, so it exists in
+every environment; but the body maps to `B` through its owner class (`symbol_beans`) and reads
+`B`'s condition: absent outside `prod`. A decided wrong answer, not an open one.
+
+**What happens today:** measured 0 such hierarchies. On fresh analyses of `apollo-portal`,
+`apollo-configservice`, `apollo-adminservice`, `jhipster-sample-app`, `yudao-module-system`,
+`yudao-spring-boot-starter-websocket` and `spring-petclinic-rest`, no class carrying a
+condition is the ancestor of any module class in `type_hierarchy`, so no body is affected;
+the whole-branch review found the same on the six field corpora.
+
+**Real triggering input:** a conditional base implementation extended by an unconditional
+bean — e.g. `@ConditionalOnMissingBean` default sender subclassed by a plain `@Component`.
+
+**Verify:** `grep -n "if declaring in beans or body in routes"
+src/sextant/application/resolve/bean_conditions.py`. **Closes** when a body declared on a bean is given the OR of its declaring bean's routes and
+those of every subclass bean that resolves the method to it, as for a body declared on no
+bean.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

@@ -647,15 +647,18 @@ spells a type (the spelling `symbols.enclosing` uses); `bean_kind`; `via`; `kind
   adapter flow it builds and returns — exists only where the factory registers). `configuration` — the enclosing configuration class's condition, applied to a
   `@Bean` method's bean. `constructed` — a plain `new` outside any bean factory: one
   condition-less row per environment, `unresolved`, evidence naming the constructing method.
-  `inherited` — a body declared in an abstract class or as an interface default method,
-  written as a bean whose routes are copies of the routes of the beans that run it; a body no
-  bean runs has one condition-less `unresolved` row per environment, evidence "no bean of this
-  module runs this inherited body". `proxy` — an interface the framework
-  implements at run time (Spring Data repositories); the bean is the interface.
-* **`via`** is the factory method for `factory` and `configuration`, the heir class (or its
-  route's `via`) for `inherited`, the constructing method for `constructed`, and NULL for
-  `class` and `proxy` only. It tells
-  two routes of one bean apart: two mutually exclusive factories are two routes.
+  `proxy` — an interface the framework implements at run time (Spring Data repositories); the
+  bean is the interface. A body declared in an abstract class or as an interface default
+  method is written as a bean of its own whose rows are COPIES of the rows of the beans that
+  run it (its heirs), each keeping the heir's `bean_kind` and `via` — the heir class standing
+  in for a `via` the heir's row does not have, so two heirs stay two routes. `inherited`
+  appears only on the rows of a body NO bean runs: one condition-less `unresolved` row per
+  environment, evidence "no bean of this module runs this inherited body".
+* **`via`** is the factory method for `factory` and `configuration` and the constructing
+  method for `constructed`; NULL for `class`, `proxy` and `inherited` — except on a copied
+  heir row of an inherited body, where it is the heir's own `via` or, for a heir with none,
+  the heir class, so such a `class` or `proxy` row carries a non-NULL `via`. It tells two
+  routes of one bean apart: two mutually exclusive factories are two routes.
 * **`kind`** is `profile`, `property`, `presence` or `other`; NULL on a condition-less route
   row (an unconditional scan or factory of a class that also has a conditional route, `true`
   in every environment, `resolved`). `profile` and `property` hold or fail by the framework's

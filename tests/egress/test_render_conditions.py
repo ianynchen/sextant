@@ -843,7 +843,10 @@ def test_a_framework_generated_implementation_answers_a_call_beside_the_classes(
     jdbc = COORDS + "com/acme/JdbcOwnerRepositoryImpl#send()."
     proxy = COORDS + "com/acme/SpringDataOwnerRepository#"
     trace = _narrowed_trace(jdbc, target="com/acme/OwnerRepository#send().")
-    opened = "named only in the base's `spring.profiles.active`; the activation selecting `mysql` decides it"
+    opened = (
+        "named only in the base's `spring.profiles.active`; the activation selecting this "
+        "environment decides it"
+    )
     document = _traced(
         trace,
         candidate_presence=[
@@ -916,7 +919,8 @@ def test_a_reason_every_candidate_of_a_line_shares_is_said_once():
     keep each reason beside its candidate."""
     kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
     shared = (
-        "named only in the base's `spring.profiles.active`; the activation selecting it decides it"
+        "named only in the base's `spring.profiles.active`; the activation selecting this "
+        "environment decides it"
     )
     other = (
         "the active profiles here come from `${apollo_profile}`, which this module does not fill"

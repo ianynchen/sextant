@@ -1402,10 +1402,12 @@ def active_profiles(
                 )
             continue
         known = expanded(frozenset({environment}) | included)
+        # Worded without the environment's name, so the reason is one string wherever it
+        # applies and the document states the environments it leaves open on one line.
         unknown = {
             name: (
-                f"named only in the base's `{key}`; the activation selecting "
-                f"`{environment}` decides it"
+                f"named only in the base's `{key}`; the activation selecting this "
+                "environment decides it"
             )
             for name, key in actives
             if name not in known

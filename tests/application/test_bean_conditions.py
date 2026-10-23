@@ -719,6 +719,72 @@ def test_a_row_made_in_a_conditional_factorys_own_body_states_the_factorys_condi
     }
 
 
+def test_a_call_to_a_conditional_factory_method_is_answered_by_the_methods_own_bean(
+    tmp_path: Path,
+):
+    """Whole-branch review, minor: a call naming a `@Bean @Profile("local")` method maps the
+    method to its OWN bean — the method, on the factory's route — never to its configuration
+    class, which carries no condition. A direct call is `resolved`, so `candidate_presence`
+    lists no row for it (a site is listed only when narrowed, or answered by an interface
+    bean) and the trace reads as it always did; where a subclass configuration overrides the
+    method, the call narrows to both bodies and `candidate_presence` states the base method's
+    own presence: `local` only, while the override exists everywhere."""
+    wiring = ORDERS + "AdapterConfig#"
+    override = ORDERS + "LocalAdapterConfig#"
+    runnable = "java/lang/Runnable#"
+    returns = "()Ljava/lang/Runnable;"
+    factory = _MODULE + method_descriptor(wiring, "flow", returns)
+    overriding = _MODULE + method_descriptor(override, "flow", returns)
+    service = ORDERS + "OrderService#"
+    send = method_descriptor(service, "send", _VOID)
+
+    def call(kind: str) -> CallSiteFact:
+        return CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + send,
+            target=CallTarget(owner=wiring, name="flow", descriptor=returns),
+            invoke_kind=kind,
+            ordinal=0,
+            result=None,
+        )
+
+    facts = [
+        *_type(wiring, [_marker(CONFIGURATION)]),
+        *_method(wiring, "flow", runnable, [_marker(BEAN), _profile("local")], []),
+        *_type(service, [_marker(SERVICE)]),
+        *_body(service, "send"),
+    ]
+    direct = _resolved(tmp_path / "direct", [*facts, call("static")], environments=("local",))
+    [edge] = [r for r in direct.query("call_edges") if r["caller"] == _MODULE + send]
+    mapped = {r["symbol"]: r["bean"] for r in direct.query("symbol_beans")}
+    listed = direct.query("candidate_presence")
+    direct.close()
+
+    assert (edge["callee"], edge["resolution"]) == (factory, "resolved")
+    assert mapped[factory] == factory
+    assert listed == []
+
+    subclassed = [
+        *facts,
+        *_type(override, [_marker(CONFIGURATION)], superclass=wiring),
+        *_method(override, "flow", runnable, [_marker(BEAN)], []),
+        call("virtual"),
+    ]
+    narrowed = _resolved(tmp_path / "narrowed", subclassed, environments=("local",))
+    candidates = {
+        (r["callee"], r["environment"]): (r["bean"], r["holds"])
+        for r in narrowed.query("candidate_presence")
+    }
+    narrowed.close()
+
+    assert candidates == {
+        (factory, "default"): (factory, "false"),
+        (factory, "local"): (factory, "true"),
+        (overriding, "default"): (None, "true"),
+        (overriding, "local"): (None, "true"),
+    }
+
+
 # --- the view tells two routes of one bean apart -----------------------------------------
 
 
@@ -1789,8 +1855,9 @@ def test_a_narrowed_site_lists_an_inherited_body_with_an_unconditional_heir_as_p
 
 _PROFILES = next(c for c in _catalogs("spring-web") if c.config_model).config_model["profiles"]
 _PETCLINIC = ("default", "h2", "hsqldb", "mysql", "postgres")
-_OPEN_IN_MYSQL = (
-    "named only in the base's `spring.profiles.active`; the activation selecting `mysql` decides it"
+_OPEN_IN_A_PROFILE_FILE = (
+    "named only in the base's `spring.profiles.active`; the activation selecting this "
+    "environment decides it"
 )
 
 
@@ -1831,8 +1898,24 @@ def test_a_profile_named_only_in_the_bases_active_list_is_open_in_a_profile_file
     assert _profile_holds({"expressions": ["spring-data-jpa"]}, active["mysql"]) == (
         UNRESOLVED,
         "unresolved",
-        _OPEN_IN_MYSQL,
+        _OPEN_IN_A_PROFILE_FILE,
     )
+
+
+def test_the_reason_a_profile_is_open_names_no_environment_so_one_line_states_them_all():
+    """Whole-branch review, minor: spring-petclinic-rest's four profile environments leave
+    `spring-data-jpa` open for one reason — the activation selecting each decides it. A reason
+    naming its environment made four reasons of it, so a site read four near-identical "not
+    evaluated" lines; worded without the name, the reason is one string and the document's
+    shared-reason grouping states the four environments on one line."""
+    active = _active({"spring.profiles.active": "h2,spring-data-jpa"}, _PETCLINIC)
+    reasons = {
+        environment: _profile_holds({"expressions": ["spring-data-jpa"]}, active[environment])[2]
+        for environment in _PETCLINIC
+        if environment != "default"
+    }
+
+    assert set(reasons.values()) == {_OPEN_IN_A_PROFILE_FILE}
 
 
 def test_an_unfilled_placeholder_leaves_every_profile_not_otherwise_decided_open():
@@ -2000,7 +2083,7 @@ def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_
     }
     assert presence[(_MODULE + jpa, "mysql")] == (
         "unresolved",
-        _OPEN_IN_MYSQL,
+        _OPEN_IN_A_PROFILE_FILE,
     )
 
 
