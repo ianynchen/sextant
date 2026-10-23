@@ -1734,11 +1734,16 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     for participant in participants:
         if participant.present and participant.location is not None:
             metadata_path = participant.location.parent / "metadata.json"
-            stale = (
-                _stale_stamps(json.loads(metadata_path.read_text(encoding="utf-8")))
-                if metadata_path.is_file()
-                else ("metadata.json is missing",)
-            )
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                # Not a different build's: an analysis that never finished writing.
+                raise NotAnalyzedError(
+                    f"participant `{participant.name}` has a workspace and no readable "
+                    f"`metadata.json`, so its analysis did not finish — re-run "
+                    f"`sextant module analyze {root}`."
+                ) from None
+            stale = _stale_stamps(metadata)
             if stale:
                 raise NotAnalyzedError(
                     f"participant `{participant.name}` was analysed by a different Sextant "

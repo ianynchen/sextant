@@ -104,3 +104,27 @@ def test_a_route_declaring_no_method_forwards_every_verb(model):
         NAMES,
     )
     assert sorted(link.from_method or "" for link in links) == ["GET", "POST"]
+
+
+def test_a_destination_carrying_a_credential_composes_as_the_bare_name(model):
+    """`uri: lb://svc:s3cret@orders` names the service `orders`: Spring Cloud Gateway reads
+    the host, and the userinfo is no part of the name (the rule `links.py` applies to the
+    same target). Kept, the route composed nothing and nothing said why."""
+    links, refusals = gateway_links(
+        _route(
+            0,
+            **{
+                "predicates[0]": "Path=/o/**",
+                "filters[0]": "StripPrefix=1",
+                "uri": "lb://svc:s3cret@orders",
+            },
+        ),
+        BOTH_VERBS,
+        model,
+        NAMES,
+    )
+    assert refusals == ()
+    assert sorted((link.from_method, link.from_path) for link in links) == [
+        ("GET", "/o/orders"),
+        ("POST", "/o/orders"),
+    ]

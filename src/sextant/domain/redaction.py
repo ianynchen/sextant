@@ -63,7 +63,10 @@ BUILTIN_KEY_PATTERNS = (
 # the URL cannot be mistaken for userinfo. Up to the authority's LAST `@`: RFC
 # 3986 forbids a raw `@` in a host, and a password may itself carry an
 # unencoded one — stopping at the first left `https://ss@host` of
-# `https://u:p@ss@host` (found 2026-10-23). A `${...}` expression carries no
+# `https://u:p@ss@host` (found 2026-10-23). Never across a `"`, `<`, `>` or `\\`,
+# which RFC 3986 admits nowhere in an authority: in a compact JSON line
+# `{"url":"https://svc","owners":["a@x.com"]}` the scan otherwise ran on into
+# the next value and ate it. A `${...}` expression carries no
 # `://`, so it passes through whole — which is the 2I ruling: an expression is
 # a REFERENCE to a value, never the value, and there is no secret inside it.
 #
@@ -73,7 +76,7 @@ BUILTIN_KEY_PATTERNS = (
 # addresses (both found by review on 2026-10-23). The one place that shape
 # arose — a URL's authority once `split_url` removed its scheme — now drops
 # the userinfo where the shape is KNOWN (`authority_without_userinfo`).
-_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]*@")
+_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s\"<>\\]*@")
 
 
 def authority_without_userinfo(authority: str) -> str:
@@ -86,17 +89,32 @@ def authority_without_userinfo(authority: str) -> str:
     port look like — `billing:{port}`, `${billing.host:localhost}` and `[::1]:8080` all keep
     their own spelling (a host that is a template is the case a shape test missed, found by
     review on 2026-10-23). An `@` inside a `{...}` placeholder is the placeholder's own text
-    and is skipped."""
-    depth = 0
-    cut = -1
-    for index, character in enumerate(authority):
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth = max(0, depth - 1)
-        elif character == "@" and depth == 0:
-            cut = index
-    return authority[cut + 1 :]
+    and is skipped.
+
+    The authority ends at the first `/`, `?` or `#` outside a placeholder, and nothing after
+    it is userinfo: `localhost:8080?user=admin@corp.com` keeps its host. Where the braces
+    never balance (`svc:p{ss@billing`), they are not a placeholder, and the last `@` before
+    the end of the authority is taken regardless — stripping too much rather than keeping a
+    password no exit can see."""
+
+    def cut(skip_braces: bool) -> tuple[int, int]:
+        depth = 0
+        last_at = -1
+        for index, character in enumerate(authority):
+            if skip_braces and character == "{":
+                depth += 1
+            elif skip_braces and character == "}":
+                depth = max(0, depth - 1)
+            elif depth == 0 and character in "/?#":
+                break
+            elif depth == 0 and character == "@":
+                last_at = index
+        return last_at, depth
+
+    last_at, depth = cut(skip_braces=True)
+    if depth:
+        last_at, _ = cut(skip_braces=False)
+    return authority[last_at + 1 :]
 
 
 # What a NAME looks like, for the paired rule `Redactor._masked` applies. A header

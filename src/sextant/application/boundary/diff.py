@@ -65,7 +65,8 @@ from typing import Literal, cast
 
 from sextant.application.boundary.source import ROW_KEYS, STAMPS, BoundarySource, _agreed
 from sextant.application.boundary.vocabulary import KINDS, Kind
-from sextant.domain.redaction import Redactor
+from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.version import GRAPH_SCHEMA_VERSION
 
 Change = Literal["added", "removed", "changed"]
 Compatibility = Literal["compatible", "breaking"]
@@ -181,10 +182,12 @@ def diff_sources(
     producer_changed = _refuse_or_allow(a, b, stamps_a, stamps_b, allow_producer_change)
     # Equal rule sets make this either side's own; differing ones (allowed) make it both.
     redactor = redactor_a.union(redactor_b)
+    # Both sides share one graph schema by now (`_VERSIONS`), so one answer covers both.
+    stale = stamps_a["graph_schema_version"] != GRAPH_SCHEMA_VERSION
     entries: list[Entry] = []
     for kind in KINDS.values():
-        before = _indexed(kind, a.rows(kind), redactor)
-        after = _indexed(kind, b.rows(kind), redactor)
+        before = _indexed(kind, a.rows(kind), redactor, stale)
+        after = _indexed(kind, b.rows(kind), redactor, stale)
         entries.extend(_compared(kind, before, after))
     order = {name: position for position, name in enumerate(KINDS)}
     entries.sort(
@@ -250,6 +253,24 @@ def _refuse_or_allow(
 
     if versions := differing(_VERSIONS):
         raise DiffRefused(f"cannot diff: {described(versions)}", tuple(versions))
+    # A side older than this build may hold what the build no longer writes — before graph
+    # schema 5, a peer carrying a URL's password with its scheme gone — and every other
+    # reader refuses such a workspace (user ruling, 2026-10-23). The diff alone can be told
+    # to read one anyway, because a kept bundle is history the user asked to compare; it is
+    # then labelled, and such a peer is masked whole (`_masked`).
+    stale = [
+        label
+        for label, stamps in (("a", stamps_a), ("b", stamps_b))
+        if stamps["graph_schema_version"] != GRAPH_SCHEMA_VERSION
+    ]
+    if stale and not allow_producer_change:
+        raise DiffRefused(
+            f"cannot diff: graph_schema_version {stamps_a['graph_schema_version']} on "
+            f"{' and '.join(stale)}, this build is {GRAPH_SCHEMA_VERSION} — re-analyse a "
+            "workspace, or allow the producer change to diff the older analyses anyway, "
+            "labelled",
+            ("graph_schema_version",),
+        )
     if a.module_id != b.module_id:
         raise DiffRefused(
             f"cannot diff two modules: {a.module_id} vs {b.module_id}", ("module_id",)
@@ -261,18 +282,18 @@ def _refuse_or_allow(
             "allow the producer change to diff anyway, labelled",
             tuple(producer),
         )
-    return bool(producer)
+    return bool(producer) or bool(stale)
 
 
 # --- masking, and the rows masking joins -------------------------------------------------
 
 
 def _indexed(
-    kind: Kind, rows: Iterable[dict[str, object]], redactor: Redactor
+    kind: Kind, rows: Iterable[dict[str, object]], redactor: Redactor, stale: bool
 ) -> dict[tuple[object, ...], dict[str, object]]:
     index: dict[tuple[object, ...], dict[str, object]] = {}
     for row in rows:
-        masked = _masked(kind, row, redactor)
+        masked = _masked(kind, row, redactor, stale)
         key = tuple(masked[column] for column in kind.identity)
         index[key] = _joined(kind, index[key], masked) if key in index else masked
     return index
@@ -282,10 +303,17 @@ def _attribute_keys(kind: Kind) -> list[str]:
     return [ROW_KEYS.get(token, token) for token in kind.attributes]
 
 
-def _masked(kind: Kind, row: dict[str, object], redactor: Redactor) -> dict[str, object]:
+def _masked(
+    kind: Kind, row: dict[str, object], redactor: Redactor, stale: bool
+) -> dict[str, object]:
     """The row as the exporter would have shipped it, cut to identity, attributes and
     evidence: `path`/`peer` through `redact_text`, a property's value through
-    `redact_value` — the calls `_EXPORT_QUERIES` makes on the same columns."""
+    `redact_value` — the calls `_EXPORT_QUERIES` makes on the same columns.
+
+    From an analysis older than graph schema 5 (`stale`, allowed by the caller), a peer
+    with an `@` and no `scheme://` is masked WHOLE: it may be a split URL's authority with
+    its password kept, and in text that cannot be told from a `mailto:ops@billing` peer, so
+    it is hidden rather than rewritten into a host either way."""
     projected = {
         **{column: row[column] for column in kind.identity},
         **{key: row[key] for key in _attribute_keys(kind)},
@@ -295,6 +323,9 @@ def _masked(kind: Kind, row: dict[str, object], redactor: Redactor) -> dict[str,
     for column in ("path", "peer"):
         if column in kind.identity and projected[column] is not None:
             projected[column] = redactor.redact_text(str(projected[column]))
+    peer = projected.get("peer")
+    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:
+        projected["peer"] = REDACTED
     if kind.name == "boundary-property":
         key = str(row["key"])
         projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))

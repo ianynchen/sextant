@@ -103,6 +103,13 @@ def test_userinfo_stripping_leaves_an_at_sign_that_is_not_userinfo():
         ("svc:s3cret@${billing.host:localhost}", "${billing.host:localhost}"),
         # An `@` inside a placeholder is the placeholder's own text.
         ("${billing.authority:svc@billing}", "${billing.authority:svc@billing}"),
+        # Nothing after the authority's end is userinfo (review, 2026-10-23: the query's
+        # `@` was taken for the host's).
+        ("localhost:8080?user=admin@corp.com", "localhost:8080?user=admin@corp.com"),
+        ("u:p@billing?x=1", "billing?x=1"),
+        ("billing#a@b", "billing#a@b"),
+        # Braces that never balance are no placeholder: strip too much, never keep it.
+        ("svc:p{ss@billing.internal", "billing.internal"),
         ("billing.internal", "billing.internal"),
         ("billing.internal:8443", "billing.internal:8443"),
     ],
@@ -117,6 +124,9 @@ def test_a_password_carrying_an_at_sign_leaves_a_url_whole():
     `https://ss@billing/ws` — part of the password — of `https://u:p@ss@billing/ws`."""
     assert _plain().redact_text("https://u:p@ss@billing/ws") == "https://billing/ws"
     assert _plain().redact_text("https://billing/a@b") == "https://billing/a@b"
+    # And never across a quote: the scan stops where the authority must have ended.
+    line = '{"url":"https://svc.internal","owners":["a@x.com","b@y.com"]}'
+    assert _plain().redact_text(line) == line
 
 
 @pytest.mark.parametrize(

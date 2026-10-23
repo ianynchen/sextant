@@ -1134,8 +1134,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/domain/redaction.py",
-                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s]*@")\n',
-                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s@]*@")\n',
+                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)'
+                '[^/?#\\s\\"<>\\\\]*@")\n',
+                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)'
+                '[^/?#\\s\\"<>\\\\@]*@")\n',
             ),
         ),
     ),
@@ -3682,6 +3684,19 @@ GUARDS: dict[str, Guard] = {
                 path=_DIFF,
                 find='        projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))\n',
                 replace='        projected["value"] = _each(projected["value"], lambda v: v)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole": Guard(
+        what="the diff refuses two sides older than this build's graph schema unless allowed, "
+        "and then masks each scheme-less peer with an `@` whole",
+        why="before graph schema 5 a split peer kept a URL's password with no scheme in "
+        "front; two such analyses agree with each other, so the diff printed it",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:\n',
+                replace="    if False:  # guard disabled\n",
             ),
         ),
     ),

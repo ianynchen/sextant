@@ -23,20 +23,26 @@ here would restate those documents rather than add anything.
   password. The existing tests pinned a WHOLE URL in the peer — a shape the split never
   produces — and passed.
   - **At the cause.** `split_url` knows it holds an authority, so it drops everything up to
-    the last `@` outside a `{…}` placeholder (`authority_without_userinfo`). The peer is the
-    host and port, templated or not: `billing:{port}`, `${billing.host:localhost}`. The
-    matcher applies the same rule to an `lb://` target. A whole-address peer (`peer_of`, an
-    annotation's `peer_from`) keeps its scheme, which every exit's rule masks.
+    the last `@` outside a `{…}` placeholder and before the authority ends at `/`, `?` or
+    `#` (`authority_without_userinfo`). The peer is the host and port, templated or not:
+    `billing:{port}`, `${billing.host:localhost}`. The
+    matcher and the gateway composition apply the same rule to an `lb://` target. A
+    whole-address peer (`peer_of`, an annotation's `peer_from`) keeps its scheme, which every
+    exit's rule masks.
   - **No guessing at the exits.** In text, `svc:s3cret@billing` cannot be told from a
     Spring-WS `mailto:ops@billing` peer or `jdbc:oracle:thin:@localhost:1521:XE`. So there is
     no scheme-less userinfo rule. **`GRAPH_SCHEMA_VERSION` moves 4 → 5** with no table change,
     so a workspace that may hold an old credential peer is refused and re-analysed. `system
     analyze` now refuses a participant by the same stamps `render` uses; before, it checked
-    none.
+    none. `module diff` compared its two sides only with each other, so two older analyses
+    were accepted and the old peer printed: such sides are now refused, and under
+    `--allow-producer-change` (kept bundles are history worth comparing) each scheme-less
+    peer with an `@` prints masked whole, never rewritten.
   - **A hole in the userinfo no longer makes the address half-known.** `"http://" + creds +
     "@billing/x"` reads as peer `billing`, resolved; it was `partial` with the peer NULL.
   - **The userinfo rule strips to the authority's last `@`**, so `https://u:p@ss@billing/ws`
-    loses the whole password, not `u:p` alone.
+    loses the whole password, not `u:p` alone — never across a `"`, `<`, `>` or `\`, which no
+    authority holds.
   - **Open-question candidates were a second, unmasked copy.** A `self_exchange` candidate
     names the called side's peer, and an `environment_divergence` one names each
     environment's config value. The document, the brief and the bundle printed both
@@ -51,7 +57,8 @@ here would restate those documents rather than add anything.
 
   Measured on the 52 analysed workspaces in this checkout: 18 peers and 15 candidate sets,
   none carrying a credential. **Every existing workspace must be re-analysed** (`module
-  analyze`), and a bundle exported before this fix may still carry a credential: re-export it.
+  analyze`). A bundle exported, or a document rendered, before this fix may still carry a
+  credential: re-export and re-render it.
 
 ### Added
 

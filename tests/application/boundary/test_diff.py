@@ -523,6 +523,39 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
+@pytest.mark.pins("boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole")
+def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Before graph schema 5 `split_url` kept a URL's password in the peer with the scheme
+    gone (`svc:s3cret@billing.internal`), and two such analyses agree with each other —
+    the diff alone compared them to nothing else, and printed it. Refused like every other
+    reader; allowed, because kept bundles are history worth comparing, every scheme-less
+    peer with an `@` is masked WHOLE — it cannot be told from a `mailto:` peer, so it is
+    hidden rather than rewritten."""
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        for peer, caller in (
+            ("svc:s3cret@billing.internal", "A#a()."),
+            ("mailto:ops@billing.internal", "B#b()."),
+            ("https://u:p@ledger.internal", "C#c()."),
+        ):
+            _endpoint(workspace, direction="outbound", method="POST", path="/v1/charge",
+                      peer=peer, caller=caller)  # fmt: skip
+
+    a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
+    b = sources(_built(tmp_path / "b", build, schema_version=4))
+    with pytest.raises(DiffRefused, match="graph_schema_version 4 on a and b, this build is 5"):
+        diff_sources(a, b, REDACTOR, REDACTOR)
+    allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
+    assert allowed.producer_changed
+    # The two hidden peers mask alike and join, as two peers differing only in userinfo do.
+    peers = {str(e.identity["peer"]): e for e in allowed.entries}
+    assert sorted(peers) == sorted([REDACTED, "https://ledger.internal"])
+    assert peers[REDACTED].evidence["symbols"] == ["A#a().", "B#b()."]
+    assert "s3cret" not in json.dumps(allowed.to_json())
+
+
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
