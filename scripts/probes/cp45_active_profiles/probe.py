@@ -96,8 +96,7 @@ def main() -> int:
     kinds = strings(body(javap(boot, TYPE, "-c", "-p", "-constants"), "static {}"))
     print(
         f"| 3 | what Boot's two profile kinds read | `spring-boot` | {v_boot} | `Profiles$Type`'s "
-        f"initialiser loads `{'`, `'.join(kinds)}` — each kind with the key it reads, and "
-        f"`DEFAULT` with the value it falls back to |"
+        f"initialiser loads `{'`, `'.join(kinds)}` |"
     )
 
     profiles = javap(boot, PROFILES, "-c", "-p")
@@ -110,8 +109,7 @@ def main() -> int:
     bound = "STRING_SET" in body(profiles, "getProfiles")
     print(
         f"| 4 | how a kind's value becomes profiles | `spring-boot` | {v_boot} | `getProfiles` "
-        f"runs `{' -> '.join(wanted)}`{', binding to `STRING_SET` (a `Set<String>`)' if bound else ''}"
-        f" — a comma-separated value, whitespace removed, or a list |"
+        f"runs `{' -> '.join(wanted)}`{', binding to `STRING_SET`' if bound else ''} |"
     )
 
     accepted = body(profiles, "getAccepted")
@@ -121,8 +119,7 @@ def main() -> int:
     activated = invoked(body(profiles, "getActivatedProfiles"))
     print(
         f"| 5 | which profiles are accepted | `spring-boot` | {v_boot} | `getAccepted` reads "
-        f"`{'`, `'.join(dict.fromkeys(fields))}` and tests `{'`, `'.join(tests)}`: the active "
-        f"list unless it is empty, else the default list; `getActivatedProfiles` runs "
+        f"`{'`, `'.join(dict.fromkeys(fields))}` and tests `{'`, `'.join(tests)}`; `getActivatedProfiles` runs "
         f"`{' -> '.join(activated)}` over the `ACTIVE` kind and the constructor's additional "
         f"profiles; the constructor also binds `{'`, `'.join(strings(constructor))}` and runs "
         f"`{'expandProfiles' if 'expandProfiles' in invoked(constructor) else 'NO expansion'}` |"
@@ -146,13 +143,13 @@ def main() -> int:
         f"`new Profiles(…)` |"
     )
 
-    invalid = strings(body(javap(boot, INVALID, "-c", "-p"), "static {}"))
+    initialiser = body(javap(boot, INVALID, "-c", "-p"), "static {}")
+    loaded = re.findall(r"getstatic\s.*// Field [\w/$]*/(Profiles\.\w+):", initialiser)
     print(
         f"| 7 | which keys a profile-specific file may not set | `spring-boot` | {v_boot} | "
-        f"`InvalidConfigDataPropertyException`'s initialiser builds `PROFILE_SPECIFIC_ERRORS` "
-        f"from `Profiles.INCLUDE_PROFILES` (and its `[0]`) and `"
-        f"{'`, `'.join(s for s in invalid if s.startswith(('spring.profiles.a', 'spring.profiles.d')))}"
-        f"` |"
+        f"`InvalidConfigDataPropertyException`'s initialiser loads "
+        f"`{'`, `'.join(strings(initialiser))}` and reads "
+        f"`{'`, `'.join(dict.fromkeys(loaded))}` |"
     )
     return 0
 

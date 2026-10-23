@@ -39,6 +39,10 @@ Which classes are beans, and which conditions apply — the container's own rule
   synthetic body, followed through lambdas it creates in turn) is that factory's code: its
   bean is the lambda body itself, on the factory's route, `via` the method — a functional
   route or a configurer the factory returns runs only where the factory registers.
+  **Stated limits:** only a lambda the factory's OWN body creates is followed, not one created
+  in a helper the body calls; and a lambda a compiler emits as a CLASS (named by the
+  `lambda_bodies` read of `effective_calls`) is reached by a `new`, not by a `dynamic` call
+  edge, so it is not on the factory's route here.
 
 **A stereotype or a condition may arrive through a COMPOSED annotation** (CP-44 row 5: the
 scanner matches meta-annotations). An annotation counts when it is one of the model's, or is
@@ -61,7 +65,8 @@ body as one condition-less `constructed` row per environment, `unresolved` — w
 code path runs it is not known. The `bean_presence` view folds them per environment (OR
 across routes); the per-condition rows stay what the documents spell.
 
-What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; unchanged by the move):
+What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; the profile rule changed by
+spec 2026-10-22 §2d, below):
 
 * `profile` — a bare name holds where that profile is ACTIVE, `!name` where it is not; any
   expression carrying `&`, `|` or a parenthesis (CP-42 row 3) is `unresolved` in every
@@ -88,6 +93,8 @@ What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; unchanged by 
 Cost per resolve (GUIDELINES §8.7): the shared `annotation_index` (one decode per load), the
 factory-method fold `beans.declared_beans` already keeps (one `method_declarations` read per
 load, shared with `bean_via`), one `constructor_edges` read, one `type_hierarchy` read, one
+`interface_declarations` read (the plain interfaces: told apart from annotation types for
+composition, and the candidates of an interface registration), one
 `resolved_config` read (each environment's active profiles computed from it once, in
 memory, a placeholder's spelling taken from the shared per-load `config_entries` rows), one
 `dispatched_bodies` read with one `Dispatch` built from the
@@ -412,6 +419,10 @@ def _routes(
     if model.get("configuration_annotation"):
         stereotypes.add(type_descriptor(str(model["configuration_annotation"])))
     annotation_types = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
+    # That set holds plain interfaces beside annotation types (`interface_symbols`). Only an
+    # annotation type composes; an interface carrying a composed annotation is its USER — the
+    # one an interface registration (CP-46) reads.
+    interfaces = [str(row["symbol"]) for row in workspace.query("interface_declarations")]
     raw = index
     interface_registrations = list(model.get("interface_registrations") or ())
     # The annotations an interface registration reads, so a composed one counts as for classes.
@@ -422,7 +433,10 @@ def _routes(
         if entry.get(key)
     }
     index = _effective_index(
-        workspace, index, annotation_types, {*stereotypes, *conditions, *registration_marks}
+        workspace,
+        index,
+        annotation_types - set(interfaces),
+        {*stereotypes, *conditions, *registration_marks},
     )
 
     def conditions_on(target: str | None, bean_kind: str) -> list[tuple[str, ConditionModel, Any]]:
@@ -465,7 +479,7 @@ def _routes(
     # An INTERFACE the framework registers and implements at run time (CP-46) is a route like
     # a scanned class's: the scanner evaluates the interface's own conditions (row 6).
     for interface in _registered_interfaces(
-        workspace, interface_registrations, annotated, ancestors
+        interfaces, interface_registrations, annotated, ancestors
     ):
         on_interface = tuple(conditions_on(interface, PROXY))
         routes.setdefault(interface, []).append(_Route(PROXY, None, on_interface))
@@ -1141,7 +1155,7 @@ def _supertypes_of(bare: str, ancestors: dict[str, list[str]]) -> set[str]:
 
 
 def _registered_interfaces(
-    workspace: Workspace,
+    interfaces: list[str],
     entries: list[dict[str, Any]],
     annotated: dict[str, frozenset[str]],
     ancestors: dict[str, list[str]],
@@ -1155,8 +1169,7 @@ def _registered_interfaces(
     if not entries:
         return []
     found: list[str] = []
-    for row in workspace.query("interface_declarations"):
-        interface = str(row["symbol"])
+    for interface in interfaces:
         bare = bare_descriptor(interface)
         above = _supertypes_of(bare, ancestors)
         own = annotated.get(bare, frozenset())
@@ -1349,7 +1362,7 @@ def active_profiles(
         known = frozenset({environment}) | included
         unknown = {
             name: (
-                f"named only in the base's `{key}` — the activation selecting "
+                f"named only in the base's `{key}`; the activation selecting "
                 f"`{environment}` decides it"
             )
             for name, key in actives

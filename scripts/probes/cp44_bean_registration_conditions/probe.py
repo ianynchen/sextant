@@ -126,12 +126,12 @@ def row_1(auto: Path, v_auto: str) -> str:
     return (
         f"| 1 | the type an unannotated `@ConditionalOnMissingBean` / `@ConditionalOnBean` checks "
         f"| `spring-boot-autoconfigure` | {v_auto} | `Spec.<init>` reaches `deducedBeanType` only "
-        f"after {tests} `Set.isEmpty` tests (the extracted types, then fields "
-        f"`{'`, `'.join(guarded)}`); `deducedBeanType` acts on `instanceof MethodMetadata`"
-        f"{' and `isAnnotated(Bean)`' if bean_only else ''}"
-        f"{'' if method_only else ' (MISSING instanceof)'} and returns `{otherwise}` for any "
-        f"other target; for a `@Bean` method `getReturnType` runs `{returns}`; `validate` runs "
-        f"`{refused}`, tested on the types, names and annotations |"
+        f"after {tests} `Set.isEmpty` tests, with fields `{'`, `'.join(guarded)}` read between "
+        f"`extractTypes` and `deducedBeanType`; `deducedBeanType` tests "
+        f"`instanceof MethodMetadata`"
+        f"{', calls `isAnnotated` with `Bean`' if bean_only else ''}"
+        f"{'' if method_only else ' (MISSING instanceof)'} and calls `{otherwise}`; "
+        f"`getReturnType` runs `{returns}`; `validate` runs `{refused}` |"
     )
 
 
@@ -176,7 +176,7 @@ def row_2(auto: Path, v_auto: str) -> str:
     )
     return (
         f"| 2 | how `value` / `type` / `name` select what is checked | `spring-boot-autoconfigure` "
-        f"| {v_auto} | `extractTypes` reads `{'`, `'.join(types)}` into ONE set of types; "
+        f"| {v_auto} | `extractTypes` reads the literals `{'`, `'.join(types)}`; "
         f"`Spec.<init>` stores {stores}; `getMatchingBeans` looks up {lookups}; "
         f"`@ConditionalOnBean` is decided by `{on_bean}` (reads {read['isAllMatched']}), "
         f"`@ConditionalOnMissingBean` by `{on_missing}` (reads {read['isAnyMatched']}) |"

@@ -772,9 +772,9 @@ GUARDS: dict[str, Guard] = {
     ),
     "conditions.a-COMPOSED-profile-expression-is-stated-not-evaluated": Guard(
         what="a profile expression with `&`, `|` or parentheses is `unresolved`, never a verdict",
-        why="an environment is ONE profile by the config layer's filename rule; evaluating a "
-        "composition over several active profiles would be a verdict about a deployment this "
-        "analysis does not see (CP-42 row 3)",
+        why="only a bare name and its negation are decided against an environment's active "
+        "profiles (CP-45); evaluating a composition over several active profiles would be a "
+        "verdict about a deployment this analysis does not see (CP-42 row 3)",
         edits=(
             Edit(
                 path="sextant/application/resolve/bean_conditions.py",
@@ -987,7 +987,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/bean_conditions.py",
-                find="    for interface in _registered_interfaces(\n        workspace, interface_registrations, annotated, ancestors\n    ):\n",
+                find="    for interface in _registered_interfaces(\n        interfaces, interface_registrations, annotated, ancestors\n    ):\n",
                 replace="    for interface in ():  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

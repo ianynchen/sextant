@@ -843,7 +843,7 @@ def test_a_framework_generated_implementation_answers_a_call_beside_the_classes(
     jdbc = COORDS + "com/acme/JdbcOwnerRepositoryImpl#send()."
     proxy = COORDS + "com/acme/SpringDataOwnerRepository#"
     trace = _narrowed_trace(jdbc, target="com/acme/OwnerRepository#send().")
-    opened = "named only in the base's `spring.profiles.active` — the activation selecting `mysql` decides it"
+    opened = "named only in the base's `spring.profiles.active`; the activation selecting `mysql` decides it"
     document = _traced(
         trace,
         candidate_presence=[
@@ -885,5 +885,59 @@ def test_a_resolved_call_into_an_interface_only_the_framework_implements_names_i
     rows = [{**row, "callee": None} for row in _candidate(None, proxy, {"default": "true"})]  # type: ignore[arg-type]
     block = _block(_traced(trace, candidate_presence=rows), "Api#handle")
     assert (
-        "  - in `default`: a framework-generated implementation of `SpringDataOwnerRepository`\n"
+        "  - `Api#send` calls `OwnerRepository#send`, answered by one of: "
+        "a framework-generated implementation of `SpringDataOwnerRepository`\n"
     ) in block + "\n"
+
+
+@pytest.mark.pins("render.a-NARROWED-site-states-its-candidates-per-environment")
+def test_a_site_every_candidate_of_which_exists_everywhere_gets_no_environment_lines():
+    """An unconditional Spring Data repository (jhipster) holds `true`, `resolved` in every
+    environment: the "answered by one of" line already says it, and one line per environment
+    would repeat it. A site with even one candidate that varies keeps its lines."""
+    proxy = COORDS + "com/acme/OwnerRepository#"
+    trace = _narrowed_trace(
+        COORDS + "com/acme/Unused#send().", target="com/acme/OwnerRepository#send()."
+    )
+    rows = [
+        {**row, "callee": None}
+        for row in _candidate(None, proxy, {"default": "true", "prod": "true"})  # type: ignore[arg-type]
+    ]
+    block = _block(_traced(trace, candidate_presence=rows), "Api#handle")
+    assert "answered by one of: a framework-generated implementation of `OwnerRepository`" in block
+    assert "  - in `" not in block
+    assert "not evaluated" not in block
+
+
+def test_a_reason_every_candidate_of_a_line_shares_is_said_once():
+    """`h2` and `mysql` leave both candidates open for the SAME reason: the line names both
+    candidates, then the reason once, joined by one dash; the reason carries its own clause
+    break as a semicolon, so a line holds no second dash. Candidates with different reasons
+    keep each reason beside its candidate."""
+    kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
+    shared = (
+        "named only in the base's `spring.profiles.active`; the activation selecting it decides it"
+    )
+    other = (
+        "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+    )
+
+    def open_in(callee: str, bean: str, **reasons: str) -> list[dict[str, object]]:
+        return [
+            {**row, "evidence": reasons[str(row["environment"])]}
+            for row in _candidate(callee, bean, dict.fromkeys(reasons, "unresolved"), "unresolved")
+        ]
+
+    document = _traced(
+        _narrowed_trace(kafka_send, redis_send),
+        candidate_presence=[
+            *open_in(kafka_send, KAFKA, h2=shared, mysql=shared, pg=shared),
+            *open_in(redis_send, REDIS, h2=shared, mysql=shared, pg=other),
+        ],
+    )
+    block = _block(document, "Api#handle") + "\n"
+    assert f"  - not evaluated in `h2`, `mysql`: `KafkaSender`, `RedisSender` — {shared}\n" in block
+    assert (
+        f"  - not evaluated in `pg`: `KafkaSender` — {shared}; `RedisSender` — {other}\n" in block
+    )
+    assert block.count("`h2`, `mysql`") == 1

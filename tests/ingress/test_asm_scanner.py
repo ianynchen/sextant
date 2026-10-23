@@ -48,7 +48,12 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
-        # Conditional beans (spec 2026-10-22-conditional-beans): the eleven class files under `conditional/` that are new (three interfaces, two senders, two policies, a client, the configuration and two controllers).
+        # Conditional beans (spec 2026-10-22-conditional-beans): eleven class files under
+        # `conditional/` are new (three interfaces, two senders, two policies, a client, the
+        # configuration and two controllers). They sort among the names below, not together:
+        # AuditClient, ConditionalClientsConfig, HttpAuditClient, KafkaNotificationSender,
+        # LogNotificationSender, NotificationSender, NotifyController, PricingController,
+        # PricingPolicy, PromoPricing, StandardPricing.
         "AuditClient.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
@@ -320,7 +325,12 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
-        # Conditional beans (spec 2026-10-22-conditional-beans): the eleven class files under `conditional/` that are new (three interfaces, two senders, two policies, a client, the configuration and two controllers).
+        # Conditional beans (spec 2026-10-22-conditional-beans): eleven class files under
+        # `conditional/` are new (three interfaces, two senders, two policies, a client, the
+        # configuration and two controllers). They sort among the names below, not together:
+        # AuditClient, ConditionalClientsConfig, HttpAuditClient, KafkaNotificationSender,
+        # LogNotificationSender, NotificationSender, NotifyController, PricingController,
+        # PricingPolicy, PromoPricing, StandardPricing.
         "AuditClient.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",

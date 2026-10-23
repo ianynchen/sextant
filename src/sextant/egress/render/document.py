@@ -2099,7 +2099,7 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
                 f"a framework-generated implementation of `{interface}`"
             )
     present: dict[str, list[str]] = {}
-    unread: dict[str, list[str]] = {}
+    unread: dict[str, list[tuple[str, str]]] = {}
     # Environments where a candidate the line leaves out was ruled out by the same kind of
     # verdict (`partial`): the line is then as hedged as one that names a `partial` candidate.
     ruled_out_partially: set[str] = set()
@@ -2112,8 +2112,8 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
             hedge = _PARTIAL_CANDIDATE if str(row["resolution"]) == "partial" else ""
             present[environment].append(f"{label}{hedge}")
         elif str(row["holds"]) == "unresolved":
-            reason = _reason_words(row.get("evidence"))
-            unread.setdefault(environment, []).append(f"{label} — {reason}" if reason else label)
+            reason = _reason_words(row.get("evidence")) or ""
+            unread.setdefault(environment, []).append((label, reason))
         elif str(row["resolution"]) == "partial":
             ruled_out_partially.add(environment)
     target = step.target or ""
@@ -2127,12 +2127,16 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
             None,
         )
     ]
+    # Every candidate exists in every environment, decided: the list above already says it, and
+    # one line per environment would only repeat it (an unconditional Spring Data repository).
+    if all(str(row["holds"]) == "true" and str(row["resolution"]) == "resolved" for row in rows):
+        return entries
     shown = {
         environment: listed
         for environment, listed in present.items()
         if listed or environment not in unread
     }
-    lines: list[tuple[str, str]] = []
+    lines: list[tuple[list[str], str]] = []
     for hedged in (False, True):
         group = {e: listed for e, listed in shown.items() if (e in ruled_out_partially) == hedged}
         for environments, listed in _shared_lines(group):
@@ -2142,13 +2146,26 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
             lines.append((environments, body))
     # Environment order, by each line's first environment: the same order an unhedged-only
     # site always had.
-    for environments, body in sorted(lines, key=lambda line: line[0].split("`")[1]):
-        entries.append(DetailEntry(_runs(f"in {environments}"), _runs(body), None))
-    for environments, listed in _shared_lines(unread):
-        # A reason carries commas of its own, so reasoned candidates are separated more firmly.
-        body = ("; " if any(" — " in item for item in listed) else ", ").join(listed)
-        entries.append(DetailEntry(_runs(f"not evaluated in {environments}"), _runs(body), None))
+    for environments, body in sorted(lines, key=lambda line: line[0][0]):
+        entries.append(DetailEntry(_runs(f"in {_spelled(environments)}"), _runs(body), None))
+    for environments, opened in _shared_lines(unread):
+        entries.append(
+            DetailEntry(
+                _runs(f"not evaluated in {_spelled(environments)}"), _runs(_open_body(opened)), None
+            )
+        )
     return entries
+
+
+def _open_body(opened: Sequence[tuple[str, str]]) -> str:
+    """The candidates one line leaves open, each with why. A reason every candidate on the line
+    shares is said once, after them; otherwise each carries its own, and a reason has commas of
+    its own, so reasoned candidates are separated more firmly."""
+    reasons = {reason for _, reason in opened}
+    if len(reasons) == 1 and "" not in reasons:
+        return ", ".join(label for label, _ in opened) + f" — {next(iter(reasons))}"
+    items = [f"{label} — {reason}" if reason else label for label, reason in opened]
+    return ("; " if reasons - {""} else ", ").join(items)
 
 
 def _candidate_owner(callee: str) -> str:
@@ -2158,16 +2175,20 @@ def _candidate_owner(callee: str) -> str:
     return bare if owner is None else owner
 
 
-def _shared_lines(by_environment: Mapping[str, Sequence[str]]) -> list[tuple[str, list[str]]]:
-    """Environments grouped by the candidates listed for them — one line per distinct list,
-    in environment order, its environments spelled together."""
-    grouped: dict[tuple[str, ...], list[str]] = {}
+def _shared_lines[Item: (str, tuple[str, str])](
+    by_environment: Mapping[str, Sequence[Item]],
+) -> list[tuple[list[str], list[Item]]]:
+    """Environments grouped by what is listed for them — one entry per distinct list, in
+    environment order, its environments together."""
+    grouped: dict[tuple[Item, ...], list[str]] = {}
     for environment in sorted(by_environment):
         grouped.setdefault(tuple(sorted(by_environment[environment])), []).append(environment)
-    return [
-        (", ".join(f"`{e}`" for e in environments), list(listed))
-        for listed, environments in grouped.items()
-    ]
+    return [(environments, list(listed)) for listed, environments in grouped.items()]
+
+
+def _spelled(environments: Sequence[str]) -> str:
+    """Environments as the document names them, `a`, `b`."""
+    return ", ".join(f"`{e}`" for e in environments)
 
 
 def _reaches_cell(step: Step) -> str:

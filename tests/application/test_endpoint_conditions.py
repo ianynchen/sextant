@@ -66,8 +66,9 @@ def test_a_negated_profile_holds_everywhere_but_that_environment():
 @pytest.mark.pins("conditions.a-COMPOSED-profile-expression-is-stated-not-evaluated")
 def test_a_composed_profile_expression_is_stated_not_evaluated():
     """CP-42 row 3: `&`, `|` and parentheses compose over SEVERAL active profiles, which
-    this analysis does not see — an environment is one profile. Unresolved, in every
-    environment, rather than a verdict about a deployment nobody measured."""
+    this analysis does not evaluate: only a bare name and its negation are decided.
+    Unresolved, in every environment, rather than a verdict about a deployment nobody
+    measured."""
     for text in ("a & b", "a | b", "(a)", "!(a & b)"):
         assert _holds(PROFILE, {"expressions": [text]}, {}, "a") == (UNRESOLVED, "unresolved")
 

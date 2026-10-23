@@ -1752,7 +1752,9 @@ def test_a_narrowed_site_lists_an_inherited_body_with_an_unconditional_heir_as_p
 
 _PROFILES = next(c for c in _catalogs("spring-web") if c.config_model).config_model["profiles"]
 _PETCLINIC = ("default", "h2", "hsqldb", "mysql", "postgres")
-_OPEN_IN_MYSQL = "named only in the base's `spring.profiles.active` — the activation selecting `mysql` decides it"
+_OPEN_IN_MYSQL = (
+    "named only in the base's `spring.profiles.active`; the activation selecting `mysql` decides it"
+)
 
 
 def _active(base: dict[str, str | None], environments: tuple[str, ...], **raw: list[str]):
@@ -1937,6 +1939,7 @@ def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: 
 
 _REPOSITORY = "org/springframework/data/repository/Repository#"
 _NO_REPOSITORY_BEAN = "org/springframework/data/repository/NoRepositoryBean#"
+_REPOSITORY_DEFINITION = "org/springframework/data/repository/RepositoryDefinition#"
 _STEREO_REPOSITORY = "org/springframework/stereotype/Repository#"
 OWNERS = ORDERS + "OwnerRepository#"
 SPRING_DATA_OWNERS = ORDERS + "SpringDataOwnerRepository#"
@@ -2028,6 +2031,56 @@ def test_a_no_repository_bean_interface_is_no_bean(tmp_path: Path):
     workspace.close()
 
     assert beans == interfaces == {_MODULE + SPRING_DATA_OWNERS}
+
+
+@pytest.mark.pins("beans.an-INTERFACE-the-framework-implements-is-a-route")
+def test_an_interface_marked_repository_definition_is_a_bean_without_extending_repository(
+    tmp_path: Path,
+):
+    """CP-46 row 2: `@RepositoryDefinition` admits an interface that extends nothing — the
+    other include filter beside `Repository`'s subtypes — and an interface carrying neither
+    stays no bean, whatever condition it carries."""
+    plain = ORDERS + "PlainInterface#"
+    facts = [
+        *_type(
+            SPRING_DATA_OWNERS,
+            [_marker(_REPOSITORY_DEFINITION), _profile("prod")],
+            kind=ConstructKind.INTERFACE,
+        ),
+        *_type(plain, [_profile("prod")], kind=ConstructKind.INTERFACE),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = {r["bean"] for r in workspace.query("bean_conditions")}
+    interfaces = {r["bean"] for r in workspace.query("interface_beans")}
+    workspace.close()
+
+    assert beans == interfaces == {_MODULE + SPRING_DATA_OWNERS}
+
+
+@pytest.mark.pins("beans.an-INTERFACE-the-framework-implements-is-a-route")
+def test_a_repository_definition_through_a_composed_annotation_is_a_bean(tmp_path: Path):
+    """The registration annotation is composed like a stereotype: `@MyRepository`, the module's
+    own annotation meta-annotated `@RepositoryDefinition`, makes the interface carrying it a
+    bean, and the annotation type itself is none."""
+    mine = ORDERS + "MyRepository#"
+    facts = [
+        *_type(mine, [_marker(_REPOSITORY_DEFINITION)], kind=ConstructKind.ANNOTATION),
+        *_type(
+            SPRING_DATA_OWNERS,
+            [AnnotationUse(annotation=mine, args={}), _profile("prod")],
+            kind=ConstructKind.INTERFACE,
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    rows = workspace.query("bean_conditions")
+    interfaces = {r["bean"] for r in workspace.query("interface_beans")}
+    workspace.close()
+
+    assert interfaces == {_MODULE + SPRING_DATA_OWNERS}
+    assert _verdicts(rows, SPRING_DATA_OWNERS) == {
+        "default": ("proxy", None, "profile", "false", "resolved"),
+        "prod": ("proxy", None, "profile", "true", "resolved"),
+    }
 
 
 def test_an_unconditional_repository_interface_answers_its_calls_everywhere(tmp_path: Path):

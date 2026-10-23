@@ -49,9 +49,10 @@ as any-of.
 `!prod` negates, `a & b`, `a | b` and parentheses compose. This analysis evaluates exactly two
 shapes — a bare name (holds where the environment is that profile) and `!name` (holds where it
 is not) — and reports any expression carrying `&`, `|` or a parenthesis as `unresolved` in
-every environment. Stated, not evaluated: an environment IS one profile by the config layer's
-own filename rule, so a bare name and its negation are exact and a boolean composition over
-several active profiles is a claim about a deployment this analysis does not see.
+every environment. Stated, not evaluated: an environment's active profiles are the profile its
+file names plus what the base configuration's `spring.profiles.active` and `.include` list
+(CP-45, which reads them), so a bare name and its negation are decided against that set, and a
+boolean composition over several active profiles is a claim this analysis does not make.
 
 **Row 4 — the generic condition is a class.** `@Conditional` takes `Condition` classes, each
 of which is code that runs against a context this analysis never sees, so no verdict is
@@ -60,8 +61,11 @@ eighteen) and the row is written verbatim, `unresolved` everywhere.
 
 ## What this does NOT measure
 
-* **Which profiles are active at runtime.** `spring.profiles.active` may be an expression
-  (`${apollo_profile}`); the environments this analysis evaluates against are the profile
-  FILES the module ships, which is what `resolved_config` already resolves.
-* **`@Profile` on a `@Bean` method** (`OI-108`): the same annotation, the same rule, a
-  different table — named as the next consumer, not measured here.
+* **Which profiles are active at runtime.** The environments this analysis evaluates against
+  are the profile FILES the module ships, which is what `resolved_config` already resolves.
+  When this record was made an environment's active profile was taken to be its file's name
+  alone; that was superseded on 2026-10-22 by CP-45, which reads `spring.profiles.active`,
+  `.include` and `.default` from configuration. A value that is a placeholder nothing fills
+  (`${apollo_profile}`) leaves every profile it could name `unresolved`.
+* **`@Profile` on a `@Bean` method** (`OI-108`, closed by `conditional-beans`): the same
+  annotation, the same rule, read from the bean's own table — not measured here.

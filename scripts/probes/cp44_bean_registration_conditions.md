@@ -33,8 +33,8 @@ cell lists them in the same order.
 
 | # | question | artifact | version | observed |
 |---|---|---|---|---|
-| 1 | the type an unannotated `@ConditionalOnMissingBean` / `@ConditionalOnBean` checks | `spring-boot-autoconfigure` | 4.1.1 | `Spec.<init>` reaches `deducedBeanType` only after 3 `Set.isEmpty` tests (the extracted types, then fields `names`, `annotations`); `deducedBeanType` acts on `instanceof MethodMetadata` and `isAnnotated(Bean)` and returns `Collections.emptySet` for any other target; for a `@Bean` method `getReturnType` runs `getMethodReturnType -> resolve -> isParameterizedContainer -> getGeneric`; `validate` runs `hasAtLeastOneElement -> new IllegalStateException`, tested on the types, names and annotations |
-| 2 | how `value` / `type` / `name` select what is checked | `spring-boot-autoconfigure` | 4.1.1 | `extractTypes` reads `value`, `type` into ONE set of types; `Spec.<init>` stores `name` -> field `names`; `annotation` -> field `annotations`; `ignored`, `ignoredType` -> field `ignoredTypes`; `getMatchingBeans` looks up `getBeanDefinitionsForType` for types, `getBeanDefinitionsForAnnotation` for annotations, `containsBean` for names; `@ConditionalOnBean` is decided by `isAllMatched` (reads `unmatchedAnnotations`, `unmatchedNames`, `unmatchedTypes`), `@ConditionalOnMissingBean` by `isAnyMatched` (reads `matchedAnnotations`, `matchedNames`, `matchedTypes`) |
+| 1 | the type an unannotated `@ConditionalOnMissingBean` / `@ConditionalOnBean` checks | `spring-boot-autoconfigure` | 4.1.1 | `Spec.<init>` reaches `deducedBeanType` only after 3 `Set.isEmpty` tests, with fields `names`, `annotations` read between `extractTypes` and `deducedBeanType`; `deducedBeanType` tests `instanceof MethodMetadata`, calls `isAnnotated` with `Bean` and calls `Collections.emptySet`; `getReturnType` runs `getMethodReturnType -> resolve -> isParameterizedContainer -> getGeneric`; `validate` runs `hasAtLeastOneElement -> new IllegalStateException` |
+| 2 | how `value` / `type` / `name` select what is checked | `spring-boot-autoconfigure` | 4.1.1 | `extractTypes` reads the literals `value`, `type`; `Spec.<init>` stores `name` -> field `names`; `annotation` -> field `annotations`; `ignored`, `ignoredType` -> field `ignoredTypes`; `getMatchingBeans` looks up `getBeanDefinitionsForType` for types, `getBeanDefinitionsForAnnotation` for annotations, `containsBean` for names; `@ConditionalOnBean` is decided by `isAllMatched` (reads `unmatchedAnnotations`, `unmatchedNames`, `unmatchedTypes`), `@ConditionalOnMissingBean` by `isAnyMatched` (reads `matchedAnnotations`, `matchedNames`, `matchedTypes`) |
 | 3 | which definitions the search sees, and when | `spring-boot-autoconfigure`, `spring-context`, `spring-beans` | 4.1.1, 7.0.9, 7.0.9 | `OnBeanCondition.getConfigurationPhase` is `REGISTER_BEAN`; `ConditionEvaluator.shouldSkip(metadata, phase)` compares the condition's own phase with the phase it was handed before `Condition.matches`; the parser hands `PARSE_CONFIGURATION`, the bean-definition reader `REGISTER_BEAN`; in `loadBeanDefinitionsForBeanMethod` `shouldSkip` (offset 26) comes BEFORE `registerBeanDefinition` (offset 758); the search is `getBeanNamesForType(ResolvableType, includeNonSingletons=true, allowEagerInit=false)`, which reads fields `beanDefinitionNames`, `manualSingletonNames` and tests each name with `isTypeMatch` |
 | 4 | every `ConditionEvaluator.shouldSkip` call site, and what it is handed | `spring-context` | 7.0.9 | `ConditionEvaluator` is package-private (`javap` header), so only the 129 classes of its own package can call it; 5 call it directly: `AnnotatedBeanDefinitionReader#doRegisterBean` hands `AnnotatedGenericBeanDefinition.getMetadata` with no phase, so the evaluator picks one; `ClassPathScanningCandidateComponentProvider#isConditionMatch` hands `MetadataReader.getAnnotationMetadata` with no phase, so the evaluator picks one; `ConfigurationClassBeanDefinitionReader#loadBeanDefinitionsForBeanMethod` hands `BeanMethod.getMetadata` with REGISTER_BEAN; `ConfigurationClassBeanDefinitionReader$TrackedConditionEvaluator#shouldSkip` hands `ConfigurationClass.getMetadata` with REGISTER_BEAN; `ConfigurationClassParser#processConfigurationClass` hands `ConfigurationClass.getMetadata` with PARSE_CONFIGURATION; `ConfigurationClassBeanDefinitionReader$TrackedConditionEvaluator` is called from `ConfigurationClassBeanDefinitionReader#loadBeanDefinitionsForConfigurationClass`, which returns (offset 61) after a skip BEFORE it reads `getBeanMethods` (offset 75); the wrapper's own `shouldSkip` runs `isImported -> getImportedBy -> shouldSkip -> getMetadata`; `ConfigurationClassParser.processConfigurationClass` is reached from `parse`, `processImports`, `processMemberClasses`; the scanner's `isCandidateComponent` runs `isConditionMatch` |
 | 5 | which annotations make a class a scanned bean | `spring-context`, `spring-web` | 7.0.9, 7.0.9 | the scanner's `registerDefaultFilters` builds an `AnnotationTypeFilter` for `Component`; reaches `@Component` directly or through meta-annotations: `@Component` yes, `@Service` yes, `@Repository` yes, `@Controller` yes, `@Configuration` yes, `@RestController` yes, `@ControllerAdvice` yes, `@RestControllerAdvice` yes |
@@ -82,9 +82,11 @@ class registered programmatically, (c) the metadata of a configuration class —
 `processImports` / `processMemberClasses` / `parse`) and again, through the tracking wrapper,
 when the reader registers it (`REGISTER_BEAN`), (d) the metadata of a `@Bean` METHOD. When the
 configuration class is skipped `loadBeanDefinitionsForConfigurationClass` returns before it
-reads `getBeanMethods`, so a skipped configuration registers none of its `@Bean`s — and an
-imported configuration class is skipped only if every importer is (`isImported` ->
-`getImportedBy`). A `@Bean` method is therefore conditioned by its own annotations AND its
+reads `getBeanMethods`, so a skipped configuration registers none of its `@Bean`s. (The
+tracking wrapper's `shouldSkip` runs `isImported` -> `getImportedBy` -> `shouldSkip`, so it
+consults the importers; that an imported configuration class is skipped only if EVERY importer
+is is Spring's documented rule, a **documented claim** the row does not show — it does not
+say all-of or any-of.) A `@Bean` method is therefore conditioned by its own annotations AND its
 configuration class's, and a component-scanned class by its own, exactly as the spec's §2a
 table states. No call site is handed an object a `@Bean` body creates: the class a method
 merely CONSTRUCTS is never an argument, which is why only the factory method's conditions
@@ -110,6 +112,10 @@ through `name` on `@ControllerAdvice` and `@RestControllerAdvice`, whose `value`
 
 ## What this does NOT measure
 
+* **That an imported configuration class is skipped only if every importer is.** Row 4 shows
+  the wrapper consults the importers (`isImported` -> `getImportedBy` -> `shouldSkip`); the
+  all-of rule is Spring's documented behaviour, stated in the prose above and not read from
+  the bytecode here.
 * **A name given through a composed stereotype or `@Named`.** Row 6 follows `@AliasFor` across
   the eight listed stereotypes only; a module's own annotation built on one of them names the
   bean only if ITS attribute is aliased the same way, which this probe does not read, and
