@@ -358,10 +358,12 @@ config_model:
     # listing the active profiles (row 1), those included beside them (row 2), and those
     # active where neither names one (row 1; `default_profile` is the reserved name, row 1).
     # Each value is a comma-separated list or a list (row 4); only the base configuration
-    # sets them (row 7).
+    # sets them (row 7). `group_prefix.<name>` lists the profiles active wherever `<name>`
+    # is, transitively (row 8, `expandProfiles`).
     active_keys: [spring.profiles.active]
     include_keys: [spring.profiles.include]
     default_keys: [spring.profiles.default]
+    group_prefix: spring.profiles.group
     by: scripts/probes/cp45_active_profiles.md
   placeholders: { open: "${", close: "}", default_separator: ":" }
   key_matching: relaxed          # relaxed | exact

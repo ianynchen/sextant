@@ -4754,6 +4754,7 @@ config_model:
     active_keys: [spring.profiles.active]     # the profiles an environment has ACTIVE
     include_keys: [spring.profiles.include]   # active beside them
     default_keys: [spring.profiles.default]   # active only where no profile is
+    group_prefix: spring.profiles.group       # `<prefix>.<name>`: active wherever `<name>` is
     by: scripts/probes/cp45_active_profiles.md
   placeholders: { open: "${", close: "}", default_separator: ":" }
   key_matching: relaxed          # relaxed | exact
@@ -4789,8 +4790,12 @@ and a value that is a placeholder nothing fills leaves every profile it could na
 `unresolved`, with the placeholder in the reason. Only the base configuration sets these keys
 (CP-45 row 7), so only the base's resolved values are read. A value is a comma-separated list,
 whitespace removed, or a list flattened to `key[0]`, `key[1]`; the exact key is matched, not a
-relaxed spelling, and `spring.profiles.group` is not read. A model with no `active_keys`
-leaves each environment's active profile its file's name alone.
+relaxed spelling. **`group_prefix` names the profile groups** (CP-45 row 8, `expandProfiles`):
+the base's `<group_prefix>.<name>`, a list read the same way, makes its profiles active wherever
+`<name>` is, `<name>` staying active itself — transitively, each profile expanded once, so a
+cycle ends — and a member takes the certainty of the profile activating it (active, or
+`unresolved` with the reason naming the group). A model with no `active_keys` leaves each
+environment's active profile its file's name alone.
 
 **`placeholders` declares the open/close delimiters and the default-value separator** a
 `${key:default}` expression resolves through — nothing more. No ecosystem-specific

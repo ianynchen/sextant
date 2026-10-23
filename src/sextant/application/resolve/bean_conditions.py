@@ -77,7 +77,8 @@ spec 2026-10-22 §2d, below):
   the base's included ones — a profile named ONLY in the base's active list is `unresolved`
   there, since the activation selecting `p` replaces or extends that list and which it does
   is the deployment's; where either key holds a placeholder nothing fills, every profile not
-  decided so is `unresolved`. A name active nowhere fails.
+  decided so is `unresolved`; a profile group (row 8) makes its members active wherever its
+  name is, as certain as the name. A name active nowhere fails.
 * `property` — the key's resolved value in that environment against `having_value`
   (case-insensitive; EMPTY means "not `false`", CP-43 row 2); an absent key is decided by
   `match_if_missing` (CP-43 row 3); a key whose value is a placeholder nobody filled is
@@ -1327,9 +1328,36 @@ def active_profiles(
     * a profile file's environment `p`: `p` and the included ones (row 6); a profile named
       only in the base's active list is unknown there — the activation selecting `p` decides;
     * a placeholder in the active or include keys leaves every other profile unknown
-      (`otherwise`); one in the default keys does, in the base, where nothing else is listed."""
+      (`otherwise`); one in the default keys does, in the base, where nothing else is listed;
+    * a GROUP (row 8, `expandProfiles`): `group_prefix` + `.<name>` lists profiles active
+      wherever `<name>` is, `<name>` staying active itself — followed transitively, each
+      profile expanded once, so a cycle ends. A member takes the certainty of the profile that
+      activates it: active where that is, unknown (with the reason naming the group) where
+      that is. **Stated limit:** a group whose value is a placeholder nothing fills adds no
+      member."""
     default = str(profiles.get("default_profile", "default"))
     base = config.get(default, {})
+    groups: dict[str, list[str]] = {}
+    prefix = profiles.get("group_prefix")
+    if prefix:
+        member = re.compile(re.escape(str(prefix)) + r"\.(?P<name>.+?)(?:\[\d+\])?")
+        for key in sorted(base):
+            grouped = member.fullmatch(key)
+            value = base[key]
+            if grouped is not None and value is not None:
+                listed_here = "".join(value.split()).split(",")
+                groups.setdefault(grouped["name"], []).extend(n for n in listed_here if n)
+
+    def expanded(names: Iterable[str]) -> frozenset[str]:
+        """`names` and every member of their groups, transitively (row 8)."""
+        reached: set[str] = set()
+        pending = list(names)
+        while pending:
+            name = pending.pop()
+            if name not in reached:
+                reached.add(name)
+                pending.extend(groups.get(name, ()))
+        return frozenset(reached)
 
     def listed(keys: Any) -> tuple[list[tuple[str, str]], list[str]]:
         """(each profile listed, with the key listing it; the spelling of each placeholder
@@ -1363,15 +1391,17 @@ def active_profiles(
         if environment == default:
             named = frozenset(name for name, _ in actives) | included
             if named or opened:
-                found[environment] = ActiveProfiles(known=named, otherwise=opened)
+                found[environment] = ActiveProfiles(known=expanded(named), otherwise=opened)
             else:
                 fallback = frozenset(name for name, _ in defaults)
                 found[environment] = ActiveProfiles(
-                    known=fallback or (frozenset() if default_open else frozenset({default})),
+                    known=expanded(
+                        fallback or (frozenset() if default_open else frozenset({default}))
+                    ),
                     otherwise=unknown_because(default_open),
                 )
             continue
-        known = frozenset({environment}) | included
+        known = expanded(frozenset({environment}) | included)
         unknown = {
             name: (
                 f"named only in the base's `{key}`; the activation selecting "
@@ -1380,6 +1410,9 @@ def active_profiles(
             for name, key in actives
             if name not in known
         }
+        for name, reason in list(unknown.items()):
+            for joined in sorted(expanded([name]) - known):
+                unknown.setdefault(joined, f"a member of the group `{name}`, which is {reason}")
         found[environment] = ActiveProfiles(known=known, unknown=unknown, otherwise=opened)
     return found
 

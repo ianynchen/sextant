@@ -709,8 +709,9 @@ the environment's ACTIVE profiles (CP-45): in `default`, the literal profiles of
 environment `p`, `p` plus the base's `.include`; a profile named only in the base's `active`
 list is `unresolved` there, and a placeholder nothing fills in either key leaves every profile
 condition not decided by the environment's own name `unresolved`. A profile the base's
-`active` list never names is `false` in a profile-file environment. Profile groups
-(`spring.profiles.group`) are not read.
+`active` list never names is `false` in a profile-file environment. A profile group
+(`spring.profiles.group.<name>`) makes its members active wherever `<name>` is, transitively,
+each member as certain as the profile activating it.
 
 **Exported.** All six travel in the bundle, by the export
 ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"). `symbol_beans` and

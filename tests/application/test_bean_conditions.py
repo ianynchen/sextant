@@ -1911,6 +1911,62 @@ def test_a_negated_open_profile_stays_open_and_any_of_takes_a_holding_term():
     assert _profile_verdict(["jdbc", "jpa"], active["mysql"]) == (FAILS, "resolved")
 
 
+@pytest.mark.pins("beans.a-PROFILE-GROUP-expands-an-active-profile")
+def test_a_profile_group_makes_its_members_active_wherever_its_name_is():
+    """Apollo's `apollo-portal`: `spring.profiles.group.github = mysql` (CP-45 row 8,
+    `expandProfiles`). Wherever `github` is active `mysql` is too, and `github` stays active
+    itself — in the `github` file's environment, and in the base where its active list names
+    `github`. Where `github` is not active, neither is `mysql`."""
+    environments = ("default", "github", "h2")
+    active = _active(
+        {"spring.profiles.active": "github", "spring.profiles.group.github": "mysql"},
+        environments,
+    )
+    filed = _active({"spring.profiles.group.github": "mysql"}, environments)
+
+    assert _profile_verdict(["mysql"], filed["github"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["github"], filed["github"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["mysql"], filed["h2"]) == (FAILS, "resolved")
+    assert _profile_verdict(["mysql"], filed["default"]) == (FAILS, "resolved")
+    assert _profile_verdict(["mysql"], active["default"]) == (HOLDS, "resolved")
+
+
+def test_a_profile_group_under_an_unknown_activation_stays_unknown():
+    """`github` is named only in the base's active list, so in the `h2` file's environment
+    whether it is active is the deployment's — and so is whether its group's `mysql` is: the
+    member takes the activating profile's certainty, with the reason naming the group."""
+    active = _active(
+        {"spring.profiles.active": "github", "spring.profiles.group.github": "mysql"},
+        ("default", "h2"),
+    )
+
+    assert _profile_verdict(["mysql"], active["h2"]) == (UNRESOLVED, "unresolved")
+    assert "the group `github`" in _profile_holds({"expressions": ["mysql"]}, active["h2"])[2]
+    assert _profile_verdict(["h2"], active["h2"]) == (HOLDS, "resolved")
+
+
+def test_a_profile_group_is_followed_transitively_and_a_cycle_terminates():
+    """jhipster's shape — a group as a YAML list (`spring.profiles.group.dev[0]`, `[1]`) —
+    with a group of a group, and two groups naming each other: each profile is expanded once,
+    as `expandProfiles` adds it, so the walk ends."""
+    active = _active(
+        {
+            "spring.profiles.group.dev[0]": "secret-samples",
+            "spring.profiles.group.dev[1]": "api-docs",
+            "spring.profiles.group.api-docs": "swagger",
+            "spring.profiles.group.a": "b",
+            "spring.profiles.group.b": "a",
+        },
+        ("default", "dev", "a"),
+    )
+
+    for name in ("dev", "secret-samples", "api-docs", "swagger"):
+        assert _profile_verdict([name], active["dev"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["swagger"], active["a"]) == (FAILS, "resolved")
+    assert _profile_verdict(["b"], active["a"]) == (HOLDS, "resolved")
+    assert _profile_verdict(["a"], active["a"]) == (HOLDS, "resolved")
+
+
 @pytest.mark.pins("beans.ACTIVE-PROFILES-are-read-from-configuration")
 def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_path: Path):
     """Through `resolve_config` and the shipped catalog: petclinic's shape. The Spring Data

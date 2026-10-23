@@ -151,6 +151,29 @@ def main() -> int:
         f"`{'`, `'.join(strings(initialiser))}` and reads "
         f"`{'`, `'.join(dict.fromkeys(loaded))}` |"
     )
+    # A worklist over the profiles: each popped profile is added to a set, and ONLY when the
+    # add admits it (`ifeq` on `Set.add`'s result) are its group's members pushed — so a
+    # member is expanded in turn, and a profile reached twice adds nothing. Which lists the
+    # constructor expands, in order, is read from its own calls.
+    expand = body(profiles, "expandProfiles")
+    pushed = invoked(expand)
+    read = [name for name in ("pop", "add", "get", "forEach") if name in pushed]
+    gated = re.search(r"Set\.add:\S*\n\s+\d+: ifeq", expand) is not None
+    group_fields = list(dict.fromkeys(re.findall(r"// Field (\w+):", expand)))
+    filled = re.search(
+        r"// String (\S+)\s*\n(?:.*\n)*?.*putfield\s+#\d+\s+// Field (\w+):", constructor
+    )
+    source = f"the constructor fills `{filled[2]}` from `{filled[1]}`" if filled else "NOT FILLED"
+    expanded = re.findall(
+        r"// Method (getActivatedProfiles|getDefaultProfiles|expandProfiles):", constructor
+    )
+    print(
+        f"| 8 | how a group expands a profile | `spring-boot` | {v_boot} | `expandProfiles` "
+        f"runs `{' -> '.join(read)}` over a deque, reading field `{'`, `'.join(group_fields)}` "
+        f"({source}); a profile's members are pushed only when "
+        f"`Set.add` admits it: {'yes' if gated else 'NO'}; the constructor runs "
+        f"`{' -> '.join(expanded)}` |"
+    )
     return 0
 
 

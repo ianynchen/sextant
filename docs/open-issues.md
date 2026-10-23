@@ -685,27 +685,40 @@ field in a module that has more than one repository.
 type arguments (`generic_interfaces`) to agree with the receiver's, or the receiver's type
 arguments are carried on `call_edges`.
 
-### OI-171 — `spring.profiles.group` and relaxed key spellings are not read
-**Minor · logged 2026-10-22 (Task 7b of `conditional-beans`, CP-45 row 5) ·
+### OI-171 — relaxed spellings of the profile keys are not read
+**Minor · logged 2026-10-22 (Task 7b of `conditional-beans`, CP-45 row 5); restated
+2026-10-23 when profile groups were built (CP-45 row 8) ·
 `src/sextant/application/resolve/bean_conditions.py::active_profiles`,
 `src/sextant/catalogs/spring-web.yml` (`config_model.profiles`)**
 
-CP-45 shows the constructor of Boot's `Profiles` binds `spring.profiles.group` and runs
-`expandProfiles`, so a profile active only through a group is active; the pass reads the
-`active`, `include` and `default` keys and nothing else, so such a profile reads as not
-active. Keys are matched exactly (or as `key[N]` for a list): a spelling Boot's relaxed
-binding accepts (`SPRING_PROFILES_ACTIVE` written inside a configuration file, camelCase
-variants) is not matched.
+The active, include, default and group keys are matched exactly (or as `key[N]` for a list): a
+spelling Boot's relaxed binding accepts (`SPRING_PROFILES_ACTIVE` written inside a
+configuration file, camelCase variants) is not matched, so a profile it names reads as not
+active. Also not read: a group whose value is a placeholder nothing fills adds no member.
 
-**What happens today:** none of the 43 analysed modules sets `spring.profiles.group` or writes
-a relaxed spelling of the three keys (`grep -rn "spring.profiles.group" examples` over its `.yml` and `.properties` files finds none).
+**Profile groups are read** (no longer part of this entry): `spring.profiles.group.<name>`
+makes its members active wherever `<name>` is, transitively, each as certain as `<name>`.
+Measured when built: five modules set a group — `apollo-portal`, `apollo-configservice`,
+`apollo-adminservice` and `apollo-assembly` (`spring.profiles.group.github = mysql`) and
+`jhipster-sample-app` (`spring.profiles.group.dev`, a list, in `config/application.yml`) — and
+**0 verdicts change** on fresh analyses of the first three (`bean_conditions`,
+`bean_presence`, `candidate_presence` and `endpoint_conditions` identical before and after):
+Apollo's active list is the unfilled `${apollo_profile}`, which already leaves every profile
+not decided by the environment's own name open, and no bean of those modules carries
+`@Profile("mysql")`. `apollo-assembly` is not analysed, and `jhipster-sample-app` resolves no
+environment (its configuration sits under `config/`), so neither moved either.
 
-**Real triggering input:** a Boot application using profile groups, e.g.
-`spring.profiles.group.prod=proddb,prodmq` with `@Profile("proddb")` on a bean.
+**What happens today:** no configuration file a module ships writes a relaxed spelling of
+the keys (`grep -rln "SPRING_PROFILES\|springProfiles" examples` over `.yml`, `.yaml` and
+`.properties` files under `src/main/resources` finds none; the hits elsewhere are Docker and
+CI environment variables, which no module's configuration reads).
 
-**Verify:** `grep -n "group" src/sextant/catalogs/spring-web.yml` — empty in the `profiles`
-block. **Closes** when `config_model.profiles` names `group_prefix` (data, from CP-45 row 5)
-and the pass expands each active profile through its group before judging.
+**Real triggering input:** a Boot application whose `application.yml` sets
+`SPRING_PROFILES_ACTIVE: prod` or `spring.profiles.ACTIVE`.
+
+**Verify:** `grep -n "key_matching" src/sextant/catalogs/spring-web.yml` says `relaxed`, and
+`active_profiles` matches `re.escape(key)` exactly. **Closes** when the profile keys are matched
+by the config model's relaxed key normalization.
 
 ### OI-172 — the `@ConditionalOnBean(annotation = …)` criterion ignores the type hierarchy
 **Minor · logged 2026-10-22 (Task 3 of `conditional-beans`) ·

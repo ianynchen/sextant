@@ -48,8 +48,10 @@ here would restate those documents rather than add anything.
   `JdbcOwnerRepositoryImpl`, `JpaOwnerRepositoryImpl`, a framework-generated implementation of
   `SpringDataOwnerRepository`*), 34 of 34 repository sites. A profile never named in the
   base's `active` list is read as off in a profile-file environment (the activation selecting
-  that file is assumed to select it); profile groups and relaxed key spellings are not read
-  (`OI-171`).
+  that file is assumed to select it). A profile group (`spring.profiles.group.github = mysql`,
+  CP-45 row 8) makes its members active wherever its name is, as certain as the name: five
+  analysed modules set one, and 0 verdicts change on the three that resolve environments.
+  Relaxed key spellings are not read (`OI-171`).
 
   **Measured on four real modules:** `apollo-portal` 63 conditional beans, 142 of 193 narrowed
   call sites given per-environment lines; `yudao-module-system` 63 beans and 11 sites;
@@ -59,8 +61,8 @@ here would restate those documents rather than add anything.
   took the OR of the beans that run it. A site every candidate of which holds everywhere (an
   unconditional repository) says so once, without a line per environment. Framework knowledge
   is catalog data (the Spring bean model's `conditions`, `presence`, `stereotypes` and
-  `interface_registrations`; `config_model.profiles`'s `active_keys`); `matches.mapping.conditions`
-  on a catalog is no longer read. `GRAPH_SCHEMA_VERSION` 3 → 4: `endpoint_conditions` is now a
+  `interface_registrations`; `config_model.profiles`'s `active_keys` and `group_prefix`);
+  `matches.mapping.conditions` on a catalog is no longer read. `GRAPH_SCHEMA_VERSION` 3 → 4: `endpoint_conditions` is now a
   view and `bean_conditions`, `bean_presence`, `symbol_beans`, `candidate_presence` and
   `interface_beans` are new, all exported; a workspace analysed by an older build is
   re-derived by `module analyze` and refused, by name, by `system analyze`.

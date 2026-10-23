@@ -977,6 +977,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.a-PROFILE-GROUP-expands-an-active-profile": Guard(
+        what="a profile `spring.profiles.group.<name>` lists is active wherever `<name>` is, "
+        "transitively (CP-45 row 8, `expandProfiles`)",
+        why="Apollo's portal sets `spring.profiles.group.github = mysql`; with groups unread, a "
+        '`@Profile("mysql")` bean was published as absent in the `github` environment, where '
+        "the container activates `mysql` and registers it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                pending.extend(groups.get(name, ()))\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "beans.a-FACTORY-methods-own-body-is-the-factorys-code": Guard(
         what="a `@Bean` method under a condition is a bean of its own, `via` itself, so a row "
         "whose code symbol is the method (an inline adapter flow it builds and returns) states "

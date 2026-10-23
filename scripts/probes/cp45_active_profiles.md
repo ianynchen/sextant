@@ -41,6 +41,7 @@ CP-5 failure this convention exists to prevent.
 | 5 | which profiles are accepted | `spring-boot` | 4.1.1 | `getAccepted` reads `activeProfiles`, `defaultProfiles` and tests `isEmpty`; `getActivatedProfiles` runs `getProfiles -> asUniqueItemList` over the `ACTIVE` kind and the constructor's additional profiles; the constructor also binds `spring.profiles.group` and runs `expandProfiles` |
 | 6 | where included profiles join the active ones | `spring-boot` | 4.1.1 | `ConfigDataEnvironment.withProfiles` runs `getIncludedProfiles -> Set.addAll -> Profiles."<init>" -> ConfigDataActivationContext.withProfiles`: `getIncludedProfiles` (reading `Profiles.INCLUDE_PROFILES`: yes) is added to the additional profiles handed to `new Profiles(…)` |
 | 7 | which keys a profile-specific file may not set | `spring-boot` | 4.1.1 | `InvalidConfigDataPropertyException`'s initialiser loads `spring.profiles`, `spring.config.activate.on-profile`, `spring.profiles[0]`, `spring.config.activate.on-profile`, `[0]`, `spring.profiles.active`, `spring.profiles.active[0]`, `spring.profiles.default`, `spring.profiles.default[0]` and reads `Profiles.INCLUDE_PROFILES` |
+| 8 | how a group expands a profile | `spring-boot` | 4.1.1 | `expandProfiles` runs `pop -> add -> get -> forEach` over a deque, reading field `groups` (the constructor fills `groups` from `spring.profiles.group`); a profile's members are pushed only when `Set.add` admits it: yes; the constructor runs `getActivatedProfiles -> expandProfiles -> getDefaultProfiles -> expandProfiles` |
 
 ## What the rows say
 
@@ -68,6 +69,14 @@ the active list is the `ACTIVE` kind plus the additional profiles the constructo
 `[0]`) is refused by `InvalidConfigDataPropertyException`. So the keys are read from the base
 environment's resolved configuration, and a profile file contributes only its own name.
 
+**Row 8 — a group expands a profile into itself and its members, transitively.**
+`expandProfiles` is a worklist: each profile popped is added to the result set, and only when
+the set admits it (a profile not reached before) are the members `spring.profiles.group.<name>`
+lists for it pushed, to be expanded in turn. So `spring.profiles.group.github = mysql` makes
+`mysql` active wherever `github` is, `github` stays active itself, a group of a group is
+followed, and a cycle stops at the first profile reached twice. The constructor expands both
+the active list and the default list. These are `config_model.profiles`'s `group_prefix`.
+
 ## What this does NOT measure
 
 * **Which activation selects a profile file's environment, and whether it replaces or extends
@@ -81,9 +90,10 @@ environment's resolved configuration, and a profile file contributes only its ow
   base's `spring.profiles.active` is `unresolved`, while `p` itself and the base's
   `spring.profiles.include` (row 6: added whatever the active list is) are active. A
   documented claim, not a measurement.
-* **Profile groups.** Row 5's `spring.profiles.group` / `expandProfiles` expand an active
-  profile into a group's members; this analysis does not read groups, so a profile active only
-  through a group reads as not active.
+* **How a group's value becomes a list.** Row 8 reads the group bound to a
+  `MultiValueMap<String, String>`; the conversion of one `a,b` string into its members is the
+  binder's and is not read here. The pass splits it as row 4 splits the active keys (whitespace
+  removed, comma-separated, or a YAML list).
 * **A placeholder nobody fills.** `${apollo_profile}` resolves at run time to whatever the
   deployment supplies; where the config layer leaves the key unresolved, every profile the
   rules above do not decide is `unresolved` there.

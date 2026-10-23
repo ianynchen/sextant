@@ -316,6 +316,11 @@ block, so resolve code names no framework):
 * **a placeholder nothing fills** in either key makes every profile condition not decided by
   the environment's own name `unresolved`, with the reason *the active profiles here come from
   `${apollo_profile}`, which this module does not fill*.
+* **a profile group** (CP-45 row 8, `expandProfiles`; the config model's `group_prefix`):
+  `spring.profiles.group.<name> = a,b` (or a YAML list) makes `a` and `b` active wherever
+  `<name>` is, `<name>` staying active itself — transitively, each profile expanded once, so a
+  cycle ends. A member takes the certainty of the profile activating it: active where that is,
+  `unresolved` where that is, with the reason naming the group.
 
 **A decision recorded here because it is visible in the documents.** In a profile-file
 environment `p`, a profile that the base's `active` list never names is read as OFF (`false`,
@@ -331,8 +336,7 @@ evaluated" under the alternative.
 
 **PR #61's verdicts moved, by this rule.** Apollo `configservice`'s `GET /` read "not in
 `default`, `github`" and now reads "not evaluated in `default`, `github`", with the reason
-(§1, the second table). `spring.profiles.group` and relaxed key spellings are not read
-(§4, `OI-171`).
+(§1, the second table). Relaxed key spellings are not read (§4, `OI-171`).
 
 ## 3. What the documents say, as built
 
@@ -392,10 +396,13 @@ evaluated" under the alternative.
 **Stated limits of what was built** — each is the reason for an open verdict or a missing
 line, not a wrong one, and where a real input triggers one it has a register entry:
 
-* **Profile groups and relaxed key spellings are not read.** `spring.profiles.group` can make
-  a profile active that no key names, and a key spelled `SPRING_PROFILES_ACTIVE` inside a file
-  is not matched (the exact key, or `key[N]`, only). None of the 43 analysed modules sets a
-  group. `OI-171`.
+* **Relaxed key spellings are not read.** A key spelled `SPRING_PROFILES_ACTIVE` inside a
+  file is not matched (the exact key, or `key[N]`, only), and a group whose value is a
+  placeholder nothing fills adds no member. Profile groups themselves are read (§2d): five
+  analysed modules set one (four Apollo modules, `spring.profiles.group.github = mysql`, and
+  `jhipster-sample-app`), and on the three of them that are analysed and resolve environments
+  0 verdicts change — Apollo's active list is the unfilled `${apollo_profile}`, and none of
+  its beans carries `@Profile("mysql")`. `OI-171`.
 * **The annotation criterion ignores the type hierarchy.** `@ConditionalOnBean(annotation = X)`
   is matched against the annotations the competitor's own type carries, where Spring's
   `findAnnotationOnBean` also looks above it. `OI-172`.
