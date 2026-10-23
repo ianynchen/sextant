@@ -13,9 +13,9 @@ Two halves, for the reason `test_return_flow.py` states:
 - **Against a real scan** (`resolved_fixture`), which is the only thing that can
   say the handler spelling in `roots` is the one `endpoints` actually wrote —
   and which carries the outbound rows a near-miss needs.
-- **Against hand-built facts**, for the scheduled kind: the compiled fixture
-  declares no schedule, and adding one to it would move counts three other test
-  files assert on.
+- **Against hand-built facts**, for the scheduled kind's literal and folded
+  shapes: the compiled fixture's only schedules (`scheduling/OrderSweeper`, spec
+  2026-10-23-configured-schedules §3e) are two placeholder jobs on one class.
 """
 
 from pathlib import Path
@@ -111,7 +111,10 @@ def test_a_handler_serving_several_addresses_is_one_root_not_several(
         "no handler serves two rows: the collapse is untested"
     )
     assert len(roots) > len(set(exposing)), "the table dropped an address"
-    assert len({(root.handler, root.kind) for root in roots_of(workspace)}) == len(set(exposing))
+    # The fixture's two scheduled jobs (`scheduling/OrderSweeper`) are roots too, and are not
+    # what this counts: they are reached by no address at all.
+    served = [root for root in roots_of(workspace) if root.kind is not RootKind.SCHEDULED]
+    assert len({(root.handler, root.kind) for root in served}) == len(set(exposing))
 
 
 def test_a_root_carries_the_wire_address_of_the_row_that_named_it(
@@ -298,6 +301,9 @@ def test_roots_of_reads_the_table_as_typed_pairs(
                 )
                 for row in roots
                 if (str(row["handler"]), str(row["root_kind"])) == (handler, kind)
+                # An all-NULL row is a root nothing addresses — the fixture's scheduled jobs —
+                # and reads as no identity at all.
+                and (row["protocol"], row["method"], row["path"]) != (None, None, None)
             ),
         )
         for handler, kind in dict.fromkeys(
@@ -312,9 +318,9 @@ def test_roots_of_reads_the_table_as_typed_pairs(
 
 # --- hand-built facts: the scheduled kind -----------------------------------
 #
-# The compiled fixture declares no schedule, and giving it one would move the
-# document counts three other files assert on. These build the two facts the
-# scheduled engine needs and run the same pipeline steps in order.
+# The compiled fixture's only schedules are two placeholder jobs on one class
+# (`scheduling/OrderSweeper`). These build the two facts the scheduled engine
+# needs and run the same pipeline steps in order.
 
 
 def _document() -> Document:

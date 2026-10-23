@@ -61,7 +61,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ✅ | ✅ | ◐ (1 limited, 1A 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ✅ | ✅ | ◐ (1A 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -81,7 +81,7 @@ register.
 
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (1 not shipped) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1 limited) |
+| **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (1 not shipped) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ◐ (1 not shipped) | ◐ (1 open, 1 not shipped) | — | — | — | ✅ |
 | **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ✅ | ✅ | — |
 | **Ktor** | ✅ | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
@@ -3825,7 +3825,7 @@ a real `peer` today, the same way OkHttp's absolute `Request.Builder#url` does.
 
 | Framework | Status | Rows shipped | Missing |
 |---|---|---|---|
-| Spring scheduling (@Scheduled) | ◐ partial | 4/5 | 1 limited; 2 stated boundaries |
+| Spring scheduling (@Scheduled) | ✅ full | 5/5 | 2 stated boundaries |
 | Spring Integration | ✅ full | 3/3 | 4 stated boundaries |
 | Quartz | ◐ partial | 0/1 | not shipped: 1 at A; `quartz` |
 | Temporal / Cadence | ✅ full | 1/1 | 2 stated boundaries |
@@ -3839,7 +3839,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 |---|---|---|---|---|
 | Java | Spring scheduling (@Scheduled) | `@Scheduled` — `cron`, `fixedRate(String)`, `fixedDelay(String)` | `annotation` | ✅ **shipped** (2O Task 8) — into `scheduled_work`, its own table, never `endpoints`: a method the framework calls on a clock speaks no protocol and has no address. Handler, trigger kind, expression **verbatim** |
 | Java | Spring scheduling (@Scheduled) | `@Schedules` — two or more `@Scheduled` on one method, folded by javac | `annotation` (nested) | ✅ shipped — through capability 9.16. The catalog REQUIRES that capability rather than degrading: on a scanner without it a two-schedule method would carry no readable trigger while its single-schedule neighbour carried its own, so the whole catalog is skipped **visibly** instead |
-| Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "${orders.sweep.cron}")` — a property placeholder | `annotation` | ◐ shipped as **`unresolved`, expression carried verbatim.** The value comes from configuration a deployment overwrites, so it is never substituted here. Closes when a non-wire row can read `resolved_config`, which needs an environment column this table does not have |
+| Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "${orders.sweep.cron}")` — a property placeholder | `annotation` | ✅ **shipped** (2026-10-23, spec `docs/superpowers/specs/2026-10-23-configured-schedules-design.md`, option A). The `scheduled_work` row stays **`unresolved`, expression carried verbatim**: the schedule that runs is the deployment's, which a deployment overwrites. Beside it, `resolved_schedules` holds what THIS REPOSITORY configures — one row per (job whose expression holds a placeholder, environment of `resolved_config`), keyed by the job's `handler`, `trigger` and `expression`, substituted by the one placeholder rule (`resolve/config.py::substitute`, the config model's own delimiters, `:default` and key matching) — and the document states it under the job's row: *as configured in this repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*, or *not set in `prod` (missing_key)*. Pinned live on `fixtures/orders-service` (`scheduling/OrderSweeper`: a key set in a profile file only, beside the annotation's default, and a key set nowhere) by `tests/e2e/test_vertical_slice.py::test_a_configured_schedule_is_stated_per_environment_in_the_document`, and by the guards `schedules.a-PLACEHOLDER-expression-is-read-per-environment`, `schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key`, `schedules.a-configured-VALUE-is-masked-on-export` and `schedules.the-DOCUMENT-states-a-schedules-configured-values`. SpEL `#{…}` is not evaluated and gets no rows (spec §4) |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "-")` — `@Scheduled.CRON_DISABLED` | `annotation` | ✅ shipped — **derives NOTHING** (`OI-2`, closed). CP-14 reads the constant off the annotation at spring-context 6.1.6, 6.2.19 and 7.0.9 and finds the post-processor comparing `cron()` against it immediately before `scheduleCronTask` and before nothing else, so the framework registers no task. `cron` is the only attribute with a sentinel: CP-14 row 3 enumerates every string comparison in that class and finds one |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "-", fixedDelay = 1000)` — a disabled cron BESIDE a live rate | `annotation` | **Boundary — OVER-reports one row (`OI-34`).** CP-14 rows 4-5: the "a schedule was declared" flag is written before the sentinel comparison and read into a failing `Assert.isTrue` after it, so the container refuses to start — while we drop the cron row and publish the `fixedDelay` one. Not encoded: every conjunct this style has is per ATTRIBUTE, and refusing the declaration as a whole is a rule the grammar does not have (§8.1 rule 4). **Falsified by** such a declaration exporting a `scheduled_work` row |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled` naming two trigger attributes at once, or none — what the container does at startup with such a declaration | `annotation` | **Boundary — one row per attribute written, and none where none is.** Whether the container refuses to start is a startup question a repository cannot answer, so each declared trigger is reported as the code fact it is. A declaration naming no trigger derives nothing: there is no expression to carry |

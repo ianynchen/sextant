@@ -3,6 +3,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
@@ -1354,3 +1356,146 @@ def test_an_unresolved_inbound_format_is_counted_against_the_inbound_rows(tmp_pa
         "verdict": "partial",
         "reasons": ["1 of 2 formats unresolved"],
     }
+
+
+# --- A schedule set in configuration (spec 2026-10-23-configured-schedules §3c) ----------
+
+SWEEP = "s maven c 1 com/acme/OrderSweeper#sweep()."
+SWEEP_CRON = "${orders.sweep.cron:0 0 * * * *}"
+
+
+def _job(handler: str, expression: str, trigger: str = "cron") -> dict[str, object]:
+    return {
+        "handler": handler,
+        "trigger": trigger,
+        "expression": expression,
+        "resolution": "unresolved",
+        "evidence": "compiler",
+        "catalog_id": "spring-scheduling",
+    }
+
+
+def _configured(
+    environment: str,
+    value: str | None,
+    reason: str | None = None,
+    *,
+    handler: str = SWEEP,
+    expression: str = SWEEP_CRON,
+    trigger: str = "cron",
+) -> dict[str, object]:
+    return {
+        "handler": handler,
+        "trigger": trigger,
+        "expression": expression,
+        "environment": environment,
+        "value": value,
+        "unresolved_reason": reason,
+    }
+
+
+def _schedules_document(
+    jobs: list[dict[str, object]],
+    configured: list[dict[str, object]],
+    redactor: Redactor | None = None,
+) -> str:
+    report = replace(REPORT, scheduled_work=jobs, resolved_schedules=configured)
+    if redactor is None:
+        return render_module_document(MODULE, report, "a3f91c")
+    return render_module_document(MODULE, report, "a3f91c", redactor=redactor)
+
+
+@pytest.mark.pins("schedules.the-DOCUMENT-states-a-schedules-configured-values")
+def test_a_placeholder_schedule_states_its_value_per_environment():
+    """The job's row keeps `unresolved` — the schedule that runs is the deployment's — and
+    the detail block under the table says what THIS REPOSITORY configures, per environment."""
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON)],
+        [_configured("default", "0 0 * * * *"), _configured("prod", "0 */5 * * * *")],
+    )
+    assert f"| `com/acme/OrderSweeper#sweep().` | cron | `{SWEEP_CRON}` | unresolved |" in text
+    assert (
+        f"- `com/acme/OrderSweeper#sweep().` — cron `{SWEEP_CRON}`\n"
+        "  - as configured in this repository: `0 0 * * * *` in `default`; "
+        "`0 */5 * * * *` in `prod`\n"
+    ) in text
+
+
+def test_environments_with_the_same_configured_value_share_one_entry():
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON)],
+        [
+            _configured("default", "0 0 * * * *"),
+            _configured("dev", "0 0 * * * *"),
+            _configured("prod", "0 */5 * * * *"),
+        ],
+    )
+    assert (
+        "  - as configured in this repository: `0 0 * * * *` in `default`, `dev`; "
+        "`0 */5 * * * *` in `prod`\n"
+    ) in text
+
+
+def test_an_environment_the_value_cannot_be_read_in_states_its_reason():
+    rate = "${orders.purge.rate}"
+    text = _schedules_document(
+        [_job(SWEEP, rate, trigger="fixedRate")],
+        [
+            _configured("default", None, "missing_key", expression=rate, trigger="fixedRate"),
+            _configured("prod", None, "missing_key", expression=rate, trigger="fixedRate"),
+        ],
+    )
+    assert (
+        "  - as configured in this repository: not set in `default`, `prod` (missing_key)\n"
+    ) in text
+
+
+def test_a_set_and_an_unset_environment_are_one_line():
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON)],
+        [_configured("default", "0 0 * * * *"), _configured("prod", None, "placeholder_cycle")],
+    )
+    assert (
+        "  - as configured in this repository: `0 0 * * * *` in `default`; "
+        "not set in `prod` (placeholder_cycle)\n"
+    ) in text
+
+
+def test_a_job_with_no_configured_rows_renders_exactly_as_before():
+    """Attribution is by the job's whole identity — (handler, trigger, expression) — so a
+    row for another job on the SAME method (`@Schedules`) does not land under this one."""
+    literal = _job(SWEEP, "0 0 4 * * *")
+    literal["resolution"] = "resolved"
+    other = "${orders.other.cron}"
+    before = _schedules_document([literal], [])
+    after = _schedules_document([literal], [_configured("prod", "0 1 * * * *", expression=other)])
+    assert after == before
+    assert "as configured in this repository" not in after
+
+
+def test_two_placeholder_jobs_on_one_method_are_each_stated_under_their_own_header():
+    second = "${orders.second.cron}"
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON), _job(SWEEP, second)],
+        [
+            _configured("prod", "0 */5 * * * *"),
+            _configured("prod", "0 0 1 * * *", expression=second),
+        ],
+    )
+    assert (
+        f"- `com/acme/OrderSweeper#sweep().` — cron `{SWEEP_CRON}`\n"
+        "  - as configured in this repository: `0 */5 * * * *` in `prod`\n"
+    ) in text
+    assert (
+        f"- `com/acme/OrderSweeper#sweep().` — cron `{second}`\n"
+        "  - as configured in this repository: `0 0 1 * * *` in `prod`\n"
+    ) in text
+
+
+def test_a_configured_schedule_value_passes_the_render_redactor():
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON)], [_configured("prod", "ACME_A1B2")], redactor
+    )
+    assert "ACME_A1B2" not in text
+    assert f"  - as configured in this repository: `{REDACTED}` in `prod`\n" in text

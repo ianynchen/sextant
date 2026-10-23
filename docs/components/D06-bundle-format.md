@@ -389,6 +389,14 @@ background work" and "this service declares no error contract" both are, and a s
 simply disappears leaves a reader unable to tell that answer from a Sextant that never
 looked.
 
+A scheduled job whose expression holds a placeholder keeps its row, `unresolved`, and gains a
+detail entry under the table stating what this repository configures for it per environment,
+from `resolved_schedules` (spec 2026-10-23-configured-schedules §3c): *as configured in this
+repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*, environments that read the
+same value sharing one entry, an unreadable one stating its reason (*not set in `prod`
+(missing_key)*). The block is headed by the job's handler, trigger and expression, and each
+value passes the render redactor.
+
 The error-handling table leads with the exception, because that is what a reader looks a
 row up by, and prints `Declared by` beside `Scope` because the two are one claim in two
 columns ([D01](D01-graph-schema.md) §3): read alone, either gets a controller's own handler

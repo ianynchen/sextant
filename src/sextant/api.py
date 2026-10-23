@@ -1073,6 +1073,7 @@ def _reconstructed_report(
         # (M00's "no analysis" rule). Not from `metadata.json`: these are rows,
         # and the workspace is where rows live.
         scheduled_work=workspace.query("scheduled_work"),
+        resolved_schedules=workspace.query("resolved_schedules"),
         error_handlers=workspace.query("error_handlers"),
         bean_conditions=workspace.query("bean_conditions"),
         bean_presence=workspace.query("bean_presence"),

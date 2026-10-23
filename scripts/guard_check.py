@@ -1117,8 +1117,8 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path="sextant/egress/render/document.py",
-                find='        conditions = _condition_entries(row["handler"], beans)\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
-                replace='        conditions = []  # guard disabled by scripts/guard_check.py\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
+                find='        entries = _condition_entries(row["handler"], beans)\n',
+                replace="        entries = []  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3121,6 +3121,22 @@ GUARDS: dict[str, Guard] = {
                 find='            value, reason = substitute(str(job["expression"]), placeholders, lookup)\n',
                 replace='            value, reason = substitute(str(job["expression"]), '
                 '{**placeholders, "default_separator": ""}, lookup)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.the-DOCUMENT-states-a-schedules-configured-values": Guard(
+        what="the document states, under a placeholder job's row, what this repository "
+        "configures for it per environment, from `resolved_schedules` (spec "
+        "2026-10-23-configured-schedules §3c)",
+        why="the table is the end of the feature: without the line, `resolved_schedules` is "
+        "written and exported and the document a person opens still shows only "
+        "`${orders.sweep.cron}` `unresolved` — the answer reaches every exit but the one read",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="_scheduled_work_sections(report.scheduled_work, report.resolved_schedules, "
+                "beans, redactor)",
+                replace="_scheduled_work_sections(report.scheduled_work, [], beans, redactor)",
             ),
         ),
     ),

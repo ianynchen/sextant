@@ -174,6 +174,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderStompController.jsonl",
         "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
+        # `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e).
+        "OrderSweeper.jsonl",
         "OrderTopicListener.jsonl",
         "OrderTotals.jsonl",
         "OrderView.jsonl",
@@ -300,7 +302,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 144 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): one class file each.
     # 155 since the conditional beans (spec 2026-10-22-conditional-beans): the eleven class files
     # under `conditional/` listed in the fact-file names above.
-    assert report.documents == 155
+    # 156 since `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e), one class
+    # file.
+    assert report.documents == 156
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -451,6 +455,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderStompController.jsonl",
         "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
+        # `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e).
+        "OrderSweeper.jsonl",
         "OrderTopicListener.jsonl",
         "OrderTotals.jsonl",
         "OrderView.jsonl",

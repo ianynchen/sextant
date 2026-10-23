@@ -1,8 +1,15 @@
 # A schedule set in configuration, read per environment — design
 
-**Status: DESIGNED 2026-10-23 — option A ruled.** Closes the one gap in Spring Boot's Async
-cell (COVERAGE §5.12, `@Scheduled` row 3: "◐ shipped as `unresolved`, expression carried
-verbatim … Closes when a non-wire row can read `resolved_config`, which needs an environment
+**Status: BUILT 2026-10-23 (branch `cov/scheduled-placeholders`) — option A ruled.** As built,
+three things differ from or sharpen the design below: `resolved_schedules` carries the job's
+`expression` after `trigger` (§3b), because `@Schedules` can put two placeholder crons on one
+method and `(handler, trigger)` alone would attribute both jobs' values to one; the
+delimiters and key matching are read by `resolve/config.py::placeholder_rule(model)`, beside
+`substitute`; and relaxed matching keeps the dot as a separator, so `orders.sweepCron`
+matches `orders.sweep-cron` (both `orders.sweepcron`) and never `orderssweepcron`.
+
+Closes the one gap in Spring Boot's Async cell (COVERAGE §5.12, `@Scheduled` row 3: "◐
+shipped as `unresolved`, expression carried verbatim … Closes when a non-wire row can read `resolved_config`, which needs an environment
 column this table does not have"). Moves Spring Boot's §2c Async cell from `◐ (1 limited)` to
 ✅.
 
@@ -47,16 +54,18 @@ nothing reads that query today (it is logged instead, §4).
 ### 3b. `resolved_schedules`, a derived table
 
 ```text
-handler                   trigger  environment  value            unresolved_reason
-OrderSweeper#sweep()      cron     default      0 0 * * * *      NULL
-OrderSweeper#sweep()      cron     prod         0 */5 * * * *    NULL
-OrderSweeper#purge()      cron     prod         NULL             missing_key
+handler               trigger    expression                         environment  value          unresolved_reason
+OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   default      0 0 * * * *    NULL
+OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   prod         0 */5 * * * *  NULL
+OrderSweeper#purge()  fixedRate  ${orders.purge.rate}               prod         NULL           missing_key
 ```
 
 - One row per (`scheduled_work` row whose `expression` holds the placeholder opener, environment of
-  `resolved_config`). A job with no placeholder gets no rows; its `scheduled_work` row already
-  says everything. With no resolved environment, the table is empty for the reason
-  `resolved_peers` gives.
+  `resolved_config`), carrying that row's `handler`, `trigger` and `expression` — the job's
+  whole identity, so two jobs on one method under `@Schedules` are told apart (as built; the
+  first sketch had no `expression` column). A job with no placeholder gets no rows; its
+  `scheduled_work` row already says everything. With no resolved environment, the table is
+  empty for the reason `resolved_peers` gives.
 - `unresolved_reason` is D01's closed set (`missing_key`, `placeholder_cycle`, …), from the
   lookup.
 - Written by a new pass after `resolve_config` and after the scheduled-work engine, reset whole
@@ -77,8 +86,11 @@ OrderSweeper#sweep()   cron   ${orders.sweep.cron:0 0 * * * *}   unresolved
 ```
 
 Environments with the same value share one entry. An unresolved environment states its reason
-(`missing_key`, …). The `resolution` column of `scheduled_work` stays `unresolved`: the job's
-schedule is still the deployment's (ruling 1(b)), and the per-environment values are what the
+(`missing_key`, …). *As built,* the line is an entry of the detail block under the table — the
+place a job's conditions already go, and in the same block — headed by the job's handler,
+trigger and expression (`` `OrderSweeper#sweep()` — cron `${orders.sweep.cron:0 0 * * * *}` ``),
+so two jobs on one method each carry their own line; a job with no rows renders as before.
+The `resolution` column of `scheduled_work` stays `unresolved`: the job's schedule is still the deployment's (ruling 1(b)), and the per-environment values are what the
 repository says.
 
 ### 3d. The diff
@@ -96,7 +108,10 @@ A Spring fixture already carrying `@Scheduled` (`orders-service`, or the one
 - one `@Scheduled(fixedRateString = "${orders.purge.rate}")`, the key set nowhere
   (`missing_key`).
 
-It is rebuilt with JDK 21.
+It is rebuilt with JDK 21. *As built:* `orders-service` carried no `@Scheduled` before
+this — the one `tests/e2e/test_vertical_slice.py` reads — so both jobs are a new class,
+`scheduling/OrderSweeper`, and the key is set in `application-prod.yml`. The class moves the
+fixture's document, call-edge and root counts by one class file, re-pinned where asserted.
 
 ## 4. What it does NOT do
 

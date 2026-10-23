@@ -69,6 +69,10 @@ class ResolveReport:
     # all. Empty lists for a module that schedules nothing and handles nothing,
     # which is the same answer their pre-declared tables give.
     scheduled_work: list[dict[str, object]] = field(default_factory=list)
+    # What the REPOSITORY configures for a placeholder schedule, per environment (spec
+    # 2026-10-23-configured-schedules §3b), beside `scheduled_work` and never inside it: the
+    # job keeps one row and stays `unresolved`, and the document states these values under it.
+    resolved_schedules: list[dict[str, object]] = field(default_factory=list)
     error_handlers: list[dict[str, object]] = field(default_factory=list)
     # The conditions every BEAN carries, one row per (bean, route, condition, environment)
     # (spec 2026-10-22-conditional-beans §2): what every derived row finds through its own
@@ -374,6 +378,7 @@ def resolve(
         coverage=coverage_of(workspace),
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),
+        resolved_schedules=workspace.query("resolved_schedules"),
         error_handlers=workspace.query("error_handlers"),
         bean_conditions=workspace.query("bean_conditions"),
         bean_presence=workspace.query("bean_presence"),

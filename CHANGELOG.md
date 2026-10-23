@@ -98,6 +98,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A schedule set in configuration is stated per environment** (COVERAGE §5.12 `@Scheduled`
+  row 3 → ✅, Spring Boot's §2c Async cell → ✅; spec `2026-10-23-configured-schedules-design.md`,
+  option A ruled 2026-10-23). `@Scheduled(cron = "${orders.sweep.cron:0 0 * * * *}")` still
+  derives one `scheduled_work` row, `unresolved`, the expression verbatim — the schedule that
+  runs is the deployment's. Beside it, a new derived table **`resolved_schedules`** holds one
+  row per (job whose expression holds a placeholder, environment of `resolved_config`), keyed
+  by the job's `handler`, `trigger` and `expression` (so two placeholder crons under
+  `@Schedules` on one method are told apart), with the value this repository configures or
+  the reason it cannot be read (`missing_key`, `placeholder_cycle`, …). The expression is
+  substituted by the one placeholder rule configuration files use
+  (`resolve/config.py::substitute`, split from `_substitute`; delimiters, `:default` and key
+  matching from the config model), so a literal default applies where no environment sets the key. The module
+  document states it under the job's row, labelled as the repository's configuration:
+  *as configured in this repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*;
+  environments that read the same value share one entry. Exported in the bundle with `value`
+  masked by `redact_text`; the document's line passes the render redactor.
+  **`GRAPH_SCHEMA_VERSION` moves 6 → 7** (a new table): re-analyse the workspace. SpEL `#{…}`
+  is not evaluated; the diff's `schedule` kind is unchanged.
+
 - **Conditions belong to the bean, not to the controller** (COVERAGE `conditional-controllers`
   generalized; `OI-108` closed; spec `2026-10-22-conditional-beans-design.md`, three decisions
   ruled 2026-10-22). PR #61 stated the condition on an inbound controller only, which was one
