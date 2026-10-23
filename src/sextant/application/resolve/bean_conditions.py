@@ -587,9 +587,10 @@ def _scanned_name(
     conditions: dict[str, ConditionModel],
 ) -> str | None:
     """A scanned class's bean name (CP-44 row 6): the text its stereotype's naming attribute
-    gives, else its short name (`short_class_name`) uncapitalised unless its first two characters are both upper case. A class that is a
-    bean only through a COMPOSED stereotype and carries an argument on any annotation may be
-    named by it (an `@AliasFor` this analysis does not read): None, the name not known."""
+    gives, else its short name (`short_class_name`) uncapitalised unless its first two
+    characters are both upper case. A class that is a bean only through a COMPOSED stereotype
+    and carries an argument on any annotation may be named by it (an `@AliasFor` this analysis
+    does not read): None, the name not known."""
     direct = False
     composing = []
     for descriptor, args in uses:

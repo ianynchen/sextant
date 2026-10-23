@@ -529,11 +529,13 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- (a condition on a scanned class), `factory` (on the `@Bean` method that constructs and
 -- returns it), `configuration` (on that method's configuration class) or `proxy` (on an
 -- INTERFACE the framework registers and implements at run time, CP-46 — the bean is the
--- interface); `via` is that method, NULL for `class` and `proxy`. `kind`, `expression` and `holds` are the conditions pass's
--- encoding (CP-42, CP-43, CP-44): `profile`, `property`, `presence` (a bean-presence
--- condition judged from the module's own beans, `resolution = partial` with the reason in
--- `evidence`, spec §2c) or `other`, the expression JSON typed per kind, and the framework's
--- own verdict for that environment or `unresolved`. A route with
+-- interface); `via` is that method, NULL for `class` and `proxy` — except on an inherited
+-- body's rows, copies of each heir's that keep its `bean_kind` with `via` the heir's own or the
+-- heir class (D01; `inherited` marks only a body no bean runs). `kind`, `expression` and
+-- `holds` are the conditions pass's encoding (CP-42, CP-43, CP-44): `profile`, `property`,
+-- `presence` (a bean-presence condition judged from the module's own beans, `resolution =
+-- partial` with the reason in `evidence`, spec §2c) or `other`, the expression JSON typed per
+-- kind, and the framework's own verdict for that environment or `unresolved`. A route with
 -- NO condition — an unconditional scan or factory of a class that also has a conditional
 -- route, or a plain `new` of it outside any factory (`bean_kind = constructed`) — is one row
 -- per environment with `kind` NULL: `true`, or `unresolved` for a plain `new`. Written only

@@ -91,8 +91,9 @@ SEXTANT_VERSION = version("sextant")
 #             `Catalog Error`.
 #     4       `bean_conditions` (spec 2026-10-22-conditional-beans): the conditions every
 #             bean carries, a new derived table; `endpoint_conditions` stops being a table
-#             and becomes a VIEW joining endpoint rows to it, gaining `caller`, `via`, `bean_kind` and `bean`; the view
-#             `bean_presence` folds it into where each bean exists; the view `symbol_beans`
+#             and becomes a VIEW joining endpoint rows to it, gaining `caller`, `via`,
+#             `bean_kind` and `bean`; the view `bean_presence` folds it into where each
+#             bean exists; the view `symbol_beans`
 #             is the one rule mapping code to its bean, and `candidate_presence` states
 #             which candidates of a narrowed call exist per environment; `interface_beans`
 #             names every interface the framework implements at run time (CP-46), whose
