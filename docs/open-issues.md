@@ -662,8 +662,9 @@ resolved: none.* The wider consequence is the same too — an environment the de
 (a profile with no file) is not one the document can speak about, only a profile the base
 names can be left open.
 
-### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim
-**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
+### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` verbatim
+**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff);
+restated 2026-10-23 when `cov/conditional-beans` merged `main` ·
 `src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES`, `src/sextant/application/boundary/source.py`**
 
 `export` passes `endpoints.path` (and `peer`) through the `_REDACTED_ADDRESSES` map, while
@@ -682,10 +683,14 @@ path in that set is changed by masking, so nothing misses.
 **Real triggering input:** an endpoint path the redactor rewrites, e.g. a `redact:` value
 pattern a route segment matches, on a module with a requirement or a condition on that route.
 
-**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES\|"endpoint_conditions": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
-**Closes** when the exporter masks `endpoints.path`, `endpoint_metadata.path` and
-`endpoint_conditions.path` through the one `_REDACTED_ADDRESSES` map, so the three stay
-spelled alike in a bundle.
+**The `endpoint_conditions` half is closed** (no longer part of this entry): spec
+2026-10-22-conditional-beans exports the `endpoint_conditions` view with `path` masked through
+the same `_REDACTED_ADDRESSES` map `endpoints.path` uses, so a bundle's condition rows join
+their endpoint on the masked spelling. `endpoint_metadata.path` is still exported verbatim.
+
+**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
+**Closes** when the exporter masks `endpoint_metadata.path` through the one
+`_REDACTED_ADDRESSES` map as well, so it stays spelled like `endpoints.path` in a bundle.
 
 ### OI-170 — a call declared on a generic framework type lists every repository that extends it
 **Minor · logged 2026-10-22 (review of `conditional-beans`' framework-implemented interface
