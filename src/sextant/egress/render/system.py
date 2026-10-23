@@ -80,6 +80,14 @@ def _links(links: "Sequence[Link]") -> list[str]:
     for link in sorted(links, key=_link_order):
         verb = link.from_method or ""
         source = f"`{link.from_participant}` {verb} `{link.from_path}`".replace("  ", " ")
+        if link.from_conditions:
+            # The calling bean exists in some environments only (spec 2026-10-22-
+            # conditional-beans §3), so the call does: stated beside the calling side as the
+            # endpoint's existence is beside the endpoint, from the participant's own rows.
+            only = any(h != "true" for _, h in link.from_conditions)
+            source += " — " + _existence(
+                link.from_conditions, "called only in" if only else "called in"
+            )
         # A participant-level link states WHO and no route, and the column says so in
         # words rather than by being empty — an empty cell reads as missing data.
         endpoint = (
@@ -91,17 +99,7 @@ def _links(links: "Sequence[Link]") -> list[str]:
             # The inbound endpoint exists in some environments only (spec 2026-10-21-
             # conditional-controllers, ruling 2): stated beside the link, from the
             # participant's own rows; the link itself is matched and kept as any other.
-            holds = sorted(e for e, h in link.to_conditions if h == "true")
-            fails = sorted(e for e, h in link.to_conditions if h == "false")
-            unread = sorted(e for e, h in link.to_conditions if h == "unresolved")
-            parts = []
-            if holds:
-                parts.append("exists in " + ", ".join(f"`{e}`" for e in holds))
-            if fails:
-                parts.append("not in " + ", ".join(f"`{e}`" for e in fails))
-            if unread:
-                parts.append("not evaluated in " + ", ".join(f"`{e}`" for e in unread))
-            endpoint += " — " + "; ".join(parts)
+            endpoint += " — " + _existence(link.to_conditions, "exists in")
         resolution = f"{link.resolution} · {link.evidence}"
         if link.resolution == str(Resolution.NARROWED):
             # `M06`'s honesty obligation: every narrowed link with all its candidates. It
@@ -112,6 +110,23 @@ def _links(links: "Sequence[Link]") -> list[str]:
         lines.append(f"| {source} | `{link.to_participant}` | {endpoint} | {resolution} |")
     lines.append("")
     return lines
+
+
+def _existence(conditions: "Sequence[tuple[str, str]]", holding: str) -> str:
+    """Where one end of a link exists, from its `(environment, holds)` pairs: the
+    environments it holds in (`holding` says in which words), those it does not, and those
+    this analysis did not evaluate."""
+    holds = sorted(e for e, h in conditions if h == "true")
+    fails = sorted(e for e, h in conditions if h == "false")
+    unread = sorted(e for e, h in conditions if h == "unresolved")
+    parts = []
+    if holds:
+        parts.append(f"{holding} " + ", ".join(f"`{e}`" for e in holds))
+    if fails:
+        parts.append("not in " + ", ".join(f"`{e}`" for e in fails))
+    if unread:
+        parts.append("not evaluated in " + ", ".join(f"`{e}`" for e in unread))
+    return "; ".join(parts)
 
 
 def _unmatched(unmatched: "Sequence[Unmatched]", absent: "set[str]") -> list[str]:

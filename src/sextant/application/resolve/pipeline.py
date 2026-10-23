@@ -66,15 +66,14 @@ class ResolveReport:
     # which is the same answer their pre-declared tables give.
     scheduled_work: list[dict[str, object]] = field(default_factory=list)
     error_handlers: list[dict[str, object]] = field(default_factory=list)
-    # The conditions an inbound endpoint's handler type carries, one row per environment
-    # (spec 2026-10-21-conditional-controllers): the document's detail lines are derived
-    # from these rows and from nothing else. Read since spec 2026-10-22-conditional-beans
-    # through the `endpoint_conditions` VIEW over `bean_conditions` below.
-    endpoint_conditions: list[dict[str, object]] = field(default_factory=list)
     # The conditions every BEAN carries, one row per (bean, route, condition, environment)
     # (spec 2026-10-22-conditional-beans §2): what every derived row finds through its own
-    # code's owner class.
+    # code's owner class, and the document's detail lines are derived from these rows and
+    # `bean_presence` below, and from nothing else (spec 2026-10-21-conditional-controllers).
     bean_conditions: list[dict[str, object]] = field(default_factory=list)
+    # Where each conditional bean EXISTS, per environment — the one answer to "does this exist
+    # here" (OR across a bean's routes, AND within one), which "holds in N of M" is read from.
+    bean_presence: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -359,8 +358,8 @@ def resolve(
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),
-        endpoint_conditions=workspace.query("endpoint_conditions"),
         bean_conditions=workspace.query("bean_conditions"),
+        bean_presence=workspace.query("bean_presence"),
         # Both passes root payload types and both expand what they root, so
         # both can meet a type nothing opens. Reported as one list, deduped:
         # the gap is in the type, not in how many passes walked into it —

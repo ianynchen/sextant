@@ -1,8 +1,16 @@
 package com.acme.api;
 
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-/** The CALLING side. Three calls, one per outcome the matcher has to distinguish. */
+/** The CALLING side. Three calls, one per outcome the matcher has to distinguish.
+ *  Under `@Profile("prod")` since 2026-10-22 (spec 2026-10-22-conditional-beans): the
+ *  client is a bean that exists in `prod` only, so every call it makes does — a property of
+ *  the OUTBOUND endpoint, which the link states beside its calling side just as it states
+ *  where the inbound endpoint exists. */
+@Profile("prod")
+@Component
 public class BillingClient {
 
     private final RestTemplate restTemplate = new RestTemplate();

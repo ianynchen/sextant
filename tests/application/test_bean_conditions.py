@@ -931,6 +931,7 @@ def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registe
     }
     assert json.loads(str(expression)) == {
         "annotation": MISSING,
+        "mode": "missing",
         "types": [USER_SERVICE],
         "names": [],
         "annotations": [],

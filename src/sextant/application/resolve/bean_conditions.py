@@ -642,13 +642,14 @@ def _presence_verdicts(
                     reasons[key] = _TYPE_VARIABLE
                 else:
                     types = [factory.registered]
+            modes[key] = str(members["mode"])
             expressions[key] = {
                 "annotation": found.annotation,
+                "mode": modes[key],
                 "types": types,
                 "names": names,
                 "annotations": annotations,
             }
-            modes[key] = str(members["mode"])
             loop_reasons[key] = (
                 str(members["order_reason"]),
                 str(members["present_cycle_reason"]),

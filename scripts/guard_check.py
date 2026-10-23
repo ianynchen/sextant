@@ -790,8 +790,25 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/api.py",
-                find='        links = _with_inbound_conditions(links, workspace.query("system_endpoint_conditions"))\n',
-                replace="        links = links  # guard disabled by scripts/guard_check.py\n",
+                find='            inbound.setdefault((participant, method, path), set()).add(str(row["bean"]))\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-LINK-states-where-its-outbound-caller-exists": Guard(
+        what="a link from a calling bean under a condition states, beside the calling side, "
+        "the environments the call exists in — read from the participant's own "
+        "`endpoint_conditions` and `bean_presence` through the federated views (spec "
+        "2026-10-22-conditional-beans §3)",
+        why="matching never reads a condition, so the condition travels with the outbound "
+        "endpoint as data and the link is where a reader of the system document learns "
+        "`orders-api` calls `billing` in `prod` only; without this the link reads as a call "
+        "made everywhere, the published-as-if-it-always-existed failure on the calling side",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='            outbound.setdefault((participant, method, path, caller), set()).add(str(row["bean"]))\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

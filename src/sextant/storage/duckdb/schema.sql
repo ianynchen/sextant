@@ -1203,7 +1203,7 @@ SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
 
 -- The conditions an endpoint row carries, read through the bean its code lives in (spec
 -- 2026-10-22-conditional-beans, decision 3): a VIEW, so no row copies them, and kept under
--- PR #61's name and columns — `caller`, `via` and `bean_kind` appended, in that order — so
+-- PR #61's name and columns — `caller`, `via`, `bean_kind` and `bean` appended, in that order — so
 -- the documents, the system tier (which federates it by name) and the bundle read what they
 -- read before, now for rows of every direction. A row's code is its handler, or its caller
 -- where it has no handler (an outbound call); its bean is that symbol itself where the
@@ -1236,7 +1236,7 @@ matched AS (
     WHERE own.bean IS NULL
 )
 SELECT DISTINCT m.protocol, m.direction, m.method, m.path, m.handler, b.kind, b.expression,
-       b.environment, b.holds, b.resolution, b.evidence, m.caller, b.via, b.bean_kind
+       b.environment, b.holds, b.resolution, b.evidence, m.caller, b.via, b.bean_kind, m.bean
 FROM matched m
 JOIN bean_conditions b ON b.bean = m.bean
 WHERE b.kind IS NOT NULL;

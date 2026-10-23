@@ -852,10 +852,10 @@ _NAMED_QUERIES = {
     # total an order as one inbound row (NFR-1).
     "endpoint_conditions": """
         SELECT protocol, direction, method, path, handler, kind, expression, environment,
-               holds, resolution, evidence, caller, via, bean_kind
+               holds, resolution, evidence, caller, via, bean_kind, bean
         FROM endpoint_conditions
         ORDER BY protocol, direction, method, path, handler, kind, expression, environment,
-                 caller, via, bean_kind
+                 caller, via, bean_kind, bean
     """,
     # Spec 2026-10-22-conditional-beans §2: the conditions every bean carries, keyed by the
     # bean. Ordered on the whole row — one bean may be reached by several routes, each a
@@ -985,7 +985,13 @@ _NAMED_QUERIES = {
     # conditions an inbound endpoint carries, which a link to it states beside itself.
     "system_endpoint_conditions": (
         "SELECT * FROM system_endpoint_conditions "
-        "ORDER BY participant, protocol, method, path, handler, kind, expression, environment"
+        "ORDER BY participant, protocol, direction, method, path, handler, caller, via, bean, "
+        "kind, expression, environment"
+    ),
+    # Every participant's `bean_presence`, federated the same way: where the bean behind a
+    # link's endpoint (either end of it) EXISTS — the one answer, OR across the bean's routes.
+    "system_bean_presence": (
+        "SELECT * FROM system_bean_presence ORDER BY participant, bean, environment"
     ),
 }
 
@@ -1580,6 +1586,9 @@ _FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
     # `endpoint_conditions` — a VIEW since spec 2026-10-22-conditional-beans, which binds
     # inside the participant's own catalog when attached.
     ("system_endpoint_conditions", "endpoint_conditions", "*"),
+    # Where each conditional bean exists, per environment: the verdict a link states for
+    # either end, read beside the rows above (spec 2026-10-22-conditional-beans §3).
+    ("system_bean_presence", "bean_presence", "*"),
 )
 
 # Names `schema.sql` once declared as a TABLE and now declares as a VIEW (spec

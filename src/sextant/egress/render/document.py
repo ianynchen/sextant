@@ -23,7 +23,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -35,6 +35,7 @@ from sextant.application.ports.detector import ModuleModel
 # — this module never reaches for a workspace, which is the import-linter
 # contract "Egress is read-only" in one line.
 from sextant.application.query.trace import Step, Trace
+from sextant.application.resolve.bean_conditions import COMPETITORS, PRESENCE
 from sextant.application.resolve.pipeline import ResolveReport
 
 # The root a trace ran from, for the addresses it carries (2Q close, defect 1).
@@ -700,67 +701,122 @@ def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
     return _text(_handler_fallback(endpoint))
 
 
-def _conditions_by_handler(
-    rows: "Sequence[Mapping[str, object]]",
-) -> dict[tuple[str, str | None, str | None], list[Mapping[str, object]]]:
-    """`endpoint_conditions` rows keyed by the endpoint they belong to (handler, method,
-    path) — the identity an inbound row carries — in the table's own order."""
-    by_endpoint: dict[tuple[str, str | None, str | None], list[Mapping[str, object]]] = {}
-    for row in rows:
-        key = (str(row["handler"]), _opt(row.get("method")), _opt(row.get("path")))
-        by_endpoint.setdefault(key, []).append(row)
-    return by_endpoint
+@dataclass(frozen=True)
+class _BeanConditions:
+    """The ONE index every section reads its conditions from (spec 2026-10-22-conditional-
+    beans §3): `bean_conditions` grouped by bean and registration route (`via`, None for the
+    scanned class), and `bean_presence` grouped by bean. Both are read once. An endpoint in
+    either direction, a scheduled job and an error handler each find their bean the way the
+    `endpoint_conditions` view does — their own code symbol first, then its owner class — and
+    state what is here, so no kind has a copy of the logic."""
+
+    routes: dict[str, dict[str | None, list[Mapping[str, object]]]]
+    presence: dict[str, list[Mapping[str, object]]]
+
+
+def _bean_conditions(report: ResolveReport) -> _BeanConditions:
+    routes: dict[str, dict[str | None, list[Mapping[str, object]]]] = {}
+    for row in report.bean_conditions:
+        routes.setdefault(str(row["bean"]), {}).setdefault(_opt(row.get("via")), []).append(row)
+    presence: dict[str, list[Mapping[str, object]]] = {}
+    for row in report.bean_presence:
+        presence.setdefault(str(row["bean"]), []).append(row)
+    return _BeanConditions(routes, presence)
 
 
 def _opt(value: object) -> str | None:
     return None if value is None else str(value)
 
 
-def _condition_entries(
-    endpoint: Mapping[str, object],
-    by_endpoint: dict[tuple[str, str | None, str | None], list[Mapping[str, object]]],
-) -> list[DetailEntry]:
-    """The VERBOSE rendering of `endpoint_conditions` (spec 2026-10-21-conditional-controllers
-    §2, ruling 1 of 2026-10-22): the stored form is the table a machine reads; the document
-    says the same thing in words, two lines per condition — the condition as the code spells
-    it, and where it HOLDS among the environments this module resolves. Absent on an
-    unconditional row, which is almost every row.
+def _bean_of(symbol: str, index: _BeanConditions) -> str | None:
+    """The bean a row's code belongs to: that symbol itself where it is a bean (a lambda a
+    `@Bean` factory creates), else its owner class — the `endpoint_conditions` view's order."""
+    if symbol in index.routes:
+        return symbol
+    owner = owner_of(symbol)
+    return owner if owner is not None and owner in index.routes else None
+
+
+def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEntry]:
+    """The VERBOSE rendering of a bean's conditions (spec 2026-10-21-conditional-controllers
+    §2, ruling 1 of 2026-10-22; spec 2026-10-22-conditional-beans §3): the stored form is the
+    tables a machine reads; the document says the same thing in words, two lines — where the
+    bean's registration says it exists, and where it EXISTS among the environments this
+    module resolves (from `bean_presence` alone: two exclusive factories each hold somewhere,
+    and read as one list of conditions the bean would exist nowhere). A bean registered one
+    way states its conditions on one line, joined by "and"; one registered several ways
+    ("Exists when any of these registers it") spells each route. Absent on an unconditional
+    row, which is almost every row.
     """
-    handler = endpoint.get("handler")
-    if handler is None:
+    if symbol is None:
         return []
-    rows = by_endpoint.get((str(handler), _opt(endpoint.get("method")), _opt(endpoint.get("path"))))
-    if not rows:
+    bean = _bean_of(str(symbol), index)
+    if bean is None:
         return []
-    entries: list[DetailEntry] = []
+    routes = index.routes[bean]
+    if not any(row["kind"] is not None for rows in routes.values() for row in rows):
+        return []
+    if len(routes) == 1:
+        [rows] = routes.values()
+        first = DetailEntry(_text("Exists only when"), _runs(_route_words(rows)), None)
+    else:
+        table = MachineTable(
+            ("Registered by", "Registers it when"),
+            tuple(
+                (_code(_route_label(via, bean)), _runs(_route_words(rows)))
+                for via, rows in routes.items()
+            ),
+        )
+        first = DetailEntry(_text("Exists when any of these registers it"), None, table)
+    verdict = _presence_verdict(index.presence.get(bean, []))
+    return [first, DetailEntry(_text("Of this module's environments"), _runs(verdict), None)]
+
+
+def _route_label(via: str | None, bean: str) -> str:
+    """A registration route as a reader names it: the factory method, or the scanned class."""
+    if via is None:
+        return simple_name(bare_descriptor(bean))
+    return _short_handler(bare_descriptor(via))
+
+
+def _route_words(rows: Sequence[Mapping[str, object]]) -> str:
+    """One route's conditions, joined by "and"; an unconditional route is "always", and a
+    class merely constructed outside any factory is not decided (which bean's code path runs
+    it is not known)."""
+    if any(str(row["bean_kind"]) == "constructed" for row in rows):
+        return "constructed outside any bean factory — not decided"
     # One condition is one (kind, expression); its rows are its environments.
     conditions: dict[tuple[str, str], list[Mapping[str, object]]] = {}
     for row in rows:
-        conditions.setdefault((str(row["kind"]), str(row["expression"])), []).append(row)
-    for (kind, expression), per_environment in conditions.items():
-        entries.append(
-            DetailEntry(_text("Exists only when"), _runs(_condition_words(kind, expression)), None)
-        )
-        holds = sorted(str(r["environment"]) for r in per_environment if str(r["holds"]) == "true")
-        fails = sorted(str(r["environment"]) for r in per_environment if str(r["holds"]) == "false")
-        unread = sorted(
-            str(r["environment"]) for r in per_environment if str(r["holds"]) == "unresolved"
-        )
-        total = len(per_environment)
-        if unread and len(unread) == total:
-            verdict = f"not evaluated by this analysis in any of the {total} environments"
-        else:
-            verdict = f"holds in {len(holds)} of {total} environments"
-            if fails:
-                verdict += " — not in " + ", ".join(f"`{e}`" for e in fails)
-            if unread:
-                verdict += "; not evaluated in " + ", ".join(f"`{e}`" for e in unread)
-        entries.append(DetailEntry(_text("Of this module's environments"), _runs(verdict), None))
-    return entries
+        if row["kind"] is not None:
+            conditions.setdefault((str(row["kind"]), str(row["expression"])), []).append(row)
+    if not conditions:
+        return "always"
+    return " and ".join(
+        _condition_words(kind, expression, per_environment)
+        for (kind, expression), per_environment in conditions.items()
+    )
 
 
-def _condition_words(kind: str, expression: str) -> str:
-    """The condition in words, from its structured expression."""
+def _presence_verdict(rows: Sequence[Mapping[str, object]]) -> str:
+    """Where a bean exists among the module's environments, from its `bean_presence` rows."""
+    holds = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "true")
+    fails = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "false")
+    unread = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "unresolved")
+    total = len(rows)
+    if unread and len(unread) == total:
+        return f"not evaluated by this analysis in any of the {total} environments"
+    verdict = f"holds in {len(holds)} of {total} environments"
+    if fails:
+        verdict += " — not in " + ", ".join(f"`{e}`" for e in fails)
+    if unread:
+        verdict += "; not evaluated in " + ", ".join(f"`{e}`" for e in unread)
+    return verdict
+
+
+def _condition_words(kind: str, expression: str, rows: Sequence[Mapping[str, object]] = ()) -> str:
+    """The condition in words, from its structured expression. `rows` are its per-environment
+    rows, which a bean-presence condition reads its competitors from."""
     try:
         parsed = json.loads(expression)
     except ValueError:
@@ -774,6 +830,8 @@ def _condition_words(kind: str, expression: str) -> str:
         value = f"is `{having}`" if having else "is set and not `false`"
         missing = " (or is absent)" if parsed.get("match_if_missing") else ""
         return f"the configuration key {keys} {value}{missing}"
+    if kind == PRESENCE:
+        return _presence_words(parsed, rows)
     # `other`: the annotation as the code spells it, with its arguments verbatim — named,
     # never evaluated (spec §4: code, not configuration).
     symbol = str(parsed.get("annotation", expression))
@@ -781,6 +839,78 @@ def _condition_words(kind: str, expression: str) -> str:
     args = parsed.get("args") or {}
     spelled = f"@{name}({json.dumps(args, sort_keys=True)})" if args else f"@{name}"
     return f"`{spelled}` holds — a condition this analysis does not evaluate"
+
+
+def _presence_words(parsed: Mapping[str, Any], rows: Sequence[Mapping[str, object]]) -> str:
+    """A bean-presence condition (`@ConditionalOnMissingBean` / `@ConditionalOnBean`) in
+    words, then who decided it: the verdict is the module's own beans only, so it says so
+    (`partial`) and names the competitors the evidence lists (spec §2c)."""
+    criteria = [
+        *(f"type `{simple_name(bare_descriptor(t))}`" for t in parsed.get("types", [])),
+        *(f"name `{n}`" for n in parsed.get("names", [])),
+        *(f"annotation `{simple_name(bare_descriptor(a))}`" for a in parsed.get("annotations", [])),
+    ]
+    if not criteria:
+        words = "a bean-presence condition naming no type, name or annotation this analysis reads"
+    elif parsed.get("mode") == "missing":
+        words = "no other bean of " + " or ".join(criteria) + " is registered"
+    else:
+        words = "a bean of " + " and ".join(criteria) + " is registered"
+    partial = any(str(row["resolution"]) == "partial" for row in rows)
+    words += (
+        " — decided from this module's beans only (`partial`)"
+        if partial
+        else " — not decided from this module's beans (`unresolved`)"
+    )
+    competitors = _competitor_words(rows)
+    return f"{words}: {competitors}" if competitors else words
+
+
+def _competitor_words(rows: Sequence[Mapping[str, object]]) -> str:
+    """The competitors a presence condition's evidence lists (a sorted JSON list after
+    `COMPETITORS`), each with the environments it exists in — never the raw JSON. A competitor
+    listed for only some environments says only those: the others were not decided by it."""
+    environments = {str(row["environment"]) for row in rows}
+    by_bean: dict[str, dict[str, str]] = {}
+    notes: dict[str, str] = {}
+    for row in rows:
+        _, separator, listed = str(row["evidence"]).partition(COMPETITORS)
+        if not separator:
+            continue
+        for entry in json.loads(listed):
+            holds = by_bean.setdefault(str(entry["bean"]), {})
+            environment = str(row["environment"])
+            # A bean competing through several routes exists wherever any of them does.
+            rank = {"true": 2, "unresolved": 1, "false": 0}
+            if rank[str(entry["holds"])] >= rank.get(holds.get(environment, ""), -1):
+                holds[environment] = str(entry["holds"])
+            if entry.get("note"):
+                notes.setdefault(str(entry["bean"]), str(entry["note"]))
+    items = []
+    for bean, holds in sorted(by_bean.items()):
+        where = _where_words(holds, complete=set(holds) == environments)
+        note = f"; {notes[bean]}" if bean in notes else ""
+        items.append(f"`{simple_name(bare_descriptor(bean))}` ({where}{note})")
+    return ", ".join(items)
+
+
+def _where_words(holds: Mapping[str, str], complete: bool) -> str:
+    """Where a competitor exists, from its per-environment verdicts."""
+    present = sorted(e for e, h in holds.items() if h == "true")
+    absent = sorted(e for e, h in holds.items() if h == "false")
+    open_ = sorted(e for e, h in holds.items() if h == "unresolved")
+    if complete and not present and not open_:
+        return "not in any environment"
+    if complete and not absent and not open_:
+        return "in every environment"
+    parts = []
+    if present:
+        parts.append("in " + ", ".join(f"`{e}`" for e in present))
+    if absent:
+        parts.append("not in " + ", ".join(f"`{e}`" for e in absent))
+    if open_:
+        parts.append("not decided in " + ", ".join(f"`{e}`" for e in open_))
+    return "; ".join(parts)
 
 
 def _detail_header(identity: str, symbol_or_fallback: tuple[Run, ...]) -> DetailEntry:
@@ -1228,6 +1358,8 @@ def assemble_module_document(
     # searched for afterwards in text that would then have to be parsed.
     structure_end = len(sections)
 
+    # Read once, by every section below that states where a derived row exists.
+    beans = _bean_conditions(report)
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
@@ -1263,7 +1395,6 @@ def assemble_module_document(
         # longer spells out lives here instead, and with one block per row in
         # table order, correlating a block back to its row needs no shared
         # identity between them.
-        conditions_by_handler = _conditions_by_handler(report.endpoint_conditions)
         for endpoint in inbound:
             request = _descriptor_entry(
                 "Request", endpoint.get("request_shape"), fields_by_shape, shape_names
@@ -1274,7 +1405,7 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
-            conditions = _condition_entries(endpoint, conditions_by_handler)
+            conditions = _condition_entries(endpoint.get("handler"), beans)
             entries = [
                 entry
                 for entry in (via, request, response, streaming, fails_with, *conditions)
@@ -1340,7 +1471,8 @@ def assemble_module_document(
         for endpoint in outbound:
             identity = _wire_identity(endpoint, redactor)
             via = None if identity in attributed else _via_entry(endpoint, origin_by_symbol)
-            if via is not None:
+            conditions = _condition_entries(endpoint.get("caller"), beans)
+            if via is not None or conditions:
                 # One convention with inbound (fix round 1, MEDIUM 1): the
                 # identity, then the caller's own full symbol — the same
                 # unshortened form the Caller column already carries (2M
@@ -1348,8 +1480,10 @@ def assemble_module_document(
                 # one), not a second spelling invented for this line alone.
                 caller_symbol = _code(bare_descriptor(str(endpoint["caller"])))
                 header = _detail_header(identity, caller_symbol)
-                sections.append(MachineDetail((header, via)))
-                attributed.add(identity)
+                entries = [entry for entry in (via, *conditions) if entry is not None]
+                sections.append(MachineDetail((header, *entries)))
+                if via is not None:
+                    attributed.add(identity)
     else:
         sections.append(MachineParagraph(_runs("None found.")))
     # `after-endpoint-table`: after BOTH tables and their detail blocks. The
@@ -1372,9 +1506,9 @@ def assemble_module_document(
     # The cost is two short sections in every document, which is the cheap
     # side of that trade.
     sections.append(MachineHeading(2, "Scheduled work"))
-    sections.extend(_scheduled_work_sections(report.scheduled_work))
+    sections.extend(_scheduled_work_sections(report.scheduled_work, beans))
     sections.append(MachineHeading(2, "Error handling"))
-    sections.extend(_error_handler_sections(report.error_handlers))
+    sections.extend(_error_handler_sections(report.error_handlers, beans))
 
     # BELOW both non-wire sections, and for the reason they sit where they do:
     # a trace starts from a ROOT, and a root is an inbound endpoint OR a
@@ -1496,7 +1630,9 @@ _ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Res
 _NONE_RECORDED = "—"
 
 
-def _scheduled_work_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+def _scheduled_work_sections(
+    rows: Sequence[dict[str, object]], beans: _BeanConditions
+) -> list[Section]:
     """The `scheduled_work` table as one machine table, or the "None found."
     paragraph the endpoint sections use.
 
@@ -1505,6 +1641,9 @@ def _scheduled_work_sections(rows: Sequence[dict[str, object]]) -> list[Section]
     `resolution` rides along because an `unresolved` expression is a
     placeholder this analysis did not substitute, and a reader who cannot see
     that would read `${orders.cron}` as the schedule itself.
+
+    A job whose bean is conditional gets a detail block under the table stating where it
+    exists (`_condition_entries`); an unconditional job gets none.
     """
     if not rows:
         return [MachineParagraph(_runs("None found."))]
@@ -1517,10 +1656,18 @@ def _scheduled_work_sections(rows: Sequence[dict[str, object]]) -> list[Section]
         )
         for row in rows
     )
-    return [MachineTable(_SCHEDULED_HEADERS, table)]
+    sections: list[Section] = [MachineTable(_SCHEDULED_HEADERS, table)]
+    for row in rows:
+        conditions = _condition_entries(row["handler"], beans)
+        if conditions:
+            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)
+            sections.append(MachineDetail((header, *conditions)))
+    return sections
 
 
-def _error_handler_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+def _error_handler_sections(
+    rows: Sequence[dict[str, object]], beans: _BeanConditions
+) -> list[Section]:
     """The `error_handlers` table, exception first.
 
     Exception first because that is what a reader looks a row up BY — "what
@@ -1531,6 +1678,9 @@ def _error_handler_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
     glued to it. `Declared by` and `Scope` sit together deliberately: they are
     one claim in two columns, and reading either alone gets a controller's own
     handler and an application-wide advice the wrong way round.
+
+    A handler whose bean is conditional gets a detail block under the table stating where it
+    exists (`_condition_entries`); an unconditional handler gets none.
     """
     if not rows:
         return [MachineParagraph(_runs("None found."))]
@@ -1545,7 +1695,14 @@ def _error_handler_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
         )
         for row in rows
     )
-    return [MachineTable(_ERROR_HEADERS, table)]
+    sections: list[Section] = [MachineTable(_ERROR_HEADERS, table)]
+    for row in rows:
+        conditions = _condition_entries(row["handler"], beans)
+        if conditions:
+            identity = _code(simple_name(str(row["exception"]))) + _text(" — ")
+            header = DetailEntry(identity + _code(bare_descriptor(str(row["handler"]))), None, None)
+            sections.append(MachineDetail((header, *conditions)))
+    return sections
 
 
 def _cell(value: object, render: Callable[[str], str]) -> str:

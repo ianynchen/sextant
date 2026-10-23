@@ -874,31 +874,64 @@ def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
 # --------------------------------------------------------------------------
 
 
-def _with_inbound_conditions(
-    links: tuple[Link, ...], conditions: Sequence[Mapping[str, Any]]
+def _with_conditions(
+    links: tuple[Link, ...],
+    conditions: Sequence[Mapping[str, Any]],
+    presence: Sequence[Mapping[str, Any]],
 ) -> tuple[Link, ...]:
-    """Each link with the `(environment, holds)` pairs of the inbound endpoint it reaches —
-    read off the participants' own `endpoint_conditions` through the federated view, joined
-    on (participant, method, path), the identity an inbound row carries. A link to an
-    unconditional endpoint keeps the empty tuple. Inbound rows only: the view carries every
-    direction since spec 2026-10-22-conditional-beans, and an outbound row of the same
-    participant under the same method and path is a call it makes, not the endpoint the link
-    reaches."""
-    by_endpoint: dict[tuple[str, str | None, str | None], list[tuple[str, str]]] = {}
+    """Each link with the `(environment, holds)` pairs of where each of its ends EXISTS: the
+    inbound endpoint it reaches (`to_conditions`) and the outbound call it is made from
+    (`from_conditions`). `conditions` are the participants' own `endpoint_conditions` through
+    the federated view, which names each row's bean; the verdict is that bean's
+    `bean_presence` (OR across its routes, AND within one) — never the per-condition rows,
+    which read two exclusive factories as "exists nowhere". An inbound end joins on
+    (participant, method, path), the identity an inbound row carries; an outbound end adds its
+    caller, since two callers may reach one address. A link whose end carries no condition
+    keeps the empty tuple. Direction is chosen explicitly: the view carries every direction,
+    and an outbound row of the same participant under the same method and path is a call it
+    makes, not the endpoint a link reaches."""
+    verdicts: dict[tuple[str, str], dict[str, str]] = {}
+    for row in presence:
+        key = (str(row["participant"]), str(row["bean"]))
+        verdicts.setdefault(key, {})[str(row["environment"])] = str(row["holds"])
+    inbound: dict[tuple[str, str | None, str | None], set[str]] = {}
+    outbound: dict[tuple[str, str | None, str | None, str | None], set[str]] = {}
     for row in conditions:
-        if row["direction"] != "inbound":
-            continue
-        key = (
-            str(row["participant"]),
-            None if row["method"] is None else str(row["method"]),
-            None if row["path"] is None else str(row["path"]),
+        participant = str(row["participant"])
+        method = None if row["method"] is None else str(row["method"])
+        path = None if row["path"] is None else str(row["path"])
+        if row["direction"] == "inbound":
+            inbound.setdefault((participant, method, path), set()).add(str(row["bean"]))
+        elif row["direction"] == "outbound":
+            caller = None if row["caller"] is None else str(row["caller"])
+            outbound.setdefault((participant, method, path, caller), set()).add(str(row["bean"]))
+
+    def existence(participant: str, beans: set[str]) -> tuple[tuple[str, str], ...]:
+        per_environment: dict[str, set[str]] = {}
+        for bean in sorted(beans):
+            for environment, holds in verdicts.get((participant, bean), {}).items():
+                per_environment.setdefault(environment, set()).add(holds)
+        return tuple(
+            (
+                environment,
+                "true" if "true" in held else "false" if held == {"false"} else "unresolved",
+            )
+            for environment, held in sorted(per_environment.items())
         )
-        by_endpoint.setdefault(key, []).append((str(row["environment"]), str(row["holds"])))
+
     return tuple(
         replace(
             link,
-            to_conditions=tuple(
-                by_endpoint.get((link.to_participant, link.to_method, link.to_path), ())
+            to_conditions=existence(
+                link.to_participant,
+                inbound.get((link.to_participant, link.to_method, link.to_path), set()),
+            ),
+            from_conditions=existence(
+                link.from_participant,
+                outbound.get(
+                    (link.from_participant, link.from_method, link.from_path, link.from_caller),
+                    set(),
+                ),
             ),
         )
         for link in links
@@ -948,8 +981,8 @@ def _reconstructed_report(
         # and the workspace is where rows live.
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),
-        endpoint_conditions=workspace.query("endpoint_conditions"),
         bean_conditions=workspace.query("bean_conditions"),
+        bean_presence=workspace.query("bean_presence"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report
@@ -1645,10 +1678,15 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         composed, refusals = _gateway_links(config, endpoints, model, names)
         links = (*links, *composed)
         # Spec 2026-10-21-conditional-controllers (ruling 2): a condition is a property of
-        # the inbound endpoint and travels with it as data. Nothing above read it; each
-        # link now carries its inbound endpoint's per-environment verdicts so the system
-        # document can state them beside the link, and nothing is dropped for it.
-        links = _with_inbound_conditions(links, workspace.query("system_endpoint_conditions"))
+        # the endpoint and travels with it as data. Nothing above read it; each link now
+        # carries where each end exists — the inbound endpoint, and (spec 2026-10-22-
+        # conditional-beans §3) the calling bean — so the system document can state them
+        # beside the link, and nothing is dropped for it.
+        links = _with_conditions(
+            links,
+            workspace.query("system_endpoint_conditions"),
+            workspace.query("system_bean_presence"),
+        )
         uncalled = _uncalled_endpoints(endpoints, links)
         workspace.derive("participants_reset")
         workspace.derive("participants_insert", rows=[p.row() for p in participants])
