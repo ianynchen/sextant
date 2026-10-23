@@ -238,6 +238,24 @@ about where the row exists, not a column every unconditional row would carry emp
   module does not fill*. A bean open in every environment reads *not evaluated by this
   analysis in any of the N environments*, then its reason. A condition this analysis does not
   evaluate is named (`@Conditional`), never quoted as JSON.
+
+  **Under deployment-set conditions** (spec 2026-10-23-deployment-set-conditions §3c, ruling 1)
+  almost every conditional bean is open in every environment, because a profile or property
+  condition is decided by what the deployment sets, not by the repository. The line keeps its
+  shape and the reason is the one the verdict's evidence states, once where every environment
+  shares it: *Of this module's environments: not evaluated by this analysis in any of the 5
+  environments — active profiles are set by the deployment; this module's own default is
+  `h2,spring-data-jpa`*. A reason that differs per environment (a property's configured value)
+  is stated per environment: *…in any of the 3 environments; in `default` — `billing.enabled`
+  is set by the deployment; this module's `default` configuration sets nothing; in `prod` — …*.
+  The one condition still decided is a profile term naming the environment itself, so a bean
+  `@Profile("h2")` reads *holds in 1 of 5 environments; not evaluated in `default`, `hsqldb`,
+  `mysql`, `postgres` — active profiles are set by the deployment; …*. The system document's
+  per-link existence reads the same verdicts (*exists in `h2`; not evaluated in `default`,
+  `hsqldb`, `mysql`, `postgres`*); it carries no reason, which lives in the module document.
+  Why (ruling 1, the user's words): "what we are ultimately interested in, is what's in
+  production and this can be set anywhere, helm charts, configmaps etc. there's no way we can
+  tell until deployment is known, which is not part of sextant's job for now".
 * A `@ConditionalOnMissingBean` / `@ConditionalOnBean` condition reads *no other bean of type
   `UserService` is registered — decided from this module's beans only (`partial`); the other
   beans of that type: `LdapUserService` (not in any environment; profile `ldap` is named but

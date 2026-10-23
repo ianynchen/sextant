@@ -815,6 +815,136 @@ def test_a_row_open_in_some_environments_says_why_in_words():
     assert f"holds in 1 of 3 environments; not evaluated in `default`, `github` — {APOLLO}" in block
 
 
+FIVE = ("default", "h2", "hsqldb", "mysql", "postgres")
+DEPLOYMENT_PROFILES = "active profiles are set by the deployment; "
+OWN_DEFAULT = DEPLOYMENT_PROFILES + "this module's own default is `h2,spring-data-jpa`"
+
+
+def _with_evidence(rows: list[dict[str, object]], evidence: object) -> list[dict[str, object]]:
+    """`rows`, each carrying the evidence its environment names (one string for all)."""
+    return [
+        {
+            **row,
+            "evidence": evidence[row["environment"]] if isinstance(evidence, dict) else evidence,
+        }
+        for row in rows
+    ]
+
+
+def test_a_profile_bean_is_not_evaluated_in_any_environment_and_says_the_deployment_sets_them():
+    """Spec 2026-10-23-deployment-set-conditions §3c, ruling 1: `@Profile("jpa")` is decided
+    by which profiles the deployment activates, so it is open in every environment — the line
+    keeps its shape (2026-10-22 §3) and its reason is the module's own default, once."""
+    handler = USERS + "all()."
+    unresolved = dict.fromkeys(FIVE, "unresolved")
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(
+                USERS, "profile", '{"expressions": ["jpa"]}', unresolved, resolution="unresolved"
+            ),
+            OWN_DEFAULT,
+        ),
+        bean_presence=_with_evidence(_presence(USERS, unresolved, "unresolved"), OWN_DEFAULT),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "  - Of this module's environments: not evaluated by this analysis in any of the 5 "
+        f"environments — {OWN_DEFAULT}\n"
+    ) in block + "\n"
+    assert "holds in" not in block
+
+
+def test_a_bean_decided_by_its_own_environments_name_reads_decided_there_only():
+    """`@Profile("h2")` holds in `h2` (the environment's own name) and nowhere else is
+    decided: the deployment may or may not activate `h2` in the others."""
+    handler = USERS + "all()."
+    holds = {e: ("true" if e == "h2" else "unresolved") for e in FIVE}
+    evidence = {e: ("compiler" if e == "h2" else OWN_DEFAULT) for e in FIVE}
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(USERS, "profile", '{"expressions": ["h2"]}', holds), evidence
+        ),
+        bean_presence=_with_evidence(_presence(USERS, holds), evidence),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "  - Of this module's environments: holds in 1 of 5 environments; not evaluated in "
+        f"`default`, `hsqldb`, `mysql`, `postgres` — {OWN_DEFAULT}\n"
+    ) in block + "\n"
+
+
+def test_a_negated_profile_failing_in_its_own_environment_reads_as_not_there():
+    """`@Profile("!h2")` fails in `h2` — the environment's own name decides it — and is open
+    in the rest."""
+    handler = USERS + "all()."
+    holds = {e: ("false" if e == "h2" else "unresolved") for e in FIVE}
+    evidence = {e: ("compiler" if e == "h2" else OWN_DEFAULT) for e in FIVE}
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(USERS, "profile", '{"expressions": ["!h2"]}', holds), evidence
+        ),
+        bean_presence=_with_evidence(_presence(USERS, holds), evidence),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "holds in 0 of 5 environments — not in `h2`; not evaluated in "
+        f"`default`, `hsqldb`, `mysql`, `postgres` — {OWN_DEFAULT}"
+    ) in block
+
+
+def test_a_module_that_activates_no_profile_says_so_as_the_reason():
+    handler = USERS + "all()."
+    unresolved = dict.fromkeys(ENVIRONMENTS, "unresolved")
+    reason = DEPLOYMENT_PROFILES + "this module activates none"
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(USERS, "profile", PROFILE_PROD, unresolved, resolution="unresolved"), reason
+        ),
+        bean_presence=_with_evidence(_presence(USERS, unresolved, "unresolved"), reason),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert ("not evaluated by this analysis in any of the 3 environments — " + reason) in block
+
+
+def test_a_property_condition_names_each_environments_configured_value():
+    """The property's value differs per environment, so each environment's reason is stated
+    with it — the value having been masked by its key where the verdict was written."""
+    handler = USERS + "all()."
+    unresolved = dict.fromkeys(ENVIRONMENTS, "unresolved")
+    evidence = {
+        "default": "`billing.enabled` is set by the deployment; this module's `default` "
+        "configuration sets nothing",
+        "prod": "`billing.enabled` is set by the deployment; this module's `prod` "
+        "configuration sets `false`",
+        "staging": "`billing.enabled` is set by the deployment; this module's `staging` "
+        "configuration sets `false`",
+    }
+    expression = '{"having_value": "true", "keys": ["billing.enabled"], "match_if_missing": false}'
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(USERS, "property", expression, unresolved, resolution="unresolved"),
+            evidence,
+        ),
+        bean_presence=_with_evidence(_presence(USERS, unresolved, "unresolved"), evidence),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "not evaluated by this analysis in any of the 3 environments; in `default` — "
+        f"{evidence['default']}; in `prod` — {evidence['prod']}; in `staging` — "
+        f"{evidence['staging']}"
+    ) in block
+
+
 def test_a_condition_not_evaluated_is_named_not_quoted_as_json():
     handler = USERS + "all()."
     unresolved = {"default": "unresolved", "prod": "unresolved"}

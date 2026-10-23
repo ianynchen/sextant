@@ -2,7 +2,7 @@
 
 import pytest
 
-from sextant.application.stitch import Refusal, Unmatched
+from sextant.application.stitch import Link, Refusal, Unmatched
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.system import render_system_document
 
@@ -42,3 +42,57 @@ def test_every_address_and_reason_the_system_document_prints_is_masked():
     assert "tok-abc" not in document
     assert "`https://payments/charges`" in document
     assert f"`Path=/hooks/{REDACTED}`" in document
+
+
+FIVE = ("default", "h2", "hsqldb", "mysql", "postgres")
+
+
+def _link_row(link: Link) -> str:
+    document = render_system_document(
+        participants=(),
+        links=(link,),
+        unmatched=(),
+        uncalled_endpoints=(),
+        route_refusals=(),
+        environment="default",
+        redactor=Redactor.from_rules(RedactionRules()),
+    )
+    return next(line for line in document.splitlines() if line.startswith("| `web`"))
+
+
+def _link(**sides: tuple[tuple[str, str], ...]) -> Link:
+    return Link(
+        from_participant="web",
+        from_protocol="http",
+        from_method="GET",
+        from_path="/owners",
+        from_caller="C#c().",
+        to_participant="owners",
+        to_protocol="http",
+        to_method="GET",
+        to_path="/owners",
+        **sides,
+    )
+
+
+def test_a_link_whose_endpoint_is_open_in_every_environment_says_so_in_each():
+    """Spec 2026-10-23-deployment-set-conditions §3c: the system document reads the same
+    verdicts as the module's. A deployment-set condition is `unresolved` in every environment,
+    so the endpoint exists in none that is decided and the row names each one open."""
+    row = _link_row(_link(to_conditions=tuple((e, "unresolved") for e in FIVE)))
+    assert row.count("not evaluated in `default`, `h2`, `hsqldb`, `mysql`, `postgres`") == 1, row
+    assert "exists in" not in row, row
+
+
+def test_a_link_whose_endpoint_is_decided_only_in_its_own_environment_reads_decided_there():
+    row = _link_row(
+        _link(to_conditions=tuple((e, "true" if e == "h2" else "unresolved") for e in FIVE))
+    )
+    assert "exists in `h2`; not evaluated in `default`, `hsqldb`, `mysql`, `postgres`" in row, row
+
+
+def test_a_call_from_a_bean_open_in_every_environment_is_not_called_anywhere_decided():
+    row = _link_row(_link(from_conditions=tuple((e, "unresolved") for e in FIVE)))
+    calling_side = row.split("`owners`")[0]
+    assert "called" not in calling_side, row
+    assert "— not evaluated in `default`, `h2`, `hsqldb`, `mysql`, `postgres`" in calling_side, row
