@@ -3501,7 +3501,7 @@ def test_a_graph_missing_a_table_the_queries_read_is_unreadable_by_name(tmp_path
     directory = _described_workspace(tmp_path)
     bundle = _described_bundle(tmp_path, directory)
     with duckdb.connect(str(directory / "workspace.duckdb")) as connection:
-        connection.execute("DROP TABLE endpoint_conditions")
+        connection.execute("DROP VIEW endpoint_conditions")
     with pytest.raises(NotABoundarySource, match="endpoint_conditions"):
         open_read_only(directory)
     (bundle / "graph" / "shapes.parquet").unlink()
