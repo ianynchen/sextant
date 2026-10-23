@@ -662,6 +662,8 @@ resolved: none.* The wider consequence is the same too — an environment the de
 (a profile with no file) is not one the document can speak about, only a profile the base
 names can be left open.
 
+**2026-10-23 — re-read against `deployment-set-conditions`; it stands.** Every verdict in a module that resolves no key is now "not evaluated" (with the module's own default as evidence) rather than `default | false`; the environment LIST is unchanged.
+
 ### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` verbatim · **CLOSED 2026-10-23**
 **Re-rated Major and closed 2026-10-23** (branch `fix/peer-userinfo`): the entry understated it. `endpoint_metadata` carries OUTBOUND rows, and an outbound `path` may be a whole address, so an outbound call that sets a header shipped `https://svc:s3cret@…` in `endpoint_metadata.parquet` — a credential in the bundle, which by the standing ruling is never Minor. Its export now masks `path` by `_REDACTED_ADDRESSES`, and its paths join the map; pinned by `redaction.endpoint-METADATA-and-CONDITIONS-mask-the-endpoints-path`. The `endpoint_conditions` half was closed by `conditional-beans` (below).
 

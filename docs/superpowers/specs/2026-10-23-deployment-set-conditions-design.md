@@ -1,9 +1,10 @@
 # What a deployment can set, the repository does not decide — design
 
-**Status: DESIGNED 2026-10-23 — three rulings made (§1); the decision in §6 ruled A (bump).** Settles the
+**Status: BUILT 2026-10-23 (branch `fix/deployment-set-conditions`) — three rulings made (§1); the decision in §6 ruled A (bump).** Settles the
 three rulings `conditional-beans` (PR #63) left open. It changes what already-shipped
 documents say, so it comes before new coverage. It moves no COVERAGE cell: it corrects
-verdicts the conditional-controllers and conditional-beans work publishes.
+verdicts the conditional-controllers and conditional-beans work publishes. §2 carries the
+before and after measured on four corpora; §8 records what building it settled.
 
 **The general concept.** Some inputs that decide whether a bean exists are set at deployment:
 - active profiles;
@@ -33,21 +34,36 @@ Rejected, for the record:
 - for 2: B (leave the dependency kind as it is);
 - for 3: A (keep per-environment verdicts) and B (compare `bean_presence`).
 
-## 2. Measured first
+## 2. Measured first, then again after building
 
-Read-only over every analysed workspace under `examples/` holding `bean_conditions`
-(the queries are in this conversation's record; re-run before building).
+Read-only over every analysed workspace under `examples/` holding `bean_conditions`.
+Before = measured before building (2026-10-23); after = the same counts from the four
+corpora re-analysed with the built change (`JAVA_HOME=…openjdk@21 sextant module analyze`).
+"Decided" is `holds in ('true','false')`; everything else is `unresolved`.
 
-| module | decided condition verdicts today → "not evaluated" | `bean_presence` decided today |
+The harness query, run per workspace (`<dir>/.sextant/workspace.duckdb`, opened read-only):
+
+```sql
+select kind, holds, count(*) from bean_conditions group by 1, 2 order by 1, 2;
+select holds, count(*) from bean_presence group by 1 order by 1;
+```
+
+| module | decided condition verdicts, before → after | `bean_presence` decided, before → after |
 |---|---|---|
-| `apollo-portal` | 240 property (84 `false`, 156 `true`); its 414 profile verdicts are already open (`${apollo_profile}`) | 222 of 714 |
-| `spring-petclinic-rest` | 77 profile (70 `false`, 7 `true`), 40 property (20 / 20) | 117 of 145 |
-| `jhipster-sample-app` | 4 profile, 1 property | 4 of 6 |
-| `mall-admin` | none (12 presence verdicts on unconditional beans, decided by code) | 12 of 12, unchanged |
+| `apollo-portal` | profile: 0 → 0 (its 414 were already open: `${apollo_profile}`); property: 240 (84 `false`, 156 `true`) → 0, all 240 now `unresolved` | 222 of 714 → 18 of 714 (all `true`) |
+| `spring-petclinic-rest` | profile: 77 (70 `false`, 7 `true`) → 0 of 105; property: 40 (20 / 20) → 0 of 40 | 117 of 145 → 0 of 145 |
+| `jhipster-sample-app` | profile: 4 → 0 of 6; property: 1 → 0 of 1 | 4 of 6 → 0 of 6 |
+| `mall-admin` | none → none (its 12 `presence`-kind rows are decided by code, `true`) | 12 of 12 → 12 of 12, unchanged |
 
-What stays decided after the change:
-- a `presence` verdict whose inputs are decided by code (an unconditional competitor, or none);
-- in profile environment `p`, a profile term naming `p` itself.
+Totals: decided profile and property verdicts 362 → 0; decided `bean_presence` rows 355 → 30.
+
+What is decided after the change:
+- a `presence` verdict whose inputs are decided by code (an unconditional competitor, or none):
+  `mall-admin`'s 12; `apollo-portal`'s 18 presence rows (its `presence`-kind condition rows: 96 `true`,
+  222 `unresolved`);
+- in profile environment `p`, a profile term naming `p` itself. None of the four corpora has
+  one: no bean's `@Profile` names a profile whose file the module ships, so the "after"
+  figure for profile verdicts is 0, and this rule is pinned on hand-built rows only.
 
 ## 3. What changes
 
@@ -179,3 +195,24 @@ never deleted:
 - the diff's condition-set tests.
 
 Field pins (`scripts/field_check.py`) read contract fields, not conditions; run them anyway.
+
+## 8. As built
+
+The rulings made while building, each with its pin:
+- **One module-level profile reason.** A deployment-set profile's evidence is one string per
+  module, the same in every environment: the module's own activation as read for its base
+  environment (`h2,spring-data-jpa`, "this module activates none", or the placeholder
+  reason). It is computed once and passed down, not rebuilt per environment.
+- **The reserved `default` profile is no activation.** When the base environment holds
+  `default` only because the module names no profile (CP-45 row 5), the evidence reads "this
+  module activates none".
+- **A quoted configured value is masked by its key.** A property's evidence quotes the value
+  the environment's file resolves, so it is masked by that key where it is written, as every
+  origin of a configured value is.
+- **The diff masks a condition expression as the exporter does.** The exporter masked it; the
+  diff compared and printed it verbatim, so a `havingValue` URL carrying a password made a
+  workspace and its own bundle differ and printed the credential. Found by review of §3e's
+  change; closed in the same branch.
+
+The loader refuses a `set_by` other than `deployment`, and a `set_by` with no `set_by_probe`.
+`by:` keeps naming the evaluation-rule probe; the new key `set_by_probe:` names CP-47.

@@ -338,6 +338,14 @@ in every profile environment whenever the base's `active` key is set). `spring-p
 shows the difference: `@Profile("jdbc")` is off in `mysql` under the chosen reading and "not
 evaluated" under the alternative.
 
+**Superseded 2026-10-23.** Ruling 1 of `2026-10-23-deployment-set-conditions-design.md` replaces
+the decision above: a profile (and a property) is something the deployment sets, so in a
+profile-file environment `p` a profile the module never names is NOT read as off. Only a term
+naming `p` itself is decided; every other profile verdict is "not evaluated", in `default` too,
+and what this section reads (the base's `active`, `include` and `default` keys, groups, the
+placeholder reason) is kept as evidence. `spring-petclinic-rest`'s `@Profile("jdbc")` is
+therefore "not evaluated" in `mysql`, the alternative this paragraph declined.
+
 **PR #61's verdicts moved, by this rule.** Apollo `configservice`'s `GET /` read "not in
 `default`, `github`" and now reads "not evaluated in `default`, `github`", with the reason
 (§1, the second table). Relaxed key spellings are not read (§4, `OI-171`).
