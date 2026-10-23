@@ -940,6 +940,7 @@ same question asked twice and may appear in either order without changing a byte
 | Table | Holds |
 |---|---|
 | `scheduled_work` | The scheduled method, the trigger kind, the declared expression |
+| `resolved_schedules` | A scheduled job whose expression holds a placeholder: its value per environment, or unresolved with a reason |
 | `error_handlers` | The handler, its container and scope, the exception, the status, the response shape |
 
 **Two tables rather than two more `endpoints` rows, and that is the whole design**
@@ -960,6 +961,18 @@ is `unresolved` where the expression is a property placeholder this analysis did
 substitute, with the placeholder carried exactly as written; the value comes from
 configuration a deployment overwrites, so substituting one would publish a schedule the
 repository cannot know.
+
+**`resolved_schedules`** is what the repository's own configuration says instead, beside
+the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
+(`scheduled_work` row whose expression holds the config model's placeholder opener,
+environment of `resolved_config`), carrying `handler`, `trigger`, `environment`, `value`
+and `unresolved_reason` — the last one of the closed set `resolved_config` uses, `value`
+NULL exactly when it is set. The expression is substituted by the same placeholder rule
+`resolved_config` itself is (`:default` included, relaxed or exact matching as the model
+says), looked up in that one environment's resolved rows. A literal or a SpEL `#{…}`
+expression gets no rows, and with no resolved environment the table is empty. A derived
+table rather than a view, because that rule is Python; replaced whole per resolve by its
+one writing pass.
 
 **`error_handlers`** carries `handler`, `advice` (the type that declares it), `declared_by`,
 `scope`, `exception`, `status`, `response_shape`, `resolution`, `evidence` and `catalog_id`.
@@ -1311,6 +1324,7 @@ own cadence.
 | 4 | `bean_conditions` (a new derived table) and the views `bean_presence`, `symbol_beans`, `candidate_presence`; `endpoint_conditions` stops being a table and becomes a view gaining `caller`, `via`, `bean_kind`, `bean`; the table `interface_beans` (spec `2026-10-22-conditional-beans-design.md`) | `module analyze` replaces the old table with the view when it opens the workspace (DuckDB refuses `CREATE OR REPLACE VIEW` over a table); `system analyze` refuses a participant that still holds the old table, by name |
 | 5 | No table change: what `endpoints.peer` may hold. Before 2026-10-23 `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`), which no exit could tell from a Spring-WS `mailto:` peer, so a workspace of that vintage is refused rather than masked by a guess (user ruling) | `render`, `enrich`, `export` and `query` refuse it by its stamp; `system analyze` now refuses a participant by the same stamps, naming it and the command; `module diff` refuses two such sides unless the producer change is allowed, and then masks each scheme-less peer with an `@` whole (user ruling) |
 | 6 | No table change: condition verdicts a deployment can change are no longer decided (spec `2026-10-23-deployment-set-conditions-design.md`). A `profile` or `property` condition is `unresolved` unless the environment's own name decides it, and the module's own reading is its evidence | refused by its stamp exactly as at 5, so a workspace holding the older decided verdicts is re-analysed rather than read beside new ones (user ruling, spec §6) |
+| 7 | `resolved_schedules`, a new derived table: a scheduled job's placeholder expression per environment, read from the module's configuration through the one placeholder rule (spec `2026-10-23-configured-schedules-design.md`); `scheduled_work` keeps one row per job and its `unresolved` | refused by its stamp exactly as at 5 and 6, so a workspace without the table is re-analysed rather than read as one whose jobs have no configured values |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

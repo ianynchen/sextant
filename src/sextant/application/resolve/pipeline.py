@@ -19,6 +19,7 @@ from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.reachability import record_reachability
 from sextant.application.resolve.request_requirements import record_request_requirements
+from sextant.application.resolve.resolved_schedules import record_resolved_schedules
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
@@ -286,6 +287,12 @@ def resolve(
     # both far above.
     with _timed("record_bean_conditions"):
         record_bean_conditions(workspace, declared)
+    # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment.
+    # It needs `resolve_config` (the values) and `derive_endpoints` (the scheduled-work
+    # engine runs as one of its styles), both above; nothing below reads what it writes,
+    # and it resets its own table, being its only writer.
+    with _timed("record_resolved_schedules"):
+        record_resolved_schedules(workspace, declared)
     # Spec 2026-09-22 §1f, and BELOW `apply_protocol_hints` for the reason
     # `record_request_requirements` above gives in full: a qualifying attribute names its
     # row by the row's identity columns, `protocol` among them, and that pass reclassifies

@@ -83,6 +83,17 @@ UNRESOLVED_REASONS = (
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
 
 
+def placeholder_rule(model: Mapping[str, Any]) -> tuple[dict[str, str], str]:
+    """A config model's `placeholders` and `key_matching` (D02 §2i), defaulted as this
+    pass defaults them — what `substitute` and a lookup beside it need to read a
+    reference the way this pass does. One accessor, so a second reader of the model
+    (`resolve/resolved_schedules.py`) cannot default either differently. Every
+    delimiter is present in the answer, a declared one over its default, which is how
+    `substitute` reads a partial block anyway."""
+    placeholders = {**_DEFAULT_PLACEHOLDERS, **model.get("placeholders", {})}
+    return placeholders, str(model.get("key_matching", "exact"))
+
+
 def resolve_config(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """M04 pass 2 (2F design §2): one row per key per environment, for every
     catalog-declared `config_model` — collected from every catalog carrying
@@ -144,8 +155,7 @@ def _resolve_model(
     # whole-string match when this is False.
     allow_filename_profile = bool(profiles_cfg.get("from_filename"))
     default_profile = str(profiles_cfg.get("default_profile", "default"))
-    key_matching = model.get("key_matching", "exact")
-    placeholders = model.get("placeholders", _DEFAULT_PLACEHOLDERS)
+    placeholders, key_matching = placeholder_rule(model)
     remote_prefixes = tuple(model.get("remote_prefixes", []))
 
     by_doc: dict[tuple[str, int], list[dict[str, object]]] = {}

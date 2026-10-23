@@ -715,6 +715,15 @@ _NAMED_QUERIES = {
         FROM scheduled_work
         ORDER BY handler, trigger, expression, resolution, evidence, catalog_id
     """,
+    # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
+    # read as `scheduled_work` is — the handler leads — and then by environment, so one
+    # job's environments read as adjacent rows. `value` and `unresolved_reason` close the
+    # tie two schedules of one kind on one method (`@Schedules`) would leave open (NFR-1).
+    "resolved_schedules": """
+        SELECT handler, trigger, environment, value, unresolved_reason
+        FROM resolved_schedules
+        ORDER BY handler, trigger, environment, value, unresolved_reason
+    """,
     # `scope` is cast to text in the ORDER BY for the reason `open_questions`
     # casts `candidates`: it is a JSON document, DuckDB has no ordering for
     # one, and it is the column that differs between two rows agreeing on
@@ -1246,7 +1255,8 @@ _NAMED_QUERIES = {
 # must not be duplicated — not the column:
 #
 #   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
-#                `endpoint_metadata.path`, `endpoint_conditions.path`
+#                `endpoint_metadata.path`, `endpoint_conditions.path`,
+#                `resolved_schedules.value` (`redact_text`, the same rule)
 #   candidates   `open_questions.candidates` (`redact_candidates`)
 #   the grammar  `call_sites.arguments`, `annotations.args`,
 #                `return_flows.value`, `method_returns.value`,
@@ -1387,6 +1397,19 @@ _EXPORT_QUERIES = {
     # is exported unmasked" is the claim a reviewer has to be able to check.
     "scheduled_work": _NAMED_QUERIES["scheduled_work"],
     "error_handlers": _NAMED_QUERIES["error_handlers"],
+    # Spec 2026-10-23-configured-schedules §3b: a job's schedule as each environment's
+    # configuration resolves it. `value` IS configuration read into the bundle, so it masks
+    # — but by `redact_text`, the address map's rule, not the key-based one: a cron, rate or
+    # delay is neither a credential nor keyed (the row carries the handler, not the key the
+    # placeholder named), and `redact_text` applies the module's value patterns and URL
+    # userinfo stripping. One map per rule, so it joins `_REDACTED_ADDRESSES`.
+    "resolved_schedules": f"""
+        SELECT s.handler, s.trigger, s.environment, coalesce(a.masked, s.value) AS value,
+               s.unresolved_reason
+        FROM resolved_schedules s
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.value
+        ORDER BY s.handler, s.trigger, s.environment, s.value, s.unresolved_reason
+    """,
     # `arguments` and `args` carry JSON the analysis read out of code, and a
     # hardcoded `https://user:pass@host` literal lands in one whole. They pass
     # `redact_json` — userinfo stripping over every string leaf — and NOT the
@@ -1754,6 +1777,11 @@ _NAMED_DERIVATIONS = {
     # more than one catalog writes to them.
     "return_flows_reset": "reset_return_flows.sql",
     "return_flows_insert": "insert_return_flows.sql",
+    # Spec 2026-10-23-configured-schedules §3b. A reset/insert pair owned by its one
+    # writing pass, exactly as `return_flows` above is and for the same reason: nothing
+    # but `resolve/resolved_schedules.py` writes here.
+    "resolved_schedules_reset": "reset_resolved_schedules.sql",
+    "resolved_schedules_insert": "insert_resolved_schedules.sql",
     # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
@@ -2504,6 +2532,10 @@ class DuckDbWorkspace:
         # map is what keeps a shadow row and the row it anticipates spelled alike.
         # Empty on every analysis but a `--shadow` one, which costs this UNION a
         # scan of an empty table.
+        # `resolved_schedules.value` joins because its rule is this map's rule,
+        # `redact_text` (spec 2026-10-23-configured-schedules §3b) — a configured
+        # schedule is neither keyed nor a credential, and one map per rule is what
+        # keeps a second `redact_text` map from drifting beside this one.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
@@ -2511,7 +2543,8 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
-            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value FROM resolved_schedules WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,

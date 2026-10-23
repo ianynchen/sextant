@@ -155,6 +155,7 @@ _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
+_RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _PATH_PREFIX = "sextant/application/resolve/path_prefix.py"
 _SPRING_BOOT_SERVER_MODEL = "sextant/catalogs/server-models/spring-boot.yml"
@@ -3087,6 +3088,55 @@ GUARDS: dict[str, Guard] = {
                 path=_SCHEDULED_WORK,
                 find="            if expression == disabled.get(attribute):",
                 replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-PLACEHOLDER-expression-is-read-per-environment": Guard(
+        what="a scheduled job whose expression holds a placeholder gets one "
+        "`resolved_schedules` row per environment of `resolved_config`, its value read "
+        "from that environment's configuration (spec 2026-10-23-configured-schedules §3b)",
+        why="without it `scheduled_work` is the only answer, `unresolved` with the "
+        "expression verbatim, and a job whose cron the module's own files set in every "
+        "environment reads as a schedule nothing in the repository says — COVERAGE §5.12's "
+        "one limited `@Scheduled` row",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find='    if rows:\n        workspace.derive("resolved_schedules_insert", rows=rows)\n',
+                replace="    # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key": Guard(
+        what="`${key:default}` in a scheduled expression resolves to the default in an "
+        "environment whose configuration sets no `key`, through the config model's own "
+        "`default_separator` — the one placeholder rule `resolve_config` applies",
+        why="read without the separator, the default is part of the key, so the ordinary "
+        '`@Scheduled(cron = "${orders.sweep.cron:0 0 * * * *}")` — a schedule the '
+        "annotation itself fixes wherever configuration is silent — reads `missing_key` in "
+        "every environment",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find='            value, reason = substitute(str(job["expression"]), placeholders, lookup)\n',
+                replace='            value, reason = substitute(str(job["expression"]), '
+                '{**placeholders, "default_separator": ""}, lookup)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.a-configured-VALUE-is-masked-on-export": Guard(
+        what="`resolved_schedules.value` leaves the bundle through `redact_text`, staged into "
+        "the address map whose rule that is",
+        why="the column is configuration read into the bundle; unstaged, a value the module "
+        "configured with a credential in it ships in the clear while the workspace's every "
+        "other exit masks it — the one-exit-forgot defect `field_writes.value` shipped",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "\n'
+                '            "UNION SELECT DISTINCT value FROM resolved_schedules WHERE value IS NOT NULL"\n',
+                replace='            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"'
+                "  # guard disabled\n",
             ),
         ),
     ),

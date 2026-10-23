@@ -2290,6 +2290,33 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
     workspace.close()
 
 
+@pytest.mark.pins("schedules.a-configured-VALUE-is-masked-on-export")
+def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
+    """Spec 2026-10-23-configured-schedules §3b: `resolved_schedules.value` is configuration
+    read into the bundle, so it leaves through `redact_text` — the address map's rule — while
+    the workspace keeps it verbatim. A cron is never a credential, which is why the case is a
+    value the module configured by mistake: the rule, not the expected shape, is what masks."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    secret = "https://u:hunter2@h/0 0 * * * *"
+    workspace._connection.execute(
+        "INSERT INTO resolved_schedules VALUES "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', 'prod', ?, NULL), "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', 'default', '0 0 * * * *', NULL)",
+        [secret],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    rows = duckdb.sql(
+        "SELECT environment, value FROM "
+        f"read_parquet('{bundle / 'graph' / 'resolved_schedules.parquet'}') ORDER BY environment"
+    ).fetchall()
+    kept = [row["value"] for row in workspace.query("resolved_schedules")]
+    workspace.close()
+
+    assert rows == [("default", "0 0 * * * *"), ("prod", "https://h/0 0 * * * *")]
+    assert secret in kept
+
+
 def test_the_alternate_orderings_carry_the_same_rows_in_a_different_order(tmp_path: Path):
     """F8 §9.4 (W37). DuckDB over Parquet has no B-trees; the levers are sort order and
     the zone maps that come with it, so a second FILE in a second order is the index.

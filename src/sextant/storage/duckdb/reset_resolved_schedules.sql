@@ -1,0 +1,11 @@
+-- Clears `resolved_schedules` for one resolve (spec 2026-10-23-configured-schedules
+-- §3b). Runs from the PASS rather than from the pipeline, the
+-- reset_return_flows.sql reasoning: the table has exactly one writer,
+-- `resolve/resolved_schedules.py`, so reset and insert belong together there.
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the
+-- "resolved_schedules" query still succeeds on a module that schedules nothing
+-- from configuration. Unconditional, so a resolve with no placeholder job, no
+-- config model or no resolved environment still leaves an empty table rather
+-- than the previous run's rows.
+DELETE FROM resolved_schedules;

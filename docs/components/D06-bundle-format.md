@@ -187,6 +187,7 @@ document field.
 | `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
 | `graph/endpoint_metadata.parquet` `path` | the same address map as `endpoints.path`: it carries its endpoint's path as the key it joins by, so a row masked differently would miss its endpoint (OI-169; `endpoint_conditions.path` takes the same map, below) |
 | `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |
+| `graph/resolved_schedules.parquet` `value` | `redact_text` (URL userinfo + value patterns), through the address map, whose rule it is: a configured cron, rate or delay is neither keyed nor a credential, so the key-based rule has nothing to key on (spec 2026-10-23-configured-schedules §3b) |
 | `graph/config_entries.parquet` `value` | the raw half of `resolved_config`, masked by the same `redact_value` keyed on the entry's own `key_path` |
 | `graph/raw_facts.parquet` `config_entry` payload `value` | the same map the `facts/*.parquet` stream joins, so the two shapes of one table cannot disagree |
 
