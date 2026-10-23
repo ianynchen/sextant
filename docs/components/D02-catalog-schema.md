@@ -435,7 +435,8 @@ not a second fold.
 bean_model: spring
 ```
 
-names a file in `catalogs/bean-models/` holding exactly:
+names a file in `catalogs/bean-models/` holding, for the dependency-injection vocabulary
+(the registration keys follow below):
 
 ```yaml
 id: spring
@@ -448,6 +449,38 @@ channel_types:                               # exact membership — the channel 
   - org.springframework.messaging.SubscribableChannel
   - org.springframework.messaging.PollableChannel
 ```
+
+**The model also carries the container's REGISTRATION vocabulary** (spec
+`2026-10-22-conditional-beans-design.md` §2a, §2c): which classes are beans, which
+annotations Spring consults when it registers one, and how a bean is named. It is the
+container's knowledge and not any one catalog's, so it sits beside `@Bean` and `@Qualifier`
+and is read by ONE resolve pass (`resolve/bean_conditions.py`) for every bean, naming no
+framework in code. The keys, all in `catalogs/bean-models/spring.yml`, each with the probe
+that read the framework's rule off its jar (`by:`):
+
+| Key | Holds | Probe |
+|---|---|---|
+| `stereotypes` | the annotations component scanning registers a class under (eight: `@Component`, `@Service`, `@Repository`, `@Controller`, `@RestController`, `@Configuration`, `@ControllerAdvice`, `@RestControllerAdvice`); each reaches `@Component` itself or through the annotation it is built on. An annotation built on one of them (module-local, or a dependency's whose header was read) counts too | CP-44 row 5 |
+| `configuration_annotation` | the annotation making a class a configuration class: a skipped one registers none of its `@Bean`s | CP-44 row 4 |
+| `stereotype_name_attrs` | for each stereotype, the attribute that names the bean — `value` on six, `name` on the two advice annotations, whose `value` aliases `basePackages`. A scanned class naming none is called by its simple name uncapitalised | CP-44 row 6 |
+| `conditions` | `profile: {annotation, expressions, by}`, `property: {annotation, prefix, names, having_value, match_if_missing, by}` and `other: {annotations, by}` — the conditions evaluated against configuration, and the ones the analysis names and never evaluates (`@Conditional` and the autoconfigure conditions) | CP-42, CP-43 |
+| `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
+| `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
+
+The loader (`yaml_source._check_bean_model`) refuses a malformed block, naming the file
+(`loading model <file>: …`); the pass does not validate. **Every Spring catalog names
+`bean_model: spring`**: the vocabulary is the container's, so a catalog whose
+`detect.coordinates` names an `org.springframework` artifact, whatever it reads, carries the
+line, and `tests/architecture/test_catalog_bean_model.py` fails the suite for one that does
+not (44 catalogs). The pass reads the union of the models the module's catalogs name,
+deduplicated by model id.
+
+**Migration: `matches.mapping.conditions` is no longer read.** PR #61 declared a controller's
+conditions on the two HTTP catalogs (`spring-web.yml`, `spring-mvc.yml`) as
+`matches.mapping.conditions`; they moved here when the rule became every bean's. A repo-local
+catalog that still carries that block is accepted and IGNORED — nothing reads it, and nothing
+warns — so a module whose catalog declared its own condition annotation there must move it to
+a bean model's `conditions`.
 
 `bean_of(reference)` answers with the `@Bean` method that built the referenced value, or
 `Unresolved(reason)`. The rungs depend on what is referenced. A **channel** reference (a
@@ -1714,19 +1747,7 @@ composed into a module-local meta-annotation, folded into a repeatable container
 declared on an interface method the class implements is not read as absent. Class-level and
 method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
 to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
-conflict with each other while neither conflicts with a method outside it. **The same two
-**`mapping.conditions` (2026-10-22)** declares the class-level annotations under which a
-catalog's inbound rows EXIST — `profile: {annotation, expressions, by}` and
-`property: {annotation, prefix, names, having_value, match_if_missing, by}`, each `by:` a
-committed probe (CP-42, CP-43) that read the framework's rule off its jar; and
-`other: {annotations: [...], by}`, the conditions the analysis NAMES and never evaluates
-(`@Conditional` and the eighteen autoconfigure conditions CP-43 row 5 enumerates) — a row
-under one is written verbatim with `holds = unresolved`, so the endpoint never reads as
-unconditional. The pass that reads
-them (`resolve/endpoint_conditions.py`) writes `endpoint_conditions` ([D01](D01-graph-schema.md))
-and refuses a malformed block naming the file; what it evaluates and what it reports
-`unresolved` is the spec's §3b/§4 — no `&`/`|` profile expression, no code-deciding
-`@Conditional`. Mapping
+conflict with each other while neither conflicts with a method outside it. **The same two mapping
 attributes, read as REQUIREMENTS, are `mapping.request_requirement_attrs: { params: param,
 headers: header }`** (spec 2026-09-19 §5c) — attribute name to `kind`, `param` because the
 parameter condition reads the query string and a form body through one API — one
@@ -1738,6 +1759,15 @@ expression naming `Accept` or `Content-Type` (case-insensitive) writes no row:
 `HeadersRequestCondition.parseExpressions` drops both and Spring reads them as
 produces/consumes instead (A4, CP-25 row 4). The mapping's keys are attribute names, its
 values one of `header`/`query`/`cookie`/`param`; anything else is refused at load (§2k).
+
+**`mapping.conditions` is gone (2026-10-22, `conditional-beans`).** PR #61 declared here the
+class-level annotations under which a catalog's inbound rows exist; a controller is a bean,
+and the same annotations condition every bean, so the vocabulary moved to the Spring bean
+model (`profile`, `property` and `other` under `conditions`, §1c) and one pass
+(`resolve/bean_conditions.py`) writes `bean_conditions` ([D01](D01-graph-schema.md)) for every
+bean, of which `endpoint_conditions` is now a view. A block of this name on a catalog is
+ignored (§1c, "Migration"). What it evaluates and what it reports `unresolved` is the spec's
+§2c and the probes' (CP-42, CP-43, CP-44, CP-45).
 **`custom_condition`
 names the framework's handler-mapping type**, whose subclasses may register a condition that
 is code rather than an attribute: a module declaring one is left alone entirely, because a
@@ -4721,6 +4751,10 @@ config_model:
     from_filename: "{-profile}"
     from_document_key: spring.config.activate.on-profile
     default_profile: default
+    active_keys: [spring.profiles.active]     # the profiles an environment has ACTIVE
+    include_keys: [spring.profiles.include]   # active beside them
+    default_keys: [spring.profiles.default]   # active only where no profile is
+    by: scripts/probes/cp45_active_profiles.md
   placeholders: { open: "${", close: "}", default_separator: ":" }
   key_matching: relaxed          # relaxed | exact
 ```
@@ -4742,6 +4776,21 @@ pattern** — `application{-profile}.yml` for Spring, `{profile}.json` for a nod
 layout whose whole filename is the profile — with the empty match naming the base file.
 No regex-in-YAML anywhere; the placeholder grammar is delimiters plus a default separator,
 which covers every surveyed ecosystem.
+
+**`active_keys`, `include_keys` and `default_keys` name the configuration keys that decide
+which profiles are ACTIVE in an environment** (conditional-beans, ruled 2026-10-22; `by:` is
+CP-45, which read the three names and the rule for them off the Spring jars). The environments
+stay the profile FILES the sources declare; these keys say which profiles each has active, for
+a `@Profile` condition to be judged against: in the base environment the literal profiles of
+`active_keys` and `include_keys` (else `default_keys`', else `default_profile`); in a profile
+file's environment `p`, `p` and the included ones — a profile named only in the base's active
+list is `unresolved` there, since the activation selecting `p` replaces or extends the list —
+and a value that is a placeholder nothing fills leaves every profile it could name
+`unresolved`, with the placeholder in the reason. Only the base configuration sets these keys
+(CP-45 row 7), so only the base's resolved values are read. A value is a comma-separated list,
+whitespace removed, or a list flattened to `key[0]`, `key[1]`; the exact key is matched, not a
+relaxed spelling, and `spring.profiles.group` is not read. A model with no `active_keys`
+leaves each environment's active profile its file's name alone.
 
 **`placeholders` declares the open/close delimiters and the default-value separator** a
 `${key:default}` expression resolves through — nothing more. No ecosystem-specific

@@ -211,17 +211,60 @@ the expression and every resolution side by side**. Either way, the document sta
 is showing — a catalog silently showing development values is a lying document. At system
 scope there is no choice: the system's declared environment is used, and named.
 
-### A conditional endpoint is rendered in words, from the table
+### A conditional bean's rows are rendered in words, from its tables
 
-`endpoint_conditions` (D01) is the structured result; the documents are its one verbose
-rendering (spec `2026-10-21-conditional-controllers-design.md`, ruling 1). The module
-document's inbound detail block gains two lines derived from the rows and nothing else —
-*Exists only when: the active profile matches one of: `prod`* and *Of this module's
-environments: holds in 1 of 2 environments — not in `default`* — and an unconditional row
-gains nothing. The system document's link row states where its inbound endpoint exists
-(*exists in `prod`; not in `default`*), read through the federated view (M06). The inbound
-table's columns are unchanged: a condition is a fact about where the row exists, not a
-column every unconditional row would carry empty.
+`bean_conditions`, `bean_presence` and `candidate_presence` (D01, "Conditional beans") are the
+structured result; the documents are their one verbose rendering (spec
+`2026-10-22-conditional-beans-design.md` §3, generalizing PR #61's ruling for inbound
+endpoints). One index is built from them once, and **every row derived from a conditional
+bean** — inbound and outbound endpoints, scheduled jobs, error handlers — finds its bean
+through `symbol_beans` and states what is there; no kind has its own copy of the logic. An
+unconditional row gains nothing, and the tables' columns are unchanged: a condition is a fact
+about where the row exists, not a column every unconditional row would carry empty.
+
+**A row's detail block gains two lines (the first is a small table for a bean with several routes):**
+
+* *Exists only when: …* where the bean has ONE registration route — its conditions joined by
+  "and" (a bean whose single route is `@Profile("prod")` and `@ConditionalOnProperty(…)` is
+  one sentence, not PR #61's pair of lines: presence belongs to the bean).
+  *Exists when any of these registers it* where it has SEVERAL, with a two-column table
+  (*Registered by*, *Registers it when*), one row per route. An unconditional route reads
+  *always*; a plain `new` outside any factory reads *constructed outside any bean factory —
+  not decided*; an inherited body no bean runs reads *no bean of this module runs this
+  inherited body — not decided*.
+* *Of this module's environments: holds in 1 of 2 environments — not in `default`*, read from
+  `bean_presence` alone. An environment left open says why, in words: *not evaluated in
+  `default`, `github` — the active profiles here come from `${apollo_profile}`, which this
+  module does not fill*. A bean open in every environment reads *not evaluated by this
+  analysis in any of the N environments*, then its reason. A condition this analysis does not
+  evaluate is named (`@Conditional`), never quoted as JSON.
+* A `@ConditionalOnMissingBean` / `@ConditionalOnBean` condition reads *no other bean of type
+  `UserService` is registered — decided from this module's beans only (`partial`); the other
+  beans of that type: `LdapUserService` (not in any environment; profile `ldap` is named but
+  this module has no `ldap` environment)*. The competitors are the module's other beans the
+  condition matches, each with where it exists. The competitor JSON the evidence carries is
+  never printed.
+
+**A call site's candidates, per environment.** Under a narrowed call in a trace block, and
+under a call a framework-generated implementation answers, the block states the site and every
+candidate (*`NotifyController#notify` calls `NotificationSender#send`, answered by one of:
+`KafkaNotificationSender`, `LogNotificationSender`*), then one line per group of environments
+naming the candidates that exist there (*in `default`: `LogNotificationSender`*; *in `prod`:
+`KafkaNotificationSender`*), then *not evaluated in `h2`: …* for candidates open there, with
+the reason. Environments with the same list share a line; where no candidate exists the line
+says *none of them*. A line that names a `partial` candidate, or leaves one out because a
+`partial` verdict ruled it out, says *(decided from this module's beans only)*. A reason that
+every candidate on a line shares is said once after them; a framework-generated
+implementation reads *a framework-generated implementation of `SpringDataOwnerRepository`*.
+**Where every candidate of a site holds in every environment, decided**, the block carries the
+*answered by* line alone: an unconditional repository would otherwise repeat one line per
+environment. Nothing is dropped: the step table and the diagram show every candidate, as
+before, and a narrowed site none of whose candidates is conditional renders byte for byte as it
+did.
+
+**The system document** states where each end of a link exists, read through the federated
+views (M06): *exists in `prod`; not in `default`* beside the inbound endpoint and *called only
+in `prod`; not in `default`* beside the calling side.
 
 ### Every reduced output states that it was reduced
 
