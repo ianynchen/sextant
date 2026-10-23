@@ -74,23 +74,27 @@ Fresh analyses of copies of the modules, read from the new tables and views
 modules below it found 0, 2, 6 and 0 rows tied to a conditional bean by way 1 and 2, and
 the views found the same.
 
-| module (environments it resolves) | beans carrying a condition (class / factory / configuration) | rows stating one: inbound / outbound / schedule / error handler, of all such rows | narrowed call sites given per-environment lines, of all narrowed | beans decided at `partial` | beans left `unresolved`, and why |
+| module (environments it resolves) | bean symbols carrying a condition (types / `@Bean` methods / lambda bodies / inherited bodies) | rows stating one: inbound / outbound / schedule / error handler, of all such rows | narrowed call sites given per-environment lines, of all narrowed | bean symbols decided at `partial` | bean symbols left `unresolved`, and why |
 |---|---|---|---|---|---|
-| Apollo `apollo-portal` (6: `default`, `github`, three `ldap-…-sample`, `oidc-sample`) | 63 (13 / 18 / 47; one bean can be several kinds) | 0 of 288 / 0 of 76 / none / none | 142 of 193 | 3 | 14: 9 under an `@Conditional(…)` class this analysis does not evaluate, 5 inherited bodies no bean runs |
-| ruoyi `yudao-module-system` (1: `default`) | 63 (11 / 10 / 45) | 0 of 212 / none / 2 of 2 / none | 11 of 36 | 7 | 25: 22 `@ConditionalOnClass`, 1 `@ConditionalOnSingleCandidate`, 3 inherited bodies no bean runs |
-| ruoyi `yudao-spring-boot-starter-websocket` (1: `default`) | 56 (15 / 8 / 35) | 2 of 2 / 2 of 2 / 2 of 2 / none | 8 of 21 | 7 | 15: 12 `@ConditionalOnClass`, 3 inherited bodies no bean runs |
-| `spring-petclinic-rest` (5: `default`, `h2`, `hsqldb`, `mysql`, `postgres`) | 19 (16 / 0 / 3) | 0 of 44 / none / none / 0 of 3 | 34 of 34 | 0 | 0 |
+| Apollo `apollo-portal` (6: `default`, `github`, three `ldap-…-sample`, `oidc-sample`) | 119 (39 / 51 / 24 / 5) | 0 of 288 / 0 of 76 / none / none | 142 of 193 | 6 | 82: 63 under a profile the unfilled `${apollo_profile}` decides, 14 under an `@Conditional(…)` class this analysis does not evaluate, 5 inherited bodies no bean runs |
+| ruoyi `yudao-module-system` (1: `default`) | 122 (39 / 56 / 14 / 13) | 0 of 212 / none / 2 of 2 / none | 11 of 36 | 15 | 41: 38 `@ConditionalOnClass` (2 of them also `@ConditionalOnSingleCandidate`), 3 inherited bodies no bean runs |
+| ruoyi `yudao-spring-boot-starter-websocket` (1: `default`) | 104 (42 / 45 / 6 / 11) | 2 of 2 / 2 of 2 / 2 of 2 / none | 8 of 21 | 15 | 23: 20 `@ConditionalOnClass`, 3 inherited bodies no bean runs |
+| `spring-petclinic-rest` (5: `default`, `h2`, `hsqldb`, `mysql`, `postgres`) | 29 (23 / 3 / 3 / 0) | 0 of 44 / none / none / 0 of 3 | 34 of 34 | 0 | 7: a profile named only in the base's `spring.profiles.active` |
 
-These are the counts of the first complete build. Two rules were added after the measurement
-showed what it got wrong, and they moved the figures for the modules they touch (§2d and
-§2a's last paragraph); the effect is measured separately, here, so the table above stays what
-it was:
+Recounted 2026-10-23 on fresh copies at the branch's head, where a `@Bean` method under a
+condition, a lambda body a conditional factory creates and an inherited body are each a bean
+symbol of their own (§2a). The first complete build counted classes only — 63, 63, 56 and 19 —
+and decided before the active-profiles rule (§2d) existed, so its `partial` and `unresolved`
+columns read 3 / 7 / 7 / 0 and 14 / 25 / 15 / 0. The rows and the narrowed sites did not move.
+Two rules were added after that first measurement showed what it got wrong, and they moved the
+figures for the modules they touch (§2d and §2a's last paragraph); their effect is measured
+separately, here:
 
 | what moved | before | after |
 |---|---|---|
 | `spring-petclinic-rest`: the 34 repository call sites, each answered by `Jdbc…Impl` or `Jpa…Impl` | every site read "in `default`, `h2`, `hsqldb`, `mysql`, `postgres`: none of them" — the document said no implementation exists anywhere, while `application.properties` sets `spring.profiles.active=h2,spring-data-jpa` | every site also names the framework-generated implementation of the Spring Data interface: present in `default`, "not evaluated" in the four profile environments, with the reason. Seven interface beans were found |
 | Apollo `configservice` `GET /` (PR #61's line) | "holds in 6 of 8 environments — not in `default`, `github`" | "holds in 6 of 8 environments; not evaluated in `default`, `github`", with the reason: the active profiles come from `${apollo_profile}`, which this module does not fill |
-| `apollo-portal` `ServerPermissionOpenApiService#checkUserExists`, candidates `LdapUserService`, `OidcLocalUserServiceImpl`, `SpringSecurityUserService` | absent (`false`, resolved) in all six environments — a decided answer where the answer was unknown | not evaluated in all six, for the same `${apollo_profile}` reason. The bean-by-environment verdicts of the whole module went from 228 `false` / 84 `unresolved` to 12 `false` / 300 `unresolved` |
+| `apollo-portal` `ServerPermissionOpenApiService#checkUserExists`, candidates `LdapUserService`, `OidcLocalUserServiceImpl`, `SpringSecurityUserService` | absent (`false`, resolved) in all six environments — a decided answer where the answer was unknown | not evaluated in all six, for the same `${apollo_profile}` reason. The bean-by-environment verdicts of the whole module went from 228 `false` / 84 `unresolved` to 12 `false` / 300 `unresolved` (of 312 verdicts then; of today's 714 — 119 bean symbols in six environments — 78 `false` / 492 `unresolved`) |
 | `jhipster-sample-app` | its unconditional Spring Data repositories were no candidate of any call | 5 interface beans; 69 call sites name the framework's implementation in their "answered by" line |
 
 On none of the four modules does a narrowed site have DIFFERENT candidates in two environments
@@ -435,9 +439,12 @@ The pass reads, once per load: the shared `annotation_index`, the factory-method
 `interface_declarations`, one `resolved_config`, one `dispatched_bodies` with one `Dispatch`
 (shared through `workspace.once`) and one insert; its presence phase reads nothing more
 (competitors are matched in memory, verdicts settle in rounds over (condition, environment)
-pairs). On `apollo-portal` (364 endpoints, 63 conditional beans, 588 condition rows) the pass
-took 0.05 s, the inherited-body step 10 ms plus 46 ms over 1,945 bodies, and the views 1.4
-ms (`endpoint_conditions`), 1 ms (`bean_presence`) and 8.5 ms (`candidate_presence`).
+pairs). On `apollo-portal` (364 endpoints, 119 bean symbols carrying a condition — 51 of them
+`@Bean` methods — and 1,092 condition rows) the pass takes 0.10 s, and on `yudao-module-system`
+(122 bean symbols, 56 of them `@Bean` methods, 169 rows) 0.17 s — the median of three runs of
+the pass alone on a fresh analysis, 2026-10-23. At the first build (63 classes, 588 rows) the
+portal's inherited-body step took 10 ms plus 46 ms over 1,945 bodies, and the views 1.4 ms
+(`endpoint_conditions`), 1 ms (`bean_presence`) and 8.5 ms (`candidate_presence`).
 
 Two costs were found by measuring, not guessed. `endpoint_conditions` first joined on
 `bean = symbol OR (bean = enclosing AND NOT EXISTS …)`, which cannot be hashed: 11 s for

@@ -53,10 +53,12 @@ here would restate those documents rather than add anything.
   analysed modules set one, and 0 verdicts change on the three that resolve environments.
   Relaxed key spellings are not read (`OI-171`).
 
-  **Measured on four real modules:** `apollo-portal` 63 conditional beans, 142 of 193 narrowed
-  call sites given per-environment lines; `yudao-module-system` 63 beans and 11 sites;
-  `yudao-spring-boot-starter-websocket` 56 beans, its 2 inbound, 2 outbound and 2 scheduled
-  rows each stated (it had stated none of them); an inherited body in an abstract class was
+  **Measured on four real modules:** `apollo-portal` 119 bean symbols carrying a condition
+  (51 of them `@Bean` methods), 142 of 193 narrowed call sites given per-environment lines;
+  `yudao-module-system` 122 bean symbols (56 methods) and 11 sites;
+  `yudao-spring-boot-starter-websocket` 104 bean symbols (45 methods), its 2 inbound, 2
+  outbound and 2 scheduled rows each stated (it had stated none of them); the pass takes
+  0.10 s on `apollo-portal` (1,092 condition rows) and 0.17 s on `yudao-module-system`; an inherited body in an abstract class was
   reading *exists everywhere* on 11 of 11 conditional sites of ruoyi's system module before it
   took the OR of the beans that run it. A site every candidate of which holds everywhere (an
   unconditional repository) says so once, without a line per environment. Framework knowledge
