@@ -18,36 +18,40 @@ here would restate those documents rather than add anything.
   documents or the bundle** (found 2026-10-23). `split_url` kept the authority's userinfo, so
   `RestTemplate.postForObject("https://svc:s3cret@billing.internal/charges", …)` derived
   `endpoints.peer = svc:s3cret@billing.internal`. Every exit's userinfo rule was anchored on
-  `scheme://`, which the split had removed, so the workspace, the module document, the
-  enrichment brief, the boundary diff and the exported `endpoints.parquet` all carried the
+  `scheme://`, which the split had removed, so the module document, the enrichment brief, the
+  boundary diff, the system document and the exported `endpoints.parquet` all carried the
   password. The existing tests pinned a WHOLE URL in the peer — a shape the split never
   produces — and passed.
-  - **At the cause.** One rule, `peer_without_userinfo`: a peer is the service a call
-    reaches (RFC 3986 §3.2's host and port, or the whole address `peer_of` keeps), and a
-    credential is never part of it. `split_url` and `peer_of`, the only two writers of a
-    peer, both apply it.
-  - **At every exit that prints a peer**, through `Redactor.redact_peer`, for a workspace
-    analysed before the fix. That covers the module document's peer cell, the export, the
-    brief and the diff. The rule applies only to a value known to be a peer: applied to
-    every string, it read `jdbc:oracle:thin:@localhost:1521:XE` as a password and
-    `mailto:support@acme.com` as a user.
+  - **At the cause.** `split_url` knows it holds an authority, so it drops everything up to
+    the last `@` outside a `{…}` placeholder (`authority_without_userinfo`). The peer is the
+    host and port, templated or not: `billing:{port}`, `${billing.host:localhost}`. The
+    matcher applies the same rule to an `lb://` target. A whole-address peer (`peer_of`, an
+    annotation's `peer_from`) keeps its scheme, which every exit's rule masks.
+  - **No guessing at the exits.** In text, `svc:s3cret@billing` cannot be told from a
+    Spring-WS `mailto:ops@billing` peer or `jdbc:oracle:thin:@localhost:1521:XE`. So there is
+    no scheme-less userinfo rule. **`GRAPH_SCHEMA_VERSION` moves 4 → 5** with no table change,
+    so a workspace that may hold an old credential peer is refused and re-analysed. `system
+    analyze` now refuses a participant by the same stamps `render` uses; before, it checked
+    none.
+  - **A hole in the userinfo no longer makes the address half-known.** `"http://" + creds +
+    "@billing/x"` reads as peer `billing`, resolved; it was `partial` with the peer NULL.
+  - **The userinfo rule strips to the authority's last `@`**, so `https://u:p@ss@billing/ws`
+    loses the whole password, not `u:p` alone.
   - **Open-question candidates were a second, unmasked copy.** A `self_exchange` candidate
     names the called side's peer, and an `environment_divergence` one names each
     environment's config value. The document, the brief and the bundle printed both
     verbatim beside a masked `path`. They now pass `Redactor.redact_candidates`.
   - **The system document masked nothing at all.** It prints every participant's paths,
     routes and refusal reasons straight from their verbatim workspaces. It now masks them
-    by the union of every participant's rule set. `system analyze` also applies the peer
-    rule to the peers it reads, so a pre-fix workspace's credential peer links as the clean
-    one does instead of being quoted in a refusal.
+    by the union of every participant's rule set.
   - **`endpoint_metadata` shipped its endpoint's `path` verbatim** (OI-169, logged Minor,
     re-rated Major). An outbound path may be a whole address, so an outbound call that sets
     a header put `https://svc:s3cret@…` in `endpoint_metadata.parquet`. It now masks `path`
     by the map `endpoints.path` takes, as `endpoint_conditions` does since conditional beans.
 
   Measured on the 52 analysed workspaces in this checkout: 18 peers and 15 candidate sets,
-  none carrying a credential, and none changed by the new rules. **A bundle exported before
-  this fix may still carry one**: re-run `module analyze` and re-export.
+  none carrying a credential. **Every existing workspace must be re-analysed** (`module
+  analyze`), and a bundle exported before this fix may still carry a credential: re-export it.
 
 ### Added
 

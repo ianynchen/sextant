@@ -825,6 +825,44 @@ src/sextant/application/resolve/bean_conditions.py`. **Closes** when a body decl
 those of every subclass bean that resolves the method to it, as for a body declared on no
 bean.
 
+### OI-175 — a bare `user:pass@host` configuration value under a key naming no secret is not masked
+**Minor · logged 2026-10-23 (review of `fix/peer-userinfo`) · `src/sextant/domain/redaction.py::_USERINFO`**
+
+A deliberate trade-off, pinned by `tests/domain/test_redaction.py::test_text_with_no_scheme_keeps_its_at_sign`.
+There is no userinfo rule without a `scheme://`, because in text `svc:s3cret@billing.internal`
+cannot be told from `mailto:ops@billing.internal` or `jdbc:oracle:thin:@localhost:1521:XE`, and
+the version that tried rewrote both. So `billing.authority=svc:s3cret@billing.internal` ships
+unmasked in `resolved_config` and `config_entries`. A key naming a secret still masks it whole,
+and a repo's own `redact:` value pattern still applies. `resolved_peers` substitutes such a value
+into a `${…}` peer and is read by nothing today, so it is not an exit yet.
+
+**What happens today:** not measured across the corpus for config values.
+**Real triggering input:** a configuration value written as a scheme-less authority with a
+password, under a key with no secret-like name.
+**Closes** when the configuration layer knows a value is an authority (a key the catalogs
+declare as one) and drops the userinfo there, as `split_url` does.
+
+### OI-176 — a raw `/` inside a URL's password splits the authority early
+**Minor · logged 2026-10-23 (review of `fix/peer-userinfo`) · `src/sextant/application/resolve/shapes/arguments.py::_ABSOLUTE_URL`**
+
+`https://u:p/w@billing/x` splits at the first `/`, giving peer `u:p` (user and half the
+password) and path `/w@billing/x`. RFC 3986 forbids the raw `/`, and `java.net.URI` ends the
+authority at the same place, so the call cannot reach `billing` as written: the code would not
+work. Logged rather than fixed by the incidental-findings rule; DR-6 says predict the
+framework, and the framework reads it as we do.
+
+**Closes** if a framework is found that accepts the form.
+
+### OI-177 — a malformed `redact:` value pattern in one module fails `system analyze` without naming the module
+**Minor · logged 2026-10-23 (review of `fix/peer-userinfo`) · `src/sextant/api.py::_redactor_for`**
+
+The system document masks by every participant's rule set, so one module's bad `.sextant.yml`
+now fails the whole run, before anything is written, as `render` fails for that module. The
+type error names the file; the regular-expression error ("redact value pattern … is not a
+regular expression") does not, so a reactor with many modules leaves the reader to search.
+
+**Closes** when `RedactionError` carries the path it was read from.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

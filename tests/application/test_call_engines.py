@@ -18,12 +18,7 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
-from sextant.application.resolve.shapes.arguments import (
-    peer_of,
-    split_url,
-    url_of,
-    url_of_answer,
-)
+from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -1230,20 +1225,28 @@ def test_split_url_drops_userinfo_from_the_peer():
     )
     assert split_url("http://token@billing.internal:8443") == ("billing.internal:8443", "")
     assert split_url("//svc:s3cret@billing/x") == ("billing", "/x")
+    # A templated host or port is still host and port (review, 2026-10-23): a shape test on
+    # the remainder kept the credential of `http://svc:s3cret@billing:{port}/x`.
+    assert split_url("http://svc:s3cret@billing:{port}/x") == ("billing:{port}", "/x")
+    assert split_url("http://svc:s3cret@${billing.host:localhost}/x") == (
+        "${billing.host:localhost}",
+        "/x",
+    )
 
 
-@pytest.mark.pins("redaction.a-WHOLE-peer-never-carries-url-userinfo")
-def test_peer_of_keeps_the_address_whole_but_drops_its_userinfo():
-    """`peer_of` keeps the address WHOLE (the identity is read elsewhere for these
-    protocols), and whole is not verbatim: the credential is never part of WHICH deployment
-    answered, by the same rule `split_url` applies. A `${...}` expression is a reference and
-    passes through as written."""
-    assert peer_of({"kind": "string", "value": "https://svc:s3cret@billing/ws"}) == (
-        "https://billing/ws",
+def test_a_hole_in_the_userinfo_leaves_the_peer_read():
+    """`"http://" + credentials + "@billing/x"`: the hole is in the userinfo, which is never
+    part of the peer, so the host WAS read and the address is resolved. Before 2026-10-23
+    the userinfo stayed in the authority and its hole made the whole authority unread
+    (`partial`, peer NULL) — an address the code states fully, reported as half-known."""
+    assert url_of({"kind": EXPRESSION, "value": "http://{}@billing/x"}) == (
+        "billing",
+        "/x",
         "resolved",
     )
-    assert peer_of({"kind": "string", "value": "${billing.ws.uri}"}) == (
-        "${billing.ws.uri}",
+    assert url_of({"kind": EXPRESSION, "value": "http://{}:{}@billing/x"}) == (
+        "billing",
+        "/x",
         "resolved",
     )
 

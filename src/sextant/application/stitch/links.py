@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from sextant.application.resolve.shapes.arguments import UNREADABLE_HOST
 from sextant.application.stitch.participants import Participant
 from sextant.domain.closed_sets import Resolution
+from sextant.domain.redaction import authority_without_userinfo
 
 # `M06` step 4's evidence words, the two this slice can produce.
 #
@@ -204,7 +205,9 @@ def _one(
 
     # Key 2, before the path is read as a path: `lb://name` is a destination, not a route.
     if path.startswith(_LOAD_BALANCED):
-        stated = path[len(_LOAD_BALANCED) :]
+        # An `lb://` target is an authority, so a credential written into it is dropped
+        # before the name is looked up or quoted in a refusal — it names no participant.
+        stated = authority_without_userinfo(path[len(_LOAD_BALANCED) :])
         target = by_name.get(stated)
         if target is _AMBIGUOUS:
             return refuse(f"more than one participant is named {stated!r}")

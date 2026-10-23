@@ -1300,6 +1300,7 @@ own cadence.
 |---|---|---|
 | 3 | `endpoint_conditions`, a derived table the system tier federates (spec `2026-10-21-conditional-controllers-design.md`) | refused by name by `system analyze`, never a bare `Catalog Error` |
 | 4 | `bean_conditions` (a new derived table) and the views `bean_presence`, `symbol_beans`, `candidate_presence`; `endpoint_conditions` stops being a table and becomes a view gaining `caller`, `via`, `bean_kind`, `bean`; the table `interface_beans` (spec `2026-10-22-conditional-beans-design.md`) | `module analyze` replaces the old table with the view when it opens the workspace (DuckDB refuses `CREATE OR REPLACE VIEW` over a table); `system analyze` refuses a participant that still holds the old table, by name |
+| 5 | No table change: what `endpoints.peer` may hold. Before 2026-10-23 `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`), which no exit could tell from a Spring-WS `mailto:` peer, so a workspace of that vintage is refused rather than masked by a guess (user ruling) | `render`, `enrich` and `export` refuse it by its stamp; `system analyze` now refuses a participant by the same stamps, naming it and the command |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

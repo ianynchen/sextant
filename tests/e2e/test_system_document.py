@@ -5,10 +5,10 @@ the markdown, not the `links` rows — a green table behind a blank document is 
 file exists to catch.
 """
 
+import json
 import shutil
 from pathlib import Path
 
-import duckdb
 import pytest
 from click.testing import CliRunner
 
@@ -154,30 +154,24 @@ def _system_document(reactor: Path) -> str:
     return (reactor / ".sextant" / "render" / "system.md").read_text(encoding="utf-8")
 
 
-@pytest.mark.pins("redaction.the-SYSTEM-tier-reads-a-peer-without-its-userinfo")
-def test_a_peer_an_older_analysis_kept_its_password_in_still_links_and_never_prints_it(
-    tmp_path,
-):
-    """A workspace analysed before 2026-10-23 holds the peer `split_url` used to write —
-    `svc:s3cret@billing`, the credential kept and the scheme gone. The system tier reads
-    workspaces as they are, and its document is an exit: the matcher saw a participant
-    nobody is called, and the refusal quoted the password. Read by the rule every peer
-    writer now applies, the call links to `billing-api` exactly as the clean peer does, and
-    the refusal for `payments` names the service alone."""
+@pytest.mark.pins("stitch.a-STALE-participant-is-refused")
+def test_a_participant_analysed_by_another_build_is_refused_naming_the_command(tmp_path):
+    """The system tier reads each participant's workspace as it is, so one derived by
+    another build is refused by the stamps `render` refuses a module's own by — the same
+    words, the same command. Until 2026-10-23 nothing here looked: a workspace analysed
+    before the userinfo fix holds `svc:s3cret@billing` as a peer (graph schema 4), and its
+    rows went straight into the system document."""
     reactor = _analyzed_copy(tmp_path)
-    connection = duckdb.connect(str(reactor / "orders-api" / ".sextant" / "workspace.duckdb"))
-    connection.execute(
-        "UPDATE endpoints SET peer = 'svc:s3cret@' || peer WHERE peer IN ('billing', 'payments')"
-    )
-    assert connection.execute(
-        "SELECT count(*) FROM endpoints WHERE peer LIKE 'svc:s3cret@%'"
-    ).fetchone() == (2,)
-    connection.close()
-    document = _system_document(reactor)
-    assert "s3cret" not in document
-    row = next(line for line in document.splitlines() if "`orders-api` GET `/balances`" in line)
-    assert "`billing-api`" in row, row
-    assert "the client names 'payments', which is not a participant" in document
+    metadata_path = reactor / "orders-api" / ".sextant" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = 4
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    result = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+    assert result.exit_code != 0
+    assert "participant `orders-api` was analysed by a different Sextant build" in result.output
+    assert "graph_schema_version is 4" in result.output
+    assert "sextant module analyze" in result.output
+    assert not (reactor / ".sextant" / "render" / "system.md").exists()
 
 
 @pytest.mark.pins("redaction.the-SYSTEM-document-masks-by-every-participants-rules")

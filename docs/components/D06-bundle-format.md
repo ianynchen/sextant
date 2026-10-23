@@ -181,10 +181,9 @@ document field.
 |---|---|
 | `graph/resolved_config.parquet` `value` | key patterns + value patterns + URL userinfo |
 | `facts/*.parquet` `config_entry` payload `value` | the same, keyed by the fact's own `key_path` |
-| `graph/endpoints.parquet` `path` | URL userinfo + value patterns |
-| `graph/endpoints.parquet` `peer` | its own map, through `redact_peer`: a peer's userinfo in either shape a peer takes — a whole URL, or an authority whose scheme the split removed (`svc:s3cret@billing.internal`) — then URL userinfo + value patterns. Since 2026-10-23 neither writer of a peer (`split_url`, `peer_of`) keeps userinfo; this is the exit's net for a workspace analysed before that. The rule is for a value known to be a peer and no other column takes it |
+| `graph/endpoints.parquet` `path`, `peer` | URL userinfo + value patterns. A peer split out of a URL never holds userinfo since 2026-10-23 (`split_url` drops it — the peer is the service's host and port); a whole-address peer (`peer_of`, an annotation's `peer_from`) keeps its scheme, which this rule masks; a workspace of the older vintage is refused (graph schema 5) |
 | `graph/open_questions.parquet` `path` | the `path` map — a question and the row it asks about must mask identically |
-| `graph/open_questions.parquet` `candidates` | `redact_candidates`, the call the document and the brief make: a candidate's `peer` through `redact_peer`, a key's per-environment `values` through `redact_value` under that key |
+| `graph/open_questions.parquet` `candidates` | `redact_candidates`, the call the document and the brief make: a candidate's `peer` through `redact_text`, a key's per-environment `values` through `redact_value` under that key |
 | `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
 | `graph/endpoint_metadata.parquet` `path` | the same address map as `endpoints.path`: it carries its endpoint's path as the key it joins by, so a row masked differently would miss its endpoint (OI-169; `endpoint_conditions.path` takes the same map, below) |
 | `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |

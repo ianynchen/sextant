@@ -1021,31 +1021,6 @@ def test_the_document_strips_url_userinfo_from_both_address_columns():
     assert "| https://billing.internal |" in text
 
 
-def test_the_document_strips_a_bare_authoritys_credential_from_the_peer():
-    """The shape the split wrote before 2026-10-23 (`svc:s3cret@billing.internal`, no
-    scheme): the document is shared — pasted into tickets, committed beside the code — and
-    the test above pinned only a whole URL in the peer, which the split never produces."""
-    report = replace(
-        REPORT,
-        endpoints=[
-            {
-                "protocol": "http",
-                "direction": "outbound",
-                "method": "POST",
-                "path": "/charges",
-                "handler": None,
-                "caller": "s maven c 1 com/acme/BillingClient#charge().",
-                "peer": "svc:s3cret@billing.internal",
-                "resolution": "resolved",
-                "evidence": "compiler",
-            }
-        ],
-    )
-    text = render_module_document(MODULE, report, "a3f91c")
-    assert "s3cret" not in text
-    assert "| billing.internal |" in text
-
-
 def test_the_document_masks_an_open_questions_candidate_peer():
     """A `self_exchange` question names the called side's peer, and the document printed it
     verbatim — the endpoint table's peer cell was masked and the same peer one section down
@@ -1061,7 +1036,7 @@ def test_the_document_masks_an_open_questions_candidate_peer():
                 {
                     "side": "called",
                     "symbol": "BillingClient#charge",
-                    "peer": "svc:s3cret@billing.internal",
+                    "peer": "https://svc:s3cret@billing.internal/ws",
                 },
             ]
         ),
@@ -1069,7 +1044,7 @@ def test_the_document_masks_an_open_questions_candidate_peer():
     }
     text = render_module_document(MODULE, REPORT, "a3f91c", open_questions=[question])
     assert "s3cret" not in text
-    assert "called by BillingClient#charge at billing.internal" in text
+    assert "called by BillingClient#charge at https://billing.internal/ws" in text
 
 
 def test_the_document_leaves_an_address_expression_exactly_as_the_row_carries_it():

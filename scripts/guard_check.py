@@ -1095,35 +1095,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/arguments.py",
-                find='    return peer_without_userinfo(match.group("authority")), '
+                find='    return authority_without_userinfo(match.group("authority")), '
                 'match.group("path") or ""\n',
                 replace='    return match.group("authority"), match.group("path") or ""  # guard disabled\n',
-            ),
-        ),
-    ),
-    "redaction.a-WHOLE-peer-never-carries-url-userinfo": Guard(
-        what="`peer_of` drops the userinfo from the whole address it keeps as the peer",
-        why="whole is not verbatim: the credential is never part of WHICH deployment "
-        "answered, and kept it reaches every exit that prints a peer",
-        edits=(
-            Edit(
-                path="sextant/application/resolve/shapes/arguments.py",
-                find='        return peer_without_userinfo(str(argument["value"])), "resolved"\n',
-                replace='        return str(argument["value"]), "resolved"  # guard disabled\n',
-            ),
-        ),
-    ),
-    "redaction.a-PEER-loses-its-userinfo-at-every-exit": Guard(
-        what="`redact_peer` applies the peer rule before `redact_text` — the export, the "
-        "document, the brief and the diff print a peer through it",
-        why="a workspace analysed before 2026-10-23 holds `svc:s3cret@billing.internal`, which "
-        "`redact_text`'s `scheme://` rule never sees; without it every bundle and document "
-        "made from one ships the password",
-        edits=(
-            Edit(
-                path="sextant/domain/redaction.py",
-                find="        return self.redact_text(peer_without_userinfo(peer))\n",
-                replace="        return self.redact_text(peer)  # guard disabled\n",
             ),
         ),
     ),
@@ -1135,7 +1109,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/domain/redaction.py",
-                find='                out["peer"] = self.redact_peer(str(out["peer"]))\n',
+                find='                out["peer"] = self.redact_text(str(out["peer"]))\n',
                 replace='                out["peer"] = str(out["peer"])  # guard disabled\n',
             ),
         ),
@@ -1153,17 +1127,55 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "redaction.the-SYSTEM-tier-reads-a-peer-without-its-userinfo": Guard(
-        what="`system_analyze` applies the peer rule to every peer it reads from a "
-        "participant's workspace",
-        why="the system tier reads workspaces as they are; one analysed before 2026-10-23 "
-        "holds a peer with its credential, which then fails to match and is quoted in the "
-        "refusal the system document prints",
+    "redaction.USERINFO-is-stripped-to-the-authoritys-last-at": Guard(
+        what="`_USERINFO` strips a URL's userinfo up to the LAST `@` of its authority",
+        why="a password may carry an unencoded `@`; stopping at the first left part of the "
+        "password in every path, argument and constant (found 2026-10-23)",
+        edits=(
+            Edit(
+                path="sextant/domain/redaction.py",
+                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s]*@")\n',
+                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s@]*@")\n',
+            ),
+        ),
+    ),
+    "stitch.a-STALE-participant-is-refused": Guard(
+        what="`system analyze` refuses a participant whose workspace stamps differ from this "
+        "build's, as `render` refuses a module's own",
+        why="the system tier reads workspaces as they are, so one derived by another build — "
+        "a pre-2026-10-23 one holding credential peers — reached the system document",
         edits=(
             Edit(
                 path="sextant/api.py",
-                find='            else {**row, "peer": peer_without_userinfo(str(row["peer"]))}\n',
-                replace="            else row  # guard disabled\n",
+                find="            if stale:\n                raise NotAnalyzedError(\n"
+                '                    f"participant `{participant.name}`',
+                replace="            if False:  # guard disabled\n                raise NotAnalyzedError(\n"
+                '                    f"participant `{participant.name}`',
+            ),
+        ),
+    ),
+    "stitch.an-LB-target-is-an-authority-without-its-userinfo": Guard(
+        what="the matcher drops userinfo from an `lb://` target before looking the name up",
+        why="the target is an authority; kept, a credential made the call match nothing and "
+        "the refusal quoted it into the system document with no scheme in front",
+        edits=(
+            Edit(
+                path="sextant/application/stitch/links.py",
+                find="        stated = authority_without_userinfo(path[len(_LOAD_BALANCED) :])\n",
+                replace="        stated = path[len(_LOAD_BALANCED) :]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "stitch.the-system-document-masks-gateway-REFUSALS": Guard(
+        what="the system document passes a gateway refusal's route and reason through the redactor",
+        why="both are configuration read verbatim from a participant's workspace",
+        edits=(
+            Edit(
+                path="sextant/egress/render/system.py",
+                find="        route = redactor.redact_text(refusal.route)\n"
+                "        reason = redactor.redact_text(refusal.reason)\n",
+                replace="        route = refusal.route  # guard disabled\n"
+                "        reason = refusal.reason\n",
             ),
         ),
     ),
@@ -3663,13 +3675,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DIFF,
-                find='        projected["path"] = redactor.redact_text(str(projected["path"]))\n',
-                replace='        projected["path"] = str(projected["path"])  # guard disabled\n',
-            ),
-            Edit(
-                path=_DIFF,
-                find='        projected["peer"] = redactor.redact_peer(str(projected["peer"]))\n',
-                replace='        projected["peer"] = str(projected["peer"])  # guard disabled\n',
+                find="            projected[column] = redactor.redact_text(str(projected[column]))\n",
+                replace="            projected[column] = str(projected[column])  # guard disabled\n",
             ),
             Edit(
                 path=_DIFF,

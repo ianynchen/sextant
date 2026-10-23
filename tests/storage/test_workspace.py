@@ -1315,51 +1315,6 @@ def test_the_export_strips_url_userinfo_from_the_address_columns(tmp_path: Path)
     workspace.close()
 
 
-@pytest.mark.pins("redaction.a-PEER-loses-its-userinfo-at-every-exit")
-def test_the_export_strips_a_bare_authoritys_credential_from_the_peer(tmp_path: Path):
-    """The shape `split_url` actually wrote before 2026-10-23: the scheme is gone and the
-    peer is `svc:s3cret@billing.internal`. The test above pins a WHOLE URL in the peer,
-    which the split never produces — so it passed while every bundle of a module with a
-    credential in a literal URL shipped the password. A workspace analysed before the
-    split was fixed still holds this shape, and the export is its last exit."""
-    workspace = _workspace_with_an_endpoint(tmp_path)
-    workspace.derive(
-        "call_endpoints",
-        rows=[
-            {
-                "protocol": "http",
-                "direction": "outbound",
-                "method": "POST",
-                "path": "/charges",
-                "handler": None,
-                "caller": "com/acme/orders/BillingClient#charge(sig_3).",
-                "peer": "svc:s3cret@billing.internal",
-                "handler_signature": None,
-                "resolution": "resolved",
-                "evidence": "test",
-                "catalog_id": "spring-web",
-                "request_shape": None,
-                "response_shape": None,
-                "consumes": None,
-                "produces": None,
-            }
-        ],
-    )
-    bundle = tmp_path / "bundle"
-    workspace.export_tables(bundle, Redactor.from_rules())
-    peers = [
-        row[0]
-        for row in duckdb.sql(
-            f"SELECT peer FROM read_parquet('{bundle / 'graph' / 'endpoints.parquet'}') "
-            "WHERE path = '/charges'"
-        ).fetchall()
-    ]
-    assert peers == ["billing.internal"]
-    for parquet in (bundle / "graph").glob("*.parquet"):
-        assert b"s3cret" not in parquet.read_bytes(), parquet.name
-    workspace.close()
-
-
 @pytest.mark.pins("redaction.endpoint-METADATA-masks-the-endpoints-path")
 def test_an_endpoints_metadata_rows_mask_its_path_as_the_endpoint_does(
     tmp_path: Path,
@@ -1529,7 +1484,7 @@ def test_the_export_masks_an_open_questions_candidates(tmp_path: Path):
                         {
                             "side": "called",
                             "symbol": "BillingClient#charge",
-                            "peer": "svc:s3cret@billing.internal",
+                            "peer": "https://svc:s3cret@billing.internal/ws",
                         },
                     ]
                 ),
@@ -1564,7 +1519,7 @@ def test_the_export_masks_an_open_questions_candidates(tmp_path: Path):
             f"read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
         ).fetchall()
     }
-    assert exported["/charges"][1]["peer"] == "billing.internal"
+    assert exported["/charges"][1]["peer"] == "https://billing.internal/ws"
     assert exported["/ledgers"] == [{"key": "billing.password", "values": {"default": REDACTED}}]
     assert exported["/invoices"] == plain
     for parquet in (bundle / "graph").glob("*.parquet"):

@@ -616,7 +616,7 @@ def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
     """
     peer = endpoint.get("peer")
     if peer is not None:
-        return redactor.redact_peer(str(peer))
+        return redactor.redact_text(str(peer))
     return "unresolved" if endpoint.get("path") is None else "none recorded"
 
 

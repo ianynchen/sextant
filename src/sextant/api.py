@@ -173,7 +173,7 @@ from sextant.application.stitch.links import Link
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
-from sextant.domain.redaction import RedactionError, Redactor, peer_without_userinfo
+from sextant.domain.redaction import RedactionError, Redactor
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.egress.export.index import write_index
 from sextant.egress.export.manifest import write_manifest
@@ -1725,6 +1725,26 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         entry["location"] = candidate if candidate.exists() else None
         entry["commit_id"] = _module_commit_of(module_root) if candidate.exists() else None
     participants = _participants_of(entries)
+    # A participant's workspace written by a different build is refused, by the stamps
+    # `render` refuses a module's own by (`_stale_stamps`, OI-24): its derived rows are
+    # another derivation's, and the system tier reads them as they are. Until 2026-10-23
+    # nothing here looked, so a workspace analysed before the userinfo fix fed its
+    # credential peers straight into the system document. Before the redactors are built
+    # because a stale module's `.sextant.yml` is not the reason to report.
+    for participant in participants:
+        if participant.present and participant.location is not None:
+            metadata_path = participant.location.parent / "metadata.json"
+            stale = (
+                _stale_stamps(json.loads(metadata_path.read_text(encoding="utf-8")))
+                if metadata_path.is_file()
+                else ("metadata.json is missing",)
+            )
+            if stale:
+                raise NotAnalyzedError(
+                    f"participant `{participant.name}` was analysed by a different Sextant "
+                    f"build ({'; '.join(stale)}), so its derived tables are a different "
+                    f"vintage from this one — re-run `sextant module analyze {root}`."
+                )
     # The system document is an exit and prints every participant's rows, so it masks by
     # every rule set any of them declares, widened by the reactor root's own.
     redactor = _redactor_for(root)
@@ -1748,16 +1768,7 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
             # The same refusal `render` makes for a workspace another build derived (D01
             # §7): nothing here this build can read, run `analyze`.
             raise NotAnalyzedError(str(stale)) from stale
-        # A workspace analysed before 2026-10-23 still holds a peer split with its userinfo
-        # (`svc:s3cret@billing.internal`). The rule every peer writer applies now is applied
-        # to what this tier reads too, so the matcher, and every reason it writes, sees the
-        # service rather than the credential.
-        endpoints = [
-            row
-            if row.get("peer") is None
-            else {**row, "peer": peer_without_userinfo(str(row["peer"]))}
-            for row in workspace.query("system_endpoints")
-        ]
+        endpoints = workspace.query("system_endpoints")
         config = workspace.query("system_config", environment=environment)
         # WHICH key holds a module's registered name is framework knowledge, so a catalog
         # declares it and this only asks for the answer (`participant_name_key`).

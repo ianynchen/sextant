@@ -36,7 +36,7 @@ from sextant.application.resolve.values import (
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import normalize_key
-from sextant.domain.redaction import peer_without_userinfo
+from sextant.domain.redaction import authority_without_userinfo
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 # The scheme is OPTIONAL, which admits RFC 3986 §4.2's scheme-relative reference
@@ -48,8 +48,8 @@ _ABSOLUTE_URL = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.\-]*:)?//(?P<authority>[^/]
 
 # RFC 3986 §3.2: `authority = [ userinfo "@" ] host [ ":" port ]`, and the peer is the
 # service a call reaches — host and port. A credential written into the URL is never part of
-# WHICH service that is, so it is dropped HERE, where a URL becomes a peer, by the same rule
-# every exit applies (`peer_without_userinfo`): kept, it sat in `endpoints.peer` as
+# WHICH service that is, so it is dropped HERE, where a URL becomes a peer and the shape is
+# known (`authority_without_userinfo`): kept, it sat in `endpoints.peer` as
 # `svc:s3cret@billing.internal`, a shape with no scheme in front of it, which the exits'
 # userinfo rule (anchored on `scheme://`) never matched — so the workspace, the document and
 # the bundle all carried the password (found 2026-10-23).
@@ -64,7 +64,7 @@ def split_url(url: str) -> tuple[str | None, str]:
     match = _ABSOLUTE_URL.match(url)
     if match is None:
         return None, url
-    return peer_without_userinfo(match.group("authority")), match.group("path") or ""
+    return authority_without_userinfo(match.group("authority")), match.group("path") or ""
 
 
 def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str]:
@@ -711,10 +711,6 @@ def peer_of(argument: dict[str, Any] | None) -> tuple[str | None, str]:
     placeholder out of `peer` exactly as it does out of `path`, so an
     expression recorded here still resolves per environment.
 
-    Whole is not verbatim, though: a credential written into the address is
-    dropped by the rule `split_url` applies (`peer_without_userinfo`), because
-    it is never part of WHICH deployment answered.
-
     Anything the scanner could not read as a string literal is the same
     honest answer every other reader here gives: peer NULL, `unresolved`."""
     if (
@@ -722,7 +718,7 @@ def peer_of(argument: dict[str, Any] | None) -> tuple[str | None, str]:
         and argument.get("kind") == "string"
         and isinstance(argument.get("value"), str)
     ):
-        return peer_without_userinfo(str(argument["value"])), "resolved"
+        return str(argument["value"]), "resolved"
     return None, "unresolved"
 
 

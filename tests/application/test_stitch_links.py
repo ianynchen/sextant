@@ -16,7 +16,7 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
-from sextant.application.stitch import match, participants_of, with_registered_names
+from sextant.application.stitch import Participant, match, participants_of, with_registered_names
 from sextant.cli.app import cli
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
@@ -180,3 +180,34 @@ def test_a_module_registering_a_different_name_carries_it_as_an_alias(linked):
     assert by_name["billing-api"].aliases == ("billing",)
     assert by_name["orders-api"].aliases == ("orders",)
     assert set(by_name["billing-api"].answers_to()) == {"billing-api", "billing"}
+
+
+@pytest.mark.pins("stitch.an-LB-target-is-an-authority-without-its-userinfo")
+def test_a_load_balanced_target_carrying_a_credential_links_and_never_quotes_it():
+    """`lb://name` names a participant, and the text after the scheme is an authority — so a
+    credential written into it (`lb://svc:s3cret@billing-api`) is never part of the name.
+    Kept, the call matched nothing and the refusal quoted the password into the system
+    document, where `redact_text`'s `scheme://` rule cannot see it once the scheme is gone."""
+    participants = (
+        Participant("orders-api", "com.acme:orders-api", None, None, True, None),
+        Participant("billing-api", "com.acme:billing-api", None, None, True, None),
+    )
+
+    def call(path: str) -> dict[str, object]:
+        return {
+            "participant": "orders-api",
+            "direction": "outbound",
+            "protocol": "http",
+            "method": "GET",
+            "path": path,
+            "peer": None,
+            "caller": "C#c().",
+        }
+
+    links, unmatched = match(
+        participants, [call("lb://svc:s3cret@billing-api"), call("lb://svc:s3cret@nobody")]
+    )
+    assert [(link.from_participant, link.to_participant) for link in links] == [
+        ("orders-api", "billing-api")
+    ]
+    assert [u.reason for u in unmatched] == ["no participant in this system is named 'nobody'"]

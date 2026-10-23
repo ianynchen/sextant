@@ -60,41 +60,43 @@ BUILTIN_KEY_PATTERNS = (
 # `scheme://user:pass@host` → `scheme://host`. Anchored on the scheme so the
 # `@` in a path, a query string or a bare hostname is untouched, and bounded by
 # the delimiters that end an authority (`/`, `?`, `#`) so an `@` further along
-# the URL cannot be mistaken for userinfo. A `${...}` expression carries no
+# the URL cannot be mistaken for userinfo. Up to the authority's LAST `@`: RFC
+# 3986 forbids a raw `@` in a host, and a password may itself carry an
+# unencoded one — stopping at the first left `https://ss@host` of
+# `https://u:p@ss@host` (found 2026-10-23). A `${...}` expression carries no
 # `://`, so it passes through whole — which is the 2I ruling: an expression is
 # a REFERENCE to a value, never the value, and there is no secret inside it.
-_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
-
-# A PEER's userinfo, which `_USERINFO` cannot see once a URL has been split: the peer is the
-# service a call reaches — RFC 3986 §3.2's `[userinfo "@"] host [":" port]` with the userinfo
-# dropped, or the whole address where an engine keeps one — and a credential is never part of
-# WHICH service that is. Before 2026-10-23 the split kept it, so `endpoints.peer` held
-# `svc:s3cret@billing.internal` with no `scheme://` in front, and every exit published the
-# password. Two shapes, each anchored on the WHOLE value:
 #
-# * a whole URL (`scheme://` or scheme-relative `//`): the userinfo up to the authority's last
-#   `@`, the scheme kept — RFC 3986 forbids a raw `@` in a host, and a password may itself
-#   carry an unencoded one;
-# * a value that IS an authority — userinfo, then a host (a name or a bracketed IPv6 literal),
-#   an optional numeric port and nothing after but a query or fragment the split left on it.
-#
-# Anchored on the whole value because this is a rule for an AUTHORITY, not for text: applied
-# to any string it read `jdbc:oracle:thin:@localhost:1521:XE` as a password and
-# `mailto:support@acme.com` as a user (both found by review before this shipped). Those two
-# never match the second shape — `:XE` is not a port, and nothing here reads a mail address
-# as a peer — and no other column takes this rule.
-_PEER_USERINFO = re.compile(
-    r"^(?:(?P<scheme>(?:[A-Za-z][A-Za-z0-9+.\-]*:)?//)[^/?#\s]*@"
-    r"|[^/?#\s]*@(?=(?:\[[^\]\s/?#@]*\]|[^\[\]\s/?#@:]+)(?::[0-9]*)?(?:[?#]\S*)?$))"
-)
+# There is deliberately no rule for userinfo WITHOUT a scheme. In text,
+# `svc:s3cret@billing.internal` cannot be told from `mailto:ops@billing.internal`
+# or `jdbc:oracle:thin:@localhost:1521:XE`, so such a rule rewrites real
+# addresses (both found by review on 2026-10-23). The one place that shape
+# arose — a URL's authority once `split_url` removed its scheme — now drops
+# the userinfo where the shape is KNOWN (`authority_without_userinfo`).
+_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]*@")
 
 
-def peer_without_userinfo(peer: str) -> str:
-    """`peer` with any userinfo dropped: the one rule every writer of a peer and every exit
-    that prints one shares, so a credential written into a literal URL is never part of the
-    service a call reaches (see `_PEER_USERINFO`). A value with no userinfo — a host, a
-    `${...}` expression, a whole address without one — is returned unchanged."""
-    return _PEER_USERINFO.sub(lambda match: match.group("scheme") or "", peer, count=1)
+def authority_without_userinfo(authority: str) -> str:
+    """An AUTHORITY with its userinfo dropped: RFC 3986 §3.2's `[userinfo "@"] host [":"
+    port]` reduced to host and port, which is the service a call reaches — a credential
+    written into the URL is never part of WHICH service that is.
+
+    For a value the caller KNOWS is an authority (`split_url`'s, or an `lb://` target), so
+    there is nothing to guess: everything up to the last `@` goes, whatever the host and
+    port look like — `billing:{port}`, `${billing.host:localhost}` and `[::1]:8080` all keep
+    their own spelling (a host that is a template is the case a shape test missed, found by
+    review on 2026-10-23). An `@` inside a `{...}` placeholder is the placeholder's own text
+    and is skipped."""
+    depth = 0
+    cut = -1
+    for index, character in enumerate(authority):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(0, depth - 1)
+        elif character == "@" and depth == 0:
+            cut = index
+    return authority[cut + 1 :]
 
 
 # What a NAME looks like, for the paired rule `Redactor._masked` applies. A header
@@ -574,18 +576,11 @@ class Redactor:
             redacted = pattern.sub(REDACTED, redacted)
         return redacted
 
-    def redact_peer(self, peer: str) -> str:
-        """A PEER on its way out — `redact_text` after `peer_without_userinfo`. Every exit
-        that prints a peer calls this rather than `redact_text`, because a peer split out
-        of a URL has lost the `scheme://` that `redact_text`'s userinfo rule needs; the
-        workspace analysed before 2026-10-23 still holds `svc:s3cret@billing.internal`, and
-        this is what keeps it out of every document and bundle made from one."""
-        return self.redact_text(peer_without_userinfo(peer))
-
     def redact_candidates(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
         """An open question's `candidates` on their way out, one rule per column that can
         carry a value from the module rather than a name from its code: a `peer` (the
-        `self_exchange` question's called side) through `redact_peer`, and the per-environment
+        `self_exchange` question's called side) through `redact_text`, as the endpoint's own
+        peer column is, and the per-environment
         `values` of a `key` (`environment_divergence`) through `redact_value` under that key.
         The document, the enrichment brief and the bundle all print these, and before
         2026-10-23 all three printed them verbatim. Every other field — a symbol, a class, a
@@ -594,7 +589,7 @@ class Redactor:
         for candidate in candidates:
             out = dict(candidate)
             if isinstance(out.get("peer"), str):
-                out["peer"] = self.redact_peer(str(out["peer"]))
+                out["peer"] = self.redact_text(str(out["peer"]))
             values = out.get("values")
             if isinstance(out.get("key"), str) and isinstance(values, dict):
                 key = str(out["key"])

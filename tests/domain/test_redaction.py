@@ -15,7 +15,7 @@ from sextant.domain.redaction import (
     RedactionRules,
     Redactor,
     _literal_prefix,
-    peer_without_userinfo,
+    authority_without_userinfo,
 )
 
 
@@ -88,50 +88,35 @@ def test_userinfo_stripping_leaves_an_at_sign_that_is_not_userinfo():
 
 
 @pytest.mark.parametrize(
-    ("peer", "expected"),
+    ("authority", "expected"),
     [
-        # The shape `split_url` wrote before 2026-10-23: the scheme gone, the credential
-        # kept, and nothing `redact_text`'s `scheme://` rule could see.
+        # The shape `split_url` kept before 2026-10-23: the scheme gone, the credential kept.
         ("svc:s3cret@billing.internal", "billing.internal"),
         ("svc:@billing.internal:8443", "billing.internal:8443"),
-        # A token alone is a credential in an authority too — a peer is never a mailbox.
         ("ghp_tok@github.com", "github.com"),
-        # A password carrying a raw `@`: the host follows the LAST one (RFC 3986 forbids
-        # a raw `@` in a host).
+        # A password carrying a raw `@`: the host follows the LAST one.
         ("u:p@ss@billing", "billing"),
         ("svc:s3cret@[::1]:8080", "[::1]:8080"),
-        ("u:p@billing?x=1", "billing?x=1"),
-        # The whole address `peer_of` keeps: the scheme stays, the userinfo goes.
-        ("https://svc:s3cret@billing/ws", "https://billing/ws"),
-        ("//svc:s3cret@billing/ws", "//billing/ws"),
-        ("https://u:p@ss@billing:9/x", "https://billing:9/x"),
+        # A host or port that is a template is still the host and port (review, 2026-10-23).
+        ("svc:s3cret@billing:{port}", "billing:{port}"),
+        ("svc:s3cret@billing:${billing.port}", "billing:${billing.port}"),
+        ("svc:s3cret@${billing.host:localhost}", "${billing.host:localhost}"),
+        # An `@` inside a placeholder is the placeholder's own text.
+        ("${billing.authority:svc@billing}", "${billing.authority:svc@billing}"),
+        ("billing.internal", "billing.internal"),
+        ("billing.internal:8443", "billing.internal:8443"),
     ],
 )
-def test_a_peer_loses_its_userinfo_in_every_shape_a_peer_takes(peer: str, expected: str):
-    """The peer is the service a call reaches, and a credential is never part of WHICH
-    service that is (`peer_without_userinfo`). `redact_peer` is the same rule at the exits,
-    for a workspace analysed before the writers applied it."""
-    assert peer_without_userinfo(peer) == expected
-    assert _plain().redact_peer(peer) == expected
+def test_an_authority_loses_its_userinfo_and_keeps_its_host_and_port(authority: str, expected: str):
+    assert authority_without_userinfo(authority) == expected
 
 
-@pytest.mark.parametrize(
-    "peer",
-    [
-        "billing.internal",
-        "billing.internal:8443",
-        "[::1]:80",
-        "${billing.url}",
-        "lb://customers-service",
-        # An `@` after the authority is not userinfo.
-        "https://billing/a@b",
-        # Not an authority at all: `:XE` is no port, so nothing here is a password.
-        "jdbc:oracle:thin:@localhost:1521:XE",
-    ],
-)
-def test_a_peer_with_no_userinfo_is_returned_unchanged(peer: str):
-    assert peer_without_userinfo(peer) == peer
-    assert _plain().redact_peer(peer) == peer
+@pytest.mark.pins("redaction.USERINFO-is-stripped-to-the-authoritys-last-at")
+def test_a_password_carrying_an_at_sign_leaves_a_url_whole():
+    """`_USERINFO` strips to the authority's LAST `@`: stopping at the first left
+    `https://ss@billing/ws` — part of the password — of `https://u:p@ss@billing/ws`."""
+    assert _plain().redact_text("https://u:p@ss@billing/ws") == "https://billing/ws"
+    assert _plain().redact_text("https://billing/a@b") == "https://billing/a@b"
 
 
 @pytest.mark.parametrize(
@@ -140,15 +125,17 @@ def test_a_peer_with_no_userinfo_is_returned_unchanged(peer: str):
         "jdbc:oracle:thin:@localhost:1521:XE",
         "mailto:support@acme.com",
         "sip:alice@atlanta.com",
+        "xmpp:server@example.com",
         "svc:s3cret@billing.internal",
     ],
 )
-def test_text_that_is_not_known_to_be_a_peer_keeps_its_at_sign(text: str):
-    """The peer rule is for a value KNOWN to be an authority, and nothing else takes it. A
-    first version applied it to every string `redact_text` sees — config values, call
-    arguments, constants, every fact payload — and read the Oracle SID form as a password
-    and a `mailto:` as a user (found by review on 2026-10-23, before it shipped). Even the
-    credential shape is left alone outside a peer: there, nothing says it is an authority."""
+def test_text_with_no_scheme_keeps_its_at_sign(text: str):
+    """There is no userinfo rule without a `scheme://`: in text, `svc:s3cret@billing` cannot
+    be told from a `mailto:`, a `sip:` or the Oracle SID form, and a first version of the
+    2026-10-23 fix that tried rewrote all three (found by review before it shipped). The
+    authority shape is handled where it is KNOWN to be one (`authority_without_userinfo`).
+    The cost, recorded as OI-175: a config value that is a bare `user:pass@host` with a key
+    naming no secret is not masked."""
     assert _plain().redact_text(text) == text
     assert _plain().redact_value("spring.datasource.url", text) == text
 
@@ -161,14 +148,18 @@ def test_an_open_questions_candidates_mask_their_peer_and_their_config_values():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=("tok-[a-z]+",)))
     masked = redactor.redact_candidates(
         [
-            {"side": "called", "symbol": "BillingClient#charge", "peer": "svc:s3cret@billing"},
+            {
+                "side": "called",
+                "symbol": "BillingClient#charge",
+                "peer": "https://svc:s3cret@billing/ws",
+            },
             {"side": "served", "symbol": "ChargeController#charge", "peer": None},
             {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": "tok-x"}},
             {"key": "spring.datasource.password", "values": {"default": "hunter2"}},
         ]
     )
     assert masked == [
-        {"side": "called", "symbol": "BillingClient#charge", "peer": "billing"},
+        {"side": "called", "symbol": "BillingClient#charge", "peer": "https://billing/ws"},
         {"side": "served", "symbol": "ChargeController#charge", "peer": None},
         {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": REDACTED}},
         {"key": "spring.datasource.password", "values": {"default": REDACTED}},

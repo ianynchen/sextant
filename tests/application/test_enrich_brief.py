@@ -128,13 +128,19 @@ def test_an_open_questions_candidates_are_redacted_before_they_reach_the_prompt(
         "path": "/charges",
         "question": "self_exchange",
         "candidates": json.dumps(
-            [{"side": "called", "symbol": "BillingClient#charge", "peer": "svc:s3cret@billing"}]
+            [
+                {
+                    "side": "called",
+                    "symbol": "BillingClient#charge",
+                    "peer": "https://svc:s3cret@billing/ws",
+                }
+            ]
         ),
         "evidence": None,
     }
     brief = _compose(_Workspace(open_questions=[question]))
     assert "s3cret" not in brief.prompt
-    assert '"peer": "billing"' in brief.prompt
+    assert '"peer": "https://billing/ws"' in brief.prompt
 
 
 def test_a_module_with_no_open_questions_says_so_rather_than_omitting_the_section():
