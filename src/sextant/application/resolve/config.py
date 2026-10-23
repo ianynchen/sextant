@@ -59,6 +59,7 @@ it is reserved for the peer-resolution join (D01), which substitutes into an
 ENDPOINT expression, not a config value.
 """
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -341,8 +342,10 @@ def _resolve_row(
             "environment": profile,
             "unresolved_reason": "remote_source",
         }
-    resolved, reason = _substitute(
-        raw_value, merged, normalized_index, placeholders, key_matching, [key]
+    resolved, reason = substitute(
+        raw_value,
+        placeholders,
+        _layered_lookup(merged, normalized_index, placeholders, key_matching, [key]),
     )
     if resolved is None:
         return {
@@ -361,20 +364,17 @@ def _resolve_row(
     }
 
 
-def _substitute(
+def substitute(
     raw: str,
-    merged: dict[str, tuple[str, str]],
-    normalized_index: dict[str, str],
-    placeholders: dict[str, str],
-    key_matching: str,
-    stack: list[str],
+    placeholders: Mapping[str, str],
+    lookup: Callable[[str], tuple[str | None, str | None]],
 ) -> tuple[str | None, str | None]:
-    """Recursive `${key:default}` substitution (D02 §2i's `placeholders`
-    delimiters and `default_separator`) over a value already picked by
-    `_layer` for one profile. `stack` carries the chain of merged-map keys
-    currently being resolved, INCLUDING the top-level key this call is
-    ultimately answering for — a self-reference is caught the same way a
-    longer cycle is, on the very first lookup.
+    """The project's one placeholder rule: `${key:default}` substitution with
+    D02 §2i's `placeholders` delimiters and `default_separator`, a literal
+    default (taken as written, never re-substituted) when `lookup` cannot
+    answer, and a no-closing-delimiter opener left literal. `lookup(ref_key)`
+    returns `(value, None)` or `(None, reason)` — what a key MEANS (the
+    layered map, one environment's resolved rows) is the caller's.
 
     Returns `(resolved_string, None)` on success or `(None, reason)` on
     failure — a single embedded failure fails the WHOLE value; this pass
@@ -405,9 +405,7 @@ def _substitute(
             ref_key, default = inner.split(separator, 1)
         else:
             ref_key, default = inner, None
-        resolved, reason = _resolve_reference(
-            ref_key, merged, normalized_index, placeholders, key_matching, stack
-        )
+        resolved, reason = lookup(ref_key)
         if resolved is None:
             if default is not None:
                 # A literal default (D02 §2i): taken as written, never
@@ -419,6 +417,27 @@ def _substitute(
         else:
             parts.append(resolved)
     return "".join(parts), None
+
+
+def _layered_lookup(
+    merged: dict[str, tuple[str, str]],
+    normalized_index: dict[str, str],
+    placeholders: dict[str, str],
+    key_matching: str,
+    stack: list[str],
+) -> Callable[[str], tuple[str | None, str | None]]:
+    """`resolve_config`'s own lookup for `substitute`: a `${ref_key}` resolved
+    against the layered map `_layer` built for one profile, recursively.
+    `stack` carries the chain of merged-map keys currently being resolved,
+    INCLUDING the top-level key being answered for — a self-reference is
+    caught the same way a longer cycle is, on the very first lookup."""
+
+    def lookup(ref_key: str) -> tuple[str | None, str | None]:
+        return _resolve_reference(
+            ref_key, merged, normalized_index, placeholders, key_matching, stack
+        )
+
+    return lookup
 
 
 def _resolve_reference(
@@ -449,8 +468,10 @@ def _resolve_reference(
     if target in stack:
         return None, "placeholder_cycle"
     raw_value, _source = merged[target]
-    return _substitute(
-        raw_value, merged, normalized_index, placeholders, key_matching, stack + [target]
+    return substitute(
+        raw_value,
+        placeholders,
+        _layered_lookup(merged, normalized_index, placeholders, key_matching, stack + [target]),
     )
 
 

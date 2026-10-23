@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.config import resolve_config
+from sextant.application.resolve.config import resolve_config, substitute
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import ConfigEntryFact, Document
@@ -455,3 +455,53 @@ def test_a_declared_from_key_prefix_mechanism_is_refused_as_reserved_unimplement
     with pytest.raises(CatalogError, match="from_key_prefix"):
         resolve_config(workspace, [_catalog(model)])
     workspace.close()
+
+
+_DOLLAR_BRACES = {"open": "${", "close": "}", "default_separator": ":"}
+
+
+def _dict_lookup(values: dict[str, str]):
+    def lookup(ref_key: str) -> tuple[str | None, str | None]:
+        if ref_key in values:
+            return values[ref_key], None
+        return None, "missing_key"
+
+    return lookup
+
+
+def test_substitute_replaces_a_reference_with_the_lookups_value():
+    assert substitute("${a}", _DOLLAR_BRACES, _dict_lookup({"a": "1"})) == ("1", None)
+
+
+def test_substitute_takes_a_missing_keys_default_literally():
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("${missing:fallback}", _DOLLAR_BRACES, lookup) == ("fallback", None)
+    # A literal default (D02 §2i) is never itself substituted.
+    assert substitute("${missing:${a}}", _DOLLAR_BRACES, lookup) == ("${a}", None)
+
+
+def test_substitute_splits_a_default_at_the_first_separator_only():
+    assert substitute("${k:a:b}", _DOLLAR_BRACES, _dict_lookup({})) == ("a:b", None)
+
+
+def test_substitute_replaces_every_reference_in_the_string():
+    lookup = _dict_lookup({"a": "1", "b": "2"})
+    assert substitute("${a} and ${b}", _DOLLAR_BRACES, lookup) == ("1 and 2", None)
+
+
+def test_substitute_fails_the_whole_value_when_one_reference_is_unresolved():
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("${a} and ${missing}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
+
+
+def test_substitute_treats_an_unclosed_opener_as_literal():
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("x ${a} y ${a", _DOLLAR_BRACES, lookup) == ("x 1 y ${a", None)
+
+
+def test_substitute_honours_catalog_given_delimiters_and_separator():
+    placeholders = {"open": "#[", "close": "]", "default_separator": "|"}
+    lookup = _dict_lookup({"a": "1"})
+    assert substitute("#[a]", placeholders, lookup) == ("1", None)
+    assert substitute("#[missing|d]", placeholders, lookup) == ("d", None)
+    assert substitute("${a}", placeholders, lookup) == ("${a}", None)
