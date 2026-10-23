@@ -849,7 +849,9 @@ declare as one) and drops the userinfo there, as `split_url` does.
 password) and path `/w@billing/x`. RFC 3986 forbids the raw `/`, and `java.net.URI` ends the
 authority at the same place, so the call cannot reach `billing` as written: the code would not
 work. Logged rather than fixed by the incidental-findings rule; DR-6 says predict the
-framework, and the framework reads it as we do.
+framework, and the framework reads it as we do. The same holds for a raw `?` or `#` in a
+password (`https://u:p?ss@billing/x`), which now keeps `u:p?ss@billing` as the peer text:
+Spring reads host `u`, port `p` and a query.
 
 **Closes** if a framework is found that accepts the form.
 
@@ -862,6 +864,22 @@ type error names the file; the regular-expression error ("redact value pattern �
 regular expression") does not, so a reactor with many modules leaves the reader to search.
 
 **Closes** when `RedactionError` carries the path it was read from.
+
+### OI-178 — the URL userinfo strip can eat the next value in compact raw text
+**Minor · logged 2026-10-23 (review of `fix/peer-userinfo`) · `src/sextant/domain/redaction.py::_USERINFO`**
+
+`_USERINFO` strips to the authority's LAST `@` and admits any character but a delimiter or
+whitespace before it, because a password carries what it carries (a first version that stopped
+at `"`, `\`, `<`, `>` kept the NTLM proxy form `http://CORP\jdoe:pass@proxy`). So in raw text
+with no delimiter between a bare-host URL and a later `@` —
+`{"url":"https://svc","owners":["a@x.com"]}`, `url='https://svc',owner='a@x.com'` — the strip
+runs into the next value and removes it. Text is lost, nothing leaks. It reaches the enrichment
+tools' results, which pass fact lines and file text through `redact_text`; `redact_json` walks
+decoded leaf strings and is not affected.
+
+**Closes** when raw-text exits strip by a tokenizer that knows where a URL ends (a JSON fact
+line through `redact_json` rather than `redact_text`), not by a wider character class: `'` and
+`,` are legal in userinfo, so no class can end the authority there.
 
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**

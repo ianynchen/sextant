@@ -63,10 +63,12 @@ BUILTIN_KEY_PATTERNS = (
 # the URL cannot be mistaken for userinfo. Up to the authority's LAST `@`: RFC
 # 3986 forbids a raw `@` in a host, and a password may itself carry an
 # unencoded one — stopping at the first left `https://ss@host` of
-# `https://u:p@ss@host` (found 2026-10-23). Never across a `"`, `<`, `>` or `\\`,
-# which RFC 3986 admits nowhere in an authority: in a compact JSON line
-# `{"url":"https://svc","owners":["a@x.com"]}` the scan otherwise ran on into
-# the next value and ate it. A `${...}` expression carries no
+# `https://u:p@ss@host` (found 2026-10-23). Any character but a delimiter or
+# whitespace may precede that `@`: a password carries what it carries, and the
+# NTLM proxy form `http://CORP\\jdoe:pass@proxy` has a backslash in its user.
+# The cost is text, never a secret: in compact raw text with no delimiter
+# between a bare-host URL and a later `@` (`url='https://svc',owner='a@x.com'`)
+# the strip runs on into the next value (OI-178). A `${...}` expression carries no
 # `://`, so it passes through whole — which is the 2I ruling: an expression is
 # a REFERENCE to a value, never the value, and there is no secret inside it.
 #
@@ -76,7 +78,7 @@ BUILTIN_KEY_PATTERNS = (
 # addresses (both found by review on 2026-10-23). The one place that shape
 # arose — a URL's authority once `split_url` removed its scheme — now drops
 # the userinfo where the shape is KNOWN (`authority_without_userinfo`).
-_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s\"<>\\]*@")
+_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]*@")
 
 
 def authority_without_userinfo(authority: str) -> str:
@@ -152,7 +154,8 @@ _KEY_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # rather than from a hand that chose to escape ASCII.
 #
 # `_USERINFO` in JSON text: the scheme is dropped (it only narrows), `/` may be
-# spelled `\/`, and the character class is the same one — a `\t` or `\n` escape
+# spelled `\/`, and the class also refuses `@` — it stops at the FIRST one, so
+# it matches wherever the last-`@` rule would change the text — a `\t` or `\n` escape
 # in the text is two printable characters, which the class admits though the
 # decoded whitespace would not, and that is the widening direction.
 _USERINFO_IN_JSON_TEXT = r":\\?/\\?/[^/?#\s@]*@"

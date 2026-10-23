@@ -151,7 +151,12 @@ class Diff:
     def to_text(self) -> str:
         """The summary table, then one line per entry: a view of `to_json`, never a second
         source."""
-        lines = ["| kind | added | removed | changed |", "|---|---|---|---|"]
+        lines = []
+        if self.producer_changed:
+            # The JSON's `producer_changed`, said where a reader of the text will see it: rows
+            # can differ with no code change, and a stale side's peers print masked.
+            lines += ["**Producer changed** — see `producer` in the JSON output.", ""]
+        lines += ["| kind | added | removed | changed |", "|---|---|---|---|"]
         for name, counts in self.summary.items():
             lines.append(
                 f"| {name} | {counts['added']} | {counts['removed']} | {counts['changed']} |"
@@ -258,17 +263,14 @@ def _refuse_or_allow(
     # reader refuses such a workspace (user ruling, 2026-10-23). The diff alone can be told
     # to read one anyway, because a kept bundle is history the user asked to compare; it is
     # then labelled, and such a peer is masked whole (`_masked`).
-    stale = [
-        label
-        for label, stamps in (("a", stamps_a), ("b", stamps_b))
-        if stamps["graph_schema_version"] != GRAPH_SCHEMA_VERSION
-    ]
+    stale = stamps_a["graph_schema_version"] != GRAPH_SCHEMA_VERSION
     if stale and not allow_producer_change:
         raise DiffRefused(
-            f"cannot diff: graph_schema_version {stamps_a['graph_schema_version']} on "
-            f"{' and '.join(stale)}, this build is {GRAPH_SCHEMA_VERSION} — re-analyse a "
-            "workspace, or allow the producer change to diff the older analyses anyway, "
-            "labelled",
+            f"cannot diff: both sides are graph_schema_version "
+            f"{stamps_a['graph_schema_version']} and this build is {GRAPH_SCHEMA_VERSION} — "
+            "re-analyse BOTH (a bundle by re-exporting a fresh analysis of its commit; one "
+            "side alone is then refused as a version mismatch), or allow the producer change "
+            "to diff them as they are, labelled",
             ("graph_schema_version",),
         )
     if a.module_id != b.module_id:
@@ -282,7 +284,7 @@ def _refuse_or_allow(
             "allow the producer change to diff anyway, labelled",
             tuple(producer),
         )
-    return bool(producer) or bool(stale)
+    return bool(producer) or stale
 
 
 # --- masking, and the rows masking joins -------------------------------------------------

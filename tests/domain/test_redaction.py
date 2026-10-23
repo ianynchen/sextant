@@ -124,9 +124,13 @@ def test_a_password_carrying_an_at_sign_leaves_a_url_whole():
     `https://ss@billing/ws` — part of the password — of `https://u:p@ss@billing/ws`."""
     assert _plain().redact_text("https://u:p@ss@billing/ws") == "https://billing/ws"
     assert _plain().redact_text("https://billing/a@b") == "https://billing/a@b"
-    # And never across a quote: the scan stops where the authority must have ended.
-    line = '{"url":"https://svc.internal","owners":["a@x.com","b@y.com"]}'
-    assert _plain().redact_text(line) == line
+    # Whatever the user and password hold: the NTLM proxy form has a backslash, and a
+    # password may carry a quote. A first version stopped at both and kept the password
+    # (review, 2026-10-23).
+    assert _plain().redact_text("http://CORP\\jdoe:Passw0rd@proxy.corp:8080") == (
+        "http://proxy.corp:8080"
+    )
+    assert _plain().redact_text('https://u:p"ss@billing/x') == "https://billing/x"
 
 
 @pytest.mark.parametrize(

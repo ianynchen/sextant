@@ -1134,10 +1134,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/domain/redaction.py",
-                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)'
-                '[^/?#\\s\\"<>\\\\]*@")\n',
-                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)'
-                '[^/?#\\s\\"<>\\\\@]*@")\n',
+                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s]*@")\n',
+                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s@]*@")\n',
             ),
         ),
     ),

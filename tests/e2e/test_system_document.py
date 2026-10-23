@@ -174,6 +174,21 @@ def test_a_participant_analysed_by_another_build_is_refused_naming_the_command(t
     assert not (reactor / ".sextant" / "render" / "system.md").exists()
 
 
+def test_a_participant_whose_metadata_cannot_be_read_is_refused_as_unfinished(tmp_path):
+    """A workspace beside a `metadata.json` that does not parse — or is not a JSON object —
+    is an analysis that never finished writing, and is named as one rather than as another
+    build's. No `pins` marker: the guard for the stale refusal above covers the branch that
+    matters, and this one only chooses the words."""
+    reactor = _analyzed_copy(tmp_path)
+    metadata_path = reactor / "orders-api" / ".sextant" / "metadata.json"
+    for broken in ("{not json", "[]"):
+        metadata_path.write_text(broken, encoding="utf-8")
+        result = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+        assert result.exit_code != 0
+        assert "participant `orders-api` has a workspace and no readable" in result.output
+        assert "Traceback" not in result.output
+
+
 @pytest.mark.pins("redaction.the-SYSTEM-document-masks-by-every-participants-rules")
 def test_the_system_document_masks_by_every_participants_own_rules(tmp_path):
     """The system document is an exit like the module document, and it prints every

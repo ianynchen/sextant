@@ -545,7 +545,9 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
 
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
-    with pytest.raises(DiffRefused, match="graph_schema_version 4 on a and b, this build is 5"):
+    with pytest.raises(
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 5"
+    ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
     assert allowed.producer_changed
@@ -554,6 +556,8 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     assert sorted(peers) == sorted([REDACTED, "https://ledger.internal"])
     assert peers[REDACTED].evidence["symbols"] == ["A#a().", "B#b()."]
     assert "s3cret" not in json.dumps(allowed.to_json())
+    # The text output says why, as the JSON's `producer_changed` does.
+    assert allowed.to_text().startswith("**Producer changed**")
 
 
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
