@@ -764,3 +764,57 @@ def test_a_condition_annotation_is_not_composed_through_what_it_is_built_on(tmp_
     workspace.close()
 
     assert {r["kind"] for r in beans} == {"property"}
+
+
+def test_a_new_inside_a_lambda_a_factory_creates_is_that_factorys_construction(
+    tmp_path: Path,
+):
+    """Round 1's ruling applied to construction: `@Bean @Profile("prod") OrderPublisher
+    publisher() { return lazily(() -> new KafkaOrderPublisher()); }`. The lambda body is the
+    factory's code, so the `new` in it is the factory's — `KafkaOrderPublisher` is a `factory`
+    bean `via` `publisher`, absent outside `prod`, and never a plain `new` leaving it open."""
+    publisher = method_descriptor(MESSAGING, "publisher", "()L" + PUBLISHER.removesuffix("#") + ";")
+    body = method_descriptor(MESSAGING, "lambda$publisher$0", _VOID)
+    facts = [
+        *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
+        *_type(KAFKA, interfaces=(PUBLISHER,)),
+        *_type(MESSAGING, [_marker(CONFIGURATION)]),
+        *_method(MESSAGING, "publisher", PUBLISHER, [_marker(BEAN), _profile("prod")], []),
+        CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + publisher,
+            target=CallTarget(owner=_METAFACTORY, name="metafactory", descriptor=_VOID),
+            invoke_kind="dynamic",
+            ordinal=0,
+            result=4,
+            implementation=body,
+            arguments=[CallArgument(kind="lambda", symbol=body)],
+        ),
+        SymbolFact(
+            document_id="doc",
+            symbol=_MODULE + body,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + MESSAGING,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            modifiers={"synthetic": True},
+        ),
+        MethodReturnFact(document_id="doc", method=_MODULE + body, ordinal=0, value=None),
+        CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + body,
+            target=CallTarget(owner=KAFKA, name="<init>", descriptor=_VOID),
+            invoke_kind="special",
+            ordinal=0,
+            result=None,
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    presence = _presence(workspace, KAFKA)
+    workspace.close()
+
+    assert _verdicts(beans, KAFKA) == {
+        "default": ("factory", _MODULE + publisher, "profile", "false", "resolved"),
+        "prod": ("factory", _MODULE + publisher, "profile", "true", "resolved"),
+    }
+    assert presence == {"default": ("false", "resolved"), "prod": ("true", "resolved")}

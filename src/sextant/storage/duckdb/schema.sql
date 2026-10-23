@@ -1211,15 +1211,32 @@ SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
 -- EXISTS in an environment is `bean_presence`'s answer (OR across routes), never "every row
 -- here holds". Condition-less route rows (`kind` NULL) are no condition and are left out.
 -- Last in this file because a view binds at creation, and `symbols` is defined above.
+--
+-- **Two equi-joins, never one `OR` join** (GUIDELINES §8.7): a join on `bean = symbol OR
+-- (bean = enclosing AND NOT EXISTS …)` cannot be hashed and plans a nested loop — measured
+-- at review, 11 s for 20,000 endpoint rows against 12,000 condition rows, against 5 ms for
+-- the same rows this way. Each row is matched once: to its own symbol where that is a bean,
+-- else (an anti-join on the beans) to its owner class.
 CREATE OR REPLACE VIEW endpoint_conditions AS
-SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
-       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind
-FROM endpoints e
-JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
-JOIN bean_conditions b
-  ON b.bean = s.symbol
-  OR (b.bean = s.enclosing
-      AND NOT EXISTS (SELECT 1 FROM bean_conditions own WHERE own.bean = s.symbol))
+WITH located AS (
+    SELECT e.protocol, e.direction, e.method, e.path, e.handler, e.caller,
+           s.symbol, s.enclosing
+    FROM endpoints e
+    JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
+),
+beans AS (SELECT DISTINCT bean FROM bean_conditions),
+matched AS (
+    SELECT l.*, l.symbol AS bean
+    FROM located l JOIN beans own ON own.bean = l.symbol
+    UNION ALL
+    SELECT l.*, l.enclosing AS bean
+    FROM located l LEFT JOIN beans own ON own.bean = l.symbol
+    WHERE own.bean IS NULL
+)
+SELECT DISTINCT m.protocol, m.direction, m.method, m.path, m.handler, b.kind, b.expression,
+       b.environment, b.holds, b.resolution, b.evidence, m.caller, b.via, b.bean_kind
+FROM matched m
+JOIN bean_conditions b ON b.bean = m.bean
 WHERE b.kind IS NOT NULL;
 
 -- Where each conditional bean EXISTS, per environment (ruled 2026-10-22): a class exists

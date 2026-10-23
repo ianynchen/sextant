@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 import duckdb
@@ -3183,3 +3184,109 @@ def test_reopening_a_workspace_holding_the_pre_view_table_replaces_it_with_the_v
             "SELECT view_name FROM duckdb_views() WHERE view_name = 'endpoint_conditions'"
         ).fetchall()
     assert views == [("endpoint_conditions",)]
+
+
+ENVIRONMENTS = ("prod", "e1", "e2", "e3", "e4")
+
+
+def _workspace_for_the_view(tmp_path: Path, methods: int) -> Path:
+    """A participant-shaped workspace: `methods` methods, five to a class, each the handler
+    of one endpoint row; every class a bean with one condition row per environment (five);
+    and one LAMBDA-like
+    method (`m0`) that is a bean of its own, so the view's two routes both answer."""
+    prefix = "s maven p 1 com/acme/"
+    facts = tmp_path / "facts"
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/All.java",
+        module_id="com.acme:big",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        facts / "all.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=f"{prefix}C{i // 5}#m{i}().",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=f"{prefix}C{i // 5}#",
+            )
+            for i in range(methods)
+        ],
+    )
+    path = tmp_path / "ws.duckdb"
+    workspace = DuckDbWorkspace(path)
+    workspace.load_facts(facts)
+
+    def row(bean: str, via: str | None, environment: str) -> dict[str, object]:
+        return {
+            "bean": bean,
+            "bean_kind": "class" if via is None else "factory",
+            "via": via,
+            "kind": "profile",
+            "expression": '{"expressions": ["prod"]}',
+            "environment": environment,
+            "holds": "true" if environment == "prod" else "false",
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+
+    rows = [
+        row(f"{prefix}C{c}#", None, environment)
+        for c in range(methods // 5)
+        for environment in ENVIRONMENTS
+    ]
+    rows += [row(f"{prefix}C0#m0().", f"{prefix}C0#make().", "prod")]
+    workspace.derive("bean_conditions_insert", rows=rows)
+    workspace.close()
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
+            f"SELECT 'http', 'inbound', 'GET', '/p' || i, '{prefix}C' || (i // 5) || '#m' || i "
+            f"|| '().' FROM range({methods}) t(i)"
+        )
+    return path
+
+
+def test_the_endpoint_conditions_view_matches_a_row_to_its_own_bean_else_its_owner(
+    tmp_path: Path,
+):
+    """The view's two routes, hand-checked on ten rows: `m0` is a bean of its own (a lambda
+    a factory creates), so it reads ITS row and not its class's; every other method reads
+    its owner class's."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10))
+    try:
+        rows = workspace.query("endpoint_conditions")
+    finally:
+        workspace.close()
+    assert [(r["path"], r["via"], r["bean_kind"]) for r in rows] == [
+        ("/p0", "s maven p 1 com/acme/C0#make().", "factory"),
+        *[(f"/p{i}", None, "class") for i in range(1, 10) for _ in ENVIRONMENTS],
+    ]
+
+
+def test_the_endpoint_conditions_view_is_planned_as_hash_joins(tmp_path: Path):
+    """GUIDELINES §8.7. What this pins is the PLANNER, not the data: the view's first
+    version joined `bean = symbol OR (bean = enclosing AND NOT EXISTS …)`, which DuckDB
+    cannot hash and runs as a nested loop — 11 s for 20,000 × 12,000 rows at review, against
+    5 ms written as two equi-joins. 10,000 endpoint rows against 10,000 condition rows
+    answer in tens of milliseconds as hash joins and in several seconds as the nested loop
+    (measured: the `OR` form failed this bound); the bound is loose so CI noise cannot trip
+    it."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10000))
+    try:
+        started = time.perf_counter()
+        rows = workspace.query("endpoint_conditions")
+        elapsed = time.perf_counter() - started
+    finally:
+        workspace.close()
+    assert len(rows) == 1 + 9999 * len(ENVIRONMENTS)
+    assert elapsed < 2.0, f"endpoint_conditions took {elapsed:.2f}s on 10,000 rows"

@@ -219,34 +219,39 @@ def _routes(
                 _Route(CLASS, None, tuple(conditions_on(target, CLASS)))
             )
     factories = declared_beans(workspace, model).by_method
-    for caller, classes in constructed.items():
-        factory = factories.get(caller)
-        route_conditions = (
-            ()
-            if factory is None
-            else (
-                *conditions_on(caller, FACTORY),
-                *conditions_on(enclosing_type_of(caller), CONFIGURATION),
-            )
-        )
-        for built in classes:
-            if (
-                factory is not None
-                and factory.erased_return is not None
-                and _assignable(bare_descriptor(built), factory.erased_return, ancestors)
-            ):
-                routes.setdefault(built, []).append(_Route(FACTORY, caller, route_conditions))
-            elif factory is None and not _delegates(caller, built, ancestors):
-                # A `new` outside every factory body (the ruling's "plain `new`"). One inside
-                # a factory body that does not return it is a helper of that bean, no route.
-                routes.setdefault(built, []).append(_Route(CONSTRUCTED, caller, ()))
-    for method in factories:
-        route_conditions = (
+    # A lambda body a factory creates is that factory's code (ruled 2026-10-22), so a `new`
+    # in it is the factory's construction too — the creating factory answers for it.
+    creator: dict[str, str] = {}
+    for creating in sorted(factories):
+        for body in _created_from(creating, created):
+            creator.setdefault(body, creating)
+
+    def route_conditions_of(method: str) -> tuple[tuple[str, ConditionModel, Any], ...]:
+        return (
             *conditions_on(method, FACTORY),
             *conditions_on(enclosing_type_of(method), CONFIGURATION),
         )
-        for body in _created_from(method, created):
-            routes.setdefault(body, []).append(_Route(FACTORY, method, route_conditions))
+
+    for caller, classes in constructed.items():
+        method = caller if caller in factories else creator.get(caller)
+        factory = None if method is None else factories[method]
+        for built in classes:
+            if (
+                method is not None
+                and factory is not None
+                and factory.erased_return is not None
+                and _assignable(bare_descriptor(built), factory.erased_return, ancestors)
+            ):
+                routes.setdefault(built, []).append(
+                    _Route(FACTORY, method, route_conditions_of(method))
+                )
+            elif method is None and not _delegates(caller, built, ancestors):
+                # A `new` outside every factory body (the ruling's "plain `new`"). One inside
+                # a factory body — or a lambda it creates — that does not return it is a
+                # helper of that bean, no route.
+                routes.setdefault(built, []).append(_Route(CONSTRUCTED, caller, ()))
+    for body, creating in creator.items():
+        routes.setdefault(body, []).append(_Route(FACTORY, creating, route_conditions_of(creating)))
     return {
         bean: found for bean, found in routes.items() if any(route.conditions for route in found)
     }
