@@ -27,6 +27,21 @@ Which classes are beans, and which conditions apply — the container's own rule
   before it reads them).
 * A class merely constructed is never handed to the evaluator (row 4), so its own
   annotations are not consulted on that route.
+* A lambda body a factory method's own body creates (the `dynamic` call edge from it to a
+  synthetic body, followed through lambdas it creates in turn) is that factory's code: its
+  bean is the lambda body itself, on the factory's route, `via` the method — a functional
+  route or a configurer the factory returns runs only where the factory registers.
+
+**A stereotype or a condition may arrive through a COMPOSED annotation** (CP-44 row 5: the
+scanner matches meta-annotations). An annotation counts when it is one of the model's, or is
+meta-annotated by one, transitively — through module-local annotation types and through
+dependency annotation types whose class-level annotations the `type_header` read recorded
+(D00 §5) — by the composition fold `effective_annotations.composed_mapping_rows` every
+annotation-driven engine already uses; a composed condition's declared arguments are folded
+under the use site's. **Stated limits:** an annotation type whose header was not read (no
+classpath, or a type in no archive on it) composes nothing; a module class whose supertypes
+`type_hierarchy` cannot reach (an ancestor in no archive) is assignable to nothing above
+that point, so a factory declared to return such a supertype gets no route for it.
 
 A class registered more than one way EXISTS wherever ANY of its routes registers it (ruled
 2026-10-22: each scan, import or factory registers its own bean definition, and the code
@@ -68,6 +83,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import declared_beans
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
+from sextant.application.resolve.effective_annotations import composed_mapping_rows
 from sextant.domain.symbols import bare_descriptor, is_type_descriptor, method_name, type_descriptor
 
 PROFILE = "profile"
@@ -121,10 +137,11 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     config = _config_by_environment(workspace)
     environments = sorted(config) or ["default"]
     constructed = _constructed_by(workspace)
+    created = _lambdas_created_by(workspace)
     ancestors = _ancestors(workspace)
     rows: list[dict[str, Any]] = []
     for model in vocabularies:
-        routes = _routes(workspace, model, index, constructed, ancestors)
+        routes = _routes(workspace, model, index, constructed, created, ancestors)
         for bean in sorted(routes):
             rows.extend(_rows_for(bean, routes[bean], config, environments))
     if rows:
@@ -170,6 +187,7 @@ def _routes(
     model: dict[str, Any],
     index: dict[str, list[tuple[str, dict[str, Any]]]],
     constructed: dict[str, list[str]],
+    created: dict[str, list[str]],
     ancestors: dict[str, list[str]],
 ) -> dict[str, list[_Route]]:
     """Every class with at least one CONDITIONAL route, mapped to all of its routes —
@@ -178,6 +196,8 @@ def _routes(
     stereotypes = {type_descriptor(str(name)) for name in model.get("stereotypes", ())}
     if model.get("configuration_annotation"):
         stereotypes.add(type_descriptor(str(model["configuration_annotation"])))
+    annotation_types = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
+    index = _effective_index(workspace, index, annotation_types, {*stereotypes, *conditions})
 
     def conditions_on(target: str | None, bean_kind: str) -> list[tuple[str, ConditionModel, Any]]:
         return [
@@ -188,6 +208,10 @@ def _routes(
 
     routes: dict[str, list[_Route]] = {}
     for target, uses in index.items():
+        # An annotation or interface TYPE carrying a stereotype is a composed stereotype or a
+        # type nothing instantiates — never a scanned bean itself.
+        if target in annotation_types:
+            continue
         if is_type_descriptor(target) and any(
             bare_descriptor(descriptor) in stereotypes for descriptor, _ in uses
         ):
@@ -216,6 +240,13 @@ def _routes(
                 # A `new` outside every factory body (the ruling's "plain `new`"). One inside
                 # a factory body that does not return it is a helper of that bean, no route.
                 routes.setdefault(built, []).append(_Route(CONSTRUCTED, caller, ()))
+    for method in factories:
+        route_conditions = (
+            *conditions_on(method, FACTORY),
+            *conditions_on(enclosing_type_of(method), CONFIGURATION),
+        )
+        for body in _created_from(method, created):
+            routes.setdefault(body, []).append(_Route(FACTORY, method, route_conditions))
     return {
         bean: found for bean, found in routes.items() if any(route.conditions for route in found)
     }
@@ -277,6 +308,87 @@ def _rows_for(
                     }
                 )
     return rows
+
+
+def _effective_index(
+    workspace: Workspace,
+    index: dict[str, list[tuple[str, dict[str, Any]]]],
+    annotation_types: set[str],
+    seeds: set[str],
+) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """`index` plus, for every use of an annotation that is meta-annotated by one of `seeds`
+    (transitively, through module-local annotation types and dependency types whose header
+    was read), a row naming the seed itself with the composition's arguments folded under
+    the use site's — `composed_mapping_rows`' own fold, run once per seed so a composed type
+    carrying two (a stereotype AND a condition) contributes both."""
+    headers = [
+        {
+            "target": str(row["target"]),
+            "annotation": bare_descriptor(str(row["annotation"])),
+            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
+        }
+        for row in workspace.query("type_header_annotations")
+    ]
+    header_types = {row["target"] for row in headers}
+    # A seed is decided by its own model, never through what it is built on: the header of
+    # `@ConditionalOnProperty` records `@Conditional(OnPropertyCondition)`, and composing
+    # through it would add an unevaluated `other` row to every direct use.
+    composing = {
+        symbol for symbol in annotation_types | header_types if bare_descriptor(symbol) not in seeds
+    }
+    names = {bare_descriptor(symbol) for symbol in composing}
+    # Only rows a composition can touch: a declaration ON an annotation type, or a USE of one.
+    rows = [
+        row
+        for row in (
+            *(
+                {"target": target, "annotation": bare_descriptor(annotation), "args": args}
+                for target, uses in index.items()
+                for annotation, args in uses
+            ),
+            *headers,
+        )
+        if row["target"] in composing or row["annotation"] in names
+    ]
+    effective = {target: list(uses) for target, uses in index.items()}
+    for seed in sorted(seeds):
+        for row in composed_mapping_rows(rows, composing, {seed}):
+            # A composing type's own declaration row comes back too; it is no bean's use.
+            if row["target"] in composing:
+                continue
+            effective.setdefault(str(row["target"]), []).append(
+                (str(row["annotation"]), dict(row["args"]))
+            )
+    return effective
+
+
+def _lambdas_created_by(workspace: Workspace) -> dict[str, list[str]]:
+    """Creating method -> the synthetic bodies (lambdas) its `dynamic` call sites create.
+    `synthetic` is the compiler's own mark on a lambda body (D00 §5a); a method REFERENCE
+    names a method someone wrote, which belongs to its own class, not to the creator."""
+    synthetic = set()
+    for row in workspace.query("method_declarations"):
+        modifiers = row.get("modifiers")
+        if isinstance(modifiers, dict) and modifiers.get("synthetic"):
+            synthetic.add(str(row["symbol"]))
+    created: dict[str, list[str]] = {}
+    for row in workspace.query("lambda_edges"):
+        if str(row["callee"]) in synthetic:
+            created.setdefault(str(row["caller"]), []).append(str(row["callee"]))
+    return created
+
+
+def _created_from(method: str, created: dict[str, list[str]]) -> list[str]:
+    """Every lambda body `method` creates, and every one those create in turn."""
+    found: list[str] = []
+    pending = list(created.get(method, ()))
+    while pending:
+        body = pending.pop()
+        if body in found:
+            continue
+        found.append(body)
+        pending.extend(created.get(body, ()))
+    return sorted(found)
 
 
 def _constructed_by(workspace: Workspace) -> dict[str, list[str]]:

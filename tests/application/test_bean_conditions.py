@@ -34,6 +34,7 @@ from sextant.domain.facts import (
     MethodReturnFact,
     Signature,
     SymbolFact,
+    TypeHeaderFact,
     TypeRef,
 )
 from sextant.domain.symbols import method_descriptor
@@ -193,7 +194,11 @@ def _catalogs(*ids: str) -> list[Catalog]:
 
 
 def _resolved(
-    tmp_path: Path, facts: list[object], *ids: str, environments: tuple[str, ...] = ("prod",)
+    tmp_path: Path,
+    facts: list[object],
+    *ids: str,
+    environments: tuple[str, ...] = ("prod",),
+    default_legacy: str = "false",
 ) -> DuckDbWorkspace:
     """The facts through the passes the conditions pass reads after: configuration (the
     environments), the call graph and the hierarchy (what a factory constructs, and what it
@@ -202,7 +207,7 @@ def _resolved(
     write_fact_file(
         root / "doc.jsonl", _document("doc", "com/acme/orders/All.java", "java", "asm"), facts
     )
-    _config(root, "application.yml", {"orders.legacy": "false"})
+    _config(root, "application.yml", {"orders.legacy": default_legacy})
     for profile in environments:
         _config(root, f"application-{profile}.yml", {"orders.legacy": "true"})
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -503,3 +508,259 @@ def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_p
         "default": ("class", None, "profile", "false", "resolved"),
         "prod": ("class", None, "profile", "true", "resolved"),
     }
+
+
+# --- a stereotype or a condition through a COMPOSED annotation (CP-44 row 5) --------------
+
+
+def test_a_module_local_composed_stereotype_makes_a_conditional_class_a_bean(tmp_path: Path):
+    """`@MyService` is the module's own annotation, meta-annotated `@Service`. The scanner
+    matches meta-annotations, so `@MyService @Profile("prod") Orders` is a scanned bean — and
+    the annotation type itself, which carries `@Service`, is no bean."""
+    my_service = ORDERS + "MyService#"
+    orders = ORDERS + "Orders#"
+    facts = [
+        *_type(my_service, [_marker(SERVICE)], kind=ConstructKind.ANNOTATION),
+        *_type(orders, [AnnotationUse(annotation=my_service, args={}), _profile("prod")]),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    workspace.close()
+
+    assert _verdicts(beans, orders) == {
+        "default": ("class", None, "profile", "false", "resolved"),
+        "prod": ("class", None, "profile", "true", "resolved"),
+    }
+    assert {r["bean"] for r in beans} == {_MODULE + orders}
+
+
+def test_a_stereotype_through_a_dependency_annotations_recorded_header_makes_a_bean(
+    tmp_path: Path,
+):
+    """Review finding 1's real input, reduced: an auto-configuration annotation from a jar,
+    whose header the classpath read recorded as meta-annotated `@Configuration`. Nothing
+    names that annotation in code; its header makes the class a configuration bean, and the
+    class's own `@ConditionalOnProperty` conditions it."""
+    auto = "org/acme/boot/AutoConfig#"
+    wiring = ORDERS + "OrdersAutoConfiguration#"
+    facts = [
+        TypeHeaderFact(
+            document_id="doc",
+            symbol="sextant-jvm maven org.acme/boot 1.0.0 " + auto,
+            construct_kind=ConstructKind.ANNOTATION,
+            annotations=[_marker(CONFIGURATION)],
+            origin="org.acme:boot",
+            version="1.0.0",
+        ),
+        *_type(
+            wiring,
+            [AnnotationUse(annotation=auto, args={}), _on_property("orders.legacy", "true")],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    workspace.close()
+
+    assert _verdicts(beans, wiring) == {
+        "default": ("class", None, "property", "false", "resolved"),
+        "prod": ("class", None, "property", "true", "resolved"),
+    }
+
+
+def test_a_condition_carried_on_a_composed_annotation_conditions_its_users(tmp_path: Path):
+    """`@LegacyOnly` is the module's own annotation carrying `@ConditionalOnProperty(name =
+    "orders.legacy", havingValue = "true")`; a `@Service @LegacyOnly` class carries that
+    condition, its arguments folded from the composition."""
+    legacy_only = ORDERS + "LegacyOnly#"
+    orders = ORDERS + "LegacyOrders#"
+    facts = [
+        *_type(
+            legacy_only,
+            [_on_property("orders.legacy", "true")],
+            kind=ConstructKind.ANNOTATION,
+        ),
+        *_type(orders, [_marker(SERVICE), AnnotationUse(annotation=legacy_only, args={})]),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    workspace.close()
+
+    assert _verdicts(beans, orders) == {
+        "default": ("class", None, "property", "false", "resolved"),
+        "prod": ("class", None, "property", "true", "resolved"),
+    }
+
+
+# --- a lambda a conditional factory creates is that factory's code -----------------------
+
+_METAFACTORY = "java/lang/invoke/LambdaMetafactory#"
+_GET_FOR_OBJECT = "(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;"
+
+
+def _outbound_call(caller: str, ordinal: int = 0) -> CallSiteFact:
+    """`restTemplate.getForObject("/billing/balances/{id}", String.class)` in `caller`."""
+    return CallSiteFact(
+        document_id="doc",
+        caller=_MODULE + caller,
+        target=CallTarget(owner=RESTTEMPLATE, name="getForObject", descriptor=_GET_FOR_OBJECT),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+        receiver=3,
+        result=12,
+        arguments=[
+            CallArgument(kind="string", value="/billing/balances/{id}"),
+            CallArgument(kind="class", symbol="java/lang/String#"),
+            CallArgument(kind="unresolved"),
+        ],
+    )
+
+
+def test_a_lambda_a_conditional_factory_creates_carries_the_factorys_condition(
+    tmp_path: Path,
+):
+    """Review finding 2. `@Bean @Profile("prod") Runnable sync() { return () ->
+    rest.getForObject(…); }` in an unconditional configuration class: the lambda body is
+    the factory's code, read off the `dynamic` call edge from `sync` to it (never off its
+    name). Its outbound row carries the factory's condition, `via` the factory — not the
+    configuration class's (none)."""
+    wiring = ORDERS + "SyncConfig#"
+    runnable = "java/lang/Runnable#"
+    factory = method_descriptor(wiring, "sync", "()Ljava/lang/Runnable;")
+    body = method_descriptor(wiring, "lambda$sync$0", _VOID)
+    facts = [
+        *_type(wiring, [_marker(CONFIGURATION)]),
+        *_method(wiring, "sync", runnable, [_marker(BEAN), _profile("prod")], []),
+        CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + factory,
+            target=CallTarget(owner=_METAFACTORY, name="metafactory", descriptor=_VOID),
+            invoke_kind="dynamic",
+            ordinal=0,
+            result=4,
+            implementation=body,
+            arguments=[CallArgument(kind="lambda", symbol=body)],
+        ),
+        SymbolFact(
+            document_id="doc",
+            symbol=_MODULE + body,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + wiring,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            modifiers={"synthetic": True},
+        ),
+        MethodReturnFact(document_id="doc", method=_MODULE + body, ordinal=0, value=None),
+        _outbound_call(body),
+    ]
+    workspace = _resolved(tmp_path, facts, "spring-resttemplate")
+    beans = workspace.query("bean_conditions")
+    viewed = workspace.query("endpoint_conditions")
+    workspace.close()
+
+    assert _verdicts(beans, body) == {
+        "default": ("factory", _MODULE + factory, "profile", "false", "resolved"),
+        "prod": ("factory", _MODULE + factory, "profile", "true", "resolved"),
+    }
+    assert {(r["caller"], r["via"], r["environment"], r["holds"]) for r in viewed} == {
+        (_MODULE + body, _MODULE + factory, "default", "false"),
+        (_MODULE + body, _MODULE + factory, "prod", "true"),
+    }
+
+
+# --- the view tells two routes of one bean apart -----------------------------------------
+
+
+def test_two_exclusive_factories_rows_on_one_endpoint_carry_distinct_via(tmp_path: Path):
+    """Review finding 3. `KafkaOrderPublisher#send` makes an outbound call and the class is
+    registered by a `prod` factory and a `staging` one. Read as "every row must hold", the
+    row would exist nowhere; `via` tells the two routes apart, and `bean_presence` — not the
+    rows — says where the row exists."""
+    staging = ORDERS + "StagingConfig#"
+    send = method_descriptor(KAFKA, "send", _VOID)
+    facts = [
+        *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
+        *_type(KAFKA, interfaces=(PUBLISHER,)),
+        SymbolFact(
+            document_id="doc",
+            symbol=_MODULE + send,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + KAFKA,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+        ),
+        _outbound_call(send),
+        *_type(MESSAGING, [_marker(CONFIGURATION)]),
+        *_method(MESSAGING, "publisher", PUBLISHER, [_marker(BEAN), _profile("prod")], [KAFKA]),
+        *_type(staging, [_marker(CONFIGURATION)]),
+        *_method(staging, "publisher", PUBLISHER, [_marker(BEAN), _profile("staging")], [KAFKA]),
+    ]
+    workspace = _resolved(tmp_path, facts, "spring-resttemplate", environments=("prod", "staging"))
+    viewed = workspace.query("endpoint_conditions")
+    presence = _presence(workspace, KAFKA)
+    workspace.close()
+
+    assert {(r["via"], r["bean_kind"]) for r in viewed} == {
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "factory"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "factory"),
+    }
+    assert {
+        (r["environment"], r["holds"])
+        for r in viewed
+        if r["via"].startswith(_factory_symbol(staging, "publisher", PUBLISHER))
+    } == {("default", "false"), ("prod", "false"), ("staging", "true")}
+    assert presence == {
+        "default": ("false", "resolved"),
+        "prod": ("true", "resolved"),
+        "staging": ("true", "resolved"),
+    }
+
+
+def test_a_bean_left_open_by_an_unfilled_placeholder_says_the_value_is_unknown(
+    tmp_path: Path,
+):
+    """Minor: `orders.legacy: ${ORDERS_LEGACY}` with nothing filling it. Where the bean's only
+    route is open for that reason, `bean_presence` says the configured value is unknown — not
+    that the condition is one this analysis does not evaluate."""
+    orders = ORDERS + "LegacyOrders#"
+    facts = [*_type(orders, [_marker(SERVICE), _on_property("orders.legacy", "true")])]
+    workspace = _resolved(tmp_path, facts, default_legacy="${ORDERS_LEGACY}")
+    rows = {
+        str(r["environment"]): r
+        for r in workspace.query("bean_presence")
+        if r["bean"] == _MODULE + orders
+    }
+    workspace.close()
+
+    assert (rows["default"]["holds"], rows["default"]["resolution"]) == ("unresolved", "unresolved")
+    assert "value is unknown" in str(rows["default"]["evidence"])
+    assert "does not evaluate" not in str(rows["default"]["evidence"])
+    assert (rows["prod"]["holds"], rows["prod"]["evidence"]) == ("true", "compiler")
+
+
+def test_a_condition_annotation_is_not_composed_through_what_it_is_built_on(tmp_path: Path):
+    """Measured on `yudao-spring-boot-starter-websocket`: the classpath header of
+    `@ConditionalOnProperty` records `@Conditional(OnPropertyCondition.class)`. A condition
+    the model names is decided by its own rule; composing through it added an unevaluated
+    `other` row to every direct use and turned a decided bean `unresolved`."""
+    on_property = "org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#"
+    orders = ORDERS + "LegacyOrders#"
+    facts = [
+        TypeHeaderFact(
+            document_id="doc",
+            symbol="sextant-jvm maven org.springframework.boot/spring-boot-autoconfigure 2.7.18 "
+            + on_property,
+            construct_kind=ConstructKind.ANNOTATION,
+            annotations=[
+                AnnotationUse(
+                    annotation="org/springframework/context/annotation/Conditional#",
+                    args={"value": ["org/acme/OnPropertyCondition#"]},
+                )
+            ],
+            origin="org.springframework.boot:spring-boot-autoconfigure",
+            version="2.7.18",
+        ),
+        *_type(orders, [_marker(SERVICE), _on_property("orders.legacy", "true")]),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    workspace.close()
+
+    assert {r["kind"] for r in beans} == {"property"}

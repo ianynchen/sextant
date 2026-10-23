@@ -1201,18 +1201,25 @@ SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
 
 -- The conditions an endpoint row carries, read through the bean its code lives in (spec
 -- 2026-10-22-conditional-beans, decision 3): a VIEW, so no row copies them, and kept under
--- PR #61's name and columns — `caller` appended last — so the documents, the system tier
--- (which federates it by name) and the bundle read what they read before, now for rows of
--- every direction. A row's owner class is its handler's `enclosing`, or its caller's where
--- it has no handler (an outbound call). DISTINCT because one condition reached by two
--- routes of one bean is one condition on the row. Last in this file because a view binds
--- at creation, and `symbols` is defined above.
+-- PR #61's name and columns — `caller`, `via` and `bean_kind` appended, in that order — so
+-- the documents, the system tier (which federates it by name) and the bundle read what they
+-- read before, now for rows of every direction. A row's code is its handler, or its caller
+-- where it has no handler (an outbound call); its bean is that symbol itself where the
+-- conditions pass wrote one for it (a lambda body a factory method creates), and otherwise
+-- the symbol's owner class (`enclosing`). `via` tells two routes of one bean apart: two
+-- mutually exclusive factories are two routes, each holding somewhere, and whether the row
+-- EXISTS in an environment is `bean_presence`'s answer (OR across routes), never "every row
+-- here holds". Condition-less route rows (`kind` NULL) are no condition and are left out.
+-- Last in this file because a view binds at creation, and `symbols` is defined above.
 CREATE OR REPLACE VIEW endpoint_conditions AS
 SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
-       b.environment, b.holds, b.resolution, b.evidence, e.caller
+       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind
 FROM endpoints e
 JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
-JOIN bean_conditions b ON b.bean = s.enclosing
+JOIN bean_conditions b
+  ON b.bean = s.symbol
+  OR (b.bean = s.enclosing
+      AND NOT EXISTS (SELECT 1 FROM bean_conditions own WHERE own.bean = s.symbol))
 WHERE b.kind IS NOT NULL;
 
 -- Where each conditional bean EXISTS, per environment (ruled 2026-10-22): a class exists
@@ -1222,16 +1229,29 @@ WHERE b.kind IS NOT NULL;
 -- where every condition of it holds, fails where any fails, and is `unresolved` otherwise;
 -- a condition-less bean route holds everywhere and a plain `new` is `unresolved`. The bean
 -- holds where any route holds, fails where every route fails, and is `unresolved` otherwise,
--- its evidence then naming what left it open.
+-- its evidence then naming what left each open route open: a plain `new`, a configured
+-- value this analysis does not know (a placeholder nothing fills), a composed profile
+-- expression, or a condition it does not evaluate.
 CREATE OR REPLACE VIEW bean_presence AS
-WITH routes AS (
+WITH reasons AS (
+    SELECT *,
+           CASE WHEN holds <> 'unresolved' THEN NULL
+                WHEN evidence <> 'compiler' THEN evidence
+                WHEN kind = 'property' THEN 'the configured value is unknown here: '
+                     || expression || ' reads a placeholder nothing fills'
+                WHEN kind = 'profile' THEN 'a composed profile expression, not evaluated: '
+                     || expression
+                ELSE 'a condition this analysis does not evaluate: ' || coalesce(expression, '')
+           END AS reason
+    FROM bean_conditions
+),
+routes AS (
     SELECT bean, coalesce(via, '') AS route, environment,
            CASE WHEN bool_or(holds = 'false') THEN 'false'
                 WHEN bool_and(holds = 'true') THEN 'true'
                 ELSE 'unresolved' END AS holds,
-           string_agg(DISTINCT evidence, '; ' ORDER BY evidence)
-               FILTER (WHERE evidence <> 'compiler') AS reason
-    FROM bean_conditions
+           string_agg(DISTINCT reason, '; ' ORDER BY reason) AS reason
+    FROM reasons
     GROUP BY bean, coalesce(via, ''), environment
 )
 SELECT bean, environment,
@@ -1241,9 +1261,8 @@ SELECT bean, environment,
        CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'resolved'
             ELSE 'unresolved' END AS resolution,
        CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'compiler'
-            ELSE coalesce(
-                string_agg(DISTINCT reason, '; ' ORDER BY reason),
-                'a condition this analysis does not evaluate'
-            ) END AS evidence
+            ELSE string_agg(DISTINCT reason, '; ' ORDER BY reason)
+                     FILTER (WHERE holds = 'unresolved')
+            END AS evidence
 FROM routes
 GROUP BY bean, environment;

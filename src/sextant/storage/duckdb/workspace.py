@@ -847,14 +847,15 @@ _NAMED_QUERIES = {
     # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22), read since spec
     # 2026-10-22-conditional-beans through the VIEW of that name: the conditions an endpoint
     # row's bean carries, one row per environment, in the order a reader compares them —
-    # endpoint, then environment. `caller` last, the view's own order; it joins the ORDER BY
-    # so an outbound row (no handler) is as total an order as an inbound one (NFR-1).
+    # endpoint, then environment. `caller`, `via` and `bean_kind` last, the view's own order;
+    # they join the ORDER BY so an outbound row (no handler) and two routes of one bean are as
+    # total an order as one inbound row (NFR-1).
     "endpoint_conditions": """
         SELECT protocol, direction, method, path, handler, kind, expression, environment,
-               holds, resolution, evidence, caller
+               holds, resolution, evidence, caller, via, bean_kind
         FROM endpoint_conditions
         ORDER BY protocol, direction, method, path, handler, kind, expression, environment,
-                 caller
+                 caller, via, bean_kind
     """,
     # Spec 2026-10-22-conditional-beans §2: the conditions every bean carries, keyed by the
     # bean. Ordered on the whole row — one bean may be reached by several routes, each a
@@ -872,6 +873,14 @@ _NAMED_QUERIES = {
         SELECT bean, environment, holds, resolution, evidence
         FROM bean_presence
         ORDER BY bean, environment
+    """,
+    # The lambda bodies each method's `dynamic` call sites create (spec 2026-10-22-conditional-
+    # beans §2a): a body a factory method creates is that factory's code. `invoke_kind` is the
+    # site's own dispatch form; the reader keeps the synthetic bodies (lambdas) among them.
+    "lambda_edges": """
+        SELECT DISTINCT caller, callee FROM call_edges
+        WHERE invoke_kind = 'dynamic' AND callee IS NOT NULL
+        ORDER BY caller, callee
     """,
     # The constructor calls a `@Bean` method's body makes, and every other one in the module
     # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
@@ -1627,9 +1636,10 @@ class DuckDbWorkspace:
         so the schema's `CREATE OR REPLACE VIEW` can run on a workspace file an earlier build
         wrote — `module analyze` reopens that file rather than starting a new one, and is the
         command every stale-workspace refusal tells the reader to run."""
+        placeholders = ", ".join("?" for _ in _TABLES_NOW_VIEWS)
         held = self._connection.execute(
             "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
-            f"AND schema_name = 'main' AND table_name IN ({', '.join('?' for _ in _TABLES_NOW_VIEWS)})",
+            f"AND schema_name = 'main' AND table_name IN ({placeholders})",
             list(_TABLES_NOW_VIEWS),
         ).fetchall()
         for (table,) in held:

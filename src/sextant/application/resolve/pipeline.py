@@ -279,12 +279,12 @@ def resolve(
     with _timed("record_bean_conditions"):
         record_bean_conditions(workspace, declared)
     # Spec 2026-09-22 §1f, and BELOW `apply_protocol_hints` for the reason
-    # `record_request_requirements` above gives in full: a qualifying attribute names its row by the row's identity columns,
-    # `protocol` among them, and that pass reclassifies `protocol` on rows the engines
-    # minted. Below the `endpoint_metadata` reset too, because it WRITES that table and a
-    # row written above the reset would simply be erased. Its order against
-    # `record_request_requirements` does not matter — the two write disjoint kinds, and
-    # the insert is insert-if-absent on the whole row either way.
+    # `record_request_requirements` above gives in full: a qualifying attribute names its
+    # row by the row's identity columns, `protocol` among them, and that pass reclassifies
+    # `protocol` on rows the engines minted. Below the `endpoint_metadata` reset too,
+    # because it WRITES that table and a row written above the reset would simply be
+    # erased. Its order against `record_request_requirements` does not matter — the two
+    # write disjoint kinds, and the insert is insert-if-absent on the whole row either way.
     with _timed("record_endpoint_attributes"):
         record_endpoint_attributes(workspace, declared)
     # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
