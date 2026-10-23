@@ -1689,3 +1689,37 @@ def test_an_inherited_body_with_an_unconditional_heir_exists_everywhere(tmp_path
     workspace.close()
 
     assert greet not in beans
+
+
+def test_a_narrowed_site_lists_an_inherited_body_with_an_unconditional_heir_as_present_everywhere(
+    tmp_path: Path,
+):
+    """The narrowed variant of the test above: `EnGreeter` (`@Profile("prod")`) overrides
+    `greet`, so the call narrows to two bodies — its own, and `Greeter`'s default body, which
+    runs as part of `PlainGreeter`. The default body belongs to no bean of its own, so the
+    bean map has no row for it, and `candidate_presence` lists it with no bean, present in
+    every environment (an unconditional heir)."""
+    greeter, en, plain = ORDERS + "Greeter#", ORDERS + "EnGreeter#", ORDERS + "PlainGreeter#"
+    hello = method_descriptor(NOTICES, "hello", _VOID)
+    facts = [
+        *_type(greeter, kind=ConstructKind.INTERFACE),
+        *_body(greeter, "greet"),
+        *_type(en, [_marker(COMPONENT), _profile("prod")], interfaces=(greeter,)),
+        *_body(en, "greet"),
+        *_type(plain, [_marker(COMPONENT)], interfaces=(greeter,)),
+        *_type(NOTICES, [_marker(SERVICE)]),
+        *_body(NOTICES, "hello"),
+        *_calls(hello, greeter, "greet"),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    inherited = _MODULE + method_descriptor(greeter, "greet", _VOID)
+    mapped = {r["symbol"] for r in workspace.query("symbol_beans")}
+    candidates = {
+        (r["callee"], r["environment"]): (r["bean"], r["holds"])
+        for r in workspace.query("candidate_presence")
+    }
+    workspace.close()
+
+    assert inherited not in mapped
+    assert candidates[(inherited, "default")] == (None, "true")
+    assert candidates[(inherited, "prod")] == (None, "true")

@@ -2025,6 +2025,9 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
     named = {callee: labels[owner] for callee, owner in owners.items()}
     present: dict[str, list[str]] = {}
     unread: dict[str, list[str]] = {}
+    # Environments where a candidate the line leaves out was ruled out by the same kind of
+    # verdict (`partial`): the line is then as hedged as one that names a `partial` candidate.
+    ruled_out_partially: set[str] = set()
     for row in rows:
         environment, label = str(row["environment"]), named[str(row["callee"])]
         present.setdefault(environment, [])
@@ -2033,6 +2036,8 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
             present[environment].append(f"`{label}`{hedge}")
         elif str(row["holds"]) == "unresolved":
             unread.setdefault(environment, []).append(f"`{label}`")
+        elif str(row["resolution"]) == "partial":
+            ruled_out_partially.add(environment)
     target = step.target or ""
     entries = [
         DetailEntry(
@@ -2049,8 +2054,17 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
         for environment, listed in present.items()
         if listed or environment not in unread
     }
-    for environments, listed in _shared_lines(shown):
-        body = ", ".join(listed) if listed else "none of them"
+    lines: list[tuple[str, str]] = []
+    for hedged in (False, True):
+        group = {e: listed for e, listed in shown.items() if (e in ruled_out_partially) == hedged}
+        for environments, listed in _shared_lines(group):
+            body = ", ".join(listed) if listed else "none of them"
+            if hedged and _PARTIAL_CANDIDATE not in body:
+                body += _PARTIAL_CANDIDATE
+            lines.append((environments, body))
+    # Environment order, by each line's first environment: the same order an unhedged-only
+    # site always had.
+    for environments, body in sorted(lines, key=lambda line: line[0].split("`")[1]):
         entries.append(DetailEntry(_runs(f"in {environments}"), _runs(body), None))
     for environments, listed in _shared_lines(unread):
         body = ", ".join(listed)

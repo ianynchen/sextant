@@ -894,12 +894,6 @@ _NAMED_QUERIES = {
         WHERE invoke_kind = 'dynamic' AND callee IS NOT NULL
         ORDER BY caller, callee
     """,
-    # The constructor calls a `@Bean` method's body makes, and every other one in the module
-    # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
-    # that class is also constructed anywhere else. Read once per resolve, restricted here to
-    # `<init>` sites with a body this workspace read — a library class has no code a derived
-    # row could live in. The site's own `name` says what is called, so nothing parses a
-    # descriptor to tell a constructor from a method.
     # The bodies every virtual or interface call site dispatches to, each with the method the
     # site names and the type declaring the body (spec 2026-10-22-conditional-beans, ruled
     # 2026-10-22): which bean an INHERITED body runs as part of is asked of the module's own
@@ -912,6 +906,12 @@ _NAMED_QUERIES = {
         WHERE e.invoke_kind IN ('virtual', 'interface') AND y.enclosing IS NOT NULL
         ORDER BY body, s.name, s.descriptor, y.enclosing
     """,
+    # The constructor calls a `@Bean` method's body makes, and every other one in the module
+    # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
+    # that class is also constructed anywhere else. Read once per resolve, restricted here to
+    # `<init>` sites with a body this workspace read — a library class has no code a derived
+    # row could live in. The site's own `name` says what is called, so nothing parses a
+    # descriptor to tell a constructor from a method.
     "constructor_edges": """
         SELECT DISTINCT e.caller, e.callee
         FROM call_edges e

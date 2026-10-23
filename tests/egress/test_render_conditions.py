@@ -645,8 +645,39 @@ def test_a_partial_candidate_says_it_was_decided_from_this_modules_beans_only():
     assert (
         "  - in `default`: `CachedUserService`, `DefaultUserService` (decided from this module's "
         "beans only)\n"
-        "  - in `ldap`: `CachedUserService`, `LdapUserService`\n"
+        # The `ldap` line names no `partial` candidate, but it leaves out `DefaultUserService`,
+        # whose absence there is the same kind of verdict (`partial`).
+        "  - in `ldap`: `CachedUserService`, `LdapUserService` (decided from this module's "
+        "beans only)\n"
         "  - not evaluated in `default`, `ldap`: `RemoteUserService`\n"
+    ) in block + "\n"
+
+
+def test_a_line_whose_left_out_candidate_was_ruled_out_partially_says_so():
+    """A candidate left out of an environment's line because it does not exist there is a
+    verdict too, and when that verdict is `partial` (a `@ConditionalOnMissingBean` default
+    displaced by a bean of this module, judged from this module's beans only) the line is
+    hedged the way a line naming a `partial` candidate is — including the line that says none
+    of them. An environment whose left-out candidates are all `resolved` stays unhedged, and
+    the two do not share a line."""
+    default_find, ldap_find = DEFAULT_USERS + "find().", LDAP_USERS + "find()."
+    document = _traced(
+        _narrowed_trace(default_find, ldap_find, target="com/acme/UserService#find()."),
+        candidate_presence=[
+            *_candidate(
+                default_find, DEFAULT_USERS, {"default": "false", "ldap": "false"}, "partial"
+            ),
+            *_candidate(default_find, DEFAULT_USERS, {"test": "false"}),
+            *_candidate(
+                ldap_find, LDAP_USERS, {"default": "false", "ldap": "true", "test": "false"}
+            ),
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert (
+        "  - in `default`: none of them (decided from this module's beans only)\n"
+        "  - in `ldap`: `LdapUserService` (decided from this module's beans only)\n"
+        "  - in `test`: none of them\n"
     ) in block + "\n"
 
 

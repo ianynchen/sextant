@@ -24,3 +24,6 @@ spring:
 # The legacy controller exists only where this is `true` (conditional-controllers fixture).
 orders:
   legacy: true
+# NotificationSender's two implementations split on this: Kafka where it is `kafka` (here), Log where
+# it is `log` or absent (default). Set in prod only.
+  notify: kafka

@@ -210,7 +210,7 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     created = _lambdas_created_by(workspace)
     ancestors = _ancestors(workspace)
     reached = _reached_bodies(workspace)
-    dispatch = dispatch_of(workspace) if reached else None
+    dispatch = workspace.once(dispatch_of) if reached else None
     rows: list[dict[str, Any]] = []
     for model in vocabularies:
         every, registrations = _routes(workspace, model, index, constructed, created, ancestors)

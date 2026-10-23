@@ -48,6 +48,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
+        # Conditional beans (spec 2026-10-22-conditional-beans): the eleven class files under `conditional/` that are new (three interfaces, two senders, two policies, a client, the configuration and two controllers).
+        "AuditClient.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
@@ -71,6 +73,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "ConditionalClientsConfig.jsonl",
         "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
@@ -79,10 +82,12 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "FirstSplitter.jsonl",
+        "HttpAuditClient.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         # A2 Task 8: `httpclient/JdkOrdersClient`, the JDK `HttpClient` fixture.
         "JdkOrdersClient.jsonl",
+        "KafkaNotificationSender.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
         # Groups B and C Task 1: the JAX-RS Kotlin fixture, `jaxrs/KotlinOrderResource.kt`
@@ -111,6 +116,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOrderController.jsonl",
         "LegacyOrdersController.jsonl",
         "LiveEndpoint.jsonl",
+        "LogNotificationSender.jsonl",
         # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
         # expression form on two handlers — one class file.
         "MappingConditionsController.jsonl",
@@ -120,7 +126,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
         "NormalisingBillingClient.jsonl",
+        "NotificationSender.jsonl",
         "NotificationsSubscriber.jsonl",
+        "NotifyController.jsonl",
         "OpsController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -171,8 +179,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ParsedPayloadListeners.jsonl",
         "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
+        "PricingController.jsonl",
+        "PricingPolicy.jsonl",
         "ProgrammaticWsConfig$TicketEndpoint.jsonl",
         "ProgrammaticWsConfig.jsonl",
+        "PromoPricing.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -200,6 +211,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
         "SpringScopedDetail.jsonl",
+        "StandardPricing.jsonl",
         "StompBrokerConfig.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
@@ -281,7 +293,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # NormalisingBillingClient`, the wrapper that reassigns `path` on one branch — one
     # class file.
     # 144 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): one class file each.
-    assert report.documents == 144
+    # 155 since the conditional beans (spec 2026-10-22-conditional-beans): the eleven class files
+    # under `conditional/` listed in the fact-file names above.
+    assert report.documents == 155
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -306,6 +320,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
+        # Conditional beans (spec 2026-10-22-conditional-beans): the eleven class files under `conditional/` that are new (three interfaces, two senders, two policies, a client, the configuration and two controllers).
+        "AuditClient.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
@@ -329,6 +345,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "ConditionalClientsConfig.jsonl",
         "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
@@ -337,10 +354,12 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
         "FirstSplitter.jsonl",
+        "HttpAuditClient.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         # A2 Task 8: `httpclient/JdkOrdersClient`, the JDK `HttpClient` fixture.
         "JdkOrdersClient.jsonl",
+        "KafkaNotificationSender.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
         # Groups B and C Task 1: the JAX-RS Kotlin fixture, `jaxrs/KotlinOrderResource.kt`
@@ -369,6 +388,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOrderController.jsonl",
         "LegacyOrdersController.jsonl",
         "LiveEndpoint.jsonl",
+        "LogNotificationSender.jsonl",
         # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
         # expression form on two handlers — one class file.
         "MappingConditionsController.jsonl",
@@ -378,7 +398,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
         "NormalisingBillingClient.jsonl",
+        "NotificationSender.jsonl",
         "NotificationsSubscriber.jsonl",
+        "NotifyController.jsonl",
         "OpsController.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -429,8 +451,11 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ParsedPayloadListeners.jsonl",
         "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
+        "PricingController.jsonl",
+        "PricingPolicy.jsonl",
         "ProgrammaticWsConfig$TicketEndpoint.jsonl",
         "ProgrammaticWsConfig.jsonl",
+        "PromoPricing.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -458,6 +483,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
         "SpringScopedDetail.jsonl",
+        "StandardPricing.jsonl",
         "StompBrokerConfig.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
