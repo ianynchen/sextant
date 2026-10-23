@@ -34,6 +34,8 @@ detect:
     - org.springframework.integration:spring-integration-core
     - org.springframework.boot:spring-boot-starter-integration
 
+bean_model: spring
+
 # `resolved_config` is the PIPELINE-declared capability every `config_join`
 # catalog needs — this one derives nothing without a `key`, but the style's
 # engine reads the table for the binder lookup and for `gaps`'s own answer, and

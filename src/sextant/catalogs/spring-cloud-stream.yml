@@ -13,6 +13,8 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.cloud:spring-cloud-stream"]
 
+bean_model: spring
+
 # The first PIPELINE-declared capability (D02 §1): the pipeline adds it once
 # M04's pass 2 has produced `resolved_config` in THIS run, so a config-less
 # run skips this catalog visibly rather than silently deriving nothing. The

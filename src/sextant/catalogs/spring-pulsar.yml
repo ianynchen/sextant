@@ -11,6 +11,8 @@ measured:
   - { artifact: org.springframework.pulsar:spring-pulsar, versions: ["1.2.11", "2.0.7"],
       identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
 
+bean_model: spring
+
 # `nested_annotation_args` (capability 9.16) because a `@PulsarListeners` member
 # reaches the class file only as a nested annotation inside the container's
 # array (`OI-38`). Required rather than optional for `spring-kafka.yml`'s

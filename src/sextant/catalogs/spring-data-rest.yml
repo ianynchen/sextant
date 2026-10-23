@@ -54,6 +54,8 @@ measured:
   - { artifact: org.springframework.data:spring-data-jpa, versions: ["4.1.1"],
       identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
 
+bean_model: spring
+
 requires: [annotation_args, implemented_interfaces, generic_interfaces]
 
 # D02's specified-but-unused `default_produces`, implemented here (register

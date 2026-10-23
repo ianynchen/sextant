@@ -61,6 +61,8 @@ class YamlCatalogSource:
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading model {path}: not a YAML mapping")
             models[str(_required(raw, "id", path))] = raw
+            if subdirectory == "bean-models":
+                _check_bean_model(raw, path)
         return models
 
     def server_model(self) -> list[dict[str, Any]]:
@@ -812,6 +814,112 @@ def _named_model(
             f"`{subdirectory}/` — known models: {sorted(models) or 'none'} ({section})"
         )
     return models[named]
+
+
+_CONDITION_KINDS = ("profile", "property", "other")
+
+
+def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
+    """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
+    `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` /
+    `interface_registrations` — naming the file
+    (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
+    framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
+    measured is a guess, and a typo here would silently strip every bean of its condition."""
+    where = f"loading model {path}"
+    if "conditions" in raw:
+        declared = raw["conditions"]
+        if not isinstance(declared, dict):
+            raise CatalogError(
+                f"{where}: `conditions` must be a mapping of kind to entry, got {declared!r}"
+            )
+        for kind, entry in declared.items():
+            if kind not in _CONDITION_KINDS or not isinstance(entry, dict):
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}`: the kinds are `profile`, `property` and "
+                    "`other`, each a mapping"
+                )
+            if kind == "other":
+                names = entry.get("annotations")
+                if not isinstance(names, list) or not names or not entry.get("by"):
+                    raise CatalogError(
+                        f"{where}: `conditions.other` needs `annotations` (a list) and a `by:` probe"
+                    )
+            elif not isinstance(entry.get("annotation"), str) or not entry.get("by"):
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}` needs `annotation` and a `by:` probe"
+                )
+    if "presence" in raw:
+        presence = raw["presence"]
+        strings = ("missing", "present", "order_reason", "present_cycle_reason")
+        lists = ("type_attrs", "name_attrs", "annotation_attrs")
+        if (
+            not isinstance(presence, dict)
+            or not all(isinstance(presence.get(key), str) for key in strings)
+            or not all(isinstance(presence.get(key), list) for key in lists)
+            or not presence.get("by")
+        ):
+            raise CatalogError(
+                f"{where}: `presence` needs `missing` and `present` (annotation names), "
+                "`type_attrs`, `name_attrs` and `annotation_attrs` (lists), `order_reason`, "
+                "`present_cycle_reason` and a `by:` probe"
+            )
+    # Which classes are beans at all (CP-44 row 5): an empty or malformed list would make
+    # every scanned class unconditional without a word, the failure the blocks above refuse.
+    if "stereotypes" in raw:
+        stereotypes = raw["stereotypes"]
+        if (
+            not isinstance(stereotypes, list)
+            or not stereotypes
+            or not all(isinstance(name, str) and name for name in stereotypes)
+        ):
+            raise CatalogError(
+                f"{where}: `stereotypes` must be a non-empty list of annotation names, "
+                f"got {stereotypes!r}"
+            )
+    if "configuration_annotation" in raw:
+        configuration = raw["configuration_annotation"]
+        if not isinstance(configuration, str) or not configuration:
+            raise CatalogError(
+                f"{where}: `configuration_annotation` must be one annotation name, "
+                f"got {configuration!r}"
+            )
+    # The attribute naming a scanned bean, per stereotype (CP-44 row 6): a malformed entry
+    # would give every scanned class its default name, read as decided.
+    if "stereotype_name_attrs" in raw:
+        naming = raw["stereotype_name_attrs"]
+        if not isinstance(naming, dict) or not all(
+            isinstance(name, str) and name and isinstance(attr, str) and attr
+            for name, attr in naming.items()
+        ):
+            raise CatalogError(
+                f"{where}: `stereotype_name_attrs` must map each annotation name to one "
+                f"attribute, got {naming!r}"
+            )
+    # Interfaces the framework registers and implements at run time (CP-46): a malformed entry
+    # would leave every such interface without a route, its calls reading as unanswered.
+    if "interface_registrations" in raw:
+        registrations = raw["interface_registrations"]
+        optional = ("annotation", "excluded_by")
+        if (
+            not isinstance(registrations, list)
+            or not registrations
+            or not all(
+                isinstance(entry, dict)
+                and isinstance(entry.get("supertypes"), list)
+                and entry["supertypes"]
+                and all(isinstance(name, str) and name for name in entry["supertypes"])
+                and all(isinstance(entry.get(key, ""), str) for key in optional)
+                and isinstance(entry.get("by"), str)
+                and entry["by"]
+                for entry in registrations
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `interface_registrations` must be a non-empty list of entries, each "
+                "with `supertypes` (a non-empty list of type names), optional `annotation` and "
+                f"`excluded_by` (annotation names) and a `by:` probe, got {registrations!r}"
+            )
 
 
 def _required(raw: dict[str, Any], key: str, path: Path) -> Any:

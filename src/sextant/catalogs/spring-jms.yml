@@ -7,6 +7,8 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-jms"]
 
+bean_model: spring
+
 # `nested_annotation_args` (capability 9.16): a REPEATED `@JmsListener`
 # reaches the class file only as the nested array inside `@JmsListeners`
 # (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a

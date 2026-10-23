@@ -630,7 +630,7 @@ handlers and clients name, and `yudao-module-system` reading more than zero.
 
 ### OI-168 — a module resolving NO configuration key still gets a `default` verdict per condition
 **Minor · logged 2026-10-22 (review of spec 2026-10-21-conditional-controllers, Minor 3) ·
-`src/sextant/application/resolve/endpoint_conditions.py::record_endpoint_conditions`**
+`src/sextant/application/resolve/bean_conditions.py::record_bean_conditions` (moved there from `endpoint_conditions.py` by `conditional-beans`)**
 
 The pass takes its environments from `resolved_config`'s rows and falls back to `["default"]`
 when there are none, so a `@Profile("prod")` controller in a module whose config files
@@ -645,12 +645,26 @@ should come from one place.
 **Real triggering input:** a Boot module with an empty `application.yml` (or none) and a
 conditional controller.
 
-**Verify:** `grep -n 'or \["default"\]' src/sextant/application/resolve/endpoint_conditions.py`.
+**Verify:** `grep -n 'or \["default"\]' src/sextant/application/resolve/bean_conditions.py`.
 **Closes** when the config layer publishes the module's environments as a fact of its own
 (the profile files it saw, `default` included) and both the pass and the document read it.
 
-### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim
-**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
+**2026-10-22 — re-read against the active-profiles rule (`conditional-beans`, spec §2d,
+CP-45); the issue stands, and its boundary is the same.** An environment is still a profile
+FILE: what changed is which profiles are ACTIVE in each — read from the base's
+`spring.profiles.active`, `.include` and `.default`, not taken from the file's name alone. So a
+profile that no file is named for (`ldap`, `oidc`) is no longer "absent in every environment";
+it is `false` or "not evaluated" according to what the base's keys say, and `unresolved`
+wherever those keys hold a placeholder nothing fills. What this entry still describes is the
+environment LIST: a module with no resolved key gets the one environment `default` (now with
+its active profiles read the same way), while its coverage section says *Environments
+resolved: none.* The wider consequence is the same too — an environment the deployment adds
+(a profile with no file) is not one the document can speak about, only a profile the base
+names can be left open.
+
+### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` verbatim
+**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff);
+restated 2026-10-23 when `cov/conditional-beans` merged `main` ·
 `src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES`, `src/sextant/application/boundary/source.py`**
 
 `export` passes `endpoints.path` (and `peer`) through the `_REDACTED_ADDRESSES` map, while
@@ -669,10 +683,145 @@ path in that set is changed by masking, so nothing misses.
 **Real triggering input:** an endpoint path the redactor rewrites, e.g. a `redact:` value
 pattern a route segment matches, on a module with a requirement or a condition on that route.
 
-**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES\|"endpoint_conditions": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
-**Closes** when the exporter masks `endpoints.path`, `endpoint_metadata.path` and
-`endpoint_conditions.path` through the one `_REDACTED_ADDRESSES` map, so the three stay
-spelled alike in a bundle.
+**The `endpoint_conditions` half is closed** (no longer part of this entry): spec
+2026-10-22-conditional-beans exports the `endpoint_conditions` view with `path` masked through
+the same `_REDACTED_ADDRESSES` map `endpoints.path` uses, so a bundle's condition rows join
+their endpoint on the masked spelling. `endpoint_metadata.path` is still exported verbatim.
+
+**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
+**Closes** when the exporter masks `endpoint_metadata.path` through the one
+`_REDACTED_ADDRESSES` map as well, so it stays spelled like `endpoints.path` in a bundle.
+
+### OI-170 — a call declared on a generic framework type lists every repository that extends it
+**Minor · logged 2026-10-22 (review of `conditional-beans`' framework-implemented interface
+beans, spec §4) · `src/sextant/storage/duckdb/schema.sql` (`candidate_presence`, the proxy arm),
+`src/sextant/application/resolve/bean_conditions.py::_registered_interfaces`**
+
+A call whose receiver is declared as a GENERIC framework type — `JpaRepository<User, Long>
+repository` — names `JpaRepository`, so every module repository interface extending it is a
+candidate for the call: the type argument is not used to narrow. The site then lists
+framework-generated implementations of repositories that cannot answer it, and states a
+per-environment line for each.
+
+**What happens today:** measured, it triggers nowhere — **0 of 69** proxy sites on
+`jhipster-sample-app` and **0 of 34** on `spring-petclinic-rest` has a framework generic type as
+its receiver.
+
+**Real triggering input:** a service that holds a `JpaRepository<X, Y>` or `CrudRepository<X, Y>`
+field in a module that has more than one repository.
+
+**Verify:** `grep -n "interface_beans" src/sextant/storage/duckdb/schema.sql` — the match is on
+`split_part(c.target, '#', 1)` alone. **Closes** when the arm also requires the interface's
+type arguments (`generic_interfaces`) to agree with the receiver's, or the receiver's type
+arguments are carried on `call_edges`.
+
+### OI-171 — relaxed spellings of the profile keys are not read
+**Minor · logged 2026-10-22 (Task 7b of `conditional-beans`, CP-45 row 5); restated
+2026-10-23 when profile groups were built (CP-45 row 8) ·
+`src/sextant/application/resolve/bean_conditions.py::active_profiles`,
+`src/sextant/catalogs/spring-web.yml` (`config_model.profiles`)**
+
+The active, include, default and group keys are matched exactly (or as `key[N]` for a list): a
+spelling Boot's relaxed binding accepts (`SPRING_PROFILES_ACTIVE` written inside a
+configuration file, camelCase variants) is not matched, so a profile it names reads as not
+active. Also not read: a group whose value is a placeholder nothing fills adds no member.
+
+**Profile groups are read** (no longer part of this entry): `spring.profiles.group.<name>`
+makes its members active wherever `<name>` is, transitively, each as certain as `<name>`.
+Measured when built: five modules set a group — `apollo-portal`, `apollo-configservice`,
+`apollo-adminservice` and `apollo-assembly` (`spring.profiles.group.github = mysql`) and
+`jhipster-sample-app` (`spring.profiles.group.dev`, a list, in `config/application.yml`) — and
+**0 verdicts change** on fresh analyses of the first three (`bean_conditions`,
+`bean_presence`, `candidate_presence` and `endpoint_conditions` identical before and after):
+Apollo's active list is the unfilled `${apollo_profile}`, which already leaves every profile
+not decided by the environment's own name open, and no bean of those modules carries
+`@Profile("mysql")`. `apollo-assembly` is not analysed, and `jhipster-sample-app` resolves no
+environment (its configuration sits under `config/`), so neither moved either.
+
+**What happens today:** no configuration file a module ships writes a relaxed spelling of
+the keys (`grep -rln "SPRING_PROFILES\|springProfiles" examples` over `.yml`, `.yaml` and
+`.properties` files under `src/main/resources` finds none; the hits elsewhere are Docker and
+CI environment variables, which no module's configuration reads).
+
+**Real triggering input:** a Boot application whose `application.yml` sets
+`SPRING_PROFILES_ACTIVE: prod` or `spring.profiles.ACTIVE`.
+
+**Verify:** `grep -n "key_matching" src/sextant/catalogs/spring-web.yml` says `relaxed`, and
+`active_profiles` matches `re.escape(key)` exactly. **Closes** when the profile keys are matched
+by the config model's relaxed key normalization.
+
+### OI-172 — the `@ConditionalOnBean(annotation = …)` criterion ignores the type hierarchy
+**Minor · logged 2026-10-22 (Task 3 of `conditional-beans`) ·
+`src/sextant/application/resolve/bean_conditions.py::_presence_verdicts`**
+
+The annotation criterion matches the annotations the competitor's OWN type carries (composed
+annotations included). Spring's `findAnnotationOnBean` also looks on the type's superclasses
+and interfaces, so a bean whose superclass carries the annotation is a competitor in Spring and
+not here: a `@ConditionalOnMissingBean(annotation = X)` can read as holding where the container
+skips it.
+
+**What happens today:** no `@ConditionalOnBean` / `@ConditionalOnMissingBean` in the analysed
+corpora (`examples/`, every `.java` file, multi-line arguments included) names the `annotation`
+attribute: 0 uses.
+
+**Real triggering input:** `@ConditionalOnMissingBean(annotation = SomeMarker.class)` where the
+marker sits on a base class of the existing bean.
+
+**Verify:** `grep -n "other.annotations" src/sextant/application/resolve/bean_conditions.py` —
+the criterion reads the competitor's own `annotations`, filled from the annotations recorded
+on its type alone. **Closes** when the
+criterion reads the annotations of the type and every ancestor `type_hierarchy` reaches (the
+set `_supertypes_of` already computes), with a test for an annotation on a superclass.
+
+### OI-173 — symbol parsing in SQL: the `candidate_presence` view cuts a symbol on `#`
+**Minor · logged 2026-10-22 (Task 7b review of `conditional-beans`) ·
+`src/sextant/storage/duckdb/derive_endpoints.sql`, `src/sextant/storage/duckdb/schema.sql`
+(`candidate_presence`)**
+
+The symbol grammar belongs in `domain/symbols`. Two places cut a symbol in SQL. The
+`candidate_presence` VIEW (`schema.sql` ~1359) adds `split_part(c.target, '#', 1) || '#'` to
+match a call's named type to `interface_beans.type`. `derive_endpoints.sql` (~853, which
+predates the branch) is a derivation script, not a view: it splits on `(` after a
+`regexp_extract` of the part after the last `#`. A change to how a type is spelled in a
+symbol would need both found by text search, not by a test. A known exception, recorded so it
+is not mistaken for a pattern.
+
+**What happens today:** correct for every symbol the extractors write; nothing wrong.
+
+**Real triggering input:** a change to the symbol spelling of a type (a new language's scanner,
+or a generics suffix) that the SQL does not cut the same way as `domain/symbols`.
+
+**Verify:** `grep -n "split_part" src/sextant/storage/duckdb/*.sql` (the view's `#` cut is the
+`schema.sql` hit). **Closes** when the type of
+a target is a column the extractors or `call_edges` carry (so no SQL cuts a symbol), or the
+two cuts are routed through one user-defined function declared next to `domain/symbols`'s
+grammar and tested against it.
+
+### OI-174 — a body a conditional bean declares and an unconditional subclass bean inherits reads only the declaring bean's conditions
+**Minor · logged 2026-10-23 (whole-branch review of `conditional-beans`) ·
+`src/sextant/application/resolve/bean_conditions.py::_inherited_rows`**
+
+`_inherited_rows` gives an inherited body the routes of the beans that run it only where the
+body's declaring class is NOT itself a bean (`if declaring in beans or body in routes:
+continue`). A body declared on a CONDITIONAL concrete bean `B` — say `@Component
+@Profile("prod") class B { void send() {…} }` — and inherited, not overridden, by an
+UNCONDITIONAL bean `@Component class S extends B` runs as part of `S` too, so it exists in
+every environment; but the body maps to `B` through its owner class (`symbol_beans`) and reads
+`B`'s condition: absent outside `prod`. A decided wrong answer, not an open one.
+
+**What happens today:** measured 0 such hierarchies. On fresh analyses of `apollo-portal`,
+`apollo-configservice`, `apollo-adminservice`, `jhipster-sample-app`, `yudao-module-system`,
+`yudao-spring-boot-starter-websocket` and `spring-petclinic-rest`, no class carrying a
+condition is the ancestor of any module class in `type_hierarchy`, so no body is affected;
+the whole-branch review found the same on the six field corpora.
+
+**Real triggering input:** a conditional base implementation extended by an unconditional
+bean — e.g. `@ConditionalOnMissingBean` default sender subclassed by a plain `@Component`.
+
+**Verify:** `grep -n "if declaring in beans or body in routes"
+src/sextant/application/resolve/bean_conditions.py`. **Closes** when a body declared on a bean is given the OR of its declaring bean's routes and
+those of every subclass bean that resolves the method to it, as for a body declared on no
+bean.
 
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
@@ -3945,7 +4094,7 @@ or `gaps` reads the role — a `sends_to` is a feeder whose wire is the sender's
 reader's question is answerable by that row — and `@MessagingGateway`/`channel.send(…)` gain
 writers on the same role.
 
-### OI-108 — `@Profile`-conditional twin beans are reported unconditionally
+### OI-108 — `@Profile`-conditional twin beans are reported unconditionally · **CLOSED 2026-10-22**
 **Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §0c B5 (shares
 `conditional-controllers`' exposure) · `src/sextant/application/resolve/beans.py::declared_beans`,
 `src/sextant/application/resolve/engines/fluent.py`**
@@ -3974,6 +4123,24 @@ environment for a CONTROLLER. The bean fold is the next consumer of the same tab
 the 69 conditional classes measured across the cloned corpora are beans, not controllers —
 and it is not written: `beans.py` still reads nothing conditional. Closes when a `@Bean`
 under `@Profile`/`@ConditionalOnProperty` writes rows stating where it exists.
+
+**2026-10-22 — CLOSED by `cov/conditional-beans`** (spec `2026-10-22-conditional-beans-design.md`).
+The bean fold was not the thing to change: the condition is stated on the BEAN, once, in
+`bean_conditions`, by one pass for every bean (a scanned class, a `@Bean` method, a `@Bean`
+inside a conditional configuration, an interface the framework implements), and everything
+derived from a bean finds it by a join — `beans.py` still reads nothing conditional, and does
+not need to. The case this entry named — an adapter bean under `@Profile("local")` beside
+`@Profile("prod")` — derives its rows as before and now states, on each, where its bean
+exists; a call whose candidates are such beans states which exist in each environment. A row
+whose code is the `@Bean` method's OWN body — an inline adapter flow it builds and returns —
+states the factory's condition too: each conditional `@Bean` method is written as a bean of
+its own, `via` itself, the way the lambdas it creates are (`symbol_beans` finds the method
+before its configuration class).
+Measured on `apollo-portal`, `yudao-module-system`, `yudao-spring-boot-starter-websocket`
+and `spring-petclinic-rest` (spec §1, "As built"); the fixture
+`orders-service/.../conditional/` pins each shape. The part of this entry that stays true is
+the one it stated: nothing is DROPPED — a registration that exists in one deployment is still
+reported, with the deployments it exists in.
 
 ### OI-109 — a spec configurer adding queues is a miss
 **Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §5 (adversarial B5) ·

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 import duckdb
@@ -3034,7 +3035,9 @@ def test_federating_a_participant_without_a_federated_table_is_refused_by_name(t
     old = tmp_path / "old-module.duckdb"
     DuckDbWorkspace(old).close()
     with duckdb.connect(str(old)) as connection:
-        connection.execute("DROP TABLE endpoint_conditions")
+        # A VIEW since spec 2026-10-22-conditional-beans (decision 3); the build this test
+        # stands for had neither the view nor the table it replaced.
+        connection.execute("DROP VIEW endpoint_conditions")
     current = tmp_path / "current-module.duckdb"
     DuckDbWorkspace(current).close()
     system = DuckDbWorkspace(tmp_path / "system.duckdb")
@@ -3048,6 +3051,393 @@ def test_federating_a_participant_without_a_federated_table_is_refused_by_name(t
     assert "`endpoint_conditions`" in message
     assert "module analyze" in message
     assert "current-module" not in message
+
+
+# PR #61's columns in PR #61's order — the shape a workspace analysed before
+# spec 2026-10-22-conditional-beans holds `endpoint_conditions` in, as a TABLE.
+_PRE_VIEW_ENDPOINT_CONDITIONS = (
+    "CREATE TABLE endpoint_conditions (protocol TEXT, direction TEXT, method TEXT, path TEXT, "
+    "handler TEXT, kind TEXT, expression TEXT, environment TEXT, holds TEXT, resolution TEXT, "
+    "evidence TEXT)"
+)
+
+
+def _with_pre_view_endpoint_conditions(path: Path) -> None:
+    DuckDbWorkspace(path).close()
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("DROP VIEW endpoint_conditions")
+        connection.execute(_PRE_VIEW_ENDPOINT_CONDITIONS)
+
+
+@pytest.mark.pins("stitch.a-participant-derived-by-an-OLDER-build-is-refused-by-name")
+def test_a_participant_holding_endpoint_conditions_as_a_table_is_refused_by_name(tmp_path: Path):
+    """Review focus 4 (plan 2026-10-22-conditional-beans). A participant analysed before
+    `endpoint_conditions` became a view still HAS an object of that name — a table, without
+    the view's `caller` column — so a check asking only whether the name exists would let it
+    through, and the federated `UNION ALL` would then fail on a column count. The check asks
+    for the KIND this build derives, and refuses the old one by name as before."""
+    old = tmp_path / "old-module.duckdb"
+    _with_pre_view_endpoint_conditions(old)
+    current = tmp_path / "current-module.duckdb"
+    DuckDbWorkspace(current).close()
+    system = DuckDbWorkspace(tmp_path / "system.duckdb")
+    try:
+        with pytest.raises(StaleParticipantError) as refused:
+            system.federate({"current-module": current, "old-module": old})
+    finally:
+        system.close()
+    message = str(refused.value)
+    assert "`old-module`" in message
+    assert "`endpoint_conditions`" in message
+    assert "module analyze" in message
+    assert "current-module" not in message
+
+
+def test_the_endpoint_conditions_view_answers_through_a_read_only_federation(tmp_path: Path):
+    """`endpoint_conditions` is a VIEW over a participant's own `endpoints`, `symbols` and
+    `bean_conditions` (spec 2026-10-22-conditional-beans, decision 3). Attached READ_ONLY, the
+    view must bind inside the participant's catalog — not the system workspace's, whose own
+    three tables are empty — or the system document would state no condition anywhere."""
+    owner = "s maven p 1 com/acme/BalanceController#"
+    handler = "s maven p 1 com/acme/BalanceController#get(sig_1)."
+    facts = tmp_path / "facts"
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/BalanceController.java",
+        module_id="com.acme:billing",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        facts / "a.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=handler,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            ),
+        ],
+    )
+    participant = tmp_path / "billing.duckdb"
+    workspace = DuckDbWorkspace(participant)
+    workspace.load_facts(facts)
+    workspace.derive(
+        "bean_conditions_insert",
+        rows=[
+            {
+                "bean": owner,
+                "bean_kind": "class",
+                "via": None,
+                "kind": "profile",
+                "expression": '{"expressions": ["prod"]}',
+                "environment": environment,
+                "holds": holds,
+                "resolution": "resolved",
+                "evidence": "compiler",
+            }
+            for environment, holds in (("default", "false"), ("prod", "true"))
+        ],
+    )
+    workspace.close()
+    with duckdb.connect(str(participant)) as connection:
+        connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
+            "VALUES ('http', 'inbound', 'GET', '/balances', ?)",
+            [handler],
+        )
+    system = DuckDbWorkspace(tmp_path / "system.duckdb")
+    try:
+        system.federate({"billing-api": participant})
+        rows = system.query("system_endpoint_conditions")
+        assert system.query("endpoint_conditions") == []
+    finally:
+        system.close()
+    assert [(r["participant"], r["path"], r["environment"], r["holds"]) for r in rows] == [
+        ("billing-api", "/balances", "default", "false"),
+        ("billing-api", "/balances", "prod", "true"),
+    ]
+
+
+def test_reopening_a_workspace_holding_the_pre_view_table_replaces_it_with_the_view(
+    tmp_path: Path,
+):
+    """`module analyze` reopens the `.sextant/workspace.duckdb` an earlier build left, and
+    `schema.sql` cannot `CREATE OR REPLACE VIEW` over a TABLE of the same name — so without
+    this every developer workspace analysed before the view existed, and the very command
+    the stale-participant refusal names, would fail on open. The table is derived and
+    replaced whole on every resolve, so dropping it loses nothing a re-analysis does not
+    rebuild."""
+    path = tmp_path / "ws.duckdb"
+    _with_pre_view_endpoint_conditions(path)
+    workspace = DuckDbWorkspace(path)
+    try:
+        assert workspace.query("endpoint_conditions") == []
+    finally:
+        workspace.close()
+    with duckdb.connect(str(path)) as connection:
+        views = connection.execute(
+            "SELECT view_name FROM duckdb_views() WHERE view_name = 'endpoint_conditions'"
+        ).fetchall()
+    assert views == [("endpoint_conditions",)]
+
+
+ENVIRONMENTS = ("prod", "e1", "e2", "e3", "e4")
+
+
+def _workspace_for_the_view(tmp_path: Path, methods: int) -> Path:
+    """A participant-shaped workspace: `methods` methods, five to a class, each the handler
+    of one endpoint row; every class a bean with one condition row per environment (five);
+    and one LAMBDA-like
+    method (`m0`) that is a bean of its own, so the view's two routes both answer."""
+    prefix = "s maven p 1 com/acme/"
+    facts = tmp_path / "facts"
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/All.java",
+        module_id="com.acme:big",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        facts / "all.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=f"{prefix}C{i // 5}#m{i}().",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=f"{prefix}C{i // 5}#",
+            )
+            for i in range(methods)
+        ],
+    )
+    path = tmp_path / "ws.duckdb"
+    workspace = DuckDbWorkspace(path)
+    workspace.load_facts(facts)
+
+    def row(bean: str, via: str | None, environment: str) -> dict[str, object]:
+        return {
+            "bean": bean,
+            "bean_kind": "class" if via is None else "factory",
+            "via": via,
+            "kind": "profile",
+            "expression": '{"expressions": ["prod"]}',
+            "environment": environment,
+            "holds": "true" if environment == "prod" else "false",
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+
+    rows = [
+        row(f"{prefix}C{c}#", None, environment)
+        for c in range(methods // 5)
+        for environment in ENVIRONMENTS
+    ]
+    rows += [row(f"{prefix}C0#m0().", f"{prefix}C0#make().", "prod")]
+    workspace.derive("bean_conditions_insert", rows=rows)
+    workspace.close()
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
+            f"SELECT 'http', 'inbound', 'GET', '/p' || i, '{prefix}C' || (i // 5) || '#m' || i "
+            f"|| '().' FROM range({methods}) t(i)"
+        )
+    return path
+
+
+def test_the_endpoint_conditions_view_matches_a_row_to_its_own_bean_else_its_owner(
+    tmp_path: Path,
+):
+    """The view's two routes, hand-checked on ten rows: `m0` is a bean of its own (a lambda
+    a factory creates), so it reads ITS row and not its class's; every other method reads
+    its owner class's."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10))
+    try:
+        rows = workspace.query("endpoint_conditions")
+    finally:
+        workspace.close()
+    assert [(r["path"], r["via"], r["bean_kind"]) for r in rows] == [
+        ("/p0", "s maven p 1 com/acme/C0#make().", "factory"),
+        *[(f"/p{i}", None, "class") for i in range(1, 10) for _ in ENVIRONMENTS],
+    ]
+
+
+def test_the_endpoint_conditions_view_is_planned_as_hash_joins(tmp_path: Path):
+    """GUIDELINES §8.7. What this pins is the PLANNER, not the data: the view's first
+    version joined `bean = symbol OR (bean = enclosing AND NOT EXISTS …)`, which DuckDB
+    cannot hash and runs as a nested loop — 11 s for 20,000 × 12,000 rows at review, against
+    5 ms written as two equi-joins. 10,000 endpoint rows against 10,000 condition rows
+    answer in tens of milliseconds as hash joins and in several seconds as the nested loop
+    (measured: the `OR` form failed this bound); the bound is loose so CI noise cannot trip
+    it."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10000))
+    try:
+        started = time.perf_counter()
+        rows = workspace.query("endpoint_conditions")
+        elapsed = time.perf_counter() - started
+    finally:
+        workspace.close()
+    assert len(rows) == 1 + 9999 * len(ENVIRONMENTS)
+    assert elapsed < 2.0, f"endpoint_conditions took {elapsed:.2f}s on 10,000 rows"
+
+
+def test_symbol_beans_maps_a_symbol_to_its_own_bean_else_its_owner_class(tmp_path: Path):
+    """The ONE rule for which bean a piece of code is (Task 5, ruling 1): the symbol itself
+    where the conditions pass wrote rows for it (a lambda a factory creates), else its owner
+    class (`symbols.enclosing`) — and only where that is a conditional bean. The
+    `endpoint_conditions` view, the call-candidate view and the document all read it."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10))
+    try:
+        rows = workspace.query("symbol_beans")
+    finally:
+        workspace.close()
+    prefix = "s maven p 1 com/acme/"
+    assert [(r["symbol"], r["bean"]) for r in rows] == [
+        (f"{prefix}C0#m0().", f"{prefix}C0#m0()."),
+        *[(f"{prefix}C{i // 5}#m{i}().", f"{prefix}C{i // 5}#") for i in range(1, 10)],
+    ]
+
+
+CANDIDATES = "s maven p 1 com/acme/"
+API_SEND = CANDIDATES + "Api#send()."
+KAFKA_SEND = CANDIDATES + "KafkaSender#send()."
+REDIS_SEND = CANDIDATES + "RedisSender#send()."
+PLAIN_SEND = CANDIDATES + "PlainSender#send()."
+
+
+def _workspace_with_a_narrowed_site(tmp_path: Path) -> Path:
+    """`Api#send` dispatches at ordinal 0 to three bodies: two `@ConditionalOnProperty`
+    senders (`kafka` in the `kafka` environment, `redis` in `default`) and one with no
+    condition; `Api#other` dispatches to two unconditional bodies only."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/All.java",
+        module_id="com.acme:senders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    methods = (API_SEND, CANDIDATES + "Api#other().", KAFKA_SEND, REDIS_SEND, PLAIN_SEND)
+    write_fact_file(
+        tmp_path / "facts" / "all.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=method.split("#")[0] + "#",
+            )
+            for method in methods
+        ],
+    )
+    path = tmp_path / "ws.duckdb"
+    workspace = DuckDbWorkspace(path)
+    workspace.load_facts(tmp_path / "facts")
+
+    def row(bean: str, value: str, environment: str, holds: str) -> dict[str, object]:
+        return {
+            "bean": bean,
+            "bean_kind": "factory",
+            "via": bean + "make().",
+            "kind": "property",
+            "expression": '{"having_value": "' + value + '", "keys": ["sender-type"]}',
+            "environment": environment,
+            "holds": holds,
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+
+    workspace.derive(
+        "bean_conditions_insert",
+        rows=[
+            row(CANDIDATES + "KafkaSender#", "kafka", "default", "false"),
+            row(CANDIDATES + "KafkaSender#", "kafka", "kafka", "true"),
+            row(CANDIDATES + "RedisSender#", "redis", "default", "true"),
+            row(CANDIDATES + "RedisSender#", "redis", "kafka", "false"),
+        ],
+    )
+    workspace.close()
+    with duckdb.connect(str(path)) as connection:
+        for caller, callee in (
+            (API_SEND, KAFKA_SEND),
+            (API_SEND, PLAIN_SEND),
+            (API_SEND, REDIS_SEND),
+            (CANDIDATES + "Api#other().", PLAIN_SEND),
+            (CANDIDATES + "Api#other().", CANDIDATES + "OtherSender#send()."),
+        ):
+            connection.execute(
+                "INSERT INTO call_edges (caller, ordinal, invoke_kind, target, callee, "
+                "resolution, evidence) VALUES (?, 0, 'interface', ?, ?, 'narrowed', 'compiler')",
+                [caller, CANDIDATES + "Sender#send().", callee],
+            )
+    return path
+
+
+def test_candidate_presence_states_each_candidate_of_a_narrowed_site_per_environment(
+    tmp_path: Path,
+):
+    """Spec 2026-10-22-conditional-beans §3, Task 5 ruling 3: the per-site, per-environment
+    answer as rows a machine reads without re-implementing the join — every candidate of a
+    narrowed site one of whose candidates is a conditional bean, the conditional ones from
+    `bean_presence`, the unconditional one (no bean) holding everywhere. A site with no
+    conditional candidate has no rows; `call_edges` is read, never changed."""
+    workspace = DuckDbWorkspace(_workspace_with_a_narrowed_site(tmp_path))
+    try:
+        rows = workspace.query("candidate_presence")
+        edges = workspace.query("call_edges")
+    finally:
+        workspace.close()
+    kafka, redis = CANDIDATES + "KafkaSender#", CANDIDATES + "RedisSender#"
+    assert [
+        (r["caller"], r["ordinal"], r["callee"], r["bean"], r["environment"], r["holds"])
+        for r in rows
+    ] == [
+        (API_SEND, 0, KAFKA_SEND, kafka, "default", "false"),
+        (API_SEND, 0, KAFKA_SEND, kafka, "kafka", "true"),
+        (API_SEND, 0, PLAIN_SEND, None, "default", "true"),
+        (API_SEND, 0, PLAIN_SEND, None, "kafka", "true"),
+        (API_SEND, 0, REDIS_SEND, redis, "default", "true"),
+        (API_SEND, 0, REDIS_SEND, redis, "kafka", "false"),
+    ]
+    assert {r["resolution"] for r in rows} == {"resolved"}
+    assert len(edges) == 5
+    assert {e["resolution"] for e in edges} == {"narrowed"}
+
+
+def test_the_bundle_exports_candidate_presence_and_symbol_beans(tmp_path: Path):
+    workspace = DuckDbWorkspace(_workspace_with_a_narrowed_site(tmp_path))
+    try:
+        written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
+        expected = len(workspace.query("candidate_presence"))
+    finally:
+        workspace.close()
+    assert "candidate_presence" in written and "symbol_beans" in written
+    graph = tmp_path / "bundle" / "graph"
+    back = duckdb.sql(
+        f"SELECT * FROM read_parquet('{graph / 'candidate_presence.parquet'}')"
+    ).fetchall()
+    assert len(back) == expected == 6
 
 
 def _described_workspace(root: Path) -> Path:
@@ -3111,7 +3501,7 @@ def test_a_graph_missing_a_table_the_queries_read_is_unreadable_by_name(tmp_path
     directory = _described_workspace(tmp_path)
     bundle = _described_bundle(tmp_path, directory)
     with duckdb.connect(str(directory / "workspace.duckdb")) as connection:
-        connection.execute("DROP TABLE endpoint_conditions")
+        connection.execute("DROP VIEW endpoint_conditions")
     with pytest.raises(NotABoundarySource, match="endpoint_conditions"):
         open_read_only(directory)
     (bundle / "graph" / "shapes.parquet").unlink()

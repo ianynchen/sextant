@@ -294,6 +294,21 @@ For four phases the export was a hand-written list of eleven names, and the seve
 The row above was therefore false as written: a reader could see a rendered trace and had no
 way to recompute or check what it asserted.
 
+**Conditional beans travel the same way** (spec `2026-10-22-conditional-beans-design.md`): the
+tables `bean_conditions` and `interface_beans` and the views `bean_presence`, `symbol_beans`,
+`candidate_presence` and `endpoint_conditions` ([D01](D01-graph-schema.md), "Conditional beans")
+are in `contents.tables` like every other, and the export ratchet covers views as it covers
+tables (`endpoint_conditions` is a view since graph schema version 4). None needed an exclusion.
+Two of them, `symbol_beans` and `interface_beans`, hold symbols only and need no redaction
+rule. The other four are masked on export by the map each value belongs to:
+`endpoint_conditions.path` is the endpoint row's own `path` — an outbound row's address can
+carry URL userinfo — and masks through the same address map as `endpoints.path`;
+`expression` quotes a condition's annotation arguments verbatim, so `bean_conditions` and
+`endpoint_conditions` pass it through `redact_json` as `annotations.args` is; and the
+`evidence` of `bean_conditions`, `endpoint_conditions`, `bean_presence` and
+`candidate_presence`, free text that repeats an expression or a placeholder's raw spelling,
+passes through `redact_text`.
+
 **The ratchet runs the direction that catches the defect.** A table in the schema and absent
 from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall
 behind a new `CREATE TABLE`. Adding a table asks its author exactly two questions, and

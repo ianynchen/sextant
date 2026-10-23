@@ -321,6 +321,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # by ruling: stated, not decided.
         ("GET", "/ops/status"),
         ("GET", "/legacy/orders/all"),
+        # the conditional beans (spec 2026-10-22-conditional-beans): `NotifyController` and
+        # `PricingController`, the two handlers whose calls narrow, and `HttpAuditClient`'s outbound
+        # `POST /events`, the call of a `@Bean @Profile("prod")` client.
+        ("POST", "/notify"),
+        ("GET", "/pricing"),
+        ("POST", "/events"),
         ("POST", "/billing/settlements"),
         ("PUT", "/billing/settlements/{id}"),
         ("POST", "/billing/batch"),
@@ -1107,7 +1113,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # two callers whose literals differ, is two rows at `partial` (Task 2 resolved the
     # merge; Task 1 alone had it as one addressless row).
     # 217 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers), one inbound row each.
-    assert len(report.endpoints) == 217
+    # 220 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`, `GET /pricing`
+    # and the outbound `POST /events`.
+    assert len(report.endpoints) == 220
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -2039,7 +2047,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # the two handlers carrying every `params=`/`headers=` expression form.
         # 121 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two callers.
         # 123 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two inbound rows.
-        "http": 123,
+        # 126 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`,
+        # `GET /pricing` and the outbound `POST /events`.
+        "http": 126,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2087,7 +2097,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 217
+    # 220 since the conditional beans (spec 2026-10-22-conditional-beans): see the http bucket above.
+    assert sum(counts.values()) == len(report.endpoints) == 220
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3583,7 +3594,10 @@ def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contrac
     # (21, 28) since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): `exchange(…, OrderView.class)` is two more
     # `single_call` rows (one per caller's literal) and their request payload is `null`, so
     # `carried` is unmoved.
-    assert (carried, len(rows)) == (21, 28), (
+    # (22, 29) since the conditional beans (spec 2026-10-22-conditional-beans): `HttpAuditClient#record`'s
+    # `postForObject("http://audit/events", event, …)` is one more `single_call` row, and it carries
+    # a payload — the `String event` parameter handed straight through.
+    assert (carried, len(rows)) == (22, 29), (
         "the outbound payload count moved — re-measure rather than re-pinning, because a "
         "handful of rows carrying a contract was the defect and this number is what closed it"
     )
@@ -3919,7 +3933,9 @@ def test_the_format_ladder_answers_every_live_row(
     # its guard declares and answers `json`; its new reactive twin answers `json` too.
     # 70 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two `String`-returning handlers
     # with no media declared — the ladder answers nothing for a bare string, as for the others.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 70
+    # 73 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify` returns a bare
+    # `String`, `GET /pricing` a bare `long`, and `POST /events` has no format source either.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 73
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -4651,9 +4667,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_environment_divergence",
         "apply_protocol_hints",
         "record_request_requirements",
-        # Spec 2026-10-21-conditional-controllers: the conditions pass, beside the two that
-        # also write per-row facts below the protocol hints.
-        "record_endpoint_conditions",
+        # Spec 2026-10-22-conditional-beans: the conditions pass, where spec 2026-10-21's
+        # endpoint-only one ran (it replaced that pass at the same point).
+        "record_bean_conditions",
         "record_endpoint_attributes",
         "record_self_exchange",
         "record_routing_conflicts",

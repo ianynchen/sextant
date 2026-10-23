@@ -18,6 +18,8 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
+bean_model: spring
+
 requires: [call_site, string_constants]
 
 matches:

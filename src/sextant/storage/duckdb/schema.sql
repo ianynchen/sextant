@@ -519,27 +519,49 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- resolution and evidence, so a header whose value could not be read is visibly
 -- unresolved rather than absent — which is the difference between "this call sends no
 -- Authorization header" and "it sends one we could not read".
--- A controller that exists in one environment only (spec 2026-10-21-conditional-controllers,
--- ruled 2026-10-22): the CONDITION an inbound endpoint's handler type carries, stated as a
--- fact about the row — structured for a machine, one row per (endpoint, condition,
--- environment the module resolves) — and never deciding whether the row exists. `kind` is
--- `profile`, `property` or `other`; `expression` is JSON typed per kind (the catalog's
--- `conditions` block says which annotation members fill it); `holds` is what the
--- framework's own rule (CP-42, CP-43) says for that environment, or `unresolved` where this
--- analysis does not evaluate the shape. The architecture document is the one verbose
--- rendering of these rows. Replaced whole per resolve, as `endpoint_metadata` is.
-CREATE TABLE IF NOT EXISTS endpoint_conditions (
-    protocol    TEXT,
-    direction   TEXT,
-    method      TEXT,
-    path        TEXT,
-    handler     TEXT,
+-- A bean that exists in some environments only (spec 2026-10-22-conditional-beans §2, §2a;
+-- the general rule spec 2026-10-21-conditional-controllers was a case of): the CONDITION
+-- Spring evaluates when it registers a bean, stated as a fact about the BEAN — structured
+-- for a machine, one row per (bean, registration route, condition, environment the module
+-- resolves) — and never deciding whether any row derived from it exists. `bean` is the
+-- class whose code runs, spelled as `symbols.symbol` spells a type (the spelling
+-- `symbols.enclosing` uses, which is how every derived row finds it); `bean_kind` is `class`
+-- (a condition on a scanned class), `factory` (on the `@Bean` method that constructs and
+-- returns it), `configuration` (on that method's configuration class) or `proxy` (on an
+-- INTERFACE the framework registers and implements at run time, CP-46 — the bean is the
+-- interface); `via` is that method, NULL for `class` and `proxy` — except on an inherited
+-- body's rows, copies of each heir's that keep its `bean_kind` with `via` the heir's own or the
+-- heir class (D01; `inherited` marks only a body no bean runs). `kind`, `expression` and
+-- `holds` are the conditions pass's encoding (CP-42, CP-43, CP-44): `profile`, `property`,
+-- `presence` (a bean-presence condition judged from the module's own beans, `resolution =
+-- partial` with the reason in `evidence`, spec §2c) or `other`, the expression JSON typed per
+-- kind, and the framework's own verdict for that environment or `unresolved`. A route with
+-- NO condition — an unconditional scan or factory of a class that also has a conditional
+-- route, or a plain `new` of it outside any factory (`bean_kind = constructed`) — is one row
+-- per environment with `kind` NULL: `true`, or `unresolved` for a plain `new`. Written only
+-- for a class with at least one conditional route. Replaced whole per resolve, as
+-- `endpoint_metadata` is.
+CREATE TABLE IF NOT EXISTS bean_conditions (
+    bean        TEXT,
+    bean_kind   TEXT,
+    via         TEXT,
     kind        TEXT,
     expression  TEXT,
     environment TEXT,
     holds       TEXT,
     resolution  TEXT,
     evidence    TEXT
+);
+
+-- Every INTERFACE the framework registers as a bean and implements at run time (CP-46; the
+-- bean model's `interface_registrations`), conditional or not, one row per type it is
+-- assignable to — itself and every supertype `type_hierarchy` reaches, bare. Written by the
+-- conditions pass beside `bean_conditions` and replaced whole with it; read by
+-- `candidate_presence`, where a call naming one of those types is answered by the
+-- framework's implementation too.
+CREATE TABLE IF NOT EXISTS interface_beans (
+    bean TEXT,
+    type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS endpoint_metadata (
@@ -1192,3 +1214,186 @@ SELECT * FROM call_edges ORDER BY callee, caller, ordinal, target;
 -- engine filtering on `path` against a handler-sorted file reads every row.
 CREATE OR REPLACE VIEW roots_by_address AS
 SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
+
+-- Which conditional bean a piece of code belongs to — the ONE rule for it (spec
+-- 2026-10-22-conditional-beans, decision 3; Task 5 ruling 1), read by `endpoint_conditions`,
+-- by `candidate_presence` and by the documents, so no reader carries a copy of it. A symbol's
+-- bean is that symbol itself where the conditions pass wrote rows for it (a lambda body a
+-- factory method creates), and otherwise its owner class (`enclosing`). Only symbols whose
+-- bean has rows in `bean_conditions` are here: a symbol absent from this view belongs to no
+-- conditional bean. A view, so it is never stale against the two it reads.
+--
+-- **Two equi-joins, never one `OR` join** (GUIDELINES §8.7): a join on `bean = symbol OR
+-- (bean = enclosing AND NOT EXISTS …)` cannot be hashed and plans a nested loop — measured
+-- at review, 11 s for 20,000 endpoint rows against 12,000 condition rows, against 5 ms for
+-- the same rows this way. Each symbol is matched once: to itself where it is a bean, else
+-- (an anti-join on the beans) to its owner class.
+CREATE OR REPLACE VIEW symbol_beans AS
+WITH beans AS (SELECT DISTINCT bean FROM bean_conditions)
+SELECT DISTINCT s.symbol, own.bean
+FROM symbols s JOIN beans own ON own.bean = s.symbol
+UNION ALL
+SELECT DISTINCT s.symbol, owner.bean
+FROM symbols s
+JOIN beans owner ON owner.bean = s.enclosing
+LEFT JOIN beans own ON own.bean = s.symbol
+WHERE own.bean IS NULL;
+
+-- The conditions an endpoint row carries, read through the bean its code lives in (spec
+-- 2026-10-22-conditional-beans, decision 3): a VIEW, so no row copies them, and kept under
+-- PR #61's name and columns — `caller`, `via`, `bean_kind` and `bean` appended, in that order — so
+-- the documents, the system tier (which federates it by name) and the bundle read what they
+-- read before, now for rows of every direction. A row's code is its handler, or its caller
+-- where it has no handler (an outbound call); its bean is `symbol_beans`' answer for that
+-- symbol. `via` tells two routes of one bean apart: two
+-- mutually exclusive factories are two routes, each holding somewhere, and whether the row
+-- EXISTS in an environment is `bean_presence`'s answer (OR across routes), never "every row
+-- here holds". Condition-less route rows (`kind` NULL) are no condition and are left out.
+-- Last in this file because a view binds at creation, and `symbols` is defined above.
+CREATE OR REPLACE VIEW endpoint_conditions AS
+SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
+       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind, m.bean
+FROM endpoints e
+JOIN symbol_beans m ON m.symbol = coalesce(e.handler, e.caller)
+JOIN bean_conditions b ON b.bean = m.bean
+WHERE b.kind IS NOT NULL;
+
+-- Where each conditional bean EXISTS, per environment (ruled 2026-10-22): a class exists
+-- wherever ANY of its registration routes registers it — OR across routes, AND across one
+-- route's conditions — because each scan, import or factory registers its own definition.
+-- A route is a bean's rows under one `via` (NULL for the scanned class). A route holds
+-- where every condition of it holds, fails where any fails, and is `unresolved` otherwise;
+-- a condition-less bean route holds everywhere and a plain `new` is `unresolved`. The bean
+-- holds where any route holds, fails where every route fails, and is `unresolved` otherwise,
+-- its evidence then naming what left each open route open: a plain `new`, a configured
+-- value this analysis does not know (a placeholder nothing fills), a composed profile
+-- expression, a condition it does not evaluate, or a bean-presence verdict left open.
+--
+-- `resolution` says how firmly (spec §2c): a bean-presence verdict is `partial`, decided
+-- from the module's own beans only, and a verdict resting on one is `partial` too —
+-- `unresolved` > `partial` > `resolved`, by what DECIDES the outcome. A route that fails is
+-- `resolved` when a `resolved` row fails it and `partial` when only `partial` rows do; one
+-- that holds is `partial` when any of its rows is. The bean holds `resolved` when a
+-- `resolved` route holds — a `partial` route beside it decides nothing — and `partial` when
+-- only `partial` routes hold; it fails `partial` when any failing route is `partial`. A
+-- `partial` verdict's evidence is the reason its `partial` rows give.
+CREATE OR REPLACE VIEW bean_presence AS
+WITH reasons AS (
+    SELECT *,
+           CASE WHEN holds <> 'unresolved' THEN NULL
+                WHEN evidence <> 'compiler' THEN evidence
+                WHEN kind = 'property' THEN 'the configured value is unknown here: '
+                     || expression || ' reads a placeholder nothing fills'
+                WHEN kind = 'profile' THEN 'a composed profile expression, not evaluated: '
+                     || expression
+                ELSE 'a condition this analysis does not evaluate: ' || coalesce(expression, '')
+           END AS reason
+    FROM bean_conditions
+),
+routes AS (
+    SELECT bean, coalesce(via, '') AS route, environment,
+           CASE WHEN bool_or(holds = 'false') THEN 'false'
+                WHEN bool_and(holds = 'true') THEN 'true'
+                ELSE 'unresolved' END AS holds,
+           CASE WHEN bool_or(holds = 'false' AND resolution = 'resolved') THEN 'resolved'
+                WHEN bool_or(holds = 'false') THEN 'partial'
+                WHEN bool_and(holds = 'true') AND bool_and(resolution = 'resolved')
+                     THEN 'resolved'
+                WHEN bool_and(holds = 'true') THEN 'partial'
+                ELSE 'unresolved' END AS resolution,
+           string_agg(DISTINCT reason, '; ' ORDER BY reason) AS reason,
+           string_agg(DISTINCT evidence, '; ' ORDER BY evidence)
+               FILTER (WHERE resolution = 'partial') AS hedge
+    FROM reasons
+    GROUP BY bean, coalesce(via, ''), environment
+)
+SELECT bean, environment,
+       CASE WHEN bool_or(holds = 'true') THEN 'true'
+            WHEN bool_and(holds = 'false') THEN 'false'
+            ELSE 'unresolved' END AS holds,
+       CASE WHEN bool_or(holds = 'true' AND resolution = 'resolved') THEN 'resolved'
+            WHEN bool_or(holds = 'true') THEN 'partial'
+            WHEN bool_and(holds = 'false') AND bool_and(resolution = 'resolved') THEN 'resolved'
+            WHEN bool_and(holds = 'false') THEN 'partial'
+            ELSE 'unresolved' END AS resolution,
+       CASE WHEN bool_or(holds = 'true' AND resolution = 'resolved') THEN 'compiler'
+            WHEN bool_or(holds = 'true')
+                 THEN string_agg(DISTINCT hedge, '; ' ORDER BY hedge) FILTER (WHERE holds = 'true')
+            WHEN bool_and(holds = 'false') AND bool_and(resolution = 'resolved') THEN 'compiler'
+            WHEN bool_and(holds = 'false')
+                 THEN string_agg(DISTINCT hedge, '; ' ORDER BY hedge)
+                          FILTER (WHERE resolution = 'partial')
+            ELSE string_agg(DISTINCT reason, '; ' ORDER BY reason)
+                     FILTER (WHERE holds = 'unresolved')
+            END AS evidence
+FROM routes
+GROUP BY bean, environment;
+
+-- Which candidates of a call site exist in each environment (spec 2026-10-22-conditional-beans
+-- §3, second bullet; Task 5 ruling 3; Task 7b fix ruling 1): the per-site, per-environment
+-- answer as rows, so a machine reads it without re-implementing the join. Read, never
+-- written: `call_edges` and its resolutions are unchanged (spec §4), and every candidate is
+-- here — none dropped in any environment. A site is listed where a NARROWED candidate's bean
+-- is conditional (`symbol_beans`), or where an INTERFACE bean's framework-generated
+-- implementation answers it — an `interface` call naming a type the interface is assignable
+-- to (`interface_beans`), whatever the site's resolution. Then every candidate of it is
+-- listed: a body with a conditional bean with its bean's `bean_presence` verdict, resolution
+-- and evidence; a body with none with `bean` NULL holding `true` (`resolved`) in every
+-- environment; a framework-generated implementation with `callee` NULL and `bean` the
+-- interface, its `bean_presence` verdict where it is conditional and `true` everywhere where
+-- it is not. A site with none of these has no rows, and its trace renders as it always did.
+-- The environments are the module's: those the conditions pass wrote, or (a module whose
+-- only interface beans are unconditional) `resolved_config`'s, else `default`, as the pass
+-- has them.
+--
+-- Equi-joins only, for the reason `symbol_beans` gives (§8.7): one hash join per step, and
+-- the unconditional arms cross joins against the handful of environments.
+CREATE OR REPLACE VIEW candidate_presence AS
+WITH edges AS (
+    SELECT DISTINCT c.caller, c.ordinal, c.callee, c.resolution, m.bean
+    FROM call_edges c
+    LEFT JOIN symbol_beans m ON m.symbol = c.callee
+    WHERE c.callee IS NOT NULL
+),
+proxied AS (
+    SELECT DISTINCT c.caller, c.ordinal, i.bean
+    FROM call_edges c
+    JOIN interface_beans i ON i.type = split_part(c.target, '#', 1) || '#'
+    WHERE c.invoke_kind = 'interface'
+),
+sites AS (
+    SELECT DISTINCT caller, ordinal FROM edges WHERE resolution = 'narrowed' AND bean IS NOT NULL
+    UNION
+    SELECT DISTINCT caller, ordinal FROM proxied
+),
+listed AS (
+    SELECT e.caller, e.ordinal, e.callee, e.bean FROM edges e
+    JOIN sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
+),
+conditional AS (SELECT DISTINCT bean FROM bean_conditions),
+environments AS (
+    SELECT environment FROM bean_conditions
+    UNION
+    SELECT environment FROM resolved_config
+    UNION
+    SELECT 'default' AS environment
+    WHERE NOT EXISTS (SELECT 1 FROM bean_conditions) AND NOT EXISTS (SELECT 1 FROM resolved_config)
+)
+SELECT l.caller, l.ordinal, l.callee, l.bean, p.environment, p.holds, p.resolution, p.evidence
+FROM listed l JOIN bean_presence p ON p.bean = l.bean
+UNION ALL
+SELECT l.caller, l.ordinal, l.callee, NULL AS bean, e.environment, 'true' AS holds,
+       'resolved' AS resolution, 'compiler' AS evidence
+FROM listed l CROSS JOIN environments e
+WHERE l.bean IS NULL
+UNION ALL
+SELECT x.caller, x.ordinal, NULL AS callee, x.bean, p.environment, p.holds, p.resolution,
+       p.evidence
+FROM proxied x JOIN bean_presence p ON p.bean = x.bean
+UNION ALL
+SELECT x.caller, x.ordinal, NULL AS callee, x.bean, e.environment, 'true' AS holds,
+       'resolved' AS resolution, 'compiler' AS evidence
+FROM proxied x
+LEFT JOIN conditional k ON k.bean = x.bean
+CROSS JOIN environments e
+WHERE k.bean IS NULL;

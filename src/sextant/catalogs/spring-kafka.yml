@@ -7,6 +7,8 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+bean_model: spring
+
 # `nested_annotation_args` (capability 9.16) because a REPEATED
 # `@KafkaListener` reaches the class file only as the nested array inside
 # its container (`OI-36`). Required rather than optional for

@@ -14,6 +14,8 @@ style: scheduled_work
 detect:
   coordinates: ["org.springframework:spring-context"]
 
+bean_model: spring
+
 # `nested_annotation_args` (capability 9.16) as well as `annotation_args`, and
 # the second is not optional hardening. Two or more `@Scheduled` on one method
 # are folded by javac into a single `@Schedules` whose `value` is an ARRAY OF

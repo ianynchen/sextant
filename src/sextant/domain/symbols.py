@@ -400,6 +400,13 @@ def simple_name(symbol: str) -> str:
     return symbol.rsplit("/", 1)[-1].rstrip("#")
 
 
+def short_class_name(symbol: str) -> str:
+    """A class's short name as the JVM's class utilities spell it (CP-44 row 6,
+    `ClassUtils.getShortName`): the simple name, cut at a `$$` generated-class suffix,
+    with a nested class's `$` read as `.` — `Outer$Inner#` is `Outer.Inner`."""
+    return simple_name(bare_descriptor(symbol)).split("$$", 1)[0].replace("$", ".")
+
+
 def without_type_marker(symbol: str) -> str:
     """`symbol` with its trailing SCIP type marker (`#`) removed, if it
     carries one — everything else about it, package coordinates included,

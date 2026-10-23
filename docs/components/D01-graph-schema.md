@@ -211,7 +211,7 @@ needs it.
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
-| `endpoint_conditions` | **A condition an inbound endpoint's handler type carries, stated as data and never deciding whether the row exists** (spec `2026-10-21-conditional-controllers-design.md`, ruled 2026-10-22): one row per (endpoint, condition, environment the module resolves) — `kind` (`profile`, `property`, `other`), `expression` (JSON typed per kind), `environment`, `holds` (`true`/`false`/`unresolved`), with its own resolution and evidence. Structured for a machine; the architecture document is the one verbose rendering. The matcher never reads it — an endpoint is an endpoint — and a link states its inbound endpoint's conditions beside it |
+| `endpoint_conditions` | **A VIEW, not a table** (since `GRAPH_SCHEMA_VERSION` 4, spec `2026-10-22-conditional-beans-design.md`): the conditions an endpoint row carries, found by joining it to the bean its code lives in — [Conditional beans](#conditional-beans) below. Columns: PR #61's (`protocol`, `direction`, `method`, `path`, `handler`, `kind`, `expression`, `environment`, `holds`, `resolution`, `evidence`), then `caller`, `via`, `bean_kind`, `bean`. Rows of BOTH directions now (an outbound row's code is its `caller`); condition-less route rows (`kind` NULL) are left out. Structured for a machine; the architecture document is the one verbose rendering. The matcher never reads it — an endpoint is an endpoint — and a link states each end's conditions beside it. Whether the row EXISTS in an environment is `bean_presence`'s answer, never "every row here holds" |
 | `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
 | `channel_bindings` (temp) | One edge between an in-process CHANNEL and a method at one of its ends: `channel`, `role` (`fed_by`, `read_by`, `sends_to`), `symbol`, `protocol`, `direction`, `destination`, `catalog_id`, `resolution`. Working state of one resolve — replaced whole beside `endpoints`, never in a bundle — joined into `endpoints` rows by `resolve/channel_bindings.py` and read by `config_join.gaps` |
 
@@ -618,6 +618,113 @@ substituting single-placeholder expressions and answering `multi_placeholder` fo
 Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
 and nothing rewrites an endpoint row per environment.
 
+### Conditional beans
+
+A bean whose registration Spring decides per environment — a class carrying `@Profile` or an
+`@ConditionalOn…`, a `@Bean` method carrying one, a `@Bean` method inside a conditional
+configuration class — has its conditions stated ONCE, on the bean, and everything derived
+from it finds them by a join (spec `2026-10-22-conditional-beans-design.md`, decision 3: the
+key is the bean). Nothing here ever decides whether a row exists: the conditions are data
+the documents state, and no row, link or call edge is dropped or added for one.
+
+| Object | Kind | Holds |
+|---|---|---|
+| `bean_conditions` | table, exported | One row per (bean, registration route, condition, environment the module resolves), written for a class with at least one conditional route, and replaced whole per resolve |
+| `bean_presence` | view, exported | Where each bean exists, per environment: `(bean, environment, holds, resolution, evidence)` |
+| `symbol_beans` | view, exported | `(symbol, bean)` — the ONE rule mapping code to its bean |
+| `candidate_presence` | view, exported | Which candidates of a call site exist in each environment |
+| `interface_beans` | table, exported | Every interface the framework registers and implements at run time, one row per type it is assignable to |
+| `endpoint_conditions` | view, exported | The contracts table above |
+
+**`bean_conditions` columns.** `bean`, the class whose code runs, spelled as `symbols.symbol`
+spells a type (the spelling `symbols.enclosing` uses); `bean_kind`; `via`; `kind`;
+`expression`; `environment`; `holds`; `resolution`; `evidence`.
+
+* **`bean_kind`** is the registration route the row belongs to. `class` — a scanned class
+  (a stereotype, direct or composed). `factory` — the `@Bean` method that constructs and
+  returns the class; and the method itself, and any lambda body it creates, as beans of
+  their own on the factory's route (a row whose code is the method's own body — an inline
+  adapter flow it builds and returns — exists only where the factory registers). `configuration` — the enclosing configuration class's condition, applied to a
+  `@Bean` method's bean. `constructed` — a plain `new` outside any bean factory: one
+  condition-less row per environment, `unresolved`, evidence naming the constructing method.
+  `proxy` — an interface the framework implements at run time (Spring Data repositories); the
+  bean is the interface. A body declared in an abstract class or as an interface default
+  method is written as a bean of its own whose rows are COPIES of the rows of the beans that
+  run it (its heirs), each keeping the heir's `bean_kind` and `via` — the heir class standing
+  in for a `via` the heir's row does not have, so two heirs stay two routes. `inherited`
+  appears only on the rows of a body NO bean runs: one condition-less `unresolved` row per
+  environment, evidence "no bean of this module runs this inherited body".
+* **`via`** is the factory method for `factory` and `configuration` and the constructing
+  method for `constructed`; NULL for `class`, `proxy` and `inherited` — except on a copied
+  heir row of an inherited body, where it is the heir's own `via` or, for a heir with none,
+  the heir class, so such a `class` or `proxy` row carries a non-NULL `via`. It tells two
+  routes of one bean apart: two mutually exclusive factories are two routes.
+* **`kind`** is `profile`, `property`, `presence` or `other`; NULL on a condition-less route
+  row (an unconditional scan or factory of a class that also has a conditional route, `true`
+  in every environment, `resolved`). `profile` and `property` hold or fail by the framework's
+  own rule (CP-42, CP-43), against the environment's active profiles (CP-45, see below) and
+  its resolved configuration. `presence` is `@ConditionalOnMissingBean` /
+  `@ConditionalOnBean`, judged from the module's own beans, always `resolution = partial` when
+  decided, the reason and the competitors in `evidence`. `other` is any condition this
+  analysis names and does not evaluate, verbatim, `unresolved`.
+* **`expression`** is JSON typed per `kind`: `{"expressions": […]}` for a profile;
+  `{"keys": […], "having_value", "match_if_missing"}` for a property; `{"annotation", "mode":
+  "missing"|"present", "types": […], "names": […], "annotations": […]}` for a presence
+  condition; `{"annotation", "args"}` for `other`.
+* **`evidence`** is `compiler` where the framework's rule decided. On a profile row, where the
+  verdict is `unresolved`, it is the reason (an activation the deployment decides; "the
+  active profiles here come from `${apollo_profile}`, which this module does not fill"). On a
+  `presence` row it is the stated reason, then `; competitors: ` and a sorted JSON list of
+  `{bean, via, holds}` (and a `note` where a competitor's conditions name a profile no
+  environment of the module is).
+
+**`bean_presence`** folds the rows by bean, route (`via`) and environment: a route holds
+where every condition of it holds, fails where any fails, and is `unresolved` otherwise; the
+bean then holds where ANY route holds (OR across routes, AND within one — each scan, import
+or `@Bean` registers its own definition), fails where every route fails, and is `unresolved`
+otherwise. `resolution` is the weakest of what decides the outcome (`unresolved`, then
+`partial`, then `resolved`); `evidence` is `compiler` when decided, otherwise the reasons that
+left a route open or the `partial` rows' reason. A bean with no row here is unconditional.
+
+**`symbol_beans`** answers "which conditional bean does this code belong to": the symbol itself
+where the pass wrote rows for it (a factory lambda, an inherited body), otherwise its owner
+class. Only symbols whose bean has rows in `bean_conditions` appear; a symbol absent from the
+view belongs to no conditional bean. It is built as two equi-joins (GUIDELINES §8.7).
+
+**`candidate_presence`** `(caller, ordinal, callee, bean, environment, holds, resolution,
+evidence)` states, per call site and per environment, which candidates exist. A site is listed
+where a NARROWED candidate's bean is conditional, or where a framework-generated
+implementation answers it (an `interface` call naming a type some `interface_beans` row is
+assignable to), whatever its resolution; then every candidate of it is listed. A body of a
+conditional bean carries its `bean_presence` verdict; a body with none carries `bean` NULL and
+`true`, `resolved` in every environment; a framework-generated implementation has `callee`
+NULL and `bean` the interface. `call_edges` and its `resolution` values are untouched — no
+candidate is dropped.
+
+**`interface_beans`** `(bean, type)` is written beside `bean_conditions` and replaced whole
+with it, for every such interface, conditional or not, because an unconditional repository is
+a candidate too and `bean_conditions` holds only classes with a conditional route.
+
+**Environments, and active profiles.** The environments are the module's profile FILES, as
+`resolved_config` has them (`default` where there are none). A profile condition holds against
+the environment's ACTIVE profiles (CP-45): in `default`, the literal profiles of the base's
+`spring.profiles.active` and `.include` (else `.default`'s, else `default`); in a profile-file
+environment `p`, `p` plus the base's `.include`; a profile named only in the base's `active`
+list is `unresolved` there, and a placeholder nothing fills in either key leaves every profile
+condition not decided by the environment's own name `unresolved`. A profile the base's
+`active` list never names is `false` in a profile-file environment. A profile group
+(`spring.profiles.group.<name>`) makes its members active wherever `<name>` is, transitively,
+each member as certain as the profile activating it.
+
+**Exported.** All six travel in the bundle, by the export
+ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"). `symbol_beans` and
+`interface_beans` hold symbols only. The other four are masked on export: the outbound rows
+of `endpoint_conditions` carry the endpoint's `path`, which can hold an address with URL
+userinfo, so it masks through the address map `endpoints.path` uses (`_REDACTED_ADDRESSES`);
+`expression` quotes a condition's annotation arguments verbatim and passes through
+`redact_json`, as `annotations.args` does; `evidence`, free text repeating an expression or a
+placeholder's raw spelling, passes through `redact_text`.
+
 ### Traces — a named query, not a table
 
 A trace is everything reachable from one inbound endpoint. Storing it would copy every
@@ -713,7 +820,7 @@ materialisation where measurement demands it, not presumed everywhere.
 |---|---|---|
 | `participants` | Service or external, name, aliases, **bundle location**, commit | Natively |
 | `links` | Outbound endpoint, inbound endpoint, trust fields, candidates | Natively |
-| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions`, the conditions an inbound endpoint carries, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2) | **Views over the bundles** |
+| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions`, `bean_presence` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions` and `bean_presence` as `system_bean_presence`, the conditions each end of a link carries and where its bean exists, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; `2026-10-22-conditional-beans-design.md`) | **Views over the bundles** |
 
 The system workspace does **not** copy the estate's graphs. Bundles are Parquet, and one
 query reads Parquet across many paths, so a view is enough.
@@ -1185,6 +1292,14 @@ own cadence.
 | `catalog_hash` | Endpoints and everything after | Re-derivation |
 | `boundary_vocabulary_version` | Nothing is rebuilt | **Comparison only.** No table changes; a diff across two values refuses, because the same words were not used on both sides. See below |
 | `sextant_version` | Derived tables | Re-derivation — **conservative by default** |
+
+**What moved `graph_schema_version`, recently** (the full comment-table is in
+`src/sextant/domain/version.py`, which owns the number):
+
+| Version | Change | What a stale workspace does |
+|---|---|---|
+| 3 | `endpoint_conditions`, a derived table the system tier federates (spec `2026-10-21-conditional-controllers-design.md`) | refused by name by `system analyze`, never a bare `Catalog Error` |
+| 4 | `bean_conditions` (a new derived table) and the views `bean_presence`, `symbol_beans`, `candidate_presence`; `endpoint_conditions` stops being a table and becomes a view gaining `caller`, `via`, `bean_kind`, `bean`; the table `interface_beans` (spec `2026-10-22-conditional-beans-design.md`) | `module analyze` replaces the old table with the view when it opens the workspace (DuckDB refuses `CREATE OR REPLACE VIEW` over a table); `system analyze` refuses a participant that still holds the old table, by name |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

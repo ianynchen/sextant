@@ -32,6 +32,8 @@ measured:
   - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
       identity: reported, by: scripts/probes/cp29_gateway_properties.md }
 
+bean_model: spring
+
 # The pipeline-declared capability (D02 §1): M04's pass 2 produced `resolved_config` in
 # THIS run. A config-less run skips this catalog visibly rather than silently deriving
 # nothing.

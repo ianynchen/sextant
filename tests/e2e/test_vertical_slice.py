@@ -344,7 +344,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # Still 29%.
     # 535 of 1822 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two
     # constructors' `Object.<init>`, the only calls either class makes. Still 29%.
-    assert "Calls whose callee body this workspace read: 535 of 1822 (29%)" in document
+    # 542 of 1839 since the conditional beans (spec 2026-10-22-conditional-beans; the eleven classes
+    # under `conditional/`): seventeen new edges. Seven land on a body this module holds — three
+    # `<init>` the configuration builds (`HttpAuditClient`, `StandardPricing`, `PromoPricing`) and
+    # the four narrowed callees (`send` on each sender, `price` on each policy). Still 29%.
+    assert "Calls whose callee body this workspace read: 542 of 1839 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -395,7 +399,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # platform owner was already counted.
     # 1818 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the seven edges above, all `resolved`.
     # 1820 since the two conditional controllers: the two `Object.<init>` edges, `resolved`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1820." in document
+    # narrowed 6 and resolved 1833 since the conditional beans: `NotifyController.notify` and
+    # `PricingController.price` each call an interface with two implementations, so each is two
+    # `narrowed` edges (+4, from 2); the other thirteen are `resolved` — eight `Object.<init>` (one
+    # per new class that has a constructor), the `postForObject` in `HttpAuditClient`, and the
+    # configuration's four constructor calls (`HttpAuditClient`, `RestTemplate`, `StandardPricing`,
+    # `PromoPricing`).
+    assert "Dispatch, by outcome (call edges): narrowed 6, resolved 1833." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -408,8 +418,12 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
         # `declared_here` 205 and `owner_not_scanned` 427 since the merged-values wrapper:
         # `send` is one more declared method; `startsWith`, `substring` and `getBody` are
         # three more lookups on owners this module never scans.
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 205, "
-        "inherited 2, owner_not_scanned 427."
+        # `declared_here` 210 and `owner_not_scanned` 428 since the conditional beans: five more
+        # declared methods looked up (`NotificationSender#send`, `PricingPolicy#price` and the three
+        # `<init>` the configuration builds) and one more on an owner never scanned
+        # (`RestTemplate.<init>()`).
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 210, "
+        "inherited 2, owner_not_scanned 428."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -721,7 +735,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # `accept(JSON) { }` — moving with `tests/cli/test_app.py`'s count; the 88 gap row
         # is now `(None, /ktmvc/**)` resolved.
         # 99 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers).
-        "http": 99,
+        # 101 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify` and
+        # `GET /pricing`, the two handlers whose calls narrow.
+        "http": 101,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -749,7 +765,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # three (`jdk-httpclient`, `apache-httpclient`).
         # 38 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange(baseUrl + path, …)`,
         # two rows at `partial` — one per caller's literal — once the walk resolved the merge.
-        "http": 38,
+        # 39 since the conditional beans (spec 2026-10-22-conditional-beans): `HttpAuditClient#record`'s
+        # `POST http://audit/events`, the outbound row of a `@Bean @Profile("prod")` client.
+        "http": 39,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -969,12 +987,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # `accept(JSON) { }`, `(None, /**)`; the 149 gap row is now `(None, /ktmvc/**)`
             # resolved, the same count.
             # 166 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers).
-            ("inbound", 166),
+            # 168 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`
+            # and `GET /pricing`.
+            ("inbound", 168),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             # 70 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two
             # callers' literals, at `partial`.
-            ("outbound", 70),
+            # 71 since the conditional beans: `HttpAuditClient#record`'s `POST /events`.
+            ("outbound", 71),
         ]
     )
 
@@ -1808,7 +1829,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # columns pinned beneath, which is what keeps this count readable.
     # 155 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19), one class file.
     # 157 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers), one class file each.
-    assert (None, 157) in origins
+    # 168 since the conditional beans (spec 2026-10-22-conditional-beans): eleven class files
+    # under `conditional/` — three interfaces, the two senders, two policies, a client, the
+    # configuration and two controllers.
+    assert (None, 168) in origins
     header = duckdb.sql(
         "SELECT origin_tier, origin FROM read_parquet("
         f"'{bundle / 'graph' / 'documents.parquet'}') WHERE header_only"
@@ -2205,13 +2229,17 @@ def test_a_conditional_controller_states_where_it_exists_in_the_document(full_ru
     assert "  - Exists only when: the active profile matches one of: `prod`\n" in document
     assert "| `GET /legacy/orders/all` | `LegacyOrdersController#all` |" in document
     assert "  - Exists only when: the configuration key `orders.legacy` is `true`\n" in document
+    # 3 since the conditional beans (spec 2026-10-22-conditional-beans): the two controllers
+    # and `POST /events`, the outbound row of the `@Profile("prod")` audit client, which now
+    # states where it exists the same way.
     assert (
         document.count(
             "  - Of this module's environments: holds in 1 of 2 environments — not in `default`"
         )
-        == 2
+        == 3
     )
-    # Structured first: the bundle carries the rows a machine reads, four of them.
+    # Structured first: the bundle carries the rows a machine reads, six of them (the two
+    # controllers' four, and `POST /events`' two since the conditional beans).
     import duckdb
 
     [parquet] = list(full_run.rglob("endpoint_conditions.parquet"))
@@ -2219,8 +2247,61 @@ def test_a_conditional_controller_states_where_it_exists_in_the_document(full_ru
         f"SELECT path, environment, holds FROM read_parquet('{parquet}') ORDER BY 1, 2"
     ).fetchall()
     assert rows == [
+        ("/events", "default", "false"),
+        ("/events", "prod", "true"),
         ("/legacy/orders/all", "default", "false"),
         ("/legacy/orders/all", "prod", "true"),
         ("/ops/status", "default", "false"),
         ("/ops/status", "prod", "true"),
     ]
+
+
+def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path):
+    """The document is the result (ruling 2026-10-17), for the `conditional-beans` cell (spec
+    2026-10-22-conditional-beans). Three bean shapes in `conditional/`, each stated in the
+    rendered text and not only in a table:
+
+    * `ConditionalClientsConfig#auditClient` is `@Bean @Profile("prod")`, so the outbound
+      `POST /events` its `HttpAuditClient` makes exists in `prod` only — the row's detail
+      block carries the same two lines a conditional controller's does.
+    * `NotifyController` calls `NotificationSender#send`, which two `@ConditionalOnProperty`
+      senders implement (`orders.notify` is `kafka` in `application-prod.yml` and absent from
+      `application.yml`): the trace lists both and then says which exists in each environment.
+    * `PricingController` calls `PricingPolicy#price`: a `@ConditionalOnMissingBean` default
+      beside a `@Profile("prod")` override. The default's presence is judged from this
+      module's beans only, so its line says so — and so does `prod`'s, where it is ruled
+      out by a bean of this module on the same grounds."""
+    document = (full_run / "render" / "architecture.md").read_text()
+
+    def block(header: str) -> str:
+        """The lines under `header`, up to the next entry at the same depth."""
+        start = document.index(header)
+        end = document.find("\n- ", start + 1)
+        return document[start : end if end != -1 else len(document)]
+
+    events = block("- `POST /events` — ")
+    assert "HttpAuditClient#record" in events
+    assert "  - Exists only when: the active profile matches one of: `prod`\n" in events
+    assert (
+        "  - Of this module's environments: holds in 1 of 2 environments — not in `default`"
+        in events
+    )
+
+    notify = block("— inbound_endpoint, reached by `POST /notify`")
+    assert (
+        "  - `NotifyController#notify` calls `NotificationSender#send`, answered by one of: "
+        "`KafkaNotificationSender`, `LogNotificationSender`\n"
+        "  - in `default`: `LogNotificationSender`\n"
+        "  - in `prod`: `KafkaNotificationSender`\n"
+    ) in notify
+    # Nothing is dropped: both candidates stay in the step table.
+    assert notify.count("| narrowed |") == 2
+
+    pricing = block("— inbound_endpoint, reached by `GET /pricing`")
+    assert (
+        "  - `PricingController#price` calls `PricingPolicy#price`, answered by one of: "
+        "`PromoPricing`, `StandardPricing`\n"
+        "  - in `default`: `StandardPricing` (decided from this module's beans only)\n"
+        "  - in `prod`: `PromoPricing` (decided from this module's beans only)\n"
+    ) in pricing
+    assert pricing.count("| narrowed |") == 2

@@ -730,15 +730,16 @@ GUARDS: dict[str, Guard] = {
     ),
     # --- a controller that exists in one environment only (spec 2026-10-21) ------------
     "conditions.the-PASS-writes-a-row-per-condition-and-environment": Guard(
-        what="`record_endpoint_conditions` runs in the pipeline and writes `endpoint_conditions`",
+        what="`record_bean_conditions` runs in the pipeline and writes `bean_conditions`, which "
+        "the `endpoint_conditions` view reads",
         why='without it a `@Profile("prod")` controller publishes its endpoints as if they '
         "always existed — the cell as it stood for a month, and the one real instance "
         "(Apollo's `HomePageController`) read `resolved` in the two environments where it 404s",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find='    if rows:\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
-                replace='    if False:  # guard disabled by scripts/guard_check.py\n        workspace.derive("endpoint_conditions_insert", rows=rows)\n',
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    if rows:\n        workspace.derive("bean_conditions_insert", rows=rows)\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        workspace.derive("bean_conditions_insert", rows=rows)\n',
             ),
         ),
     ),
@@ -749,9 +750,14 @@ GUARDS: dict[str, Guard] = {
         "the endpoint exists nowhere",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find="                verdicts.append(environment != text[1:].strip())\n",
-                replace="                verdicts.append(environment == text[1:].strip())  # guard disabled\n",
+                path="sextant/application/resolve/bean_conditions.py",
+                find="            state = FAILS if negated else HOLDS\n",
+                replace="            state = HOLDS  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="            state = HOLDS if negated else FAILS\n",
+                replace="            state = FAILS  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -762,7 +768,7 @@ GUARDS: dict[str, Guard] = {
         "controller gated on a key the deployment never sets would be published as served there",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find='                if not expression["match_if_missing"]:\n                    return FAILS, "resolved"\n',
                 replace='                if False:  # guard disabled by scripts/guard_check.py\n                    return FAILS, "resolved"\n',
             ),
@@ -770,14 +776,14 @@ GUARDS: dict[str, Guard] = {
     ),
     "conditions.a-COMPOSED-profile-expression-is-stated-not-evaluated": Guard(
         what="a profile expression with `&`, `|` or parentheses is `unresolved`, never a verdict",
-        why="an environment is ONE profile by the config layer's filename rule; evaluating a "
-        "composition over several active profiles would be a verdict about a deployment this "
-        "analysis does not see (CP-42 row 3)",
+        why="only a bare name and its negation are decided against an environment's active "
+        "profiles (CP-45); evaluating a composition over several active profiles would be a "
+        "verdict about a deployment this analysis does not see (CP-42 row 3)",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find="            if any(char in _COMPOSITION for char in text):\n                composed = True\n                continue\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n                composed = True\n                continue\n",
+                path="sextant/application/resolve/bean_conditions.py",
+                find="        if any(char in _COMPOSITION for char in text):\n            composed = True\n            continue\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            composed = True\n            continue\n",
             ),
         ),
     ),
@@ -793,8 +799,25 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/api.py",
-                find='        links = _with_inbound_conditions(links, workspace.query("system_endpoint_conditions"))\n',
-                replace="        links = links  # guard disabled by scripts/guard_check.py\n",
+                find='            inbound.setdefault((participant, method, path), set()).add(str(row["bean"]))\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-LINK-states-where-its-outbound-caller-exists": Guard(
+        what="a link from a calling bean under a condition states, beside the calling side, "
+        "the environments the call exists in — read from the participant's own "
+        "`endpoint_conditions` and `bean_presence` through the federated views (spec "
+        "2026-10-22-conditional-beans §3)",
+        why="matching never reads a condition, so the condition travels with the outbound "
+        "endpoint as data and the link is where a reader of the system document learns "
+        "`orders-api` calls `billing` in `prod` only; without this the link reads as a call "
+        "made everywhere, the published-as-if-it-always-existed failure on the calling side",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='            outbound.setdefault((participant, method, path, caller), set()).add(str(row["bean"]))\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -807,7 +830,7 @@ GUARDS: dict[str, Guard] = {
         "framework would see and this analysis does not (review fix, 2026-10-22)",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
+                path="sextant/application/resolve/bean_conditions.py",
                 find='        if value is None and reason == "missing_key" and row.get("source") is None:\n',
                 replace='        if value is None and reason == "missing_key":  # guard disabled\n',
             ),
@@ -822,9 +845,230 @@ GUARDS: dict[str, Guard] = {
         "closes, for sixteen of the nineteen conditions CP-43 row 5 enumerates",
         edits=(
             Edit(
-                path="sextant/application/resolve/endpoint_conditions.py",
-                find="                for name in names:\n                    symbol = type_descriptor(str(name))\n",
-                replace="                for name in ():  # guard disabled by scripts/guard_check.py\n                    symbol = type_descriptor(str(name))\n",
+                path="sextant/application/resolve/bean_conditions.py",
+                find="            for name in names:\n                symbol = type_descriptor(str(name))\n",
+                replace="            for name in ():  # guard disabled by scripts/guard_check.py\n                symbol = type_descriptor(str(name))\n",
+            ),
+        ),
+    ),
+    # --- a bean that exists in some environments only (spec 2026-10-22-conditional-beans) -
+    "beans.a-FACTORY-conditions-only-the-class-it-returns": Guard(
+        what="a factory method conditions the classes its body constructs that are assignable "
+        "to its declared return type, and no helper the body builds and hands to the bean",
+        why='a `@Profile("prod") Client client()` builds an `HttpClient` and returns a '
+        "`Client` over it; without the rule the helper is a conditional bean too, and every "
+        "row of the helper's class is published as existing in `prod` only — a condition on "
+        "code the factory merely uses",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                and _assignable(bare_descriptor(built), factory.erased_return, ancestors)\n",
+                replace="                and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.registration-ROUTES-combine-by-OR": Guard(
+        what="a bean exists in an environment where ANY of its registration routes holds — OR "
+        "across routes, AND within one — in `bean_presence`",
+        why="two exclusive `@Profile` factories register the same class, each in its own "
+        "environment; read as one list of conditions the class would exist nowhere, and every "
+        "endpoint of it would be published as served in no environment at all",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/schema.sql",
+                find="SELECT bean, environment,\n       CASE WHEN bool_or(holds = 'true') THEN 'true'\n            WHEN bool_and(holds = 'false') THEN 'false'\n",
+                replace="SELECT bean, environment,\n       CASE WHEN bool_and(holds = 'true') THEN 'true'\n            WHEN bool_and(holds = 'false') THEN 'false'\n",
+            ),
+        ),
+    ),
+    "beans.a-COMPOSED-stereotype-or-condition-is-followed": Guard(
+        what="an annotation meta-annotated by a stereotype or a condition (a composed "
+        "annotation, in the module or from a dependency's recorded header) counts as that "
+        "stereotype or condition on its users",
+        why='a `@ProdService` composed of `@Service` and `@Profile("prod")` is the ordinary '
+        "way a team writes the condition once; unfollowed, the class is no bean or an "
+        "unconditional one, and its endpoints read as served everywhere",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="        for row in composed_mapping_rows(rows, composing, {seed}):\n",
+                replace="        for row in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-LAMBDA-a-factory-creates-is-the-factorys-code": Guard(
+        what="a lambda body a factory method creates is that factory's code: a bean it "
+        "constructs is the factory's construction, and the lambda's own rows carry the "
+        "factory's conditions",
+        why="a router function or a `@Bean`-returned handler is written as a lambda; without "
+        "the rule its `new` is a plain construction outside any factory, the bean is left "
+        'open, and a `@Profile("prod")` factory\'s routes are published as existing everywhere',
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="        for body in _created_from(creating, created):\n",
+                replace="        for body in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.MISSING-BEAN-reads-the-modules-competitors": Guard(
+        what="`@ConditionalOnMissingBean` / `@ConditionalOnBean` are judged against the "
+        "module's other bean definitions that register a different class",
+        why='a default `@ConditionalOnMissingBean` client beside a `@Profile("prod")` '
+        "override exists everywhere but `prod`; with no competitors read, the default holds "
+        "everywhere and the override's environment is published as having both",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                if holder not in (other.symbol, other.owner) and not (other.beans & same)\n",
+                replace="                if False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-SAME-CLASS-route-is-never-a-competitor": Guard(
+        what="a bean's own other registration routes are no competitor of its presence condition",
+        why="two `@ConditionalOnMissingBean` factories for one class would each find the "
+        "other registering it and fail; the class would be published as existing nowhere "
+        "though the container registers it through whichever route runs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                if holder not in (other.symbol, other.owner) and not (other.beans & same)\n",
+                replace="                if holder not in (other.symbol, other.owner)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.every-presence-verdict-is-PARTIAL": Guard(
+        what="a bean-presence verdict is `partial`, never `resolved`: it is decided from the "
+        "module's own beans only",
+        why="a dependency's auto-configuration can register the bean this analysis does not "
+        "see, so `resolved` would assert a fact about the deployment's container that only "
+        "the module's classes support",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                stated[environment] = (str(final), PARTIAL, reason + listed)\n",
+                replace='                stated[environment] = (str(final), "resolved", reason + listed)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "beans.an-INHERITED-body-takes-the-OR-of-the-beans-that-run-it": Guard(
+        what="an inherited body (an abstract class's method, an interface default) exists "
+        "wherever any bean that resolves to it does — each heir's routes kept distinct under "
+        "the body",
+        why="two beans inherit one body, each in its own profile; folded into one route the "
+        "body would need both profiles at once, and its endpoints would be published as "
+        "existing in neither",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='{**row, "bean": body, "via": row["via"] or heir}',
+                replace='{**row, "bean": body, "via": row["via"]}',
+            ),
+        ),
+    ),
+    "beans.ACTIVE-PROFILES-are-read-from-configuration": Guard(
+        what="a `@Profile` condition is judged against the profiles the base configuration's "
+        "active keys list (CP-45), not the environment's file name alone",
+        why="spring-petclinic-rest sets `spring.profiles.active=h2,spring-data-jpa`; read off "
+        "the file names alone, every Spring Data JPA repository was published as existing in "
+        "no environment although the container registers them wherever the module runs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    actives, active_open = listed(profiles.get("active_keys"))\n',
+                replace="    actives, active_open = [], []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-PROFILE-GROUP-expands-an-active-profile": Guard(
+        what="a profile `spring.profiles.group.<name>` lists is active wherever `<name>` is, "
+        "transitively (CP-45 row 8, `expandProfiles`)",
+        why="Apollo's portal sets `spring.profiles.group.github = mysql`; with groups unread, a "
+        '`@Profile("mysql")` bean was published as absent in the `github` environment, where '
+        "the container activates `mysql` and registers it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="                pending.extend(groups.get(name, ()))\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-FACTORY-methods-own-body-is-the-factorys-code": Guard(
+        what="a `@Bean` method under a condition is a bean of its own, `via` itself, so a row "
+        "whose code symbol is the method (an inline adapter flow it builds and returns) states "
+        "the factory's condition",
+        why="a row made in the factory's own body maps through `symbol_beans` to the "
+        "configuration class, which has no rows unless it is conditional: the row read "
+        "as existing everywhere though the factory registers nothing outside its profile "
+        "(OI-108's own case)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="        if own:\n            routes.setdefault(declared, []).append(_Route(FACTORY, declared, own))\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            routes.setdefault(declared, []).append(_Route(FACTORY, declared, own))\n",
+            ),
+        ),
+    ),
+    "beans.an-INTERFACE-the-framework-implements-is-a-route": Guard(
+        what="an interface the framework registers and implements at run time (CP-46) is a "
+        "registration route with its own conditions, and its implementation answers calls "
+        "naming a type it is assignable to",
+        why='spring-petclinic-rest\'s `@Profile("spring-data-jpa")` Spring Data repositories '
+        "are interfaces; without the route every repository call was published as answered by "
+        "nothing in any environment, though the active profile makes the framework implement it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="    for interface in _registered_interfaces(\n        interfaces, interface_registrations, annotated, ancestors\n    ):\n",
+                replace="    for interface in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "render.OUTBOUND-rows-and-schedules-state-their-condition": Guard(
+        what="an outbound call and a scheduled job of a conditional bean get the two lines "
+        "saying where it exists, read through the same index the inbound rows use",
+        why="the first cut of the rule stated a condition on inbound endpoints only; an "
+        'outbound call and a nightly job of a `@Profile("prod")` bean read as running '
+        "everywhere in the document",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='            conditions = _condition_entries(endpoint.get("caller"), beans)\n',
+                replace="            conditions = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='        conditions = _condition_entries(row["handler"], beans)\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
+                replace='        conditions = []  # guard disabled by scripts/guard_check.py\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
+            ),
+        ),
+    ),
+    "render.a-NARROWED-site-states-its-candidates-per-environment": Guard(
+        what="a narrowed call site with a conditional candidate states, per environment, "
+        "which candidates exist, from `candidate_presence`",
+        why="the step table lists every candidate of a narrowed call, so a reader sees "
+        "`ldap` and `oidc` both answering; without the per-environment lines nothing says "
+        "that only one of them exists where the module runs",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="    entries.extend(_candidate_entries(trace, candidates))\n",
+                replace="    entries.extend([])  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "render.existence-is-read-from-PRESENCE-only": Guard(
+        what="the line `holds in N of M environments` is read from `bean_presence`, never "
+        "from the per-condition rows",
+        why="two exclusive factories each hold somewhere; counted from the condition rows "
+        "the bean would read as holding in half the environments it exists in, or in none",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="    verdict = _presence_verdict(index.presence.get(bean, []))\n",
+                replace="    verdict = _presence_verdict([row for rows in routes.values() for row in rows])  # guard disabled\n",
             ),
         ),
     ),

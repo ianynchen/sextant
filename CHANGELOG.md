@@ -14,6 +14,63 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Conditions belong to the bean, not to the controller** (COVERAGE `conditional-controllers`
+  generalized; `OI-108` closed; spec `2026-10-22-conditional-beans-design.md`, three decisions
+  ruled 2026-10-22). PR #61 stated the condition on an inbound controller only, which was one
+  case of a rule: Spring decides per environment whether it registers ANY bean, and
+  everything Sextant derives from a bean exists only where the bean does. One table,
+  `bean_conditions`, now holds each bean's conditions (a scanned class, a `@Bean` method, a
+  `@Bean` inside a conditional configuration, an interface the framework implements), by one
+  pass over every bean, and every row finds them by a join. **Outbound, schedule and
+  error-handler rows state their conditions** in the architecture document exactly as inbound
+  rows did (*Exists only when … / Of this module's environments: holds in 1 of 2 — not in
+  `default`*; a bean registered more than one way says *Exists when any of these registers
+  it*, one line per route), and a link states BOTH its ends: *called only in `prod`; not in
+  `default`*. **A call that could reach several implementations states which exist in each
+  environment** — *in `prod`: `KafkaWebSocketMessageSender`* — and the step table and the
+  diagram still show every candidate: nothing is dropped, in any environment.
+  `@ConditionalOnMissingBean` and `@ConditionalOnBean` are decided from the module's own
+  beans at `partial`, with the competitors named; `@ConditionalOnClass`, `@Conditional(Class)`
+  and the rest are still stated, not evaluated. A class registered by several routes exists
+  wherever any of them registers it, Spring's own rule.
+
+  **An environment's active profiles are now read from configuration, which CHANGES PR #61's
+  verdicts.** An environment used to be taken to have exactly one profile, the name of its
+  file. It now has the profiles `spring.profiles.active` / `.include` / `.default` give it
+  (CP-45), and a profile that depends on a placeholder nothing fills is *not evaluated*, not
+  absent: Apollo `configservice`'s `GET /` read *not in `default`, `github`* and now reads
+  *not evaluated in `default`, `github` — the active profiles here come from
+  `${apollo_profile}`, which this module does not fill*; Apollo's `ldap`, `oidc` and `auth`
+  user services moved from absent in all six environments to not evaluated in all six.
+  `spring-petclinic-rest`, which sets `spring.profiles.active=h2,spring-data-jpa`, no longer
+  has its Spring Data repositories read as absent everywhere: **Spring Data repository
+  interfaces are named as framework-generated implementations** (*answered by one of:
+  `JdbcOwnerRepositoryImpl`, `JpaOwnerRepositoryImpl`, a framework-generated implementation of
+  `SpringDataOwnerRepository`*), 34 of 34 repository sites. A profile never named in the
+  base's `active` list is read as off in a profile-file environment (the activation selecting
+  that file is assumed to select it). A profile group (`spring.profiles.group.github = mysql`,
+  CP-45 row 8) makes its members active wherever its name is, as certain as the name: five
+  analysed modules set one, and 0 verdicts change on the three that resolve environments.
+  Relaxed key spellings are not read (`OI-171`).
+
+  **Measured on four real modules:** `apollo-portal` 119 bean symbols carrying a condition
+  (51 of them `@Bean` methods), 142 of 193 narrowed call sites given per-environment lines;
+  `yudao-module-system` 122 bean symbols (56 methods) and 11 sites;
+  `yudao-spring-boot-starter-websocket` 104 bean symbols (45 methods), its 2 inbound, 2
+  outbound and 2 scheduled rows each stated (it had stated none of them); the pass takes
+  0.10 s on `apollo-portal` (1,092 condition rows) and 0.17 s on `yudao-module-system`; an inherited body in an abstract class was
+  reading *exists everywhere* on 11 of 11 conditional sites of ruoyi's system module before it
+  took the OR of the beans that run it. A site every candidate of which holds everywhere (an
+  unconditional repository) says so once, without a line per environment. Framework knowledge
+  is catalog data (the Spring bean model's `conditions`, `presence`, `stereotypes` and
+  `interface_registrations`; `config_model.profiles`'s `active_keys` and `group_prefix`);
+  `matches.mapping.conditions` on a catalog is no longer read. `GRAPH_SCHEMA_VERSION` 3 → 4: `endpoint_conditions` is now a
+  view and `bean_conditions`, `bean_presence`, `symbol_beans`, `candidate_presence` and
+  `interface_beans` are new, all exported; a workspace analysed by an older build is
+  re-derived by `module analyze` and refused, by name, by `system analyze`.
+  Probes CP-44 (where Spring evaluates a condition), CP-45 (which profiles are active) and
+  CP-46 (which interfaces the framework implements) read each rule off the jars.
+
 - **Two analyses of one module can be compared, and an analysis says what it could not see**
   (Group H, FR-21–FR-24; spec `2026-10-22-boundary-vocabulary-and-diff-design.md`, ruled
   2026-10-22). `sextant module diff <a> <b>` — each side a module, its workspace or an exported

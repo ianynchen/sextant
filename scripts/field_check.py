@@ -52,6 +52,11 @@ Checks, per expectation:
   because they are two claims: only the second can appear in the document. Pinned because
   W32's plan row claimed this shape never occurred on real code and it occurs 34 times on
   `spring-petclinic-rest`.
+- **`candidate_presence`**, where the pin declares one (spec 2026-10-22-conditional-beans
+  §3) — the named narrowed call sites' candidates and, per candidate, the environments
+  grouped by the verdict `candidate_presence` gives there (`holds/resolution`). Pinned
+  because it is the only place a real module's per-environment answer for a call that
+  several beans may serve is read off the analysed workspace.
 - **`contracts`**, where the pin declares one (F4 §5.2, F7 §8.4) — shape fields, open
   shapes and inheritance arrows. The inherited-field fix recovered 153 fields on
   `mall-admin` and 17 on `jhipster-sample-app`, and the class diagram draws one arrow on
@@ -384,6 +389,52 @@ def _narrowed_sites(module: Path) -> dict[str, int]:
     return {"in_graph": len(in_graph), "reached_by_a_trace": len(reached)}
 
 
+def _candidate_presence(
+    module: Path, sites: list[str]
+) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """For each site named `Owner#method@ordinal`, `{candidate class: {"holds/resolution":
+    [environments]}}` from the workspace `analyze` has just written."""
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    workspace = DuckDbWorkspace(module / ".sextant" / "workspace.duckdb")
+    try:
+        rows = workspace.query("candidate_presence")
+    finally:
+        workspace.close()
+    return _candidate_verdicts(rows, sites)
+
+
+def _candidate_verdicts(
+    rows: list[dict[str, object]], sites: list[str]
+) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """The pure half of `_candidate_presence`: a symbol is named by its last `/`-separated
+    segment, the method without its signature, a candidate by its class alone — a
+    framework-generated implementation (no `callee`, CP-46) by its interface and
+    `(framework-generated)`."""
+    found: dict[str, dict[str, dict[str, list[str]]]] = {site: {} for site in sites}
+    for row in rows:
+        caller = str(row["caller"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("(")[0]
+        site = f"{caller}@{row['ordinal']}"
+        if site not in found:
+            continue
+        if row["callee"] is None:
+            interface = str(row["bean"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("#")[0]
+            candidate = f"{interface} (framework-generated)"
+        else:
+            candidate = str(row["callee"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("#")[0]
+        verdict = f"{row['holds']}/{row['resolution']}"
+        found[site].setdefault(candidate, {}).setdefault(verdict, []).append(
+            str(row["environment"])
+        )
+    return {
+        site: {
+            candidate: {verdict: sorted(environments) for verdict, environments in verdicts.items()}
+            for candidate, verdicts in candidates.items()
+        }
+        for site, candidates in found.items()
+    }
+
+
 def _terminal_kinds(module: Path) -> dict[str, int]:
     """`call_edges`' classification, counted per `kind/target`, from the workspace
     `analyze` has just written.
@@ -593,6 +644,19 @@ def _check_one(name: str) -> list[str]:
                 f"narrowed sites: expected {expected_narrowed!r}, got {counted!r} — this "
                 f"is the shape F7 §8.3's `alt` blocks are drawn for, and the last time it "
                 f"went unpinned a plan row claimed it never occurred"
+            )
+
+    # Spec 2026-10-22-conditional-beans §3. Which candidates of a call that several beans may
+    # serve exist in each environment the module resolves, for the sites the pin names.
+    # Pinned because the per-environment lines in the document are only as true as the rows
+    # under them, and a unit test builds its own beans: this is a real module's answer.
+    expected_candidates = expectation.get("candidate_presence")
+    if expected_candidates is not None:
+        counted = _candidate_presence(module, list(expected_candidates))
+        if counted != expected_candidates:
+            problems.append(
+                f"candidate presence: expected {expected_candidates!r}, got {counted!r} — "
+                f"this is where each candidate of a narrowed call exists, per environment"
             )
 
     # F4 §5.2 / F7 §8.4. What the wire contracts and the contract diagram came out as:

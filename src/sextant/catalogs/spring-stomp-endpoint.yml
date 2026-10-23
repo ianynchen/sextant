@@ -27,6 +27,8 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
+bean_model: spring
+
 # **`array_arguments` IS declared here, and the three sibling catalogs that read arrays do
 # not declare it** — a split settled by measuring rather than by a principle (W47's review).
 # Withhold the capability and re-resolve, on facts where every `array` argument arrives as one

@@ -22,6 +22,8 @@ measured:
   - { artifact: org.springframework:spring-aop, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp11_sweep_round1.md }
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 # D02 §2c. `direction` above is a DEFAULT here in a way it is on no other

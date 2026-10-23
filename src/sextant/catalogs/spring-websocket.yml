@@ -15,6 +15,8 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
+bean_model: spring
+
 # **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
 # Withhold the capability and re-resolve on facts where every `array` argument arrives as one
 # opaque `unresolved`: this catalog's row count is UNCHANGED and only its media column goes

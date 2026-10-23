@@ -916,14 +916,83 @@ _NAMED_QUERIES = {
     # may carry several headers, and two callers may reach one address with different ones
     # — so the endpoint columns alone tie, and `kind, name` ties for a repeated header
     # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
-    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22): the conditions an inbound
-    # endpoint's handler type carries, one row per environment, in the order a reader
-    # compares them — endpoint, then environment.
+    # Spec 2026-10-21-conditional-controllers (ruled 2026-10-22), read since spec
+    # 2026-10-22-conditional-beans through the VIEW of that name: the conditions an endpoint
+    # row's bean carries, one row per environment, in the order a reader compares them —
+    # endpoint, then environment. `caller`, `via` and `bean_kind` last, the view's own order;
+    # they join the ORDER BY so an outbound row (no handler) and two routes of one bean are as
+    # total an order as one inbound row (NFR-1).
     "endpoint_conditions": """
         SELECT protocol, direction, method, path, handler, kind, expression, environment,
-               holds, resolution, evidence
+               holds, resolution, evidence, caller, via, bean_kind, bean
         FROM endpoint_conditions
-        ORDER BY protocol, direction, method, path, handler, kind, expression, environment
+        ORDER BY protocol, direction, method, path, handler, kind, expression, environment,
+                 caller, via, bean_kind, bean
+    """,
+    # Spec 2026-10-22-conditional-beans §2: the conditions every bean carries, keyed by the
+    # bean. Ordered on the whole row — one bean may be reached by several routes, each a
+    # (bean_kind, via), and several conditions per route.
+    "bean_conditions": """
+        SELECT bean, bean_kind, via, kind, expression, environment, holds, resolution,
+               evidence
+        FROM bean_conditions
+        ORDER BY bean, bean_kind, via, kind, expression, environment, holds, resolution,
+                 evidence
+    """,
+    # Where each conditional bean exists, per environment — the view folding the rows above
+    # (OR across routes, AND within one; ruled 2026-10-22).
+    "bean_presence": """
+        SELECT bean, environment, holds, resolution, evidence
+        FROM bean_presence
+        ORDER BY bean, environment
+    """,
+    # The bean each code symbol belongs to — the one rule (own symbol, then owner class) the
+    # `endpoint_conditions` view and the documents both read (Task 5, ruling 1). One row per
+    # symbol whose bean is conditional.
+    "symbol_beans": "SELECT symbol, bean FROM symbol_beans ORDER BY symbol, bean",
+    # Which candidates of each narrowed call site exist in each environment (spec §3; Task 5,
+    # ruling 3): every candidate of a site with a conditional one, per environment. Ordered on
+    # the site, then the candidate, then the environment — the order a trace block reads it.
+    "candidate_presence": """
+        SELECT caller, ordinal, callee, bean, environment, holds, resolution, evidence
+        FROM candidate_presence
+        ORDER BY caller, ordinal, callee NULLS LAST, bean, environment
+    """,
+    # Every interface the framework registers and implements at run time, with each type it
+    # is assignable to (CP-46) — what `candidate_presence` matches a call site's named type on.
+    "interface_beans": "SELECT bean, type FROM interface_beans ORDER BY bean, type",
+    # The lambda bodies each method's `dynamic` call sites create (spec 2026-10-22-conditional-
+    # beans §2a): a body a factory method creates is that factory's code. `invoke_kind` is the
+    # site's own dispatch form; the reader keeps the synthetic bodies (lambdas) among them.
+    "lambda_edges": """
+        SELECT DISTINCT caller, callee FROM call_edges
+        WHERE invoke_kind = 'dynamic' AND callee IS NOT NULL
+        ORDER BY caller, callee
+    """,
+    # The bodies every virtual or interface call site dispatches to, each with the method the
+    # site names and the type declaring the body (spec 2026-10-22-conditional-beans, ruled
+    # 2026-10-22): which bean an INHERITED body runs as part of is asked of the module's own
+    # method resolution for exactly these. Equi-joins on the site and the body's own symbol.
+    "dispatched_bodies": """
+        SELECT DISTINCT e.callee AS body, s.name, s.descriptor, y.enclosing
+        FROM call_edges e
+        JOIN call_sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
+        JOIN symbols y ON y.symbol = e.callee
+        WHERE e.invoke_kind IN ('virtual', 'interface') AND y.enclosing IS NOT NULL
+        ORDER BY body, s.name, s.descriptor, y.enclosing
+    """,
+    # The constructor calls a `@Bean` method's body makes, and every other one in the module
+    # (spec 2026-10-22-conditional-beans §2a): which class a factory constructs, and whether
+    # that class is also constructed anywhere else. Read once per resolve, restricted here to
+    # `<init>` sites with a body this workspace read — a library class has no code a derived
+    # row could live in. The site's own `name` says what is called, so nothing parses a
+    # descriptor to tell a constructor from a method.
+    "constructor_edges": """
+        SELECT DISTINCT e.caller, e.callee
+        FROM call_edges e
+        JOIN call_sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
+        WHERE s.name = '<init>' AND e.callee IS NOT NULL
+        ORDER BY e.caller, e.callee
     """,
     "endpoint_metadata": """
         SELECT protocol, direction, method, path, caller, kind, name, value,
@@ -1161,7 +1230,13 @@ _NAMED_QUERIES = {
     # conditions an inbound endpoint carries, which a link to it states beside itself.
     "system_endpoint_conditions": (
         "SELECT * FROM system_endpoint_conditions "
-        "ORDER BY participant, protocol, method, path, handler, kind, expression, environment"
+        "ORDER BY participant, protocol, direction, method, path, handler, caller, via, bean, "
+        "kind, expression, environment"
+    ),
+    # Every participant's `bean_presence`, federated the same way: where the bean behind a
+    # link's endpoint (either end of it) EXISTS — the one answer, OR across the bean's routes.
+    "system_bean_presence": (
+        "SELECT * FROM system_bean_presence ORDER BY participant, bean, environment"
     ),
 }
 
@@ -1169,9 +1244,13 @@ _NAMED_QUERIES = {
 # query below says why. THREE MAPS, one per rule, because the rule is the thing
 # that must not be duplicated — not the column:
 #
-#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`
+#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
+#                `endpoint_conditions.path`
 #   the grammar  `call_sites.arguments`, `annotations.args`,
-#                `return_flows.value`, `method_returns.value`
+#                `return_flows.value`, `method_returns.value`,
+#                `bean_conditions.expression` (and the view repeating it)
+#   evidence     `bean_conditions.evidence`, `bean_presence.evidence` and the
+#                views repeating them — free text quoting the grammar
 #   config       `resolved_config.value`, `config_entries.value`, and
 #                `config_entry` fact payloads (`_stage_fact_redactions`, joined
 #                by BOTH the `facts/*.parquet` stream and `graph/raw_facts`)
@@ -1197,6 +1276,10 @@ _REDACTED_CONFIG_VALUES = "redacted_config_values"
 _REDACTED_ADDRESSES = "redacted_addresses"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
+# Free text that QUOTES the grammar — a condition's `evidence`, which repeats its expression
+# (`bean_presence`'s "the configured value is unknown here: …") or a placeholder's raw
+# spelling — masked by `redact_text`, since it is not a JSON document `redact_json` can walk.
+_REDACTED_EVIDENCE = "redacted_evidence"
 # `config_entries` is the RAW half of what `resolved_config` holds resolved —
 # the same values, before the resolver joined them — so it masks by the same
 # rule through the same `Redactor.redact_value`, keyed on the entry's own
@@ -1408,8 +1491,52 @@ _EXPORT_QUERIES = {
     # applied here as well would be the redactor run twice over its own output.
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     # Structured for a machine (ruling 1, 2026-10-22): the conditions rows go out as they
-    # are, the document being the one verbose rendering of them.
-    "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
+    # are, the document being the one verbose rendering of them — the bean's own rows and the
+    # view every endpoint row reads them through (spec 2026-10-22-conditional-beans), the
+    # symbol-to-bean rule both views use, and the per-environment candidates of every narrowed
+    # call site a trace block states. Three of their columns reach a value redaction exists
+    # for, and each is masked by the map its value belongs to. `endpoint_conditions.path` is
+    # the endpoint row's own `path` — an outbound row's address, URL userinfo and all — so it
+    # masks by the address map `endpoints.path` uses. `expression` quotes a condition's
+    # annotation arguments verbatim (a `havingValue` is a string out of bytecode), so it takes
+    # the `redact_json` pass `annotations.args` takes. `evidence` is free text quoting that
+    # expression, or the raw spelling of a placeholder in the configuration, so it takes
+    # `redact_text` — the same strip, over text that is not a JSON document
+    # (`_REDACTED_EVIDENCE`). `symbol_beans` and `interface_beans` hold symbols only.
+    "endpoint_conditions": f"""
+        SELECT c.* REPLACE (coalesce(a.masked, c.path) AS path,
+                            coalesce(j.masked, c.expression) AS expression,
+                            coalesce(t.masked, c.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["endpoint_conditions"]}) c
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = c.path
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = c.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = c.evidence
+        ORDER BY c.protocol, c.direction, c.method, c.path, c.handler, c.kind, c.expression,
+                 c.environment, c.caller, c.via, c.bean_kind, c.bean
+    """,
+    "bean_conditions": f"""
+        SELECT b.* REPLACE (coalesce(j.masked, b.expression) AS expression,
+                            coalesce(t.masked, b.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["bean_conditions"]}) b
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = b.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = b.evidence
+        ORDER BY b.bean, b.bean_kind, b.via, b.kind, b.expression, b.environment, b.holds,
+                 b.resolution, b.evidence
+    """,
+    "bean_presence": f"""
+        SELECT p.* REPLACE (coalesce(t.masked, p.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["bean_presence"]}) p
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = p.evidence
+        ORDER BY p.bean, p.environment
+    """,
+    "symbol_beans": _NAMED_QUERIES["symbol_beans"],
+    "candidate_presence": f"""
+        SELECT p.* REPLACE (coalesce(t.masked, p.evidence) AS evidence)
+        FROM ({_NAMED_QUERIES["candidate_presence"]}) p
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = p.evidence
+        ORDER BY p.caller, p.ordinal, p.callee NULLS LAST, p.bean, p.environment
+    """,
+    "interface_beans": _NAMED_QUERIES["interface_beans"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
@@ -1627,8 +1754,9 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
-    "endpoint_conditions_reset": "reset_endpoint_conditions.sql",
-    "endpoint_conditions_insert": "insert_endpoint_conditions.sql",
+    "bean_conditions_reset": "reset_bean_conditions.sql",
+    "bean_conditions_insert": "insert_bean_conditions.sql",
+    "interface_beans_insert": "insert_interface_beans.sql",
     # D01's system scope, written by `application/stitch`. A reset/insert pair each,
     # both run once per `system analyze` — unlike the resolve tables above, where the
     # reset is the pipeline's and the insert is per catalog.
@@ -1955,9 +2083,21 @@ _FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
     ("system_endpoints", "endpoints", "*"),
     ("system_config", "resolved_config", "*"),
     # Spec 2026-10-21-conditional-controllers (ruling 2): a condition is data on the
-    # inbound endpoint and the link states it, read from the participant's own table.
+    # inbound endpoint and the link states it, read from the participant's own
+    # `endpoint_conditions` — a VIEW since spec 2026-10-22-conditional-beans, which binds
+    # inside the participant's own catalog when attached.
     ("system_endpoint_conditions", "endpoint_conditions", "*"),
+    # Where each conditional bean exists, per environment: the verdict a link states for
+    # either end, read beside the rows above (spec 2026-10-22-conditional-beans §3).
+    ("system_bean_presence", "bean_presence", "*"),
 )
+
+# Names `schema.sql` once declared as a TABLE and now declares as a VIEW (spec
+# 2026-10-22-conditional-beans: `endpoint_conditions`). `CREATE OR REPLACE VIEW` refuses to
+# replace a table, so a workspace file an earlier build wrote is dropped of the table first
+# — `_add_columns_the_schema_has_gained`'s reasoning: it is derived, and the next resolve
+# rebuilds what it held.
+_TABLES_NOW_VIEWS = ("endpoint_conditions",)
 
 
 class DuckDbWorkspace:
@@ -1968,6 +2108,7 @@ class DuckDbWorkspace:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = duckdb.connect(str(path))
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
+        self._drop_tables_the_schema_made_views()
         self._connection.execute(schema)
         self._add_columns_the_schema_has_gained(schema)
         # Read HERE, while every fact view is still the form `schema.sql` just gave
@@ -1999,6 +2140,20 @@ class DuckDbWorkspace:
         # never re-derived. Cleared with `_fact_reads`, for the same reason: this is
         # a reading of `raw_facts`, and `load_facts` is its one writer.
         self._staged_payloads: tuple[str, list[tuple[str, ...]]] | None = None
+
+    def _drop_tables_the_schema_made_views(self) -> None:
+        """Drops an existing TABLE `schema.sql` now declares as a view (`_TABLES_NOW_VIEWS`),
+        so the schema's `CREATE OR REPLACE VIEW` can run on a workspace file an earlier build
+        wrote — `module analyze` reopens that file rather than starting a new one, and is the
+        command every stale-workspace refusal tells the reader to run."""
+        placeholders = ", ".join("?" for _ in _TABLES_NOW_VIEWS)
+        held = self._connection.execute(
+            "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
+            f"AND schema_name = 'main' AND table_name IN ({placeholders})",
+            list(_TABLES_NOW_VIEWS),
+        ).fetchall()
+        for (table,) in held:
+            self._connection.execute(f"DROP TABLE {table}")
 
     def _add_columns_the_schema_has_gained(self, schema: str) -> None:
         """Adds any column `schema.sql` declares that an EXISTING workspace file does
@@ -2220,6 +2375,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _REDACTED_EVIDENCE,
             )
         return list(_EXPORTED_TABLES)
 
@@ -2243,7 +2399,7 @@ class DuckDbWorkspace:
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name NOT IN "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -2251,6 +2407,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _REDACTED_EVIDENCE,
                 _ENDPOINT_CANDIDATES,
                 _ROUTE_REQUIREMENTS,
                 _CHANNEL_BINDINGS,
@@ -2361,7 +2518,8 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -2370,6 +2528,25 @@ class DuckDbWorkspace:
                 (str(original), masked)
                 for (original,) in json_rows
                 if (masked := redactor.redact_json(str(original))) != str(original)
+            ],
+        )
+
+        # A condition's evidence, from the table and the view that composes it: the view's
+        # reasons are built from the table's expressions, so each composed string is staged
+        # as the view spells it rather than masked piecewise. `candidate_presence` carries
+        # `bean_presence`'s evidence or `compiler`, and `endpoint_conditions` the table's, so
+        # both are covered without evaluating either view a second time.
+        evidence_rows = self._connection.execute(
+            "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
+            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_EVIDENCE,
+            "original VARCHAR, masked VARCHAR",
+            [
+                (str(original), masked)
+                for (original,) in evidence_rows
+                if (masked := redactor.redact_text(str(original))) != str(original)
             ],
         )
 
@@ -2543,18 +2720,22 @@ class DuckDbWorkspace:
             # the first system query raise a bare `Catalog Error`. Refused here, naming the
             # participant and what to do, which is the same answer `render` gives a stale
             # workspace (D01 §7's stamp): there is no analysis here this build can read.
-            present = {
-                str(row[0])
-                for row in self._connection.execute(
-                    "SELECT table_name FROM duckdb_tables() WHERE database_name = ?", [alias]
-                ).fetchall()
-            }
-            missing = sorted(table for _, table, _ in _FEDERATED_VIEWS if table not in present)
+            # Present means present as the KIND this build's own schema makes it — a table
+            # or a view, read off this workspace's own catalog — because a participant
+            # analysed before `endpoint_conditions` became a view still holds a TABLE of
+            # that name, with a column fewer, and the `UNION ALL` below would fail on it.
+            present = self._object_kinds(alias)
+            expected = self._object_kinds(None)
+            missing = sorted(
+                table
+                for _, table, _ in _FEDERATED_VIEWS
+                if present.get(table) != expected.get(table)
+            )
             if missing:
                 raise StaleParticipantError(
                     f"participant `{name}` ({location}) carries no `{'`, `'.join(missing)}` "
-                    "table: its workspace was derived by an older Sextant. Run "
-                    "`sextant module analyze` on it again, then `system analyze`."
+                    "as this build derives it: its workspace was derived by an older Sextant. "
+                    "Run `sextant module analyze` on it again, then `system analyze`."
                 )
         for view, table, columns in _FEDERATED_VIEWS:
             if not aliases:
@@ -2572,6 +2753,24 @@ class DuckDbWorkspace:
                 for alias, name in aliases
             )
             self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")
+
+    def _object_kinds(self, database: str | None) -> dict[str, str]:
+        """Every table and view `database` holds (this workspace's own where None), mapped
+        to `table` or `view` — what `federate` compares a participant's against."""
+        where = "database_name = coalesce(?, current_database()) AND NOT internal"
+        kinds = {
+            str(name): "table"
+            for (name,) in self._connection.execute(
+                f"SELECT table_name FROM duckdb_tables() WHERE {where}", [database]
+            ).fetchall()
+        }
+        kinds.update(
+            (str(name), "view")
+            for (name,) in self._connection.execute(
+                f"SELECT view_name FROM duckdb_views() WHERE {where}", [database]
+            ).fetchall()
+        )
+        return kinds
 
     def close(self) -> None:
         # The staged rows hold the values the export exists to keep out of a

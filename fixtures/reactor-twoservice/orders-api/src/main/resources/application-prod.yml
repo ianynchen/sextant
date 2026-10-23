@@ -1,0 +1,3 @@
+# The `prod` environment: `BillingClient` (`@Profile("prod")`) exists here and not in `default`.
+orders:
+  mode: live

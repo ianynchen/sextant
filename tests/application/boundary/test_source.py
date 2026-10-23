@@ -23,8 +23,8 @@ from sextant.application.boundary.source import (
     NotABoundarySource,
 )
 from sextant.application.boundary.vocabulary import KINDS
+from sextant.application.resolve.bean_conditions import record_bean_conditions
 from sextant.application.resolve.config import resolve_config
-from sextant.application.resolve.endpoint_conditions import record_endpoint_conditions
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.cli.app import cli
@@ -49,7 +49,7 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
-    "schema_version": 3,
+    "schema_version": 4,
     "boundary_vocabulary_version": 1,
     "catalog_hash": "sha256:catalogs",
     "module": {
@@ -497,7 +497,7 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
     """The inbound rows are written by the REAL passes through the shipped `spring-web`
-    catalog — `record_request_requirements` and `record_endpoint_conditions` — because the
+    catalog — `record_request_requirements` and `record_bean_conditions` — because the
     writer is what decides which column names the endpoint: an inbound `endpoint_metadata`
     row carries the HANDLER in its `caller` column while the `endpoints` row's `caller` is
     NULL, and a test that wrote both by hand matched them on a NULL nobody writes.
@@ -524,8 +524,8 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
         resolve_config(workspace, [spring])
         workspace.derive("endpoint_metadata_reset")
         record_request_requirements(workspace, [spring])
-        workspace.derive("endpoint_conditions_reset")
-        record_endpoint_conditions(workspace, [spring])
+        workspace.derive("bean_conditions_reset")
+        record_bean_conditions(workspace, [spring])
         # Not vacuous: the writer names the handler, and the endpoint row has no caller.
         (inbound,) = {(r["caller"], r["handler"]) for r in workspace.query("endpoints")
                       if r["handler"].startswith(_MODULE + "com/acme/a/")}  # fmt: skip
@@ -622,7 +622,7 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
         assert source.producer == {
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
-            "graph_schema_version": 3,
+            "graph_schema_version": 4,
             "boundary_vocabulary_version": 1,
             "catalog_hash": "sha256:catalogs",
         }

@@ -12,8 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from sextant.application.resolve.config import resolve_config
-from sextant.application.resolve.endpoint_conditions import (
+from sextant.application.resolve.bean_conditions import (
     FAILS,
     HOLDS,
     OTHER,
@@ -23,8 +22,11 @@ from sextant.application.resolve.endpoint_conditions import (
     ConditionModel,
     _expression,
     _holds,
-    record_endpoint_conditions,
 )
+from sextant.application.resolve.bean_conditions import (
+    record_bean_conditions as record_endpoint_conditions,
+)
+from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -64,8 +66,9 @@ def test_a_negated_profile_holds_everywhere_but_that_environment():
 @pytest.mark.pins("conditions.a-COMPOSED-profile-expression-is-stated-not-evaluated")
 def test_a_composed_profile_expression_is_stated_not_evaluated():
     """CP-42 row 3: `&`, `|` and parentheses compose over SEVERAL active profiles, which
-    this analysis does not see — an environment is one profile. Unresolved, in every
-    environment, rather than a verdict about a deployment nobody measured."""
+    this analysis does not evaluate: only a bare name and its negation are decided.
+    Unresolved, in every environment, rather than a verdict about a deployment nobody
+    measured."""
     for text in ("a & b", "a | b", "(a)", "!(a & b)"):
         assert _holds(PROFILE, {"expressions": [text]}, {}, "a") == (UNRESOLVED, "unresolved")
 
@@ -248,7 +251,7 @@ def test_the_pass_writes_one_row_per_condition_and_environment_through_the_shipp
         == []
     )
     resolve_config(workspace, [spring])
-    workspace.derive("endpoint_conditions_reset")
+    workspace.derive("bean_conditions_reset")
     record_endpoint_conditions(workspace, [spring])
     rows = workspace.query("endpoint_conditions")
     workspace.close()
@@ -343,7 +346,7 @@ def _rows_through_spring_web(tmp_path: Path, facts: Path) -> list[dict[str, obje
     spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
     derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
     resolve_config(workspace, [spring])
-    workspace.derive("endpoint_conditions_reset")
+    workspace.derive("bean_conditions_reset")
     record_endpoint_conditions(workspace, [spring])
     rows = workspace.query("endpoint_conditions")
     workspace.close()

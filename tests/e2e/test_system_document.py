@@ -118,6 +118,23 @@ def test_a_link_to_a_conditional_endpoint_states_where_the_endpoint_exists(syste
     assert "exists in `prod`; not in `default`" in row, row
 
 
+@pytest.mark.pins("conditions.a-LINK-states-where-its-outbound-caller-exists")
+def test_a_link_from_a_conditional_caller_states_where_the_call_exists(system_document):
+    """`BillingClient` is a `@Component` under `@Profile("prod")` and `orders-api` resolves two
+    environments (`default`, `prod`), so the call exists in `prod` only (spec 2026-10-22-
+    conditional-beans §3). The link is matched and kept as any other; the row states the
+    OUTBOUND side's existence beside the calling side, as it states the inbound side's beside
+    the endpoint — from `orders-api`'s own rows through the federated views, the answer being
+    `bean_presence`'s."""
+    row = next(
+        line for line in system_document.splitlines() if "`orders-api` GET `/balances`" in line
+    )
+    assert "called only in `prod`; not in `default`" in row, row
+    # Each side states its own: the endpoint's existence stays beside the endpoint.
+    assert row.index("called only in") < row.index("`billing-api`"), row
+    assert "exists in `prod`; not in `default`" in row.split("`billing-api`")[1], row
+
+
 def test_a_reactor_nobody_analyzed_is_refused_naming_the_command_to_run(tmp_path):
     """The `no analysis` refusal (M00's own rule), and why it is a refusal rather than an
     empty document: "no links" would be a claim about the system, when the truth is that
