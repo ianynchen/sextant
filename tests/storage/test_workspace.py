@@ -1315,6 +1315,62 @@ def test_the_export_strips_url_userinfo_from_the_address_columns(tmp_path: Path)
     workspace.close()
 
 
+@pytest.mark.pins("redaction.endpoint-METADATA-masks-the-endpoints-path")
+def test_an_endpoints_metadata_rows_mask_its_path_as_the_endpoint_does(
+    tmp_path: Path,
+):
+    """OI-169, closed 2026-10-23. `endpoint_metadata` carries its endpoint's `path` as the
+    key it joins by, and an outbound path may be a whole address. It shipped verbatim beside
+    the masked `endpoints.path` — the credential in the bundle, and a bundle reader's join on
+    `path` missing every row of it."""
+    secret = "https://svc:s3cret@billing.internal/invoices"
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[
+            _metadata_row(
+                None,
+                direction="outbound",
+                path=secret,
+                caller="com/acme/orders/BillingClient#invoices(sig_3).",
+            )
+        ],
+    )
+    workspace.derive(
+        "call_endpoints",
+        rows=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": secret,
+                "handler": None,
+                "caller": "com/acme/orders/BillingClient#invoices(sig_3).",
+                "peer": None,
+                "handler_signature": None,
+                "resolution": "resolved",
+                "evidence": "test",
+                "catalog_id": "spring-web",
+                "request_shape": None,
+                "response_shape": None,
+                "consumes": None,
+                "produces": None,
+            }
+        ],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    for table in ("endpoints", "endpoint_metadata"):
+        paths = duckdb.sql(
+            f"SELECT DISTINCT path FROM read_parquet('{bundle / 'graph' / f'{table}.parquet'}') "
+            "WHERE direction = 'outbound'"
+        ).fetchall()
+        assert paths == [("https://billing.internal/invoices",)], table
+    for parquet in (bundle / "graph").glob("*.parquet"):
+        assert b"s3cret" not in parquet.read_bytes(), parquet.name
+    workspace.close()
+
+
 def test_the_export_strips_userinfo_from_a_call_arguments_json_and_keeps_the_host(
     tmp_path: Path,
 ):
@@ -1403,6 +1459,72 @@ def test_the_export_masks_an_open_questions_path_exactly_as_the_endpoint_it_asks
         f"SELECT path FROM read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
     ).fetchall()
     assert exported == [("https://billing.internal/invoices",)]
+    workspace.close()
+
+
+@pytest.mark.pins("redaction.open-question-CANDIDATES-are-masked-at-every-exit")
+def test_the_export_masks_an_open_questions_candidates(tmp_path: Path):
+    """A `self_exchange` candidate carries the called side's peer and an
+    `environment_divergence` one each environment's value of a key, and the
+    bundle exported both verbatim until 2026-10-23 — only the ledger's `path`
+    was masked. A ledger row with nothing to mask exports exactly as stored."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    plain = [{"format": "json", "seen_in": "consumes", "why": "application/json"}]
+    workspace.derive(
+        "open_questions_insert",
+        rows=[
+            {
+                "protocol": "http",
+                "method": "POST",
+                "path": "/charges",
+                "question": "self_exchange",
+                "candidates": json.dumps(
+                    [
+                        {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+                        {
+                            "side": "called",
+                            "symbol": "BillingClient#charge",
+                            "peer": "https://svc:s3cret@billing.internal/ws",
+                        },
+                    ]
+                ),
+                "evidence": "served and called here",
+            },
+            {
+                "protocol": "http",
+                "method": "GET",
+                "path": "/ledgers",
+                "question": "environment_divergence",
+                "candidates": json.dumps(
+                    [{"key": "billing.password", "values": {"default": "hunter2"}}]
+                ),
+                "evidence": "differs between environments",
+            },
+            {
+                "protocol": "http",
+                "method": "GET",
+                "path": "/invoices",
+                "question": "format_conflict",
+                "candidates": json.dumps(plain),
+                "evidence": "rung 2",
+            },
+        ],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    exported = {
+        path: json.loads(candidates)
+        for path, candidates in duckdb.sql(
+            "SELECT path, candidates::VARCHAR FROM "
+            f"read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
+        ).fetchall()
+    }
+    assert exported["/charges"][1]["peer"] == "https://billing.internal/ws"
+    assert exported["/ledgers"] == [{"key": "billing.password", "values": {"default": REDACTED}}]
+    assert exported["/invoices"] == plain
+    for parquet in (bundle / "graph").glob("*.parquet"):
+        assert b"s3cret" not in parquet.read_bytes(), parquet.name
+        assert b"hunter2" not in parquet.read_bytes(), parquet.name
     workspace.close()
 
 

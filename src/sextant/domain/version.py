@@ -100,6 +100,12 @@ SEXTANT_VERSION = version("sextant")
 #             implementation `candidate_presence` lists as a candidate. A workspace
 #             holding the old table is refused by name by `system analyze` and rebuilt by
 #             `module analyze`.
+#     5       no table change: what `endpoints.peer` may HOLD changed. Before 2026-10-23
+#             `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`),
+#             a shape no exit's `scheme://` rule could see, so a workspace of that vintage
+#             puts a password into every document and bundle made from it. Bumped so every
+#             reader refuses one rather than guessing at it (user ruling, 2026-10-23): in
+#             text that shape cannot be told from a Spring-WS `mailto:ops@billing` peer.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -111,5 +117,5 @@ SEXTANT_VERSION = version("sextant")
 #             without changing a single table or fact: a consumer comparing two bundles
 #             reads this stamp to know whether the same words were used on both sides.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 4
+GRAPH_SCHEMA_VERSION = 5
 BOUNDARY_VOCABULARY_VERSION = 1

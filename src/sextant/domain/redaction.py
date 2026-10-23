@@ -60,10 +60,64 @@ BUILTIN_KEY_PATTERNS = (
 # `scheme://user:pass@host` → `scheme://host`. Anchored on the scheme so the
 # `@` in a path, a query string or a bare hostname is untouched, and bounded by
 # the delimiters that end an authority (`/`, `?`, `#`) so an `@` further along
-# the URL cannot be mistaken for userinfo. A `${...}` expression carries no
+# the URL cannot be mistaken for userinfo. Up to the authority's LAST `@`: RFC
+# 3986 forbids a raw `@` in a host, and a password may itself carry an
+# unencoded one — stopping at the first left `https://ss@host` of
+# `https://u:p@ss@host` (found 2026-10-23). Any character but a delimiter or
+# whitespace may precede that `@`: a password carries what it carries, and the
+# NTLM proxy form `http://CORP\\jdoe:pass@proxy` has a backslash in its user.
+# The cost is text, never a secret: in compact raw text with no delimiter
+# between a bare-host URL and a later `@` (`url='https://svc',owner='a@x.com'`)
+# the strip runs on into the next value (OI-178). A `${...}` expression carries no
 # `://`, so it passes through whole — which is the 2I ruling: an expression is
 # a REFERENCE to a value, never the value, and there is no secret inside it.
-_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
+#
+# There is deliberately no rule for userinfo WITHOUT a scheme. In text,
+# `svc:s3cret@billing.internal` cannot be told from `mailto:ops@billing.internal`
+# or `jdbc:oracle:thin:@localhost:1521:XE`, so such a rule rewrites real
+# addresses (both found by review on 2026-10-23). The one place that shape
+# arose — a URL's authority once `split_url` removed its scheme — now drops
+# the userinfo where the shape is KNOWN (`authority_without_userinfo`).
+_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]*@")
+
+
+def authority_without_userinfo(authority: str) -> str:
+    """An AUTHORITY with its userinfo dropped: RFC 3986 §3.2's `[userinfo "@"] host [":"
+    port]` reduced to host and port, which is the service a call reaches — a credential
+    written into the URL is never part of WHICH service that is.
+
+    For a value the caller KNOWS is an authority (`split_url`'s, or an `lb://` target), so
+    there is nothing to guess: everything up to the last `@` goes, whatever the host and
+    port look like — `billing:{port}`, `${billing.host:localhost}` and `[::1]:8080` all keep
+    their own spelling (a host that is a template is the case a shape test missed, found by
+    review on 2026-10-23). An `@` inside a `{...}` placeholder is the placeholder's own text
+    and is skipped.
+
+    The authority ends at the first `/`, `?` or `#` outside a placeholder, and nothing after
+    it is userinfo: `localhost:8080?user=admin@corp.com` keeps its host. Where the braces
+    never balance (`svc:p{ss@billing`), they are not a placeholder, and the last `@` before
+    the end of the authority is taken regardless — stripping too much rather than keeping a
+    password no exit can see."""
+
+    def cut(skip_braces: bool) -> tuple[int, int]:
+        depth = 0
+        last_at = -1
+        for index, character in enumerate(authority):
+            if skip_braces and character == "{":
+                depth += 1
+            elif skip_braces and character == "}":
+                depth = max(0, depth - 1)
+            elif depth == 0 and character in "/?#":
+                break
+            elif depth == 0 and character == "@":
+                last_at = index
+        return last_at, depth
+
+    last_at, depth = cut(skip_braces=True)
+    if depth:
+        last_at, _ = cut(skip_braces=False)
+    return authority[last_at + 1 :]
+
 
 # What a NAME looks like, for the paired rule `Redactor._masked` applies. A header
 # name, a query-parameter name or a form-field name is one token — letters,
@@ -100,7 +154,8 @@ _KEY_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 # rather than from a hand that chose to escape ASCII.
 #
 # `_USERINFO` in JSON text: the scheme is dropped (it only narrows), `/` may be
-# spelled `\/`, and the character class is the same one — a `\t` or `\n` escape
+# spelled `\/`, and the class also refuses `@` — it stops at the FIRST one, so
+# it matches wherever the last-`@` rule would change the text — a `\t` or `\n` escape
 # in the text is two printable characters, which the class admits though the
 # decoded whitespace would not, and that is the widening direction.
 _USERINFO_IN_JSON_TEXT = r":\\?/\\?/[^/?#\s@]*@"
@@ -541,3 +596,27 @@ class Redactor:
         for pattern in self._compiled:
             redacted = pattern.sub(REDACTED, redacted)
         return redacted
+
+    def redact_candidates(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """An open question's `candidates` on their way out, one rule per column that can
+        carry a value from the module rather than a name from its code: a `peer` (the
+        `self_exchange` question's called side) through `redact_text`, as the endpoint's own
+        peer column is, and the per-environment
+        `values` of a `key` (`environment_divergence`) through `redact_value` under that key.
+        The document, the enrichment brief and the bundle all print these, and before
+        2026-10-23 all three printed them verbatim. Every other field — a symbol, a class, a
+        format, a binder — is a name read out of code and passes through unchanged."""
+        masked: list[dict[str, object]] = []
+        for candidate in candidates:
+            out = dict(candidate)
+            if isinstance(out.get("peer"), str):
+                out["peer"] = self.redact_text(str(out["peer"]))
+            values = out.get("values")
+            if isinstance(out.get("key"), str) and isinstance(values, dict):
+                key = str(out["key"])
+                out["values"] = {
+                    env: self.redact_value(key, value) if isinstance(value, str) else value
+                    for env, value in values.items()
+                }
+            masked.append(out)
+        return masked

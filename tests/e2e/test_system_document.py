@@ -5,13 +5,16 @@ the markdown, not the `links` rows — a green table behind a blank document is 
 file exists to catch.
 """
 
+import json
 import shutil
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.redaction import REDACTED
 
 REACTOR = FIXTURES / "reactor-twoservice"
 
@@ -133,6 +136,72 @@ def test_a_link_from_a_conditional_caller_states_where_the_call_exists(system_do
     # Each side states its own: the endpoint's existence stays beside the endpoint.
     assert row.index("called only in") < row.index("`billing-api`"), row
     assert "exists in `prod`; not in `default`" in row.split("`billing-api`")[1], row
+
+
+def _analyzed_copy(tmp_path: Path) -> Path:
+    """The reactor, module-analysed in a private copy a test may then change."""
+    compile_fixture(REACTOR)
+    reactor = tmp_path / "reactor-twoservice"
+    shutil.copytree(REACTOR, reactor)
+    analyzed = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+    assert analyzed.exit_code == 0, analyzed.output
+    return reactor
+
+
+def _system_document(reactor: Path) -> str:
+    linked = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+    assert linked.exit_code == 0, linked.output
+    return (reactor / ".sextant" / "render" / "system.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.pins("stitch.a-STALE-participant-is-refused")
+def test_a_participant_analysed_by_another_build_is_refused_naming_the_command(tmp_path):
+    """The system tier reads each participant's workspace as it is, so one derived by
+    another build is refused by the stamps `render` refuses a module's own by — the same
+    words, the same command. Until 2026-10-23 nothing here looked: a workspace analysed
+    before the userinfo fix holds `svc:s3cret@billing` as a peer (graph schema 4), and its
+    rows went straight into the system document."""
+    reactor = _analyzed_copy(tmp_path)
+    metadata_path = reactor / "orders-api" / ".sextant" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = 4
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    result = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+    assert result.exit_code != 0
+    assert "participant `orders-api` was analysed by a different Sextant build" in result.output
+    assert "graph_schema_version is 4" in result.output
+    assert "sextant module analyze" in result.output
+    assert not (reactor / ".sextant" / "render" / "system.md").exists()
+
+
+def test_a_participant_whose_metadata_cannot_be_read_is_refused_as_unfinished(tmp_path):
+    """A workspace beside a `metadata.json` that does not parse — or is not a JSON object —
+    is an analysis that never finished writing, and is named as one rather than as another
+    build's. No `pins` marker: the guard for the stale refusal above covers the branch that
+    matters, and this one only chooses the words."""
+    reactor = _analyzed_copy(tmp_path)
+    metadata_path = reactor / "orders-api" / ".sextant" / "metadata.json"
+    for broken in ("{not json", "[]"):
+        metadata_path.write_text(broken, encoding="utf-8")
+        result = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+        assert result.exit_code != 0
+        assert "participant `orders-api` has a workspace and no readable" in result.output
+        assert "Traceback" not in result.output
+
+
+@pytest.mark.pins("redaction.the-SYSTEM-document-masks-by-every-participants-rules")
+def test_the_system_document_masks_by_every_participants_own_rules(tmp_path):
+    """The system document is an exit like the module document, and it prints every
+    participant's rows in one place — so a rule ANY participant adds masks all of them. Until
+    2026-10-23 it masked nothing at all. Here `orders-api`'s rule hides a route `billing-api`
+    serves."""
+    reactor = _analyzed_copy(tmp_path)
+    (reactor / "orders-api" / ".sextant.yml").write_text(
+        "redact:\n  value_patterns: ['ledgers']\n", encoding="utf-8"
+    )
+    document = _system_document(reactor)
+    assert "ledgers" not in document
+    assert f"GET `/{REDACTED}`" in document
 
 
 def test_a_reactor_nobody_analyzed_is_refused_naming_the_command_to_run(tmp_path):

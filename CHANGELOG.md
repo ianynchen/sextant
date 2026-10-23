@@ -12,6 +12,54 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A password written into a literal URL no longer leaks into the peer column, the
+  documents or the bundle** (found 2026-10-23). `split_url` kept the authority's userinfo, so
+  `RestTemplate.postForObject("https://svc:s3cret@billing.internal/charges", …)` derived
+  `endpoints.peer = svc:s3cret@billing.internal`. Every exit's userinfo rule was anchored on
+  `scheme://`, which the split had removed, so the module document, the enrichment brief, the
+  boundary diff, the system document and the exported `endpoints.parquet` all carried the
+  password. The existing tests pinned a WHOLE URL in the peer — a shape the split never
+  produces — and passed.
+  - **At the cause.** `split_url` knows it holds an authority, so it drops everything up to
+    the last `@` outside a `{…}` placeholder and before the authority ends at `/`, `?` or
+    `#` (`authority_without_userinfo`). The peer is the host and port, templated or not:
+    `billing:{port}`, `${billing.host:localhost}`. The
+    matcher and the gateway composition apply the same rule to an `lb://` target. A
+    whole-address peer (`peer_of`, an annotation's `peer_from`) keeps its scheme, which every
+    exit's rule masks.
+  - **No guessing at the exits.** In text, `svc:s3cret@billing` cannot be told from a
+    Spring-WS `mailto:ops@billing` peer or `jdbc:oracle:thin:@localhost:1521:XE`. So there is
+    no scheme-less userinfo rule. **`GRAPH_SCHEMA_VERSION` moves 4 → 5** with no table change,
+    so a workspace that may hold an old credential peer is refused and re-analysed. `system
+    analyze` now refuses a participant by the same stamps `render` uses; before, it checked
+    none. `module diff` compared its two sides only with each other, so two older analyses
+    were accepted and the old peer printed: such sides are now refused, and under
+    `--allow-producer-change` (kept bundles are history worth comparing) each scheme-less
+    peer with an `@` prints masked whole, never rewritten.
+  - **A hole in the userinfo no longer makes the address half-known.** `"http://" + creds +
+    "@billing/x"` reads as peer `billing`, resolved; it was `partial` with the peer NULL.
+  - **The userinfo rule strips to the authority's last `@`**, so `https://u:p@ss@billing/ws`
+    loses the whole password, not `u:p` alone — never across a `"`, `<`, `>` or `\`, which no
+    authority holds.
+  - **Open-question candidates were a second, unmasked copy.** A `self_exchange` candidate
+    names the called side's peer, and an `environment_divergence` one names each
+    environment's config value. The document, the brief and the bundle printed both
+    verbatim beside a masked `path`. They now pass `Redactor.redact_candidates`.
+  - **The system document masked nothing at all.** It prints every participant's paths,
+    routes and refusal reasons straight from their verbatim workspaces. It now masks them
+    by the union of every participant's rule set.
+  - **`endpoint_metadata` shipped its endpoint's `path` verbatim** (OI-169, logged Minor,
+    re-rated Major). An outbound path may be a whole address, so an outbound call that sets
+    a header put `https://svc:s3cret@…` in `endpoint_metadata.parquet`. It now masks `path`
+    by the map `endpoints.path` takes, as `endpoint_conditions` does since conditional beans.
+
+  Measured on the 52 analysed workspaces in this checkout: 18 peers and 15 candidate sets,
+  none carrying a credential. **Every existing workspace must be re-analysed** (`module
+  analyze`). A bundle exported, or a document rendered, before this fix may still carry a
+  credential: re-export and re-render it.
+
 ### Added
 
 - **Conditions belong to the bean, not to the controller** (COVERAGE `conditional-controllers`

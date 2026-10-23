@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 from sextant.application.stitch.links import DECLARED, Link
 from sextant.domain.closed_sets import Resolution
+from sextant.domain.redaction import authority_without_userinfo
 
 # A route's wildcard tail, as a `Path=` predicate writes it. Everything before it is the
 # literal prefix this module composes with; the tail is what the service's own paths fill.
@@ -260,6 +261,8 @@ def _one(
         elif field == model.destination_field:
             # `lb://name` — a load-balanced destination names a service. Anything else (an
             # absolute `http://host:port`) names a host, not a participant of this build.
+            # The name is an authority, so a credential written into it is no part of it
+            # — the rule `links.py` applies to the same target.
             if value.startswith("lb://"):
-                destination = value[len("lb://") :]
+                destination = authority_without_userinfo(value[len("lb://") :])
     return prefix, destination, strip, frozenset(verbs)

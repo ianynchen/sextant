@@ -455,7 +455,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SYSTEM_RENDER,
-                find='            lines.append(f"| `{u.participant}` | {call} | {u.reason} |")',
+                find='            lines.append(f"| `{u.participant}` | {call} | {redactor.redact_text(u.reason)} |")',
                 replace='            lines.append(f"| `{u.participant}` | {call} | |")',
             ),
         ),
@@ -1083,6 +1083,112 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/storage/duckdb/workspace.py",
                 find="            if missing:\n                raise StaleParticipantError(\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n                raise StaleParticipantError(\n",
+            ),
+        ),
+    ),
+    "redaction.a-PEER-never-carries-url-userinfo": Guard(
+        what="`split_url` drops `user:password@` from the authority it returns as the peer",
+        why="the peer is the service a call reaches; kept, a credential written into a literal "
+        "URL sat in `endpoints.peer` without its scheme, where the exits' `scheme://` "
+        "userinfo rule never matched it — the workspace, the document and the bundle all "
+        "carried the password (found 2026-10-23)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='    return authority_without_userinfo(match.group("authority")), '
+                'match.group("path") or ""\n',
+                replace='    return match.group("authority"), match.group("path") or ""  # guard disabled\n',
+            ),
+        ),
+    ),
+    "redaction.open-question-CANDIDATES-are-masked-at-every-exit": Guard(
+        what="`redact_candidates` masks a candidate's `peer` (and a key's per-environment "
+        "values) before the document, the brief or the bundle prints it",
+        why="the ledger's `path` was masked and its candidates beside it were not, so a "
+        "`self_exchange` question printed the called side's peer verbatim",
+        edits=(
+            Edit(
+                path="sextant/domain/redaction.py",
+                find='                out["peer"] = self.redact_text(str(out["peer"]))\n',
+                replace='                out["peer"] = str(out["peer"])  # guard disabled\n',
+            ),
+        ),
+    ),
+    "redaction.endpoint-METADATA-masks-the-endpoints-path": Guard(
+        what="the export masks `endpoint_metadata.path` by the address map `endpoints.path` takes",
+        why="it carries its endpoint's path as the key it joins by, and an outbound path may "
+        "be a whole address: shipped verbatim, the bundle carried the credential and a "
+        "reader's join on `path` missed every row (OI-169)",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="        SELECT m.* REPLACE (coalesce(a.masked, m.path) AS path)\n",
+                replace="        SELECT m.*  -- guard disabled\n",
+            ),
+        ),
+    ),
+    "redaction.USERINFO-is-stripped-to-the-authoritys-last-at": Guard(
+        what="`_USERINFO` strips a URL's userinfo up to the LAST `@` of its authority",
+        why="a password may carry an unencoded `@`; stopping at the first left part of the "
+        "password in every path, argument and constant (found 2026-10-23)",
+        edits=(
+            Edit(
+                path="sextant/domain/redaction.py",
+                find='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s]*@")\n',
+                replace='_USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\\-]*://)[^/?#\\s@]*@")\n',
+            ),
+        ),
+    ),
+    "stitch.a-STALE-participant-is-refused": Guard(
+        what="`system analyze` refuses a participant whose workspace stamps differ from this "
+        "build's, as `render` refuses a module's own",
+        why="the system tier reads workspaces as they are, so one derived by another build — "
+        "a pre-2026-10-23 one holding credential peers — reached the system document",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="            if stale:\n                raise NotAnalyzedError(\n"
+                '                    f"participant `{participant.name}`',
+                replace="            if False:  # guard disabled\n                raise NotAnalyzedError(\n"
+                '                    f"participant `{participant.name}`',
+            ),
+        ),
+    ),
+    "stitch.an-LB-target-is-an-authority-without-its-userinfo": Guard(
+        what="the matcher drops userinfo from an `lb://` target before looking the name up",
+        why="the target is an authority; kept, a credential made the call match nothing and "
+        "the refusal quoted it into the system document with no scheme in front",
+        edits=(
+            Edit(
+                path="sextant/application/stitch/links.py",
+                find="        stated = authority_without_userinfo(path[len(_LOAD_BALANCED) :])\n",
+                replace="        stated = path[len(_LOAD_BALANCED) :]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "stitch.the-system-document-masks-gateway-REFUSALS": Guard(
+        what="the system document passes a gateway refusal's route and reason through the redactor",
+        why="both are configuration read verbatim from a participant's workspace",
+        edits=(
+            Edit(
+                path="sextant/egress/render/system.py",
+                find="        route = redactor.redact_text(refusal.route)\n"
+                "        reason = redactor.redact_text(refusal.reason)\n",
+                replace="        route = refusal.route  # guard disabled\n"
+                "        reason = refusal.reason\n",
+            ),
+        ),
+    ),
+    "redaction.the-SYSTEM-document-masks-by-every-participants-rules": Guard(
+        what="the system document's redactor is the union of every present participant's rule set",
+        why="the document prints every participant's rows in one place, so a value one "
+        "participant's `redact:` rule hides must be hidden wherever it appears",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="            redactor = redactor.union("
+                "_redactor_for(participant.location.parent.parent))\n",
+                replace="            redactor = redactor  # guard disabled\n",
             ),
         ),
     ),
@@ -3576,6 +3682,19 @@ GUARDS: dict[str, Guard] = {
                 path=_DIFF,
                 find='        projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))\n',
                 replace='        projected["value"] = _each(projected["value"], lambda v: v)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole": Guard(
+        what="the diff refuses two sides older than this build's graph schema unless allowed, "
+        "and then masks each scheme-less peer with an `@` whole",
+        why="before graph schema 5 a split peer kept a URL's password with no scheme in "
+        "front; two such analyses agree with each other, so the diff printed it",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:\n',
+                replace="    if False:  # guard disabled\n",
             ),
         ),
     ),

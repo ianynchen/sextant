@@ -1021,6 +1021,32 @@ def test_the_document_strips_url_userinfo_from_both_address_columns():
     assert "| https://billing.internal |" in text
 
 
+def test_the_document_masks_an_open_questions_candidate_peer():
+    """A `self_exchange` question names the called side's peer, and the document printed it
+    verbatim — the endpoint table's peer cell was masked and the same peer one section down
+    was not (found 2026-10-23)."""
+    question = {
+        "protocol": "http",
+        "method": "POST",
+        "path": "/charges",
+        "question": "self_exchange",
+        "candidates": json.dumps(
+            [
+                {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+                {
+                    "side": "called",
+                    "symbol": "BillingClient#charge",
+                    "peer": "https://svc:s3cret@billing.internal/ws",
+                },
+            ]
+        ),
+        "evidence": "served and called here",
+    }
+    text = render_module_document(MODULE, REPORT, "a3f91c", open_questions=[question])
+    assert "s3cret" not in text
+    assert "called by BillingClient#charge at https://billing.internal/ws" in text
+
+
 def test_the_document_leaves_an_address_expression_exactly_as_the_row_carries_it():
     """The negative half, and the 2I ruling restated: a `${...}` peer is a
     REFERENCE to a value, never the value, so there is nothing in it to mask —

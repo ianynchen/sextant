@@ -1725,6 +1725,39 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
         entry["location"] = candidate if candidate.exists() else None
         entry["commit_id"] = _module_commit_of(module_root) if candidate.exists() else None
     participants = _participants_of(entries)
+    # A participant's workspace written by a different build is refused, by the stamps
+    # `render` refuses a module's own by (`_stale_stamps`, OI-24): its derived rows are
+    # another derivation's, and the system tier reads them as they are. Until 2026-10-23
+    # nothing here looked, so a workspace analysed before the userinfo fix fed its
+    # credential peers straight into the system document. Before the redactors are built
+    # because a stale module's `.sextant.yml` is not the reason to report.
+    for participant in participants:
+        if participant.present and participant.location is not None:
+            metadata_path = participant.location.parent / "metadata.json"
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                metadata = None
+            if not isinstance(metadata, dict):
+                # Not a different build's: an analysis that never finished writing.
+                raise NotAnalyzedError(
+                    f"participant `{participant.name}` has a workspace and no readable "
+                    f"`metadata.json`, so its analysis did not finish — re-run "
+                    f"`sextant module analyze {root}`."
+                )
+            stale = _stale_stamps(metadata)
+            if stale:
+                raise NotAnalyzedError(
+                    f"participant `{participant.name}` was analysed by a different Sextant "
+                    f"build ({'; '.join(stale)}), so its derived tables are a different "
+                    f"vintage from this one — re-run `sextant module analyze {root}`."
+                )
+    # The system document is an exit and prints every participant's rows, so it masks by
+    # every rule set any of them declares, widened by the reactor root's own.
+    redactor = _redactor_for(root)
+    for participant in participants:
+        if participant.present and participant.location is not None:
+            redactor = redactor.union(_redactor_for(participant.location.parent.parent))
 
     system_dir = root / ".sextant"
     system_dir.mkdir(parents=True, exist_ok=True)
@@ -1798,7 +1831,13 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     document = render_dir / _SYSTEM_DOCUMENT
     document.write_text(
         render_system_document(
-            participants, links, unmatched, uncalled, refusals, environment=environment
+            participants,
+            links,
+            unmatched,
+            uncalled,
+            refusals,
+            environment=environment,
+            redactor=redactor,
         ),
         encoding="utf-8",
     )

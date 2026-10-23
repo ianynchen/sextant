@@ -15,6 +15,7 @@ from sextant.domain.redaction import (
     RedactionRules,
     Redactor,
     _literal_prefix,
+    authority_without_userinfo,
 )
 
 
@@ -84,6 +85,99 @@ def test_userinfo_stripping_leaves_an_at_sign_that_is_not_userinfo():
     assert redactor.redact_text("https://h/users/@me") == "https://h/users/@me"
     assert redactor.redact_text("https://h/x?to=a@b.com") == "https://h/x?to=a@b.com"
     assert redactor.redact_text("sqs.us-east-1.amazonaws.com") == "sqs.us-east-1.amazonaws.com"
+
+
+@pytest.mark.parametrize(
+    ("authority", "expected"),
+    [
+        # The shape `split_url` kept before 2026-10-23: the scheme gone, the credential kept.
+        ("svc:s3cret@billing.internal", "billing.internal"),
+        ("svc:@billing.internal:8443", "billing.internal:8443"),
+        ("ghp_tok@github.com", "github.com"),
+        # A password carrying a raw `@`: the host follows the LAST one.
+        ("u:p@ss@billing", "billing"),
+        ("svc:s3cret@[::1]:8080", "[::1]:8080"),
+        # A host or port that is a template is still the host and port (review, 2026-10-23).
+        ("svc:s3cret@billing:{port}", "billing:{port}"),
+        ("svc:s3cret@billing:${billing.port}", "billing:${billing.port}"),
+        ("svc:s3cret@${billing.host:localhost}", "${billing.host:localhost}"),
+        # An `@` inside a placeholder is the placeholder's own text.
+        ("${billing.authority:svc@billing}", "${billing.authority:svc@billing}"),
+        # Nothing after the authority's end is userinfo (review, 2026-10-23: the query's
+        # `@` was taken for the host's).
+        ("localhost:8080?user=admin@corp.com", "localhost:8080?user=admin@corp.com"),
+        ("u:p@billing?x=1", "billing?x=1"),
+        ("billing#a@b", "billing#a@b"),
+        # Braces that never balance are no placeholder: strip too much, never keep it.
+        ("svc:p{ss@billing.internal", "billing.internal"),
+        ("billing.internal", "billing.internal"),
+        ("billing.internal:8443", "billing.internal:8443"),
+    ],
+)
+def test_an_authority_loses_its_userinfo_and_keeps_its_host_and_port(authority: str, expected: str):
+    assert authority_without_userinfo(authority) == expected
+
+
+@pytest.mark.pins("redaction.USERINFO-is-stripped-to-the-authoritys-last-at")
+def test_a_password_carrying_an_at_sign_leaves_a_url_whole():
+    """`_USERINFO` strips to the authority's LAST `@`: stopping at the first left
+    `https://ss@billing/ws` — part of the password — of `https://u:p@ss@billing/ws`."""
+    assert _plain().redact_text("https://u:p@ss@billing/ws") == "https://billing/ws"
+    assert _plain().redact_text("https://billing/a@b") == "https://billing/a@b"
+    # Whatever the user and password hold: the NTLM proxy form has a backslash, and a
+    # password may carry a quote. A first version stopped at both and kept the password
+    # (review, 2026-10-23).
+    assert _plain().redact_text("http://CORP\\jdoe:Passw0rd@proxy.corp:8080") == (
+        "http://proxy.corp:8080"
+    )
+    assert _plain().redact_text('https://u:p"ss@billing/x') == "https://billing/x"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jdbc:oracle:thin:@localhost:1521:XE",
+        "mailto:support@acme.com",
+        "sip:alice@atlanta.com",
+        "xmpp:server@example.com",
+        "svc:s3cret@billing.internal",
+    ],
+)
+def test_text_with_no_scheme_keeps_its_at_sign(text: str):
+    """There is no userinfo rule without a `scheme://`: in text, `svc:s3cret@billing` cannot
+    be told from a `mailto:`, a `sip:` or the Oracle SID form, and a first version of the
+    2026-10-23 fix that tried rewrote all three (found by review before it shipped). The
+    authority shape is handled where it is KNOWN to be one (`authority_without_userinfo`).
+    The cost, recorded as OI-175: a config value that is a bare `user:pass@host` with a key
+    naming no secret is not masked."""
+    assert _plain().redact_text(text) == text
+    assert _plain().redact_value("spring.datasource.url", text) == text
+
+
+@pytest.mark.pins("redaction.open-question-CANDIDATES-are-masked-at-every-exit")
+def test_an_open_questions_candidates_mask_their_peer_and_their_config_values():
+    """`self_exchange` names the called side's peer and `environment_divergence` each
+    environment's value of one key — and the document, the enrichment brief and the bundle
+    all printed both verbatim until 2026-10-23. Names read out of code pass unchanged."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("tok-[a-z]+",)))
+    masked = redactor.redact_candidates(
+        [
+            {
+                "side": "called",
+                "symbol": "BillingClient#charge",
+                "peer": "https://svc:s3cret@billing/ws",
+            },
+            {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+            {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": "tok-x"}},
+            {"key": "spring.datasource.password", "values": {"default": "hunter2"}},
+        ]
+    )
+    assert masked == [
+        {"side": "called", "symbol": "BillingClient#charge", "peer": "https://billing/ws"},
+        {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+        {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": REDACTED}},
+        {"key": "spring.datasource.password", "values": {"default": REDACTED}},
+    ]
 
 
 def test_a_placeholder_expression_passes_through_whole():

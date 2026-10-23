@@ -1211,6 +1211,46 @@ def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
     assert split_url("https://billing.internal") == ("billing.internal", "")
 
 
+@pytest.mark.pins("redaction.a-PEER-never-carries-url-userinfo")
+def test_split_url_drops_userinfo_from_the_peer():
+    """RFC 3986 §3.2: an authority is `[userinfo "@"] host [":" port]`, and the peer is the
+    service the call reaches — the host and port. A credential written into the URL
+    (`https://svc:s3cret@billing.internal/…`) is never part of WHICH service is called, and
+    keeping it put the password into `endpoints.peer`, from where every exit published it:
+    the redactor strips userinfo only after a `scheme://`, and the split had removed the
+    scheme (found 2026-10-23). The path keeps nothing of the authority either way."""
+    assert split_url("https://svc:s3cret@billing.internal/invoices") == (
+        "billing.internal",
+        "/invoices",
+    )
+    assert split_url("http://token@billing.internal:8443") == ("billing.internal:8443", "")
+    assert split_url("//svc:s3cret@billing/x") == ("billing", "/x")
+    # A templated host or port is still host and port (review, 2026-10-23): a shape test on
+    # the remainder kept the credential of `http://svc:s3cret@billing:{port}/x`.
+    assert split_url("http://svc:s3cret@billing:{port}/x") == ("billing:{port}", "/x")
+    assert split_url("http://svc:s3cret@${billing.host:localhost}/x") == (
+        "${billing.host:localhost}",
+        "/x",
+    )
+
+
+def test_a_hole_in_the_userinfo_leaves_the_peer_read():
+    """`"http://" + credentials + "@billing/x"`: the hole is in the userinfo, which is never
+    part of the peer, so the host WAS read and the address is resolved. Before 2026-10-23
+    the userinfo stayed in the authority and its hole made the whole authority unread
+    (`partial`, peer NULL) — an address the code states fully, reported as half-known."""
+    assert url_of({"kind": EXPRESSION, "value": "http://{}@billing/x"}) == (
+        "billing",
+        "/x",
+        "resolved",
+    )
+    assert url_of({"kind": EXPRESSION, "value": "http://{}:{}@billing/x"}) == (
+        "billing",
+        "/x",
+        "resolved",
+    )
+
+
 # --- Spec 2026-10-18: a partly-known address publishes at `partial` --------
 
 
