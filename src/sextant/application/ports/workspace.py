@@ -92,3 +92,42 @@ class Workspace(Protocol):
         own fact rows stay verbatim."""
 
     def close(self) -> None: ...
+
+
+class GraphReader(Protocol):
+    """One side of a boundary comparison, opened to be read and never changed: a module's
+    workspace or an exported bundle, answering the same named queries whichever it is (spec
+    2026-10-22 §3a), and saying what it is.
+
+    Narrower than `Workspace` on purpose — opening one runs no schema, derives nothing and
+    loads nothing, so a diff of two analyses cannot alter either. The description is read off
+    `metadata.json` (a workspace) or `manifest.json` (a bundle) by the adapter, because
+    `application` reads no files."""
+
+    @property
+    def module(self) -> dict[str, object]:
+        """The `module` block: `id`, `kind`, `languages`, `dependency_source`."""
+
+    @property
+    def commit(self) -> str: ...
+
+    @property
+    def producer(self) -> dict[str, object]:
+        """The stamps this side carries, under the names the bundle manifest gives them; one
+        it lacks is absent, not `None`."""
+
+    @property
+    def environments(self) -> list[str]: ...
+
+    @property
+    def is_bundle(self) -> bool: ...
+
+    @property
+    def module_root(self) -> "Path | None":
+        """The directory above the workspace — the module, for the usual `<module>/.sextant`
+        layout, where `.sextant.yml` lives; `None` for a bundle, which has none."""
+
+    def query(self, name: str, **params: object) -> list[dict[str, object]]:
+        """Run one named query, as `Workspace.query` does."""
+
+    def close(self) -> None: ...

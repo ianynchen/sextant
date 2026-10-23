@@ -6,6 +6,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from sextant.application.boundary.source import NotABoundarySource
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -29,9 +30,12 @@ from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb import workspace as workspace_module
 from sextant.storage.duckdb.workspace import (
+    _EXPORTED_TABLES,
     _FACT_VIEWS,
+    READ_ONLY_TABLES,
     DuckDbWorkspace,
     StaleParticipantError,
+    open_read_only,
 )
 
 
@@ -3434,3 +3438,72 @@ def test_the_bundle_exports_candidate_presence_and_symbol_beans(tmp_path: Path):
         f"SELECT * FROM read_parquet('{graph / 'candidate_presence.parquet'}')"
     ).fetchall()
     assert len(back) == expected == 6
+
+
+def _described_workspace(root: Path) -> Path:
+    """A workspace directory holding two boundary rows, with the `metadata.json` a read-only
+    open describes it from."""
+    directory = root / ".sextant"
+    workspace = DuckDbWorkspace(directory / "workspace.duckdb")
+    for direction, route in (("inbound", "/in"), ("outbound", "/out")):
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, peer) "
+            "VALUES ('http', ?, 'GET', ?, 'H#h().', 'C#c().', 'billing')",
+            [direction, route],
+        )
+    workspace.close()
+    (directory / "metadata.json").write_text(
+        json.dumps({"module": {"id": "m"}, "provenance": {"commit": "c"}}), encoding="utf-8"
+    )
+    return directory
+
+
+def _described_bundle(root: Path, directory: Path) -> Path:
+    workspace = DuckDbWorkspace(directory / "workspace.duckdb")
+    workspace.export_tables(root / "bundle", Redactor.from_rules())
+    workspace.close()
+    (root / "bundle" / "manifest.json").write_text(
+        json.dumps({"module": {"id": "m"}, "source": {"commit": "c"}}), encoding="utf-8"
+    )
+    return root / "bundle"
+
+
+def test_a_read_only_graph_runs_the_same_queries_on_a_workspace_and_on_its_export(tmp_path: Path):
+    """The point of presenting both as views called what the queries call them: one SQL
+    string per kind, whichever side it is read from."""
+    directory = _described_workspace(tmp_path)
+    bundle = _described_bundle(tmp_path, directory)
+    from_workspace, from_bundle = open_read_only(directory), open_read_only(bundle)
+    try:
+        for name in ("boundary_endpoint", "boundary_dependency", "boundary_contract"):
+            assert from_workspace.query(name) == from_bundle.query(name), name
+        assert [row["path"] for row in from_workspace.query("boundary_endpoint")] == ["/in"]
+        assert [row["path"] for row in from_workspace.query("boundary_dependency")] == ["/out"]
+    finally:
+        from_workspace.close()
+        from_bundle.close()
+
+
+def test_a_read_only_graph_cannot_be_written(tmp_path: Path):
+    graph = open_read_only(_described_workspace(tmp_path))
+    try:
+        with pytest.raises(duckdb.Error):
+            graph._connection.execute("DELETE FROM w.endpoints")
+    finally:
+        graph.close()
+
+
+def test_every_table_a_read_only_graph_presents_is_one_a_bundle_ships():
+    assert set(READ_ONLY_TABLES) <= set(_EXPORTED_TABLES)
+
+
+def test_a_graph_missing_a_table_the_queries_read_is_unreadable_by_name(tmp_path: Path):
+    directory = _described_workspace(tmp_path)
+    bundle = _described_bundle(tmp_path, directory)
+    with duckdb.connect(str(directory / "workspace.duckdb")) as connection:
+        connection.execute("DROP TABLE endpoint_conditions")
+    with pytest.raises(NotABoundarySource, match="endpoint_conditions"):
+        open_read_only(directory)
+    (bundle / "graph" / "shapes.parquet").unlink()
+    with pytest.raises(NotABoundarySource, match="shapes"):
+        open_read_only(bundle)

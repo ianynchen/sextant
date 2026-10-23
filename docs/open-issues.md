@@ -662,6 +662,31 @@ resolved: none.* The wider consequence is the same too — an environment the de
 (a profile with no file) is not one the document can speak about, only a profile the base
 names can be left open.
 
+### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim
+**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
+`src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES`, `src/sextant/application/boundary/source.py`**
+
+`export` passes `endpoints.path` (and `peer`) through the `_REDACTED_ADDRESSES` map, while
+`endpoint_metadata` and `endpoint_conditions` are exported whole, `path` included. Both are
+tied to their endpoint by carrying its identity columns rather than a key, and the boundary
+source joins them on `path` — so on a BUNDLE side, an endpoint whose path the redactor
+changed (userinfo in a path, a value pattern matching it) carries the masked path while its
+requirement and condition rows carry the verbatim one, and the join misses them: the
+endpoint reads with no requirements and no conditions, and a diff against the workspace it
+came from reports them removed.
+
+**What happens today:** 0 such paths across 44 workspaces, measured by the whole-branch
+review of `h/meridian` on 2026-10-22 (not re-measured when this entry was logged) — no inbound
+path in that set is changed by masking, so nothing misses.
+
+**Real triggering input:** an endpoint path the redactor rewrites, e.g. a `redact:` value
+pattern a route segment matches, on a module with a requirement or a condition on that route.
+
+**Verify:** `grep -n '"endpoint_metadata": _NAMED_QUERIES\|"endpoint_conditions": _NAMED_QUERIES' src/sextant/storage/duckdb/workspace.py`.
+**Closes** when the exporter masks `endpoints.path`, `endpoint_metadata.path` and
+`endpoint_conditions.path` through the one `_REDACTED_ADDRESSES` map, so the three stay
+spelled alike in a bundle.
+
 ### OI-170 — a call declared on a generic framework type lists every repository that extends it
 **Minor · logged 2026-10-22 (review of `conditional-beans`' framework-implemented interface
 beans, spec §4) · `src/sextant/storage/duckdb/schema.sql` (`candidate_presence`, the proxy arm),
@@ -5299,6 +5324,13 @@ draws no `alt`/`opt`/`loop` structure — both are recorded in M07 rather than
 here, the first as a deliberate choice and the second as D00 §5's already-priced
 `ordinal` enrichment.
 
+**Amended 2026-10-22 (Group H): `trace_of` is no longer the only named query with a reader.**
+Six module-scope questions — `source`, `callers`, `callees`, `implementations`, `uses`,
+`impact` — are answered from the workspace through `sextant.api.query`, in process, with no
+command-line form (D01 §5; M09). The statement above that "no public API verb was added"
+was true on 2026-09-06 and is not now: `query` is a public verb, ruled in on 2026-10-22 as a
+partial reopening of the language gate for that function alone.
+
 ### OI-24 — D01 §7's conservative re-derivation rule was not enforced anywhere
 **Major · found 2026-09-06 by 2Q `G4` · CLOSED 2026-09-06 by 2Q's rendered trace ·
 `src/sextant/api.py::_stale_stamps`**
@@ -6759,14 +6791,23 @@ before a spec cites a mechanism as shipped, grep for it in `src/`.
 | 1 | `detect:` / `detect.coordinates` | **PARTLY CLOSED, 2O Task 6.** Now on the `Catalog` model and read by the loader, and it GATES the **two** styles whose framework rule is conditional on the library — `derived_resource` and `config_join`, `application/resolve/dependencies.py::DEPENDENCY_GATED`, applied in `gate_reason`. **Re-measured |
 | 2 | `ClasspathEntry` | Still **constructed nowhere**, deliberately (2O Task 6): an entry names a resolved ARCHIVE and its tier, which the Gradle report carries and a parsed POM does not, so filling it from Maven would mean inventing a path. The coordinate half a gate needs is `ModuleFact.dependency_coordinates` instead. |
 | 10 | Project catalogs — D02 §6's repository-supplied catalog directory | **No repository-supplied catalog is ever loaded.** The catalog set is hard-wired to the installed package's own directory: `api.py:565` → `resources.py::catalogs_dir` (`:34-46`), which resolves `<package root>/catalogs` and raises if it is absent. There is no parameter, no merge and no search path,  |
-| 11 | D01 §5's ten named queries — `callers_of`, `callees_of`, `implementations_of`, `uses_of`,  | **None of the ten exists.** Across `src/` and `tests/` the ten names occur exactly once, and that occurrence is `engines/scheduled_work.py:13` citing `trace_of` as a thing that does not exist. The real registry is `storage/duckdb/workspace.py:10`'s `_NAMED_QUERIES`, a different and resolver-internal |
+| 11 | D01 §5's ten named queries — `callers_of`, `callees_of`, `implementations_of`, `uses_of`,  | **None of the ten existed when this was folded; five more do now, so six have a reader (amended 2026-10-22, below).** Across `src/` and `tests/` the ten names occur exactly once, and that occurrence is `engines/scheduled_work.py:13` citing `trace_of` as a thing that does not exist. The real registry is `storage/duckdb/workspace.py:10`'s `_NAMED_QUERIES`, a different and resolver-internal |
 | 12 | `publishing` in the Gradle init script | **Deliberately unconsumed since 2026-09-04.** Its only reader was `GradleDetector._classify`, removed by the user ruling that publishing says where artifacts go rather than what a module contains. Listed here so it is not rediscovered as an accidental phantom: the emission stays only because removin |
 | 13 | `~/.sextant/config.yml` and the repository-root `sextant.yml` — **both files, whole** | **Neither file is ever opened.** `grep -rn "sextant\.yml" src/ \ |
 | 14 | The `filesystem` catalog style | **No engine.** `filesystem` is absent from `application/resolve/endpoints.py`'s `_ENGINES` (`:214-253`), which is the dict a catalog's `style:` is resolved against, so a catalog declaring it raises `CatalogError` from `_engine_for` (`:196-211`) at the top of `derive_endpoints` (`:83`), before `endpo |
 
 **Where each is tracked now.** #10 and #13 are standing retirements (a repository-supplied
 catalog would make D02's schema a public API). #11's ten named queries are `FR-9`/`FR-10`'s
-missing surface and sit with `G-71` on the delivery list. #2's classpath tiering waits on a
+missing surface and sit with `G-71` on the delivery list. **Amended 2026-10-22 (Group H):
+five more of the ten now ship, in process only, as `question_callers`, `question_callees`,
+`question_implementations`, `question_uses` and `question_impact_step` in
+`storage/duckdb/workspace.py`'s `_NAMED_QUERIES`, answered by
+`application/query/questions.py` through `sextant.api.query` — beside `trace_of`, which is a
+Python walk (OI-25), and a sixth question, `source`, that was never one of the ten. The
+four that remain absent are `paths_between`, `endpoint_for_address`, `who_uses_shape` and
+`who_reads_config`; no command-line noun or plugin reads any of them, which the language gate
+of 2026-09-18 still holds (reopened for the function alone).** D01 §5 and PROJECT.md carry the
+count. #2's classpath tiering waits on a
 resolved classpath under both build systems. #12 is an emission to delete when a
 build-script change is next authorised. #14 is the `filesystem` engine, deliberately ahead
 of implementation.

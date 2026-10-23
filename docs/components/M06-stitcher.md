@@ -160,6 +160,17 @@ numbers still matches.
 Where a format publishes compatibility rules, those rules are applied rather than
 reimplemented.
 
+**The same test is read a second time, forwards in time, by `module diff`**
+([M00](M00-cli.md); `application/boundary/diff.py`), which is built where this step is not.
+The two directions become *did the new analysis break an old client?*: a change to an
+endpoint's or dependency's body is `breaking` where the request gained a required field or an
+existing request field became required (the REQUEST test, an old client now misses a field),
+where the response lost a field (the RESPONSE test, an old client declared it), where an
+existing field's wire type changed in either body, or where a body's structure changed
+(`OrderView` becoming `List<OrderView>`); `compatible` otherwise. The comparison is on wire
+name and wire type and never on type names, exactly as above. It is a labelled reading of two
+analyses, not a matching step: nothing here chooses among candidates.
+
 The client shape compared against the response is the shape **as declared**, not the fields
 the client actually reads. That is cheaper, and it catches a real defect: a declared field
 the server never returns is a field that is always null.

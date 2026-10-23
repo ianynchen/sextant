@@ -326,6 +326,15 @@ class Redactor:
         # a `.sextant.yml` happened to list its additions in.
         return cls(tuple(sorted(keys)), tuple(sorted(values)))
 
+    def union(self, other: "Redactor") -> "Redactor":
+        """Every rule either set holds: what masks anything either side wanted hidden, for
+        an exit that prints rows masked under two rule sets (the diff, spec 2026-10-22
+        §3d). Both are already validated, so nothing is refused here."""
+        return Redactor(
+            tuple(sorted({*self._key_patterns, *other._key_patterns})),
+            tuple(sorted({*self._value_patterns, *other._value_patterns})),
+        )
+
     @property
     def rule_set_hash(self) -> str:
         """The sha256 of the effective rule set, canonically serialized (D05

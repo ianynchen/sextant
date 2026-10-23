@@ -29,11 +29,15 @@ from click.testing import CliRunner
 from fixture_build import compile_fixture
 from sextant import api
 from sextant.agents import AGENT_REGISTRY
+from sextant.application.boundary.source import BoundarySource
+from sextant.application.boundary.vocabulary import KINDS
 from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.redaction import REDACTED
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -520,3 +524,393 @@ def test_export_writes_a_bundle_with_the_manifest(rendered_root: Path):
 def test_export_before_analyze_raises_notanalyzederror(tmp_path: Path):
     with pytest.raises(api.NotAnalyzedError):
         api.export(tmp_path)
+
+
+# --------------------------------------------------------------------------
+# diff
+# --------------------------------------------------------------------------
+
+
+def test_diff_of_a_workspace_with_itself_is_empty_and_lists_every_kind(rendered_root: Path):
+    result = api.diff(rendered_root, rendered_root)
+
+    assert isinstance(result, api.DiffResult)
+    assert result.diff.entries == () and set(result.diff.summary) == set(KINDS)
+    assert result.written is None
+
+
+def test_diff_writes_the_file_when_out_is_given(rendered_root: Path, tmp_path: Path):
+    target = tmp_path / "nested" / "diff.json"
+
+    result = api.diff(rendered_root, rendered_root, out=target)
+
+    assert result.written == target
+    written = target.read_text(encoding="utf-8")
+    assert json.loads(written)["summary"] == result.diff.to_json()["summary"]
+    assert written == json.dumps(result.diff.to_json(), sort_keys=True, indent=2) + "\n"
+
+
+def test_the_fixtures_endpoints_carry_the_requirements_the_binder_enforces(rendered_root: Path):
+    """On real data, not hand-built rows: `RequestParamsController#search`'s `@RequestParam
+    String q` is a `required` param, and it reaches the `endpoint` kind's `requirements`
+    (the writer names the handler in `endpoint_metadata.caller`; the `endpoints` row's own
+    `caller` is NULL)."""
+    source = BoundarySource.open(rendered_root, open_read_only)
+    try:
+        rows = source.rows(KINDS["endpoint"])
+    finally:
+        source.close()
+    with_requirements = [row for row in rows if row["requirements"]]
+    assert with_requirements
+    (search,) = [row for row in rows if row["path"] == "/v1/params/search"]
+    assert {"kind": "param", "name": "q", "requirement": "required"} in search["requirements"]  # type: ignore[operator]
+
+
+def test_a_request_that_gains_a_required_param_is_a_breaking_change(
+    rendered_root: Path, tmp_path: Path
+):
+    """Through the real pass: the fixture's `RequestParamsController#search` binds
+    `@RequestParam String q`, which the binder makes `required`. Side `before` is the
+    fixture with that requirement row removed, so from `before` to the fixture the request
+    GAINS a required param — one `changed` endpoint naming the requirement set, `breaking`
+    (ruled 2026-10-22: M06 step 3 counts a required metadata row as part of what the server
+    requires). Read the other way the requirement is dropped, which is `compatible`."""
+    before = tmp_path / "before" / "orders-service"
+    shutil.copytree(rendered_root, before)
+    workspace = DuckDbWorkspace(before / ".sextant" / "workspace.duckdb")
+    try:
+        workspace._connection.execute(
+            "DELETE FROM endpoint_metadata WHERE path = '/v1/params/search' AND name = 'q'"
+        )
+    finally:
+        workspace.close()
+
+    (entry,) = api.diff(before, rendered_root).diff.entries
+
+    assert (entry.kind, entry.change, entry.identity["path"]) == (
+        "endpoint", "changed", "/v1/params/search",
+    )  # fmt: skip
+    assert set(cast(dict[str, object], entry.to)) == {"requirements"}
+    gained = {"kind": "param", "name": "q", "requirement": "required"}
+    assert gained in cast(list[object], cast(dict[str, object], entry.to)["requirements"])
+    assert gained not in cast(list[object], cast(dict[str, object], entry.from_)["requirements"])
+    assert entry.compatibility == "breaking"
+    (dropped,) = api.diff(rendered_root, before).diff.entries
+    assert (dropped.change, dropped.compatibility) == ("changed", "compatible")
+
+
+def test_diff_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError):
+        api.diff(tmp_path, tmp_path)
+
+
+def test_diff_of_two_stamps_that_cannot_be_compared_raises_diffrefusederror(
+    rendered_root: Path, tmp_path: Path
+):
+    """The refusal's own text names the stamp that differs; the facade carries it unchanged."""
+    stale = _side(rendered_root, tmp_path / "stale")
+    metadata = json.loads((stale / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
+    metadata["schema_version"] = "0.9.0"
+    (stale / ".sextant" / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(api.DiffRefusedError) as refused:
+        api.diff(rendered_root, stale)
+
+    assert "graph_schema_version" in str(refused.value)
+
+
+_DSN = "orders.internal.dsn"
+
+
+def _side(rendered_root: Path, where: Path, *, rules: bool = True, sql: str = "") -> Path:
+    """A copy of the analysed module at `where/orders-service`. `rules=False` leaves its
+    `.sextant.yml` without the fixture's `redact:` section (whose `dsn` pattern is what masks
+    `orders.internal.dsn`); `sql` is run against its workspace."""
+    root = where / "orders-service"
+    shutil.copytree(rendered_root, root)
+    if not rules:
+        (root / ".sextant.yml").write_text(
+            "extract_libraries:\n  - com.example:orders-soap-client\n", encoding="utf-8"
+        )
+    if sql:
+        workspace = DuckDbWorkspace(root / ".sextant" / "workspace.duckdb")
+        try:
+            workspace._connection.execute(sql)
+        finally:
+            workspace.close()
+    return root
+
+
+def test_a_redact_rule_only_side_b_declares_refuses_on_the_redaction_set_hash(
+    rendered_root: Path, tmp_path: Path
+):
+    """Spec §3d: each workspace side is masked under its OWN `.sextant.yml`. Side a lacks
+    the fixture's `dsn` rule and side b keeps it, so their rule sets differ and the diff
+    refuses, naming the stamp and both hashes — never masking b by a's rules alone."""
+    a = _side(rendered_root, tmp_path / "a", rules=False)
+    b = _side(rendered_root, tmp_path / "b",
+              sql=f"UPDATE resolved_config SET value = 'jdbc:NEW-SECRET' WHERE key = '{_DSN}'")  # fmt: skip
+
+    with pytest.raises(api.DiffRefusedError) as refused:
+        api.diff(a, b)
+
+    message = str(refused.value)
+    assert "redaction_set_hash" in message
+    assert api._redactor_for(a).rule_set_hash in message
+    assert api._redactor_for(b).rule_set_hash in message
+
+
+def test_allowed_a_rule_either_side_declares_masks_both_and_the_diff_is_labelled(
+    rendered_root: Path, tmp_path: Path
+):
+    """Under `allow_producer_change` both sides are masked by the UNION of their rule sets:
+    side b's DSN, a key only b's rules name, reads masked, and the diff says the producer
+    changed."""
+    a = _side(rendered_root, tmp_path / "a", rules=False,
+              sql=f"DELETE FROM resolved_config WHERE key = '{_DSN}'")  # fmt: skip
+    b = _side(rendered_root, tmp_path / "b",
+              sql=f"UPDATE resolved_config SET value = 'jdbc:NEW-SECRET' WHERE key = '{_DSN}'")  # fmt: skip
+
+    found = api.diff(a, b, options=api.DiffOptions(allow_producer_change=True)).diff
+
+    assert found.producer_changed is True
+    added = [e for e in found.entries if e.kind == "boundary-property"]
+    assert added and all(e.identity["key"] == _DSN and e.change == "added" for e in added)
+    assert all(cast(dict[str, object], e.to)["value"] == REDACTED for e in added)
+    assert "NEW-SECRET" not in json.dumps(found.to_json())
+
+
+def test_a_workspace_outside_its_modules_sextant_directory_is_refused_by_name(
+    rendered_root: Path, tmp_path: Path
+):
+    """`module analyze --workspace DIR` puts a workspace where no module's `.sextant.yml`
+    sits above it, so the rules it would be exported under are unknown: refused, naming
+    the path, rather than masked by the built-ins alone."""
+    custom = tmp_path / "custom-workspace"
+    shutil.copytree(rendered_root / ".sextant", custom)
+
+    with pytest.raises(api.DiffRefusedError, match="custom-workspace"):
+        api.diff(custom, rendered_root)
+
+
+def test_a_bundle_missing_a_table_is_told_what_is_missing(rendered_root: Path):
+    """A bundle exported before `endpoint_conditions` was a table is not "unanalysed": the
+    refusal keeps what the reader looked for."""
+    bundle = api.export(rendered_root).bundle
+    (bundle / "graph" / "endpoint_conditions.parquet").unlink()
+
+    with pytest.raises(api.NotAnalyzedError, match="endpoint_conditions"):
+        api.diff(bundle, rendered_root)
+
+
+# --------------------------------------------------------------------------
+# observability
+# --------------------------------------------------------------------------
+
+
+def test_observability_of_a_workspace_is_the_map_analyze_wrote(rendered_root: Path):
+    stored = json.loads((rendered_root / ".sextant" / "metadata.json").read_text("utf-8"))
+
+    result = api.observability(rendered_root)
+
+    assert isinstance(result, api.ObservabilityMap)
+    assert result.to_json() == stored["observability"]
+    assert api.observability(rendered_root / ".sextant").to_json() == stored["observability"]
+    assert set(result.kinds) == set(KINDS)
+
+
+def test_observability_returns_the_recorded_map_and_never_re_derives_it(rendered_root: Path):
+    """The map `analyze` recorded is the answer, for a workspace and for the bundle that
+    copied it: a sentinel planted in it comes back unchanged, which a re-derived map would
+    not carry."""
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    metadata["observability"]["stated_boundaries"] = ["planted-sentinel"]
+    metadata["observability"]["kinds"]["schedule"] = {"verdict": "partial", "reasons": ["planted"]}
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert api.observability(rendered_root).to_json() == metadata["observability"]
+    assert (
+        api.observability(api.export(rendered_root).bundle).to_json() == metadata["observability"]
+    )
+
+
+def test_observability_reads_a_bundle_as_well_as_a_workspace(rendered_root: Path):
+    stored = json.loads((rendered_root / ".sextant" / "metadata.json").read_text("utf-8"))
+    bundle = api.export(rendered_root).bundle
+
+    result = api.observability(bundle)
+
+    assert result.to_json() == stored["observability"]
+
+
+def test_observability_of_a_workspace_without_the_map_is_the_labelled_degraded_one(
+    rendered_root: Path,
+):
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    del metadata["catalogs_run"], metadata["observability"]
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = api.observability(rendered_root)
+
+    assert "predates boundary vocabulary 1" in result.kinds["endpoint"].reasons[0]
+    assert result.kinds["endpoint"].verdict == "partial"
+
+
+def test_render_reads_each_skips_cause_back_from_the_metadata(rendered_root: Path):
+    """`render` reconstructs the report from `metadata.json` (M00's "no analysis" rule), so
+    the cause `analyze` recorded is the cause it holds; a skip written before the field has
+    none, which the map counts as a gap."""
+    path = rendered_root / ".sextant" / "metadata.json"
+    metadata = json.loads(path.read_text("utf-8"))
+    workspace = DuckDbWorkspace(rendered_root / ".sextant" / "workspace.duckdb")
+    try:
+        _, report = api._reconstructed_report(rendered_root, workspace, metadata)
+        recorded = {s["catalog_id"]: s["cause"] for s in metadata["skipped_catalogs"]}
+        assert {s.catalog_id: s.cause for s in report.skipped_catalogs} == recorded
+        for skipped in metadata["skipped_catalogs"]:
+            del skipped["cause"]
+        _, old = api._reconstructed_report(rendered_root, workspace, metadata)
+    finally:
+        workspace.close()
+    assert old.skipped_catalogs and all(s.cause is None for s in old.skipped_catalogs)
+
+
+def test_observability_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError):
+        api.observability(tmp_path)
+
+
+def test_observability_of_a_document_that_is_not_an_object_raises_notanalyzederror(
+    tmp_path: Path,
+):
+    (tmp_path / "metadata.json").write_text("[1, 2]", encoding="utf-8")
+
+    with pytest.raises(api.NotAnalyzedError, match="metadata.json"):
+        api.observability(tmp_path)
+
+
+# --------------------------------------------------------------------------
+# query and AnalyzeOptions
+# --------------------------------------------------------------------------
+
+_MODULE_PREFIX = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+ORDER_CONTROLLER_GET = _MODULE_PREFIX + "com/acme/orders/OrderController#get(sig_4cb6f523)."
+ORDER_SERVICE_FIND = _MODULE_PREFIX + "com/acme/orders/OrderService#find(sig_4cb6f523)."
+ORDER_RESULT = _MODULE_PREFIX + "com/acme/orders/OrderResult#"
+SPLITTER = _MODULE_PREFIX + "com/acme/orders/trace/Splitter#"
+FIRST_SPLITTER_HEAD = _MODULE_PREFIX + "com/acme/orders/trace/FirstSplitter#head(sig_7b622a99)."
+
+
+def _symbols(rows: object) -> list[str]:
+    assert isinstance(rows, list)
+    return [str(row["symbol"]) for row in rows]
+
+
+def test_source_names_the_file_and_lines_of_a_method(rendered_root: Path):
+    [row] = cast(
+        list[dict[str, object]], api.query(rendered_root, "source", symbol=ORDER_CONTROLLER_GET)
+    )
+    assert str(row["file"]).endswith("OrderController.java")
+    assert cast(int, row["line_start"]) <= cast(int, row["line_end"])
+
+
+def test_callers_and_callees_are_one_hop_each_way(rendered_root: Path):
+    """The handler calls the service; the service is called by the handler. Each answer is
+    one hop: the service's callees are not among the handler's."""
+    callers = _symbols(api.query(rendered_root, "callers", symbol=ORDER_SERVICE_FIND))
+    callees = _symbols(api.query(rendered_root, "callees", symbol=ORDER_CONTROLLER_GET))
+    assert ORDER_CONTROLLER_GET in callers and callers == sorted(callers)
+    assert ORDER_SERVICE_FIND in callees
+    service_callees = set(_symbols(api.query(rendered_root, "callees", symbol=ORDER_SERVICE_FIND)))
+    assert not (service_callees - {ORDER_SERVICE_FIND}) & set(callees)
+
+
+def test_implementations_lists_the_types_implementing_an_interface(rendered_root: Path):
+    assert _symbols(api.query(rendered_root, "implementations", symbol=SPLITTER)) == [
+        _MODULE_PREFIX + "com/acme/orders/trace/FirstSplitter#",
+        _MODULE_PREFIX + "com/acme/orders/trace/SecondSplitter#",
+    ]
+
+
+def test_uses_asks_about_a_type_not_a_function(rendered_root: Path):
+    """A payload class's real question: what returns it, takes it, or extends it — the
+    handler and the service both return `OrderResult`, and the OpenAPI result extends it."""
+    users = _symbols(api.query(rendered_root, "uses", symbol=ORDER_RESULT))
+    assert {ORDER_CONTROLLER_GET, ORDER_SERVICE_FIND} <= set(users)
+    assert _MODULE_PREFIX + "com/acme/orders/openapi/DetailedOrderResult#" in users
+    assert users == sorted(users)
+
+
+def test_impact_returns_three_partitions_never_one_count(rendered_root: Path):
+    result = cast(
+        dict[str, list[dict[str, object]]], api.query(rendered_root, "impact", symbol=ORDER_RESULT)
+    )
+    assert set(result) == {"definite", "possible", "unknown_regions"} and result["definite"]
+    definite = _symbols(result["definite"])
+    # The service returns it; the legacy controller calls the service: two hops upstream.
+    assert ORDER_SERVICE_FIND in definite
+    assert _MODULE_PREFIX + "com/acme/orders/LegacyOrderController#amend(sig_4cb6f523)." in definite
+    assert not set(definite) & set(_symbols(result["possible"]))
+
+
+def test_impact_through_a_dispatch_that_narrowed_to_two_bodies_is_possible(rendered_root: Path):
+    """`TraceProbe#describe` calls `Splitter#head`, which the fixture implements twice: the
+    call may run either body, so it is a possible caller of each, never a definite one."""
+    result = cast(
+        dict[str, list[dict[str, object]]],
+        api.query(rendered_root, "impact", symbol=FIRST_SPLITTER_HEAD),
+    )
+    describe = _MODULE_PREFIX + "com/acme/orders/trace/TraceProbe#describe(sig_99bf8bb7)."
+    assert describe in _symbols(result["possible"])
+    assert describe not in _symbols(result["definite"])
+
+
+def test_an_unknown_question_is_refused_naming_the_six(rendered_root: Path):
+    assert api.QUESTIONS == (
+        "source",
+        "callers",
+        "callees",
+        "implementations",
+        "uses",
+        "impact",
+    )
+    with pytest.raises(
+        api.ConfigurationError, match="source, callers, callees, implementations, uses, impact"
+    ):
+        api.query(rendered_root, "trace", symbol="x")
+
+
+def test_an_unknown_symbol_is_refused_naming_it(rendered_root: Path):
+    with pytest.raises(api.ConfigurationError, match="OrderController#nothing"):
+        api.query(
+            rendered_root,
+            "callers",
+            symbol=_MODULE_PREFIX + "com/acme/orders/OrderController#nothing.",
+        )
+
+
+def test_query_before_analyze_raises_notanalyzederror(tmp_path: Path):
+    with pytest.raises(api.NotAnalyzedError, match="no analysis found"):
+        api.query(tmp_path, "source", symbol="x")
+
+
+def test_analyze_accepts_an_options_object_equivalent_to_the_flags(
+    module_root: Path, tmp_path: Path
+):
+    """The three knobs the CLI has, as one object (spec §5): the same analysis as the flag
+    form, and `workspace_dir` puts the workspace where it says."""
+    elsewhere = tmp_path / "elsewhere"
+
+    flags = api.analyze(module_root, allow_resolve=False)
+    options = api.analyze(module_root, options=api.AnalyzeOptions(workspace_dir=elsewhere))
+
+    assert options == flags
+    assert (elsewhere / "workspace.duckdb").is_file()
+
+
+def test_analyze_refuses_the_flag_and_an_options_object_together(module_root: Path):
+    with pytest.raises(api.ConfigurationError, match="allow_resolve"):
+        api.analyze(module_root, allow_resolve=True, options=api.AnalyzeOptions())
+    assert not (module_root / ".sextant").exists()

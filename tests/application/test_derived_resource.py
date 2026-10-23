@@ -258,6 +258,7 @@ def _workspace(
     *,
     coordinates: tuple[str, ...] | None = (DATA_REST,),
     config: list[tuple[str, str, str]] | None = None,
+    dependency_source: str = "declared",
 ) -> DuckDbWorkspace:
     """A workspace holding `facts`, a module fact declaring `coordinates`, and
     any already-resolved configuration.
@@ -281,6 +282,7 @@ def _workspace(
                     source_roots=["src/main/java"],
                     output_dirs=["target/classes"],
                     dependency_coordinates=list(coordinates),
+                    dependency_source=dependency_source,
                 )
             ],
         )
@@ -578,6 +580,25 @@ def test_a_module_whose_build_does_not_declare_the_framework_derives_nothing(tmp
     # "declares none of them" is a confident negative the evidence does not
     # support.
     assert "own transitive" in reason
+    # The cause is data, never parsed from that string: the map reads it beside
+    # `dependency_source` (ruled 2026-10-22).
+    assert skipped[0].cause == "framework_absent"  # type: ignore[attr-defined]
+
+
+def test_a_framework_absent_from_a_resolved_classpath_is_skipped_as_absent(tmp_path: Path):
+    """The same near-miss where Maven answered for the set, transitives included: the
+    message drops the caveat and the cause is the same `framework_absent` — which
+    `dependency_source` then tells the observability map is a real absence."""
+    workspace, skipped = _resolve(
+        tmp_path,
+        _repository(queries=("findByStatus",)),
+        coordinates=("org.springframework.boot:spring-boot-starter-data-jpa",),
+        dependency_source="maven",
+    )
+    workspace.close()
+
+    assert "as the build tool resolved it" in skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+    assert skipped[0].cause == "framework_absent"  # type: ignore[attr-defined]
 
 
 def test_an_analysis_that_recorded_no_coordinates_skips_rather_than_deriving(tmp_path: Path):
@@ -590,6 +611,7 @@ def test_an_analysis_that_recorded_no_coordinates_skips_rather_than_deriving(tmp
 
     assert routes == set()
     assert "recorded no dependency coordinates" in skipped[0].missing_capabilities[0]  # type: ignore[attr-defined]
+    assert skipped[0].cause == "dependencies_unrecorded"  # type: ignore[attr-defined]
 
 
 def test_a_module_fact_carrying_no_coordinates_key_skips_rather_than_crashing(tmp_path: Path):

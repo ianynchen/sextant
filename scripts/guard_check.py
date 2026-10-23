@@ -170,6 +170,10 @@ _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
 _DOCUMENT = "sextant/egress/render/document.py"
 _VALUES = "sextant/application/resolve/values.py"
+_VOCABULARY = "sextant/application/boundary/vocabulary.py"
+_DIFF = "sextant/application/boundary/diff.py"
+_OBSERVABILITY = "sextant/application/boundary/observability.py"
+_QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
@@ -3524,6 +3528,125 @@ GUARDS: dict[str, Guard] = {
                 path=_DOCUMENT,
                 find="                elides=_trace_elision(trace),",
                 replace="                elides=None,  # guard disabled",
+            ),
+        ),
+    ),
+    # --- the boundary vocabulary, the diff and the observability map (spec 2026-10-22) ---
+    "boundary.the-HANDLER-is-evidence-never-identity": Guard(
+        what="an endpoint is identified by its wire address (`protocol`, `method`, `path`); "
+        "the handler symbol is evidence",
+        why="every controller in petclinic-rest moved into `v1/` and was renamed between two "
+        "commits (spec §1b). With the handler in the identity, the diff reports every route "
+        "removed and re-added — a rewrite of the whole boundary where the wire did not move, "
+        "which buries the one route that did",
+        edits=(
+            Edit(
+                path=_VOCABULARY,
+                find='        identity=("protocol", "method", "path"),\n',
+                replace='        identity=("protocol", "method", "path", "handler"),  # guard disabled\n',
+            ),
+        ),
+    ),
+    "boundary.a-REQUIRED-request-field-added-is-breaking": Guard(
+        what="a request field that is required on the new side and was not on the old is a "
+        "`breaking` change (M06 step 3 read forwards in time)",
+        why="an old client never sent it, so its next call is refused. Labelled `compatible` it "
+        "is the one change a consumer most needs to be warned about, reported as safe",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='        return "breaking" if newly_required else "compatible"\n',
+                replace='        return "compatible"  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "boundary.both-sides-pass-through-the-REDACTOR": Guard(
+        what="each side's `path`/`peer` and `boundary-property` value pass through the redactor "
+        "the exporter uses before they are joined or printed",
+        why="a bundle was masked at export and a workspace is verbatim, so read raw the same "
+        "address is a removal and an addition; and the diff's own output would print a secret "
+        "the bundle was masked to hide",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find="            projected[column] = redactor.redact_text(str(projected[column]))\n",
+                replace="            projected[column] = str(projected[column])  # guard disabled\n",
+            ),
+            Edit(
+                path=_DIFF,
+                find='        projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))\n',
+                replace='        projected["value"] = _each(projected["value"], lambda v: v)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "boundary.a-PRODUCER-mismatch-refuses-unless-allowed": Guard(
+        what="two analyses whose Sextant version, catalog hash or redaction rule set differ "
+        "are refused unless the caller allows it",
+        why="a fixed dispatch bug or a new catalog changes rows with no code change; a diff "
+        "that mixed the two would report the tool's change as the module's, with nothing to "
+        "tell the reader which it was looking at",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find="    if producer and not allow_producer_change:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "boundary.the-static-GAP-list-is-stated-never-a-verdict": Guard(
+        what="`gaps`, the static list of what Sextant does not read, is listed as "
+        "`stated_boundaries` and is never folded into a kind's verdict or reasons",
+        why="the list is identical on every manifest, so folded in it would make every kind "
+        "`partial` on every module and the verdict would stop saying anything about THIS "
+        "analysis — the measurement the map exists to carry",
+        edits=(
+            Edit(
+                path=_OBSERVABILITY,
+                find="    shared: list[str] = []\n",
+                replace="    shared: list[str] = list(stated)  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_OBSERVABILITY,
+                find='            kinds[name] = Verdict("observable", ())\n            continue\n',
+                replace='            kinds[name] = Verdict("partial", stated) if stated else Verdict("observable", ())\n            continue\n',
+            ),
+        ),
+    ),
+    "boundary.every-kind-is-in-the-summary-at-zero": Guard(
+        what="the diff's summary carries all seven kinds, at zero where nothing changed",
+        why="a summary that omits a kind it found nothing in reads as a kind it did not look "
+        "at; a consumer counting `error-handler` changes cannot tell zero from not-measured",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find="    summary: dict[str, dict[str, int]] = {name: dict.fromkeys(_CHANGES, 0) for name in KINDS}\n",
+                replace="    summary: dict[str, dict[str, int]] = {}  # guard disabled\n",
+            ),
+            Edit(
+                path=_DIFF,
+                find="        summary[entry.kind][entry.change] += 1\n",
+                replace="        summary.setdefault(entry.kind, dict.fromkeys(_CHANGES, 0))[entry.change] += 1\n",
+            ),
+        ),
+    ),
+    "query.impact-returns-THREE-partitions": Guard(
+        what="`impact` answers `definite`, `possible` and `unknown_regions` apart, never as "
+        "one list or one count",
+        why="D01 §5: a caller reached only through a narrowed dispatch may not run the "
+        "subject, and a region the walk cannot see past is not a caller at all. Folded into "
+        "one list, a reader changing a method is told it certainly breaks everything that "
+        "merely might, and is never told where the walk stopped",
+        edits=(
+            Edit(
+                path=_QUESTIONS,
+                find='        "definite": [item for item in ordered if definite[str(item["symbol"])]],\n'
+                '        "possible": [item for item in ordered if not definite[str(item["symbol"])]],\n'
+                '        "unknown_regions": [\n'
+                '            {"symbol": symbol, "reason": reason} for symbol, reason in sorted(regions)\n'
+                "        ],\n",
+                replace='        "definite": ordered,  # guard disabled by scripts/guard_check.py\n'
+                '        "possible": [],\n'
+                '        "unknown_regions": [],\n',
             ),
         ),
     ),

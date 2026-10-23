@@ -71,5 +71,48 @@
     ],
     "outbound": []
   },
-  "resolvable_superclass_calls": 131
+  "resolvable_superclass_calls": 131,
+  "diff_against": {
+    "commit": "f957c77b774cb0dd7acf00834fbcb25dce5f8e9f",
+    "summary": {
+      "module": {
+        "added": 0,
+        "removed": 0,
+        "changed": 0
+      },
+      "endpoint": {
+        "added": 2,
+        "removed": 0,
+        "changed": 0
+      },
+      "dependency": {
+        "added": 0,
+        "removed": 0,
+        "changed": 0
+      },
+      "data-contract": {
+        "added": 2,
+        "removed": 0,
+        "changed": 0
+      },
+      "boundary-property": {
+        "added": 0,
+        "removed": 0,
+        "changed": 0
+      },
+      "schedule": {
+        "added": 0,
+        "removed": 0,
+        "changed": 0
+      },
+      "error-handler": {
+        "added": 0,
+        "removed": 0,
+        "changed": 0
+      }
+    }
+  },
+  "notes": [
+    "diff_against 2026-10-22 (spec 2026-10-22-boundary-vocabulary-and-diff-design.md §1b): f957c77 (2026-03-05) to the pinned 4cd8e1b. Measured by the field checker, which builds both sides with the network allowed: endpoint +2 (GET /petclinic/api/v2/owners and /pets), data-contract +2 (OwnerPageDto, PetPageDto), every other kind zero including `module`. The controllers were moved into v1/ and renamed between the two commits and appear nowhere in the diff: the handler is evidence, not identity. `module` read changed 1 (dependency_source declared -> maven) when the older side was built OFFLINE on a machine without its dependencies cached; the checker's own build runs `dependency:build-classpath` with the network allowed and it measured zero here, so all seven kinds are compared."
+  ]
 }
