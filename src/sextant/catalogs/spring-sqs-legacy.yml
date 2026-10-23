@@ -19,6 +19,8 @@ measured:
   - { artifact: io.awspring.cloud:spring-cloud-aws-messaging, versions: ["2.4.4"],
       identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 matches:

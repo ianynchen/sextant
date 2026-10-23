@@ -186,7 +186,7 @@ document field.
 | `graph/open_questions.parquet` `path` | the `path` map — a question and the row it asks about must mask identically |
 | `graph/open_questions.parquet` `candidates` | `redact_candidates`, the call the document and the brief make: a candidate's `peer` through `redact_peer`, a key's per-environment `values` through `redact_value` under that key |
 | `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
-| `graph/endpoint_metadata.parquet` `path`, `graph/endpoint_conditions.parquet` `path` | the same address map as `endpoints.path`: each carries its endpoint's path as the key it joins by, so a row masked differently would miss its endpoint (OI-169) |
+| `graph/endpoint_metadata.parquet` `path` | the same address map as `endpoints.path`: it carries its endpoint's path as the key it joins by, so a row masked differently would miss its endpoint (OI-169; `endpoint_conditions.path` takes the same map, below) |
 | `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |
 | `graph/config_entries.parquet` `value` | the raw half of `resolved_config`, masked by the same `redact_value` keyed on the entry's own `key_path` |
 | `graph/raw_facts.parquet` `config_entry` payload `value` | the same map the `facts/*.parquet` stream joins, so the two shapes of one table cannot disagree |
@@ -296,6 +296,21 @@ For four phases the export was a hand-written list of eleven names, and the seve
 `field_writes` and `method_returns` — were dropped from every bundle with nothing saying so.
 The row above was therefore false as written: a reader could see a rendered trace and had no
 way to recompute or check what it asserted.
+
+**Conditional beans travel the same way** (spec `2026-10-22-conditional-beans-design.md`): the
+tables `bean_conditions` and `interface_beans` and the views `bean_presence`, `symbol_beans`,
+`candidate_presence` and `endpoint_conditions` ([D01](D01-graph-schema.md), "Conditional beans")
+are in `contents.tables` like every other, and the export ratchet covers views as it covers
+tables (`endpoint_conditions` is a view since graph schema version 4). None needed an exclusion.
+Two of them, `symbol_beans` and `interface_beans`, hold symbols only and need no redaction
+rule. The other four are masked on export by the map each value belongs to:
+`endpoint_conditions.path` is the endpoint row's own `path` — an outbound row's address can
+carry URL userinfo — and masks through the same address map as `endpoints.path`;
+`expression` quotes a condition's annotation arguments verbatim, so `bean_conditions` and
+`endpoint_conditions` pass it through `redact_json` as `annotations.args` is; and the
+`evidence` of `bean_conditions`, `endpoint_conditions`, `bean_presence` and
+`candidate_presence`, free text that repeats an expression or a placeholder's raw spelling,
+passes through `redact_text`.
 
 **The ratchet runs the direction that catches the defect.** A table in the schema and absent
 from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall

@@ -7,6 +7,8 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.amqp:spring-rabbit"]
 
+bean_model: spring
+
 # `nested_annotation_args` (capability 9.16): a REPEATED `@RabbitListener`
 # reaches the class file only as the nested array inside `@RabbitListeners`
 # (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a

@@ -7,6 +7,8 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.cloud:spring-cloud-openfeign-core"]
 
+bean_model: spring
+
 requires: [annotation_args, typed_signatures]
 
 matches:

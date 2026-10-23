@@ -56,12 +56,15 @@ class Link:
     resolution: str = str(Resolution.RESOLVED)
     evidence: str = NAME_MATCH
     candidates: tuple[str, ...] = ()
-    # The conditions the INBOUND endpoint carries, as `(environment, holds)` pairs read off
-    # the participant's own `endpoint_conditions` (spec 2026-10-21-conditional-controllers,
-    # ruling 2): matching never read them — an endpoint is an endpoint — and the link
-    # states them. Not a column of `links`: the structured rows live in the participant's
-    # bundle and join on (participant, method, path).
+    # Where the INBOUND endpoint EXISTS, as `(environment, holds)` pairs (spec 2026-10-21-
+    # conditional-controllers, ruling 2): matching never read them — an endpoint is an
+    # endpoint — and the link states them. `from_conditions` is the same for the OUTBOUND
+    # side, the calling bean (spec 2026-10-22-conditional-beans §3). Both are read off the
+    # participant's own `endpoint_conditions` and `bean_presence`, the verdict being the
+    # latter's. Not columns of `links`: the structured rows live in the participant's bundle
+    # and join on (participant, method, path) and, for the caller, its symbol.
     to_conditions: tuple[tuple[str, str], ...] = ()
+    from_conditions: tuple[tuple[str, str], ...] = ()
 
     def row(self) -> dict[str, object]:
         return {

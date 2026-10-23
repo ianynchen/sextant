@@ -11,6 +11,8 @@ measured:
   - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
 
+bean_model: spring
+
 # **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
 # Withhold the capability and re-resolve on facts where every `array` argument arrives as one
 # opaque `unresolved`: this catalog's row count is UNCHANGED and only its media column goes

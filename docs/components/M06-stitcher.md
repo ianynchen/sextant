@@ -224,20 +224,28 @@ Both are output. Neither stops the run. But an unmatched call into a participant
 [M05](M05-sync.md) marked **absent** is attributed to the gap, not reported as an
 architectural finding.
 
-### A condition on the inbound endpoint is data the link carries, never a gate
+### A condition on either end of a link is data the link carries, never a gate
 
-**Ruled 2026-10-22 (spec `2026-10-21-conditional-controllers-design.md`, ruling 2):** an
-endpoint is an endpoint — the filter chain joins an outbound endpoint to an inbound one on
-protocol, verb and path, and nothing about either side's implementation, environment or
-reactor enters that join. A controller under `@Profile("prod")` or
-`@ConditionalOnProperty(…)` exists in some of its module's environments only; that is a
-property of the INBOUND endpoint, stored as structured rows in the participant's own
-`endpoint_conditions` and read here through the federated `system_endpoint_conditions`
-view, exactly as the inbound row itself is read. After matching, each link carries the
-`(environment, holds)` pairs of the endpoint it reaches (`Link.to_conditions`, not a column
-of `links` — the rows live in the participant's bundle and join on participant, verb and
-path), and the system document states them beside the link: *exists in `prod`; not in
-`default`*. **No link is dropped or added for a condition**, in any environment.
+**Ruled 2026-10-22 (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; extended to
+both ends by `2026-10-22-conditional-beans-design.md`):** an endpoint is an endpoint — the
+filter chain joins an outbound endpoint to an inbound one on protocol, verb and path, and
+nothing about either side's implementation, environment or reactor enters that join. A
+controller under `@Profile("prod")` or `@ConditionalOnProperty(…)` exists in some of its
+module's environments only, and so does a client bean under one: a conditional bean is the
+general case and an inbound handler is one instance of it. Those are properties of an
+ENDPOINT ROW, whichever direction, stored as structured rows in the participant's own
+`endpoint_conditions` view and `bean_presence` view, and read here through the federated
+`system_endpoint_conditions` and `system_bean_presence`, exactly as the endpoint rows
+themselves are read. After matching, each link states BOTH ends' existence
+(`Link.to_conditions` for the inbound endpoint it reaches and `Link.from_conditions` for the
+outbound endpoint it starts from — neither a column of `links`: the rows live in the
+participant's bundle and join on participant, verb and path), and the system document writes
+them beside the link: the calling side *called only in `prod`; not in `default`*, the called
+side *exists in `prod`; not in `default`*. Whether an end exists in an environment is its
+bean's `bean_presence` answer (OR across the bean's registration routes), never the per-condition
+rows, which would print "exists in X; not in X" for a bean two exclusive factories register.
+**No link is dropped or added for a condition**, in any environment, and matching reads
+nothing of either end's condition.
 
 ### External participants
 

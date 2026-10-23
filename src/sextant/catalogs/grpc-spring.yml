@@ -53,6 +53,8 @@ measured:
   - { artifact: net.devh:grpc-server-spring-boot-starter, versions: ["3.1.0.RELEASE"],
       identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
 
+bean_model: spring
+
 # Only the annotation itself is read — presence on a class, no attributes —
 # so `annotation_args` is the whole requirement. No `superclass` here: this
 # catalog deliberately does NOT repeat `grpc-java.yml`'s supertype match, and

@@ -29,6 +29,8 @@ measured:
   - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
       identity: reported, by: scripts/probes/w19_catalog_surface.md }
 
+bean_model: spring
+
 requires: [call_site, string_constants]
 
 # The outbound half of `spring-cloud-gateway.yml` (`G-30-outbound`, spec §12): where each

@@ -116,11 +116,11 @@ Measured over the 101 shipped catalogs, 2026-09-23.
 
   **What actually drops them is the method name, not the value's type** — measured, because
   the sentence that stood here named the wrong mechanism for two of the three. Two are
-  `payload_arg: 0` (`spring-cloud-stream.yml:62` and `:64`) and `_slots_of` returns `(0,)`
+  `payload_arg: 0` (`spring-cloud-stream.yml:64` and `:66`) and `_slots_of` returns `(0,)`
   for each; they are dropped by `if slots and names` below, because `_names_of` is `()` at
   the `suffix[]` node and at every ancestor it could inherit from — `binding`,
   `address_from_config` and `matches` — and the node carries no `type`, so the `<init>` arm
-  does not fire either. Only the third (`:72`, `payload_arg: [0, 1]`) is dropped for being a
+  does not fire either. Only the third (`:74`, `payload_arg: [0, 1]`) is dropped for being a
   list. Either way the justification is the consuming line above and never the accident, and
   now the stated accident is the one that happens.
 
@@ -140,7 +140,7 @@ withdrawn:** it said `payload_arg` is a call slot under `wrappers:` and a type-a
 index under `suffix:`, "two lines apart in one file". No `payload_arg` in the 101 shipped
 catalogs is a call slot — both spellings are type-argument indices, which is the whole
 reason both are refused above — and in `spring-cloud-stream.yml` the two blocks are not
-adjacent: `suffix[]` at `:62`, `:64`, `:72` and `wrappers[]` at `:110`, `:111`, in different
+adjacent: `suffix[]` at `:64`, `:66`, `:74` and `wrappers[]` at `:112`, `:113`, in different
 top-level blocks. What is really impossible is deciding from the NAME alone, which the
 refusals above settle from each key's consuming line instead.
 

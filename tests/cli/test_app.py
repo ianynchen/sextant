@@ -135,7 +135,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # `accept(JSON) { }` at the top of `coRouter { }` — `(None, /**)`, one row; the 88 gap
     # row is now `(None, /ktmvc/**)` resolved, the same count.
     # 99 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): `GET /ops/status`, `GET /legacy/orders/all`.
-    assert metadata["endpoints"]["inbound"]["http"] == 99
+    # 101 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`
+    # (`NotifyController`) and `GET /pricing` (`PricingController`), the two handlers whose calls narrow.
+    assert metadata["endpoints"]["inbound"]["http"] == 101
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -249,7 +251,11 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 156 since `clients/NormalisingBillingClient` (spec 2026-10-21 merged values, capability 9.19): the wrapper that reassigns `path` on one
     # branch — one class file.
     # 158 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): one class file each.
-    assert metadata["coverage"]["documents"] == 158
+    # 169 since the conditional beans (spec 2026-10-22-conditional-beans): eleven class files under
+    # `conditional/` — `NotificationSender`, its two implementations, `NotifyController`,
+    # `AuditClient`, `HttpAuditClient`, `PricingPolicy`, `StandardPricing`, `PromoPricing`,
+    # `ConditionalClientsConfig` and `PricingController`.
+    assert metadata["coverage"]["documents"] == 169
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(
