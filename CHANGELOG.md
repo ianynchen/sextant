@@ -49,7 +49,7 @@ here would restate those documents rather than add anything.
   `SpringDataOwnerRepository`*), 34 of 34 repository sites. A profile never named in the
   base's `active` list is read as off in a profile-file environment (the activation selecting
   that file is assumed to select it); profile groups and relaxed key spellings are not read
-  (`OI-170`).
+  (`OI-171`).
 
   **Measured on four real modules:** `apollo-portal` 63 conditional beans, 142 of 193 narrowed
   call sites given per-environment lines; `yudao-module-system` 63 beans and 11 sites;

@@ -23,7 +23,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, cast, overload
 
 from pydantic import ValidationError
 
@@ -2175,12 +2175,23 @@ def _candidate_owner(callee: str) -> str:
     return bare if owner is None else owner
 
 
-def _shared_lines[Item: (str, tuple[str, str])](
-    by_environment: Mapping[str, Sequence[Item]],
-) -> list[tuple[list[str], list[Item]]]:
+@overload
+def _shared_lines(
+    by_environment: Mapping[str, Sequence[str]],
+) -> list[tuple[list[str], list[str]]]: ...
+
+
+@overload
+def _shared_lines(
+    by_environment: Mapping[str, Sequence[tuple[str, str]]],
+) -> list[tuple[list[str], list[tuple[str, str]]]]: ...
+
+
+def _shared_lines(by_environment: Mapping[str, Sequence[Any]]) -> list[tuple[list[str], list[Any]]]:
     """Environments grouped by what is listed for them — one entry per distinct list, in
-    environment order, its environments together."""
-    grouped: dict[tuple[Item, ...], list[str]] = {}
+    environment order, its environments together. A list holds candidate labels, or (label,
+    reason it is open) pairs."""
+    grouped: dict[tuple[Any, ...], list[str]] = {}
     for environment in sorted(by_environment):
         grouped.setdefault(tuple(sorted(by_environment[environment])), []).append(environment)
     return [(environments, list(listed)) for listed, environments in grouped.items()]

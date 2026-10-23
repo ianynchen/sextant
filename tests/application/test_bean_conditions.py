@@ -324,8 +324,9 @@ def test_a_profile_factory_conditions_the_class_it_constructs(tmp_path: Path):
         "default": ("factory", via, "profile", "false", "resolved"),
         "prod": ("factory", via, "profile", "true", "resolved"),
     }
-    # The configuration class itself carries no condition, so it is no conditional bean.
-    assert {r["bean"] for r in beans} == {_MODULE + KAFKA}
+    # The configuration class itself carries no condition, so it is no conditional bean. The
+    # factory method is one: its own body is the factory's code, `via` itself.
+    assert {r["bean"] for r in beans} == {_MODULE + KAFKA, via}
 
 
 @pytest.mark.pins("beans.a-FACTORY-conditions-only-the-class-it-returns")
@@ -351,7 +352,9 @@ def test_a_factory_conditions_only_the_class_it_returns(tmp_path: Path):
     beans = workspace.query("bean_conditions")
     workspace.close()
 
-    assert {r["bean"] for r in beans} == {_MODULE + KAFKA}
+    # The class it returns and the factory method itself (its own body is the factory's code).
+    via = _factory_symbol(MESSAGING, "publisher", PUBLISHER)
+    assert {r["bean"] for r in beans} == {_MODULE + KAFKA, via}
     assert _verdicts(beans, FORMATTER) == {}
 
 
@@ -679,6 +682,38 @@ def test_a_lambda_a_conditional_factory_creates_carries_the_factorys_condition(
     assert {(r["caller"], r["via"], r["environment"], r["holds"]) for r in viewed} == {
         (_MODULE + body, _MODULE + factory, "default", "false"),
         (_MODULE + body, _MODULE + factory, "prod", "true"),
+    }
+
+
+@pytest.mark.pins("beans.a-FACTORY-methods-own-body-is-the-factorys-code")
+def test_a_row_made_in_a_conditional_factorys_own_body_states_the_factorys_condition(
+    tmp_path: Path,
+):
+    """OI-108's case. `@Bean @Profile("local") Runnable flow() { rest.getForObject(…); … }` in
+    an unconditional configuration class: the row's code symbol IS the factory method, so
+    the owner class (no rows) is the wrong bean. The method is a bean of its own, `via`
+    itself, and the row exists only in `local` — the same mechanism a lambda it creates
+    uses."""
+    wiring = ORDERS + "AdapterConfig#"
+    runnable = "java/lang/Runnable#"
+    factory = method_descriptor(wiring, "flow", "()Ljava/lang/Runnable;")
+    facts = [
+        *_type(wiring, [_marker(CONFIGURATION)]),
+        *_method(wiring, "flow", runnable, [_marker(BEAN), _profile("local")], []),
+        _outbound_call(factory),
+    ]
+    workspace = _resolved(tmp_path, facts, "spring-resttemplate", environments=("local",))
+    beans = workspace.query("bean_conditions")
+    viewed = workspace.query("endpoint_conditions")
+    workspace.close()
+
+    assert _verdicts(beans, factory) == {
+        "default": ("factory", _MODULE + factory, "profile", "false", "resolved"),
+        "local": ("factory", _MODULE + factory, "profile", "true", "resolved"),
+    }
+    assert {(r["caller"], r["via"], r["environment"], r["holds"]) for r in viewed} == {
+        (_MODULE + factory, _MODULE + factory, "default", "false"),
+        (_MODULE + factory, _MODULE + factory, "local", "true"),
     }
 
 

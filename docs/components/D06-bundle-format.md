@@ -268,9 +268,14 @@ way to recompute or check what it asserted.
 **Conditional beans travel the same way** (spec `2026-10-22-conditional-beans-design.md`): the
 tables `bean_conditions` and `interface_beans` and the views `bean_presence`, `symbol_beans`,
 `candidate_presence` and `endpoint_conditions` ([D01](D01-graph-schema.md), "Conditional beans")
-are in `contents.tables` like every other, and none needed an exclusion or a redaction rule:
-they hold symbols, closed-set values and environment names. `endpoint_conditions` is a view
-since graph schema version 4, and the export ratchet covers views as it covers tables.
+are in `contents.tables` like every other, and the export ratchet covers views as it covers
+tables (`endpoint_conditions` is a view since graph schema version 4). None needed an exclusion.
+Four of them need no redaction rule either: they hold symbols, closed-set values and
+environment names. **`endpoint_conditions` is exempt from that claim:** it carries `path` and
+`method`, and it is exported as the view holds it, while `endpoints.path` is masked. Its
+outbound rows (new in version 4) can carry an address with URL userinfo, so the masking of
+`endpoints.parquet` does not reach `endpoint_conditions.parquet` yet. That is an open issue
+(PR #62 logs it); until it is fixed the bundle is not clean of it.
 
 **The ratchet runs the direction that catches the defect.** A table in the schema and absent
 from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall

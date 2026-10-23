@@ -662,7 +662,7 @@ resolved: none.* The wider consequence is the same too — an environment the de
 (a profile with no file) is not one the document can speak about, only a profile the base
 names can be left open.
 
-### OI-169 — a call declared on a generic framework type lists every repository that extends it
+### OI-170 — a call declared on a generic framework type lists every repository that extends it
 **Minor · logged 2026-10-22 (review of `conditional-beans`' framework-implemented interface
 beans, spec §4) · `src/sextant/storage/duckdb/schema.sql` (`candidate_presence`, the proxy arm),
 `src/sextant/application/resolve/bean_conditions.py::_registered_interfaces`**
@@ -685,7 +685,7 @@ field in a module that has more than one repository.
 type arguments (`generic_interfaces`) to agree with the receiver's, or the receiver's type
 arguments are carried on `call_edges`.
 
-### OI-170 — `spring.profiles.group` and relaxed key spellings are not read
+### OI-171 — `spring.profiles.group` and relaxed key spellings are not read
 **Minor · logged 2026-10-22 (Task 7b of `conditional-beans`, CP-45 row 5) ·
 `src/sextant/application/resolve/bean_conditions.py::active_profiles`,
 `src/sextant/catalogs/spring-web.yml` (`config_model.profiles`)**
@@ -707,7 +707,7 @@ a relaxed spelling of the three keys (`grep -rn "spring.profiles.group" examples
 block. **Closes** when `config_model.profiles` names `group_prefix` (data, from CP-45 row 5)
 and the pass expands each active profile through its group before judging.
 
-### OI-171 — the `@ConditionalOnBean(annotation = …)` criterion ignores the type hierarchy
+### OI-172 — the `@ConditionalOnBean(annotation = …)` criterion ignores the type hierarchy
 **Minor · logged 2026-10-22 (Task 3 of `conditional-beans`) ·
 `src/sextant/application/resolve/bean_conditions.py::_presence_verdicts`**
 
@@ -730,23 +730,26 @@ on its type alone. **Closes** when the
 criterion reads the annotations of the type and every ancestor `type_hierarchy` reaches (the
 set `_supertypes_of` already computes), with a test for an annotation on a superclass.
 
-### OI-172 — symbol parsing in SQL: `split_part(…, '#', 1)` in two views
+### OI-173 — symbol parsing in SQL: the `candidate_presence` view cuts a symbol on `#`
 **Minor · logged 2026-10-22 (Task 7b review of `conditional-beans`) ·
 `src/sextant/storage/duckdb/derive_endpoints.sql`, `src/sextant/storage/duckdb/schema.sql`
 (`candidate_presence`)**
 
-The symbol grammar belongs in `domain/symbols`; `derive_endpoints.sql` (which predates the
-branch) cuts symbols with `split_part` and `regexp_extract`, and the `candidate_presence`
-view's proxy arm adds `split_part(c.target, '#', 1) || '#'` to match a call's named type to
-`interface_beans.type`. A change to how a type is spelled in a symbol would need both found by
-text search, not by a test. A known exception, recorded so it is not mistaken for a pattern.
+The symbol grammar belongs in `domain/symbols`. Two places cut a symbol in SQL. The
+`candidate_presence` VIEW (`schema.sql` ~1359) adds `split_part(c.target, '#', 1) || '#'` to
+match a call's named type to `interface_beans.type`. `derive_endpoints.sql` (~853, which
+predates the branch) is a derivation script, not a view: it splits on `(` after a
+`regexp_extract` of the part after the last `#`. A change to how a type is spelled in a
+symbol would need both found by text search, not by a test. A known exception, recorded so it
+is not mistaken for a pattern.
 
 **What happens today:** correct for every symbol the extractors write; nothing wrong.
 
 **Real triggering input:** a change to the symbol spelling of a type (a new language's scanner,
 or a generics suffix) that the SQL does not cut the same way as `domain/symbols`.
 
-**Verify:** `grep -n "split_part" src/sextant/storage/duckdb/*.sql`. **Closes** when the type of
+**Verify:** `grep -n "split_part" src/sextant/storage/duckdb/*.sql` (the view's `#` cut is the
+`schema.sql` hit). **Closes** when the type of
 a target is a column the extractors or `call_edges` carry (so no SQL cuts a symbol), or the
 two cuts are routed through one user-defined function declared next to `domain/symbols`'s
 grammar and tested against it.
@@ -4059,7 +4062,11 @@ inside a conditional configuration, an interface the framework implements), and 
 derived from a bean finds it by a join — `beans.py` still reads nothing conditional, and does
 not need to. The case this entry named — an adapter bean under `@Profile("local")` beside
 `@Profile("prod")` — derives its rows as before and now states, on each, where its bean
-exists; a call whose candidates are such beans states which exist in each environment.
+exists; a call whose candidates are such beans states which exist in each environment. A row
+whose code is the `@Bean` method's OWN body — an inline adapter flow it builds and returns —
+states the factory's condition too: each conditional `@Bean` method is written as a bean of
+its own, `via` itself, the way the lambdas it creates are (`symbol_beans` finds the method
+before its configuration class).
 Measured on `apollo-portal`, `yudao-module-system`, `yudao-spring-boot-starter-websocket`
 and `spring-petclinic-rest` (spec §1, "As built"); the fixture
 `orders-service/.../conditional/` pins each shape. The part of this entry that stays true is

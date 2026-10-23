@@ -642,8 +642,9 @@ spells a type (the spelling `symbols.enclosing` uses); `bean_kind`; `via`; `kind
 
 * **`bean_kind`** is the registration route the row belongs to. `class` — a scanned class
   (a stereotype, direct or composed). `factory` — the `@Bean` method that constructs and
-  returns the class, or a lambda body it creates (which is its own bean, on the factory's
-  route). `configuration` — the enclosing configuration class's condition, applied to a
+  returns the class; and the method itself, and any lambda body it creates, as beans of
+  their own on the factory's route (a row whose code is the method's own body — an inline
+  adapter flow it builds and returns — exists only where the factory registers). `configuration` — the enclosing configuration class's condition, applied to a
   `@Bean` method's bean. `constructed` — a plain `new` outside any bean factory: one
   condition-less row per environment, `unresolved`, evidence naming the constructing method.
   `inherited` — a body declared in an abstract class or as an interface default method,
@@ -652,7 +653,8 @@ spells a type (the spelling `symbols.enclosing` uses); `bean_kind`; `via`; `kind
   module runs this inherited body". `proxy` — an interface the framework
   implements at run time (Spring Data repositories); the bean is the interface.
 * **`via`** is the factory method for `factory` and `configuration`, the heir class (or its
-  route's `via`) for `inherited`, and NULL for `class`, `constructed` and `proxy`. It tells
+  route's `via`) for `inherited`, the constructing method for `constructed`, and NULL for
+  `class` and `proxy` only. It tells
   two routes of one bean apart: two mutually exclusive factories are two routes.
 * **`kind`** is `profile`, `property`, `presence` or `other`; NULL on a condition-less route
   row (an unconditional scan or factory of a class that also has a conditional route, `true`
@@ -711,8 +713,14 @@ condition not decided by the environment's own name `unresolved`. A profile the 
 (`spring.profiles.group`) are not read.
 
 **Exported.** All six travel in the bundle, by the export
-ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"): symbols, closed-set
-values and environment names only, so redaction has nothing to reach.
+ratchet ([D06](D06-bundle-format.md), "Nothing is dropped on export"). Five of them hold
+symbols, closed-set values and environment names only, so redaction has nothing to reach.
+**`endpoint_conditions` is the exception:** it carries the endpoint's `path` and `method`,
+and the exporter writes it as the view holds it, while `endpoints.path` goes out masked
+(`_REDACTED_ADDRESSES`). Now that the view holds outbound rows too, an address with URL
+userinfo reaches `graph/endpoint_conditions.parquet` unmasked where `endpoints.parquet`
+masks it. The exporter's masking does not reach this view yet; that is an open issue (PR #62
+logs it), not a property of the design.
 
 ### Traces — a named query, not a table
 

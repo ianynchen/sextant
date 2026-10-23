@@ -93,8 +93,11 @@ spec 2026-10-22 §2d, below):
 Cost per resolve (GUIDELINES §8.7): the shared `annotation_index` (one decode per load), the
 factory-method fold `beans.declared_beans` already keeps (one `method_declarations` read per
 load, shared with `bean_via`), one `constructor_edges` read, one `type_hierarchy` read, one
-`interface_declarations` read (the plain interfaces: told apart from annotation types for
-composition, and the candidates of an interface registration), one
+`interface_symbols` read (annotation types and plain interfaces, the composing types) and one
+`interface_declarations` read (the plain interfaces: told apart from the annotation types for
+composition, and the candidates of an interface registration), one `type_header_annotations`
+read (the composing dependency types), one `method_declarations` read for the compiler's
+`synthetic` mark and one `lambda_edges` read (the lambdas a factory creates), one
 `resolved_config` read (each environment's active profiles computed from it once, in
 memory, a placeholder's spelling taken from the shared per-load `config_entries` rows), one
 `dispatched_bodies` read with one `Dispatch` built from the
@@ -564,6 +567,15 @@ def _routes(
         replace(registration, beans=frozenset(registers.get(registration.symbol, ())))
         for registration in registrations
     ]
+    # A factory method's OWN body is that factory's code (ruled 2026-10-22), as the lambdas it
+    # creates are: a row whose code symbol is the method itself — an inline adapter flow it
+    # builds and returns — exists only where the factory registers. So each conditional
+    # factory is written as a bean of its own, `via` itself, found by `symbol_beans`' own-symbol
+    # rule. Added after `registers` so the method is no competitor of anything.
+    for declared in sorted(factories):
+        own = route_conditions_of(declared)
+        if own:
+            routes.setdefault(declared, []).append(_Route(FACTORY, declared, own))
     return routes, registrations
 
 

@@ -182,6 +182,11 @@ decides the outcome: `unresolved`, then `partial`, then `resolved`.
   through it would add an unevaluated `other` row to every direct use — so the condition
   annotations are the vocabulary's leaves. An annotation type whose header was not read
   composes nothing (a stated limit, §4).
+* **A factory method's own body is the factory's code, as a lambda it creates is.** A
+  conditional `@Bean` method (its own conditions, or its configuration class's) is written as
+  a bean of its own — `bean` the method symbol, `via` itself — so a row whose code symbol IS
+  the method, such as an inline adapter flow it builds and returns, states the factory's
+  condition instead of mapping to a configuration class that has no rows.
 * **A lambda a factory creates is the factory's code.** A lambda body whose creating method
   (a `dynamic` call edge from that method, read off `call_edges`, never parsed from the
   `lambda$name$N` spelling) is a `@Bean` method belongs to that factory's route, with `via`
@@ -327,7 +332,7 @@ evaluated" under the alternative.
 **PR #61's verdicts moved, by this rule.** Apollo `configservice`'s `GET /` read "not in
 `default`, `github`" and now reads "not evaluated in `default`, `github`", with the reason
 (§1, the second table). `spring.profiles.group` and relaxed key spellings are not read
-(§4, `OI-170`).
+(§4, `OI-171`).
 
 ## 3. What the documents say, as built
 
@@ -390,10 +395,10 @@ line, not a wrong one, and where a real input triggers one it has a register ent
 * **Profile groups and relaxed key spellings are not read.** `spring.profiles.group` can make
   a profile active that no key names, and a key spelled `SPRING_PROFILES_ACTIVE` inside a file
   is not matched (the exact key, or `key[N]`, only). None of the 43 analysed modules sets a
-  group. `OI-170`.
+  group. `OI-171`.
 * **The annotation criterion ignores the type hierarchy.** `@ConditionalOnBean(annotation = X)`
   is matched against the annotations the competitor's own type carries, where Spring's
-  `findAnnotationOnBean` also looks above it. `OI-171`.
+  `findAnnotationOnBean` also looks above it. `OI-172`.
 * **Lambdas created in a helper a `@Bean` calls are not followed** — only a lambda the factory
   method's own body creates belongs to its route. **Kotlin class-compiled lambdas** reach the
   pass through the `lambda_bodies` path, not the `dynamic` call edge a Java lambda has.
@@ -403,7 +408,7 @@ line, not a wrong one, and where a real input triggers one it has a register ent
 * **A generic framework receiver over-lists.** A call declared on `JpaRepository<User, Long>`
   names `JpaRepository`, so every module repository extending it is a candidate; the type
   argument is not used to narrow. Measured on 0 of 69 `jhipster-sample-app` and 0 of 34
-  `spring-petclinic-rest` interface sites, so it is logged and not fixed. `OI-169`.
+  `spring-petclinic-rest` interface sites, so it is logged and not fixed. `OI-170`.
 * **Spring Data's bean names are not modelled** (`name` is NULL on a proxy), so a
   `@ConditionalOnMissingBean(name = …)` reads it as "could match".
 * **An annotation type whose header was not read composes nothing**, and a module class whose
@@ -411,9 +416,10 @@ line, not a wrong one, and where a real input triggers one it has a register ent
 * **Not read:** `ignored`/`ignoredType`, `search`, container generics, a `@Bean`'s aliases
   beyond its first name; whether Spring Data scanning runs and from which packages; a nested
   repository interface (which Spring Data refuses by default).
-* **Symbol parsing in SQL.** `split_part(…, '#', 1)` in `derive_endpoints.sql` (older) and in
-  the `candidate_presence` view's proxy arm reads the type out of a symbol string, a known
-  exception to "symbol grammar lives in `domain/symbols`". `OI-172`.
+* **Symbol parsing in SQL.** The `candidate_presence` view's proxy arm cuts a symbol on `#`
+  (`split_part(c.target, '#', 1)`, `schema.sql`), and the derivation script
+  `derive_endpoints.sql` (older, not a view) cuts one on `(` after a `regexp_extract`: a
+  known exception to "symbol grammar lives in `domain/symbols`". `OI-173`.
 
 ## 5. Cost (§8.7), as measured
 

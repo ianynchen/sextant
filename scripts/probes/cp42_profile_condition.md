@@ -47,7 +47,7 @@ as any-of.
 
 **Row 3 — a profile string is an EXPRESSION, not a name.** The parser tokenises on `()&|!`:
 `!prod` negates, `a & b`, `a | b` and parentheses compose. This analysis evaluates exactly two
-shapes — a bare name (holds where the environment is that profile) and `!name` (holds where it
+shapes — a bare name (holds where that profile is active) and `!name` (holds where it
 is not) — and reports any expression carrying `&`, `|` or a parenthesis as `unresolved` in
 every environment. Stated, not evaluated: an environment's active profiles are the profile its
 file names plus what the base configuration's `spring.profiles.active` and `.include` list

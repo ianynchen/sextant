@@ -977,6 +977,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.a-FACTORY-methods-own-body-is-the-factorys-code": Guard(
+        what="a `@Bean` method under a condition is a bean of its own, `via` itself, so a row "
+        "whose code symbol is the method (an inline adapter flow it builds and returns) states "
+        "the factory's condition",
+        why="a row made in the factory's own body maps through `symbol_beans` to the "
+        "configuration class, which has no rows unless it is conditional: the row read "
+        "as existing everywhere though the factory registers nothing outside its profile "
+        "(OI-108's own case)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="        if own:\n            routes.setdefault(declared, []).append(_Route(FACTORY, declared, own))\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            routes.setdefault(declared, []).append(_Route(FACTORY, declared, own))\n",
+            ),
+        ),
+    ),
     "beans.an-INTERFACE-the-framework-implements-is-a-route": Guard(
         what="an interface the framework registers and implements at run time (CP-46) is a "
         "registration route with its own conditions, and its implementation answers calls "
