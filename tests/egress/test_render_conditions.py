@@ -695,3 +695,59 @@ def test_an_environment_where_no_candidate_exists_says_so():
     )
     block = _block(document, "Api#handle")
     assert "  - in `default`: none of them\n  - in `kafka`: `KafkaSender`\n" in block + "\n"
+
+
+# --- An inherited body (ruled 2026-10-22) ----------------------------------------------
+
+ABSTRACT_SEND = COORDS + "com/acme/AbstractSender#send()."
+LOCAL = COORDS + "com/acme/LocalSender#"
+KAFKA_HEIR = COORDS + "com/acme/KafkaSender#"
+LOCAL_ONLY = {"default": "true", "prod": "false", "staging": "false"}
+
+
+def test_a_row_in_an_inherited_body_names_each_heir_as_a_route():
+    """An outbound call in `AbstractSender#send`, which two `@Component` heirs run: the body's
+    rows are its heirs' routes, each named by the heir class, and it exists where either does."""
+    property_expression = (
+        '{"having_value": "local", "keys": ["sender-type"], "match_if_missing": true}'
+    )
+    document = _document(
+        endpoints=[_outbound(ABSTRACT_SEND)],
+        bean_conditions=[
+            *_condition(ABSTRACT_SEND, "property", property_expression, LOCAL_ONLY, via=LOCAL),
+            *_condition(ABSTRACT_SEND, "profile", PROFILE_PROD, PROD_ONLY, via=KAFKA_HEIR),
+        ],
+        bean_presence=_presence(
+            ABSTRACT_SEND, {"default": "true", "prod": "true", "staging": "false"}
+        ),
+        symbol_beans=[_belongs(ABSTRACT_SEND, ABSTRACT_SEND)],
+    )
+    block = _block(document, "AbstractSender#send")
+    assert (
+        "| `LocalSender` | the configuration key `sender-type` is `local` (or is absent) |"
+    ) in block
+    assert "| `KafkaSender` | the active profile matches one of: `prod` |" in block
+    assert "holds in 2 of 3 environments — not in `staging`" in block
+
+
+def test_a_row_in_an_inherited_body_no_bean_runs_says_it_is_not_decided():
+    unresolved = {"default": "unresolved", "prod": "unresolved", "staging": "unresolved"}
+    document = _document(
+        endpoints=[_outbound(ABSTRACT_SEND)],
+        bean_conditions=_condition(
+            ABSTRACT_SEND,
+            None,
+            None,
+            unresolved,
+            bean_kind="inherited",
+            resolution="unresolved",
+            evidence="no bean of this module runs this inherited body",
+        ),
+        bean_presence=_presence(ABSTRACT_SEND, unresolved, "unresolved"),
+        symbol_beans=[_belongs(ABSTRACT_SEND, ABSTRACT_SEND)],
+    )
+    block = _block(document, "AbstractSender#send")
+    assert (
+        "  - Exists only when: no bean of this module runs this inherited body — not decided\n"
+    ) in block + "\n"
+    assert "not evaluated by this analysis in any of the 3 environments" in block

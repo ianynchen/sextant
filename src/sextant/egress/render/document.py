@@ -35,7 +35,7 @@ from sextant.application.ports.detector import ModuleModel
 # — this module never reaches for a workspace, which is the import-linter
 # contract "Egress is read-only" in one line.
 from sextant.application.query.trace import Step, Trace
-from sextant.application.resolve.bean_conditions import COMPETITORS, PRESENCE
+from sextant.application.resolve.bean_conditions import COMPETITORS, INHERITED, NO_HEIR, PRESENCE
 from sextant.application.resolve.pipeline import ResolveReport
 
 # The root a trace ran from, for the addresses it carries (2Q close, defect 1).
@@ -59,6 +59,7 @@ from sextant.domain.enrichment import (
 from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import (
     bare_descriptor,
+    is_type_descriptor,
     member_name,
     method_name,
     owner_of,
@@ -748,7 +749,11 @@ def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEnt
     if bean is None or bean not in index.routes:
         return []
     routes = index.routes[bean]
-    if not any(row["kind"] is not None for rows in routes.values() for row in rows):
+    if not any(
+        row["kind"] is not None or row["bean_kind"] == INHERITED
+        for rows in routes.values()
+        for row in rows
+    ):
         return []
     if len(routes) == 1:
         [rows] = routes.values()
@@ -767,9 +772,12 @@ def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEnt
 
 
 def _route_label(via: str | None, bean: str) -> str:
-    """A registration route as a reader names it: the factory method, or the scanned class."""
+    """A registration route as a reader names it: the factory method, or the scanned class —
+    the bean's own, or, for an inherited body, the heir class whose route it runs on."""
     if via is None:
         return simple_name(bare_descriptor(bean))
+    if is_type_descriptor(bare_descriptor(via)):
+        return simple_name(bare_descriptor(via))
     return _short_handler(bare_descriptor(via))
 
 
@@ -779,6 +787,8 @@ def _route_words(rows: Sequence[Mapping[str, object]]) -> str:
     it is not known)."""
     if any(str(row["bean_kind"]) == "constructed" for row in rows):
         return "constructed outside any bean factory — not decided"
+    if any(str(row["bean_kind"]) == INHERITED for row in rows):
+        return f"{NO_HEIR} — not decided"
     # One condition is one (kind, expression); its rows are its environments.
     conditions: dict[tuple[str, str], list[Mapping[str, object]]] = {}
     for row in rows:

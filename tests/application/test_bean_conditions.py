@@ -1499,3 +1499,193 @@ def test_two_on_bean_conditions_waiting_on_each_other_both_fail(tmp_path: Path):
         assert {(h, r) for h, r, _ in per_environment.values()} == {("false", "partial")}
         assert all(_NEITHER in str(reason) for _, _, reason in per_environment.values())
         assert all(_ORDER not in str(reason) for _, _, reason in per_environment.values())
+
+
+# --- an inherited body runs as part of every bean that resolves the method to it -------
+
+SENDER = ORDERS + "Sender#"
+ABSTRACT_SENDER = ORDERS + "AbstractSender#"
+LOCAL_SENDER = ORDERS + "LocalSender#"
+KAFKA_SENDER = ORDERS + "KafkaSender#"
+NOTICES = ORDERS + "NoticeService#"
+_LEGACY_KEY = "orders.legacy"
+
+
+def _legacy_is(having: str, *, match_if_missing: bool = False) -> AnnotationUse:
+    return AnnotationUse(
+        annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+        args={"name": [_LEGACY_KEY], "havingValue": having, "matchIfMissing": match_if_missing},
+    )
+
+
+def _body(owner: str, name: str) -> list[object]:
+    """A `void name()` declared on `owner` whose body was read."""
+    symbol = _MODULE + method_descriptor(owner, name, _VOID)
+    return [
+        SymbolFact(
+            document_id="doc",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+        ),
+        MethodReturnFact(document_id="doc", method=symbol, ordinal=0, value=None),
+    ]
+
+
+def _declaration(owner: str, name: str) -> SymbolFact:
+    """An abstract `void name()` on `owner` — declared, no body."""
+    return SymbolFact(
+        document_id="doc",
+        symbol=_MODULE + method_descriptor(owner, name, _VOID),
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + owner,
+        signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+    )
+
+
+def _calls(caller: str, owner: str, name: str, ordinal: int = 0) -> list[object]:
+    """`caller` (a `@Service` method, declared here) calls `owner#name()` through the
+    interface, so dispatch narrows to every body that can answer."""
+    return [
+        CallSiteFact(
+            document_id="doc",
+            caller=_MODULE + caller,
+            target=CallTarget(owner=owner, name=name, descriptor=_VOID),
+            invoke_kind="interface",
+            ordinal=ordinal,
+            result=None,
+        ),
+    ]
+
+
+def _senders(*extra: object) -> list[object]:
+    """`interface Sender { void send(); void flush(); }`; `abstract class AbstractSender
+    implements Sender` with bodies for both; `@Component @ConditionalOnProperty(orders.legacy,
+    havingValue = "false", matchIfMissing = true) LocalSender extends AbstractSender`
+    overriding `flush` only; `@Component @ConditionalOnProperty(orders.legacy, havingValue =
+    "true") KafkaSender extends AbstractSender` overriding both. `NoticeService#push` calls
+    `Sender#send` and `Sender#flush`."""
+    push = method_descriptor(NOTICES, "push", _VOID)
+    return [
+        *_type(SENDER, kind=ConstructKind.INTERFACE),
+        _declaration(SENDER, "send"),
+        _declaration(SENDER, "flush"),
+        *_type(ABSTRACT_SENDER, interfaces=(SENDER,)),
+        *_body(ABSTRACT_SENDER, "send"),
+        *_body(ABSTRACT_SENDER, "flush"),
+        *_type(
+            LOCAL_SENDER,
+            [_marker(COMPONENT), _legacy_is("false", match_if_missing=True)],
+            superclass=ABSTRACT_SENDER,
+        ),
+        *_body(LOCAL_SENDER, "flush"),
+        *_type(KAFKA_SENDER, [_marker(COMPONENT), _legacy_is("true")], superclass=ABSTRACT_SENDER),
+        *_body(KAFKA_SENDER, "send"),
+        *_body(KAFKA_SENDER, "flush"),
+        *_type(NOTICES, [_marker(SERVICE)]),
+        *_body(NOTICES, "push"),
+        *_calls(push, SENDER, "send", 0),
+        *_calls(push, SENDER, "flush", 1),
+        *extra,
+    ]
+
+
+def test_an_inherited_body_exists_exactly_where_the_bean_that_inherits_it_does(tmp_path: Path):
+    """ruoyi's `WebSocketSenderApiImpl#send`, reduced: `AbstractSender#send` has no bean of
+    its own — it runs as part of `LocalSender`, the one bean whose class resolves `send` to
+    it (JVMS 5.4.3.3, the module's own `Dispatch.resolve`). So the candidate exists where
+    `LocalSender` does (`default`, the key `false`), and `KafkaSender#send` where `KafkaSender`
+    does (`prod`) — never "everywhere" because its abstract class carries no condition."""
+    workspace = _resolved(tmp_path, _senders())
+    inherited = _MODULE + method_descriptor(ABSTRACT_SENDER, "send", _VOID)
+    overriding = _MODULE + method_descriptor(KAFKA_SENDER, "send", _VOID)
+    abstract_presence = _presence(workspace, method_descriptor(ABSTRACT_SENDER, "send", _VOID))
+    local_presence = _presence(workspace, LOCAL_SENDER)
+    mapped = {r["symbol"]: r["bean"] for r in workspace.query("symbol_beans")}
+    candidates = {
+        (r["callee"], r["environment"]): (r["bean"], r["holds"], r["resolution"])
+        for r in workspace.query("candidate_presence")
+        if r["ordinal"] == 0
+    }
+    workspace.close()
+
+    assert local_presence == {"default": ("true", "resolved"), "prod": ("false", "resolved")}
+    assert abstract_presence == local_presence
+    assert mapped[inherited] == inherited
+    assert mapped[overriding] == _MODULE + KAFKA_SENDER
+    assert candidates == {
+        (inherited, "default"): (inherited, "true", "resolved"),
+        (inherited, "prod"): (inherited, "false", "resolved"),
+        (overriding, "default"): (_MODULE + KAFKA_SENDER, "false", "resolved"),
+        (overriding, "prod"): (_MODULE + KAFKA_SENDER, "true", "resolved"),
+    }
+
+
+def test_an_inherited_body_no_bean_resolves_to_is_unresolved(tmp_path: Path):
+    """`AbstractSender#flush` is overridden by both beans under it, so no bean of the module
+    runs it: `unresolved`, and the evidence says why."""
+    workspace = _resolved(tmp_path, _senders())
+    flush = method_descriptor(ABSTRACT_SENDER, "flush", _VOID)
+    presence = {
+        str(r["environment"]): (r["holds"], r["resolution"], r["evidence"])
+        for r in workspace.query("bean_presence")
+        if r["bean"] == _MODULE + flush
+    }
+    workspace.close()
+
+    reason = "no bean of this module runs this inherited body"
+    assert presence == {
+        "default": ("unresolved", "unresolved", reason),
+        "prod": ("unresolved", "unresolved", reason),
+    }
+
+
+def test_an_interface_default_method_exists_wherever_any_bean_inheriting_it_does(
+    tmp_path: Path,
+):
+    """`interface Greeter { default void greet() {…} }` implemented, without overriding, by
+    `@Component @Profile("prod") EnGreeter` and `@Component @Profile("staging") FrGreeter`:
+    the default body runs as part of both, so it exists where either does — the OR."""
+    greeter, en, fr = ORDERS + "Greeter#", ORDERS + "EnGreeter#", ORDERS + "FrGreeter#"
+    hello = method_descriptor(NOTICES, "hello", _VOID)
+    facts = [
+        *_type(greeter, kind=ConstructKind.INTERFACE),
+        *_body(greeter, "greet"),
+        *_type(en, [_marker(COMPONENT), _profile("prod")], interfaces=(greeter,)),
+        *_type(fr, [_marker(COMPONENT), _profile("staging")], interfaces=(greeter,)),
+        *_type(NOTICES, [_marker(SERVICE)]),
+        *_body(NOTICES, "hello"),
+        *_calls(hello, greeter, "greet"),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("prod", "staging"))
+    presence = _presence(workspace, method_descriptor(greeter, "greet", _VOID))
+    workspace.close()
+
+    assert presence == {
+        "default": ("false", "resolved"),
+        "prod": ("true", "resolved"),
+        "staging": ("true", "resolved"),
+    }
+
+
+def test_an_inherited_body_with_an_unconditional_heir_exists_everywhere(tmp_path: Path):
+    """An unconditional bean among the heirs makes the body exist everywhere, `resolved`:
+    nothing is written for it, exactly as for a body of an unconditional bean."""
+    greeter, en, plain = ORDERS + "Greeter#", ORDERS + "EnGreeter#", ORDERS + "PlainGreeter#"
+    hello = method_descriptor(NOTICES, "hello", _VOID)
+    facts = [
+        *_type(greeter, kind=ConstructKind.INTERFACE),
+        *_body(greeter, "greet"),
+        *_type(en, [_marker(COMPONENT), _profile("prod")], interfaces=(greeter,)),
+        *_type(plain, [_marker(COMPONENT)], interfaces=(greeter,)),
+        *_type(NOTICES, [_marker(SERVICE)]),
+        *_body(NOTICES, "hello"),
+        *_calls(hello, greeter, "greet"),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    greet = _MODULE + method_descriptor(greeter, "greet", _VOID)
+    beans = {r["bean"] for r in workspace.query("bean_conditions")}
+    workspace.close()
+
+    assert greet not in beans

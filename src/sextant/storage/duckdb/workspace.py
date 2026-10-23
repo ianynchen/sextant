@@ -900,6 +900,18 @@ _NAMED_QUERIES = {
     # `<init>` sites with a body this workspace read — a library class has no code a derived
     # row could live in. The site's own `name` says what is called, so nothing parses a
     # descriptor to tell a constructor from a method.
+    # The bodies every virtual or interface call site dispatches to, each with the method the
+    # site names and the type declaring the body (spec 2026-10-22-conditional-beans, ruled
+    # 2026-10-22): which bean an INHERITED body runs as part of is asked of the module's own
+    # method resolution for exactly these. Equi-joins on the site and the body's own symbol.
+    "dispatched_bodies": """
+        SELECT DISTINCT e.callee AS body, s.name, s.descriptor, y.enclosing
+        FROM call_edges e
+        JOIN call_sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
+        JOIN symbols y ON y.symbol = e.callee
+        WHERE e.invoke_kind IN ('virtual', 'interface') AND y.enclosing IS NOT NULL
+        ORDER BY body, s.name, s.descriptor, y.enclosing
+    """,
     "constructor_edges": """
         SELECT DISTINCT e.caller, e.callee
         FROM call_edges e

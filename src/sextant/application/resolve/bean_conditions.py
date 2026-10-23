@@ -74,7 +74,9 @@ What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; unchanged by 
 Cost per resolve (GUIDELINES §8.7): the shared `annotation_index` (one decode per load), the
 factory-method fold `beans.declared_beans` already keeps (one `method_declarations` read per
 load, shared with `bean_via`), one `constructor_edges` read, one `type_hierarchy` read, one
-`resolved_config` read and one insert — once per distinct bean model, none per catalog, per
+`resolved_config` read, one `dispatched_bodies` read with one `Dispatch` built from the
+cached fact reads for the inherited bodies (`_inherited_rows`; 10 ms + 46 ms on apollo-portal,
+1,945 bodies), and one insert — once per distinct bean model, none per catalog, per
 bean or per row. The presence phase reads nothing more: its competitors are the definitions
 `_routes` already found, matched in memory (one scan of them per presence condition), and its
 verdicts settle in rounds over (condition, environment) pairs.
@@ -89,6 +91,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import declared_beans
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
+from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -134,6 +137,10 @@ FACTORY = "factory"
 CONFIGURATION = "configuration"
 # The route of a class constructed outside any factory method's body.
 CONSTRUCTED = "constructed"
+# An inherited body no bean of the module resolves its method to (ruled 2026-10-22): it runs
+# as part of no bean here, so where it exists is not decided.
+INHERITED = "inherited"
+NO_HEIR = "no bean of this module runs this inherited body"
 # The JVM's own name for a constructor, which a member descriptor carries verbatim.
 _CONSTRUCTOR = "<init>"
 
@@ -202,14 +209,97 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     constructed = _constructed_by(workspace)
     created = _lambdas_created_by(workspace)
     ancestors = _ancestors(workspace)
+    reached = _reached_bodies(workspace)
+    dispatch = dispatch_of(workspace) if reached else None
     rows: list[dict[str, Any]] = []
     for model in vocabularies:
-        routes, registrations = _routes(workspace, model, index, constructed, created, ancestors)
+        every, registrations = _routes(workspace, model, index, constructed, created, ancestors)
+        routes = {
+            bean: found for bean, found in every.items() if any(route.conditions for route in found)
+        }
         presence = _presence_verdicts(registrations, ancestors, config, environments)
+        written: dict[str, list[dict[str, Any]]] = {}
         for bean in sorted(routes):
-            rows.extend(_rows_for(bean, routes[bean], config, environments, presence))
+            written[bean] = _rows_for(bean, routes[bean], config, environments, presence)
+            rows.extend(written[bean])
+        if dispatch is not None:
+            rows.extend(_inherited_rows(reached, dispatch, every, written, environments))
     if rows:
         workspace.derive("bean_conditions_insert", rows=rows)
+
+
+def _reached_bodies(workspace: Workspace) -> dict[str, tuple[str, str, str]]:
+    """Every body a virtual or interface call site dispatches to, with the method it names
+    (`name`, `descriptor`, as the site wrote them) and the type that declares the body
+    (`symbols.enclosing`) — one entry per body, the first in the query's order."""
+    reached: dict[str, tuple[str, str, str]] = {}
+    for row in workspace.query("dispatched_bodies"):
+        reached.setdefault(
+            str(row["body"]), (str(row["name"]), str(row["descriptor"]), str(row["enclosing"]))
+        )
+    return reached
+
+
+def _inherited_rows(
+    reached: dict[str, tuple[str, str, str]],
+    dispatch: Dispatch,
+    routes: dict[str, list[_Route]],
+    written: dict[str, list[dict[str, Any]]],
+    environments: list[str],
+) -> list[dict[str, Any]]:
+    """An INHERITED body — declared on a type the module registers as no bean (an abstract
+    class, an interface's default method) above at least one bean — has no bean of its own:
+    it runs as part of every bean whose class RESOLVES the method to it (ruled 2026-10-22),
+    by the module's own JVMS 5.4.3.3 walk (`Dispatch.resolve`, the one `method_resolution`
+    and every call edge use). So it exists wherever any of those beans does — OR across
+    them, each bean's own routes copied under the body (`via` the bean's own route, or the
+    bean class for a scanned one, so two heirs stay two routes in `bean_presence`). An
+    unconditional heir makes it exist everywhere, which is no row at all, as for any
+    unconditional bean; no heir at all leaves it `unresolved`, `NO_HEIR`.
+
+    **Stated limits:** only a body some virtual or interface call site reaches is considered
+    (a `super` call runs an overridden body as part of the overriding bean, which resolution
+    does not see); an abstract type with no bean below it is no inherited body here."""
+    beans = {
+        bare_descriptor(bean): bean
+        for bean, found in routes.items()
+        if is_type_descriptor(bean) and any(route.route in (CLASS, FACTORY) for route in found)
+    }
+    rows: list[dict[str, Any]] = []
+    for body, (name, descriptor, enclosing) in sorted(reached.items()):
+        declaring = bare_descriptor(enclosing)
+        if declaring in beans or body in routes:
+            continue
+        below = [beans[sub] for sub in dispatch.subtypes.get(declaring, ()) if sub in beans]
+        if not below:
+            continue
+        heirs = [
+            bean
+            for bean in below
+            if dispatch.resolve(bare_descriptor(bean), name, descriptor)[0] == declaring
+        ]
+        if not heirs:
+            rows.extend(
+                {
+                    "bean": body,
+                    "bean_kind": INHERITED,
+                    "via": None,
+                    "kind": None,
+                    "expression": None,
+                    "environment": environment,
+                    "holds": UNRESOLVED,
+                    "resolution": UNRESOLVED,
+                    "evidence": NO_HEIR,
+                }
+                for environment in environments
+            )
+        elif all(heir in written for heir in heirs):
+            rows.extend(
+                {**row, "bean": body, "via": row["via"] or heir}
+                for heir in heirs
+                for row in written[heir]
+            )
+    return rows
 
 
 def _bean_models(catalogs: list[Catalog]) -> list[dict[str, Any]]:
@@ -264,9 +354,10 @@ def _routes(
     created: dict[str, list[str]],
     ancestors: dict[str, list[str]],
 ) -> tuple[dict[str, list[_Route]], list[_Registration]]:
-    """Every class with at least one CONDITIONAL route, mapped to all of its routes —
-    conditional or not, since an unconditional second route decides where it exists — and
-    every bean definition of the module, conditional or not, for the bean-presence search."""
+    """Every class with a route, mapped to all of its routes — conditional or not, since an
+    unconditional second route decides where it exists (the caller keeps those with at least
+    one CONDITIONAL route, and reads the rest for which classes are beans at all) — and every
+    bean definition of the module, conditional or not, for the bean-presence search."""
     conditions = _models(model)
     naming = {
         type_descriptor(str(name)): str(attr)
@@ -385,9 +476,7 @@ def _routes(
         replace(registration, beans=frozenset(registers.get(registration.symbol, ())))
         for registration in registrations
     ]
-    return {
-        bean: found for bean, found in routes.items() if any(route.conditions for route in found)
-    }, registrations
+    return routes, registrations
 
 
 def _scanned_name(
