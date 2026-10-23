@@ -170,6 +170,9 @@ conditions:
 # of them on a `@Bean` method checks the method's own return type (row 1). `order_reason` is
 # what a verdict left open by a loop of these conditions says — two defaults each missing the
 # other: the container keeps the first it reads (row 3), and nothing in the code orders them.
+# `present_cycle_reason` is what a loop of `present` conditions alone says: the first read
+# finds the other not yet registered (row 3) and is skipped, so every one of them fails in
+# whatever order.
 presence:
   missing: org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
   present: org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -177,4 +180,5 @@ presence:
   name_attrs: [name]
   annotation_attrs: [annotation]
   order_reason: Spring keeps whichever is processed first; the order is not in the code
+  present_cycle_reason: neither bean sees the other registered, so both fail whatever the order
   by: scripts/probes/cp44_bean_registration_conditions.md

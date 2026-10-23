@@ -82,7 +82,7 @@ verdicts settle in rounds over (condition, environment) pairs.
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
@@ -94,7 +94,7 @@ from sextant.domain.symbols import (
     bare_descriptor,
     is_type_descriptor,
     method_name,
-    simple_name,
+    short_class_name,
     type_descriptor,
 )
 
@@ -112,7 +112,12 @@ PARTIAL = "partial"
 ON_MODULE_BEANS = (
     "decided from this module's beans only; a library or the processing order may differ"
 )
-_COMPETITOR_OPEN = "whether a competing bean exists here is not decided"
+# An open verdict says it is open, and why, before the competitor list names who left it so.
+_NOT_DECIDED = "not decided from this module's beans"
+_COMPETITOR_OPEN = "a competing bean's own existence here is open"
+# The separator between a presence verdict's reason and its competitor list (JSON), so a
+# machine splits the evidence once and the documents word the list.
+COMPETITORS = "; competitors: "
 # CP-44 row 1: with no type, name or annotation the type is deduced from a factory method's
 # return type, and anywhere else `validate` refuses the use.
 _NO_CRITERION = (
@@ -164,7 +169,9 @@ class _Registration:
     return type), its bean name (None where it is not known), the annotations of that type,
     and every condition the container evaluates on it as (holder, model, args), the holder
     being the class or method the annotation is on. `owner` is a factory's own class: a
-    condition on that class is judged before the class's factory methods are read."""
+    condition on that class is judged before the class's factory methods are read. `beans`
+    are the module classes it registers — the class itself, or the classes a factory
+    constructs and returns: two definitions sharing one never compete (ruled at review)."""
 
     route: str
     symbol: str
@@ -173,6 +180,7 @@ class _Registration:
     name: str | None
     annotations: frozenset[str]
     conditions: tuple[tuple[str, ConditionModel, dict[str, Any]], ...]
+    beans: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -365,6 +373,18 @@ def _routes(
                 routes.setdefault(built, []).append(_Route(CONSTRUCTED, caller, ()))
     for body, creating in creator.items():
         routes.setdefault(body, []).append(_Route(FACTORY, creating, route_conditions_of(creating)))
+    # Which classes each definition registers, read off the routes just built.
+    registers: dict[str, set[str]] = {}
+    for registered_class, found in routes.items():
+        for route in found:
+            if route.route == CLASS:
+                registers.setdefault(registered_class, set()).add(registered_class)
+            elif route.route == FACTORY and route.via is not None:
+                registers.setdefault(route.via, set()).add(registered_class)
+    registrations = [
+        replace(registration, beans=frozenset(registers.get(registration.symbol, ())))
+        for registration in registrations
+    ]
     return {
         bean: found for bean, found in routes.items() if any(route.conditions for route in found)
     }, registrations
@@ -377,8 +397,7 @@ def _scanned_name(
     conditions: dict[str, ConditionModel],
 ) -> str | None:
     """A scanned class's bean name (CP-44 row 6): the text its stereotype's naming attribute
-    gives, else its simple name — after the last `.`, cut at `$$`, `$` read as `.` —
-    uncapitalised unless its first two characters are both upper case. A class that is a
+    gives, else its short name (`short_class_name`) uncapitalised unless its first two characters are both upper case. A class that is a
     bean only through a COMPOSED stereotype and carries an argument on any annotation may be
     named by it (an `@AliasFor` this analysis does not read): None, the name not known."""
     direct = False
@@ -397,7 +416,7 @@ def _scanned_name(
             return value
     if not direct and any(composing):
         return None
-    short = simple_name(bare_descriptor(target)).split("$$", 1)[0].replace("$", ".")
+    short = short_class_name(target)
     if len(short) > 1 and short[0].isupper() and short[1].isupper():
         return short
     return short[:1].lower() + short[1:]
@@ -519,23 +538,32 @@ def _presence_verdicts(
     A condition's CRITERIA are each type of `type_attrs` (one set, row 2), each name of
     `name_attrs` and each annotation of `annotation_attrs` — or, with none of them on a
     factory method, the method's declared return type (row 1). Its COMPETITORS are the
-    module's other bean definitions: one matches a type when the type it is matched by is
-    that type or a subtype (`type_hierarchy`), a name when its bean name is that name, an
-    annotation when its type carries it. A condition on a class is judged before that class's
-    own factory methods are read (row 4), so they are no competitor of it. A competitor
-    EXISTS in an environment where every condition on it holds — its own presence conditions
-    too — so the verdicts are decided together, in memory, until nothing changes:
+    module's other bean definitions that register a DIFFERENT class (ruled at review: the
+    condition asks whether ANOTHER bean of the type exists; OR across one class's own routes
+    is `bean_presence`'s): one matches a type when the type it is matched by is that type or
+    a subtype (`type_hierarchy`), a name when its bean name is that name, an annotation when
+    its type carries it. A condition on a class is judged before that class's own factory
+    methods are read (row 4), so they are no competitor of it. A competitor EXISTS in an
+    environment where every condition on it holds — its own presence conditions too — so the
+    verdicts are decided together, in memory, in rounds until nothing changes:
 
     * `missing` (`isAnyMatched`) fails where some criterion has a competitor that exists,
       holds where no criterion has one that exists or could, and is `unresolved` otherwise;
     * `present` (`isAllMatched`) holds where every criterion has a competitor that exists,
       fails where some criterion has none that exists or could, `unresolved` otherwise.
 
-    A condition still undecided when nothing changes waits on itself through its competitors
-    — two defaults each missing the other — and the container keeps whichever it reads first:
-    `unresolved`, with that reason. Every decided verdict is `partial`, with the stated reason.
-    Cost: one pass over the definitions per condition to find its competitors, then rounds
-    over (condition, environment) pairs, each round deciding at least one — no table read."""
+    Conditions still undecided when nothing changes wait on each other through their
+    competitors. Each closed loop of them (one waiting on nothing outside itself) is settled
+    by its shape: a loop of `present` conditions alone FAILS — the first the container reads
+    finds the others not yet registered (row 3), so no order lets one in — and is decided
+    with the model's `present_cycle_reason`; a loop holding a `missing` one keeps whichever
+    is read first, so it is `unresolved` with `order_reason`. Then the rounds resume.
+
+    Every decided verdict is `partial`, with the stated reason; every verdict's evidence ends
+    with `COMPETITORS` and a sorted JSON list of the competitors that decided it or left it
+    open, each `{bean, via, holds}` and a `note` where its conditions name a profile no
+    environment of the module is. Cost: one pass over the definitions per condition to find
+    its competitors, then rounds over (condition, environment) pairs — no table read."""
     by_symbol = {registration.symbol: registration for registration in registrations}
     closure: dict[str, frozenset[str]] = {}
 
@@ -551,18 +579,21 @@ def _presence_verdicts(
             closure[bare] = frozenset(seen)
         return closure[bare]
 
-    # Each (definition, environment)'s verdict on the conditions this phase does not judge.
+    # Each (definition, environment)'s verdict on the conditions this phase does not judge,
+    # and the profiles its conditions name that no environment of the module is.
     base: dict[str, dict[str, str]] = {}
+    unseen: dict[str, list[str]] = {}
     for registration in registrations:
         unjudged: dict[str, str] = {}
+        others = [
+            _expression(found, args)
+            for _, found, args in registration.conditions
+            if found.kind != PRESENCE
+        ]
         for environment in environments:
             states = [
                 _holds(kind, expression, config.get(environment, {}), environment)[0]
-                for kind, expression in (
-                    _expression(found, args)
-                    for _, found, args in registration.conditions
-                    if found.kind != PRESENCE
-                )
+                for kind, expression in others
             ]
             unjudged[environment] = (
                 FAILS
@@ -572,14 +603,24 @@ def _presence_verdicts(
                 else UNRESOLVED
             )
         base[registration.symbol] = unjudged
+        unseen[registration.symbol] = sorted(
+            {
+                name
+                for kind, expression in others
+                if kind == PROFILE
+                for raw in expression["expressions"]
+                if not any(char in _COMPOSITION for char in str(raw))
+                and (name := str(raw).strip().lstrip("!").strip())
+                and name not in environments
+            }
+        )
 
     expressions: dict[tuple[str, str, str], dict[str, Any]] = {}
     modes: dict[tuple[str, str, str], str] = {}
     criteria: dict[tuple[str, str, str], list[list[tuple[str, bool]]]] = {}
     reasons: dict[tuple[str, str, str], str] = {}
-    # What a verdict left open by a loop of these conditions says — two beans that each
-    # register only where the other does not: the model's `order_reason` (CP-44 row 3).
-    orders: dict[tuple[str, str, str], str] = {}
+    # The model's wording for a closed loop, per shape (see above; CP-44 row 3).
+    loop_reasons: dict[tuple[str, str, str], tuple[str, str]] = {}
     held: dict[str, list[tuple[str, str, str]]] = {}
     for registration in registrations:
         for holder, found, args in registration.conditions:
@@ -608,9 +649,18 @@ def _presence_verdicts(
                 "annotations": annotations,
             }
             modes[key] = str(members["mode"])
-            orders[key] = str(members["order_reason"])
+            loop_reasons[key] = (
+                str(members["order_reason"]),
+                str(members["present_cycle_reason"]),
+            )
+            # The definitions the condition is on — the holder itself, or a class and its
+            # own factory methods — and the classes they register.
+            own = [other for other in registrations if holder in (other.symbol, other.owner)]
+            same = frozenset().union(*(other.beans for other in own))
             competitors = [
-                other for other in registrations if holder not in (other.symbol, other.owner)
+                other
+                for other in registrations
+                if holder not in (other.symbol, other.owner) and not (other.beans & same)
             ]
             criteria[key] = [
                 *(
@@ -639,6 +689,8 @@ def _presence_verdicts(
         key: {environment: UNRESOLVED if key in reasons else None for environment in environments}
         for key in expressions
     }
+    # (condition, environment) pairs a closed loop settled, and which wording it took.
+    looped: dict[tuple[tuple[str, str, str], str], str] = {}
 
     def exists(symbol: str, environment: str) -> str | None:
         states: list[str | None] = [base[symbol][environment]]
@@ -649,10 +701,15 @@ def _presence_verdicts(
             return None
         return HOLDS if all(state == HOLDS for state in states) else UNRESOLVED
 
-    def judge(key: tuple[str, str, str], environment: str) -> str | None:
+    def judge(key: tuple[str, str, str], environment: str, absent: bool = False) -> str | None:
+        """The verdict where it is decided, None while a competitor is; `absent` reads every
+        undecided competitor as not registered — a closed loop's own members, as the first
+        one the container reads sees them."""
         states: list[str | None] = []
         for matches in criteria[key]:
             found = [(exists(symbol, environment), sure) for symbol, sure in matches]
+            if absent:
+                found = [(FAILS if state is None else state, sure) for state, sure in found]
             if any(state == HOLDS and sure for state, sure in found):
                 states.append(_MET)
             elif all(state == FAILS for state, _ in found):
@@ -668,6 +725,35 @@ def _presence_verdicts(
             return HOLDS
         return None if None in states else UNRESOLVED
 
+    def waits_on(key: tuple[str, str, str], environment: str) -> set[tuple[str, str, str]]:
+        return {
+            other
+            for matches in criteria[key]
+            for symbol, _ in matches
+            if exists(symbol, environment) is None
+            for other in held.get(symbol, ())
+            if verdict[other][environment] is None
+        }
+
+    def closed_loops(environment: str, waiting: list[tuple[str, str, str]]) -> list[list[Any]]:
+        """The loops among `waiting` that wait on nothing outside themselves."""
+        reach: dict[tuple[str, str, str], set[tuple[str, str, str]]] = {}
+        for start in waiting:
+            seen = {start}
+            frontier = [start]
+            while frontier:
+                for other in waits_on(frontier.pop(), environment):
+                    if other not in seen:
+                        seen.add(other)
+                        frontier.append(other)
+            reach[start] = seen
+        loops: list[list[Any]] = []
+        for start in waiting:
+            loop = {other for other in reach[start] if start in reach[other]}
+            if loop == reach[start] and sorted(loop) not in loops:
+                loops.append(sorted(loop))
+        return loops
+
     pending = sorted(
         (key, environment)
         for key, per_environment in verdict.items()
@@ -682,19 +768,69 @@ def _presence_verdicts(
                 verdict[key][environment] = state
                 decided.append((key, environment))
         if not decided:
-            break
+            for environment in environments:
+                waiting = [key for key, at in pending if at == environment]
+                for loop in closed_loops(environment, waiting):
+                    if all(modes[key] == "present" for key in loop):
+                        settled = {key: judge(key, environment, absent=True) for key in loop}
+                        for key, state in settled.items():
+                            verdict[key][environment] = state or UNRESOLVED
+                            if state == FAILS:
+                                looped[(key, environment)] = loop_reasons[key][1]
+                    else:
+                        for key in loop:
+                            verdict[key][environment] = UNRESOLVED
+                            looped[(key, environment)] = loop_reasons[key][0]
+                    decided.extend((key, environment) for key in loop)
         done = set(decided)
         pending = [item for item in pending if item not in done]
+
+    def deciders(key: tuple[str, str, str], environment: str) -> list[dict[str, str | None]]:
+        """The competitors that decided the verdict — those that exist where one existing
+        decides it, every one matched where none existing decides it — or left it open."""
+        final = verdict[key][environment]
+        mode = modes[key]
+        chosen: set[str] = set()
+        for matches in criteria[key]:
+            found = [(symbol, sure, exists(symbol, environment)) for symbol, sure in matches]
+            present = [symbol for symbol, sure, state in found if state == HOLDS and sure]
+            if final == UNRESOLVED:
+                chosen.update(symbol for symbol, _, state in found if state != FAILS)
+            elif (mode, final) in (("missing", FAILS), ("present", HOLDS)):
+                chosen.update(present)
+            elif mode == "missing" or not present:
+                chosen.update(symbol for symbol, _, _ in found)
+        entries: list[dict[str, str | None]] = []
+        for symbol in chosen:
+            other = by_symbol[symbol]
+            state = exists(symbol, environment) or UNRESOLVED
+            for bean in sorted(other.beans) or [other.registered or symbol]:
+                entry: dict[str, str | None] = {
+                    "bean": bean,
+                    "via": symbol if other.route == FACTORY else None,
+                    "holds": state,
+                }
+                notes = [
+                    f"profile `{name}` is named but this module has no `{name}` environment"
+                    for name in unseen[symbol]
+                ]
+                if notes:
+                    entry["note"] = "; ".join(notes)
+                entries.append(entry)
+        return sorted(entries, key=lambda entry: (entry["bean"] or "", entry["via"] or ""))
 
     judged: dict[tuple[str, str, str], _Presence] = {}
     for key, per_environment in verdict.items():
         stated: dict[str, tuple[str, str, str]] = {}
         for environment, final in per_environment.items():
+            listed = COMPETITORS + json.dumps(deciders(key, environment), sort_keys=True)
+            loop_reason = looped.get((key, environment))
             if final in (HOLDS, FAILS):
-                stated[environment] = (str(final), PARTIAL, ON_MODULE_BEANS)
+                reason = ON_MODULE_BEANS + (f"; {loop_reason}" if loop_reason else "")
+                stated[environment] = (str(final), PARTIAL, reason + listed)
                 continue
-            reason = reasons.get(key) or (orders[key] if final is None else _COMPETITOR_OPEN)
-            stated[environment] = (UNRESOLVED, UNRESOLVED, f"{ON_MODULE_BEANS}; {reason}")
+            reason = reasons.get(key) or loop_reason or _COMPETITOR_OPEN
+            stated[environment] = (UNRESOLVED, UNRESOLVED, f"{_NOT_DECIDED}: {reason}{listed}")
         judged[key] = _Presence(expression=expressions[key], verdicts=stated)
     return judged
 

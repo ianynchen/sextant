@@ -13,6 +13,7 @@ from sextant.domain.symbols import (
     owner_of,
     parameter_types,
     returned_type,
+    short_class_name,
     simple_name,
     type_descriptor,
     without_type_marker,
@@ -226,3 +227,18 @@ def test_returned_type_answers_only_for_an_object_return(descriptor: str, expect
     `void`, a primitive or an array cannot be handing a constructed object back to its
     caller, which is the only question anyone asks this."""
     assert returned_type(descriptor) == expected
+
+
+@pytest.mark.parametrize(
+    ("symbol", "expected"),
+    [
+        ("com/acme/OrderService#", "OrderService"),
+        ("sextant-jvm maven g/a 1 com/acme/Outer$Inner#", "Outer.Inner"),
+        ("com/acme/OrderService$$SpringCGLIB$$0#", "OrderService"),
+    ],
+)
+def test_short_class_name_reads_a_nested_class_with_a_dot_and_drops_a_generated_suffix(
+    symbol: str, expected: str
+):
+    """CP-44 row 6 (`ClassUtils.getShortName`): after the package, cut at `$$`, `$` as `.`."""
+    assert short_class_name(symbol) == expected

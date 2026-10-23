@@ -840,6 +840,7 @@ AUDIT = SPI + "UserAudit#"
 AUTH = SPI + "AuthConfiguration#"
 _PARTIAL = "decided from this module's beans only; a library or the processing order may differ"
 _ORDER = "Spring keeps whichever is processed first; the order is not in the code"
+_NEITHER = "neither bean sees the other registered, so both fail whatever the order"
 
 
 def _missing(**args: object) -> AnnotationUse:
@@ -878,11 +879,31 @@ def _default_beside_ldap(default_uses: list[AnnotationUse]) -> list[object]:
     ]
 
 
+_COMPETITORS = "; competitors: "
+
+
 def _presence_rows(workspace: DuckDbWorkspace, bean: str) -> dict[str, tuple[object, ...]]:
+    """environment -> (holds, resolution, the stated reason) of the bean's presence rows; the
+    reason is the evidence before its competitor list (`_competitors` reads that)."""
     return {
-        str(r["environment"]): (r["holds"], r["resolution"], r["evidence"])
+        str(r["environment"]): (
+            r["holds"],
+            r["resolution"],
+            str(r["evidence"]).split(_COMPETITORS, 1)[0],
+        )
         for r in workspace.query("bean_conditions")
         if r["bean"] == _MODULE + bean and r["kind"] == "presence"
+    }
+
+
+def _competitors(workspace: DuckDbWorkspace, bean: str, via: str | None = None) -> dict:
+    """environment -> the competitor list a presence row's evidence carries, as JSON."""
+    return {
+        str(r["environment"]): json.loads(str(r["evidence"]).split(_COMPETITORS, 1)[1])
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + bean
+        and r["kind"] == "presence"
+        and (via is None or r["via"] == via)
     }
 
 
@@ -1275,3 +1296,205 @@ def test_a_resolved_route_decides_presence_over_a_partial_one(tmp_path: Path):
     workspace.close()
 
     assert presence == {"default": ("true", "resolved"), "ldap": ("true", "resolved")}
+
+
+# --- review round: same-class routes, the competitor list, chains and loops --------------
+
+
+def test_two_routes_of_one_class_never_compete_with_each_other(tmp_path: Path):
+    """Ruled at review: the condition asks whether ANOTHER bean of the type exists. Two
+    factories both returning `new DefaultUserService()` — one `@ConditionalOnMissingBean
+    (UserService.class)`, one `@ConditionalOnClass` — register the same class, so the second
+    is no competitor of the first: the first holds, and the class exists, `partial`."""
+    facts = [
+        *_users(DEFAULT_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "one",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "two",
+            USER_SERVICE,
+            [_marker(BEAN), AnnotationUse(annotation=ON_CLASS, args={"name": ["x.Y"]})],
+            [DEFAULT_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    presence = _presence(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows == {
+        "default": ("true", "partial", _PARTIAL),
+        "ldap": ("true", "partial", _PARTIAL),
+    }
+    assert presence == {"default": ("true", "partial"), "ldap": ("true", "partial")}
+
+
+def test_two_missing_bean_routes_of_one_class_exist_in_every_order(tmp_path: Path):
+    """Two `@ConditionalOnMissingBean(UserService.class)` factories of the SAME class: whichever
+    Spring keeps, the class exists — no order question, so no `unresolved`."""
+    facts = [
+        *_users(DEFAULT_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "one",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "two",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    presence = _presence(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert presence == {"default": ("true", "partial"), "ldap": ("true", "partial")}
+
+
+def test_the_evidence_lists_the_competitors_and_a_profile_no_environment_activates(
+    tmp_path: Path,
+):
+    """Ruled at review: a presence verdict's evidence names, after its reason, the competitors
+    that decided it — as JSON. Here the module resolves only `default`, so the `ldap` override
+    is absent everywhere and the default holds; the row says so, and says `ldap` is a profile
+    the module names but no environment file activates (OI-168's boundary)."""
+    facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
+    workspace = _resolved(tmp_path, facts, environments=())
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    listed = _competitors(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows == {"default": ("true", "partial", _PARTIAL)}
+    assert listed == {
+        "default": [
+            {
+                "bean": _MODULE + LDAP_USERS,
+                "via": _factory_symbol(AUTH, "ldapUserService", USER_SERVICE),
+                "holds": "false",
+                "note": "profile `ldap` is named but this module has no `ldap` environment",
+            }
+        ]
+    }
+
+
+def test_the_evidence_names_the_competitor_that_exists(tmp_path: Path):
+    """Where the override exists the default fails, and its row names the override as the
+    bean that decided it — no note, since `ldap` is an environment here."""
+    facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    listed = _competitors(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert listed["ldap"] == [
+        {
+            "bean": _MODULE + LDAP_USERS,
+            "via": _factory_symbol(AUTH, "ldapUserService", USER_SERVICE),
+            "holds": "true",
+        }
+    ]
+
+
+def test_an_open_verdict_names_the_competitor_that_leaves_it_open(tmp_path: Path):
+    """The override under `@ConditionalOnClass`: the default's verdict is open, and its
+    evidence names that override as `unresolved` rather than claiming a decision."""
+    facts = [
+        *_users(DEFAULT_USERS, LDAP_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "ldapUserService",
+            USER_SERVICE,
+            [_marker(BEAN), AnnotationUse(annotation=ON_CLASS, args={"name": ["x.Y"]})],
+            [LDAP_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    listed = _competitors(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows["default"] == (
+        "unresolved",
+        "unresolved",
+        "not decided from this module's beans: a competing bean's own existence here is open",
+    )
+    assert listed["default"] == [
+        {
+            "bean": _MODULE + LDAP_USERS,
+            "via": _factory_symbol(AUTH, "ldapUserService", USER_SERVICE),
+            "holds": "unresolved",
+        }
+    ]
+
+
+def test_a_chain_of_presence_conditions_is_decided_in_dependency_order(tmp_path: Path):
+    """A `@ConditionalOnMissingBean(Notifier)` waits on B `@ConditionalOnBean(Channel)`, which
+    waits on C `@Profile("ldap")`. In `ldap` C exists, so B does, so A does not; elsewhere
+    the reverse — each `partial` but C's own, which is a profile."""
+    notifier = SPI + "Notifier#"
+    channel = SPI + "Channel#"
+    a, b, c = SPI + "Fallback#", SPI + "MailNotifier#", SPI + "SmtpChannel#"
+    facts = [
+        *_type(notifier, kind=ConstructKind.INTERFACE),
+        *_type(channel, kind=ConstructKind.INTERFACE),
+        *_type(a),
+        *_type(b, interfaces=(notifier,)),
+        *_type(c, interfaces=(channel,)),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(AUTH, "a", a, [_marker(BEAN), _missing(value=[notifier])], [a]),
+        *_method(AUTH, "b", notifier, [_marker(BEAN), _present(value=[channel])], [b]),
+        *_method(AUTH, "c", channel, [_marker(BEAN), _profile("ldap")], [c]),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    first, second = _presence(workspace, a), _presence(workspace, b)
+    workspace.close()
+
+    assert second == {"default": ("false", "partial"), "ldap": ("true", "partial")}
+    assert first == {"default": ("true", "partial"), "ldap": ("false", "partial")}
+
+
+def test_two_on_bean_conditions_waiting_on_each_other_both_fail(tmp_path: Path):
+    """`@ConditionalOnBean(Channel)` on a `Notifier` factory and `@ConditionalOnBean(Notifier)`
+    on a `Channel` factory: whichever Spring reads first finds the other not yet registered and
+    skips, so the second finds nothing too — both absent in every order, `partial`, with that
+    reason rather than the order one."""
+    notifier = SPI + "Notifier#"
+    channel = SPI + "Channel#"
+    b, c = SPI + "MailNotifier#", SPI + "SmtpChannel#"
+    facts = [
+        *_type(notifier, kind=ConstructKind.INTERFACE),
+        *_type(channel, kind=ConstructKind.INTERFACE),
+        *_type(b, interfaces=(notifier,)),
+        *_type(c, interfaces=(channel,)),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(AUTH, "b", notifier, [_marker(BEAN), _present(value=[channel])], [b]),
+        *_method(AUTH, "c", channel, [_marker(BEAN), _present(value=[notifier])], [c]),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = {bean: _presence_rows(workspace, bean) for bean in (b, c)}
+    workspace.close()
+
+    for per_environment in rows.values():
+        assert {(h, r) for h, r, _ in per_environment.values()} == {("false", "partial")}
+        assert all(_NEITHER in str(reason) for _, _, reason in per_environment.values())
+        assert all(_ORDER not in str(reason) for _, _, reason in per_environment.values())

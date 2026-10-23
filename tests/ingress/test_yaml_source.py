@@ -401,6 +401,7 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         "  name_attrs: [name]\n"
         "  annotation_attrs: [annotation]\n"
         "  order_reason: the order is not in the code\n"
+        "  present_cycle_reason: both fail\n"
         "  by: probe.md\n"
         "stereotypes: [com.acme.Component]\n"
         "configuration_annotation: com.acme.Config\n"
@@ -438,7 +439,7 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         (
             (
                 "presence: {missing: com.acme.M, present: com.acme.P, type_attrs: [value], "
-                "name_attrs: [name], order_reason: x, by: p.md}\n"
+                "name_attrs: [name], order_reason: x, present_cycle_reason: y, by: p.md}\n"
             ),
             "`annotation_attrs`",
         ),
@@ -448,6 +449,14 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
                 "name_attrs: [name], annotation_attrs: [annotation], by: p.md}\n"
             ),
             "`order_reason`",
+        ),
+        (
+            (
+                "presence: {missing: com.acme.M, present: com.acme.P, type_attrs: [value], "
+                "name_attrs: [name], annotation_attrs: [annotation], order_reason: x, "
+                "by: p.md}\n"
+            ),
+            "`present_cycle_reason`",
         ),
         ("stereotype_name_attrs: [value]\n", "`stereotype_name_attrs` must map"),
         ("stereotype_name_attrs: {com.acme.Component: 7}\n", "`stereotype_name_attrs` must map"),

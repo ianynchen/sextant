@@ -850,7 +850,7 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
                 )
     if "presence" in raw:
         presence = raw["presence"]
-        strings = ("missing", "present", "order_reason")
+        strings = ("missing", "present", "order_reason", "present_cycle_reason")
         lists = ("type_attrs", "name_attrs", "annotation_attrs")
         if (
             not isinstance(presence, dict)
@@ -860,8 +860,8 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
         ):
             raise CatalogError(
                 f"{where}: `presence` needs `missing` and `present` (annotation names), "
-                "`type_attrs`, `name_attrs` and `annotation_attrs` (lists), `order_reason` "
-                "and a `by:` probe"
+                "`type_attrs`, `name_attrs` and `annotation_attrs` (lists), `order_reason`, "
+                "`present_cycle_reason` and a `by:` probe"
             )
     # Which classes are beans at all (CP-44 row 5): an empty or malformed list would make
     # every scanned class unconditional without a word, the failure the blocks above refuse.
