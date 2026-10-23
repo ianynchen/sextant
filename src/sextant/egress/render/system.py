@@ -72,6 +72,14 @@ def _participants(participants: "Sequence[Participant]") -> list[str]:
     return lines
 
 
+# What "not evaluated" beside a link end means, and where its reason is: the Links section's
+# one legend, present only where an end carries it.
+_NOT_EVALUATED = (
+    "*Not evaluated:* this analysis does not decide whether that end exists there — most often "
+    "because the deployment sets its condition; the participant's module document says why."
+)
+
+
 def _links(links: "Sequence[Link]", redactor: Redactor) -> list[str]:
     lines = ["## Links", ""]
     if not links:
@@ -118,6 +126,15 @@ def _links(links: "Sequence[Link]", redactor: Redactor) -> list[str]:
             resolution = f"**{resolution}** — one of {candidates}"
         lines.append(f"| {source} | `{link.to_participant}` | {endpoint} | {resolution} |")
     lines.append("")
+    if any(
+        holds == "unresolved"
+        for link in links
+        for _, holds in (*link.from_conditions, *link.to_conditions)
+    ):
+        # Ruled at the final review of spec 2026-10-23-deployment-set-conditions: an end's
+        # "not evaluated" is its participant's verdict, whose reason only the module
+        # document states — said once, in one fixed sentence, however many ends carry it.
+        lines += [_NOT_EVALUATED, ""]
     return lines
 
 

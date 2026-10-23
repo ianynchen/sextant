@@ -18,10 +18,16 @@ from sextant import api
 from sextant.application.boundary.diff import DiffRefused, diff_sources
 from sextant.application.boundary.source import BoundarySource
 from sextant.application.boundary.vocabulary import KINDS
+from sextant.application.resolve.bean_conditions import record_bean_conditions
 from sextant.cli.app import cli
+from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
 
+CATALOGS = Path(__file__).parents[3] / "src" / "sextant" / "catalogs"
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 REDACTOR = Redactor.from_rules()
 _ZERO = {"added": 0, "removed": 0, "changed": 0}
@@ -34,8 +40,8 @@ _MODULE = {
 }
 _PROVENANCE = {"commit": "630906a7", "sextant_version": "0.1.0", "fact_schema_version": 2}
 _METADATA = {
-    "schema_version": 5,
-    "boundary_vocabulary_version": 1,
+    "schema_version": 6,
+    "boundary_vocabulary_version": 2,
     "catalog_hash": "sha256:catalogs",
     "module": _MODULE,
     "provenance": _PROVENANCE,
@@ -451,6 +457,123 @@ def test_a_dependency_header_set_change_is_compatible(
     assert (entry.kind, entry.compatibility) == ("dependency", "compatible")
 
 
+# --- conditions: the declared expressions, never the verdicts ------------------------------
+
+_BILLING = "com/acme/BillingClient#"
+_CHARGE = _BILLING + "charge()."
+_ON_BILLING = AnnotationUse(
+    annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+    args={"name": ["billing.enabled"], "havingValue": "true"},
+)
+_ON_BILLING_EXPRESSION = (
+    '{"having_value": "true", "keys": ["billing.enabled"], "match_if_missing": false}'
+)
+
+
+def _billing_client(workspace: DuckDbWorkspace, root: Path, *on_class: AnnotationUse) -> None:
+    """`POST /v1/charges` on `billing`, called from `charge()` of a `@Service` whose class
+    carries `on_class` too: the class and method symbols are facts, loaded, because a row's
+    bean is found through `symbols`; the outbound row is written by hand."""
+    facts = root / "facts"
+    write_fact_file(
+        facts / "billing.jsonl",
+        Document(document_id=_BILLING, relative_path="com/acme/BillingClient.java",
+                 module_id=_MODULE["id"], language="java", sextant_version="0.1.0",
+                 fact_schema_version=2, scanner_id="sextant-jvm-extractor",
+                 content_hash="sha256:c", origin_entry="target/classes",
+                 origin_tier=OriginTier.MODULE_OUTPUT, redaction_set_hash="sha256:none"),
+        [
+            SymbolFact(document_id=_BILLING, symbol=_BILLING, construct_kind=ConstructKind.CLASS),
+            SymbolFact(document_id=_BILLING, symbol=_CHARGE, construct_kind=ConstructKind.METHOD,
+                       enclosing=_BILLING),
+            *[AnnotationFact(document_id=_BILLING, target=_BILLING, retention="runtime", use=use)
+              for use in (AnnotationUse(annotation="org/springframework/stereotype/Service#",
+                                        args={}), *on_class)],
+        ],
+    )  # fmt: skip
+    workspace.load_facts(facts)
+    _endpoint(workspace, direction="outbound", method="POST", path="/v1/charges",
+              caller=_CHARGE, peer="billing")  # fmt: skip
+
+
+@pytest.mark.pins("boundary.CONDITIONS-diff-as-declared-expressions")
+def test_a_config_change_is_a_boundary_property_change_and_not_a_conditions_change(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Spec 2026-10-23-deployment-set-conditions, ruling 3 (§3e): the prod file flips
+    `billing.enabled`, and that is reported once, as the `boundary-property` change it is.
+    The per-environment verdicts are evidence, so they leave the diffed `conditions` of both
+    kinds: `charge()` is also the handler of `POST /charges`, the route that makes the call.
+
+    The verdicts are written by hand as the framework rule reads each environment's
+    configuration — `true`, then `false` in `prod` — so the two sides' per-environment
+    entries really differ. The pass now publishes `unresolved` for both (ruling 1), but what
+    the diff compares must not lean on that: a verdict is evidence whatever decided it."""
+
+    def build(prod: str) -> Callable[[DuckDbWorkspace], None]:
+        def fill(workspace: DuckDbWorkspace) -> None:
+            _billing_client(workspace, tmp_path / prod, _ON_BILLING)
+            _endpoint(workspace, method="POST", path="/charges", handler=_CHARGE)
+            for environment, value in (("default", "true"), ("prod", prod)):
+                _insert(
+                    workspace,
+                    "resolved_config",
+                    key="billing.enabled",
+                    value=value,
+                    source=f"application-{environment}.yml",
+                    environment=environment,
+                )
+                _insert(workspace, "bean_conditions", bean=_BILLING, bean_kind="class",
+                        via=None, kind="property", expression=_ON_BILLING_EXPRESSION,
+                        environment=environment, holds=value, resolution="resolved",
+                        evidence=f"`billing.enabled` is `{value}`")  # fmt: skip
+
+        return fill
+
+    a = sources(_built(tmp_path / "a", build("true")))
+    b = sources(_built(tmp_path / "b", build("false")))
+    # Not vacuous: both kinds carry the declared condition on both sides.
+    declared = [{"kind": "property", "expression": _ON_BILLING_EXPRESSION}]
+    for side in (a, b):
+        for kind in ("endpoint", "dependency"):
+            assert [row["conditions"] for row in side.rows(KINDS[kind])] == [declared]
+    diff = diff_sources(a, b, REDACTOR, REDACTOR)
+    assert [(e.kind, e.change, e.identity) for e in diff.entries] == [
+        ("boundary-property", "changed", {"key": "billing.enabled", "environment": "prod"})
+    ]
+    assert not any("conditions" in (entry.to or {}) for entry in diff.entries)
+
+
+@pytest.mark.pins("boundary.a-DEPENDENCY-carries-its-callers-conditions")
+def test_adding_a_condition_to_a_caller_is_a_dependency_conditions_change(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The code change §3e names: the class a call is made from gains
+    `@ConditionalOnProperty("billing.enabled")`, and the dependency is `changed` on
+    `conditions` alone (ruling 2), unlabelled, as a conditions change always is. Both sides'
+    conditions are written by the REAL pass."""
+
+    def build(*on_class: AnnotationUse) -> Callable[[DuckDbWorkspace], None]:
+        def fill(workspace: DuckDbWorkspace) -> None:
+            _billing_client(workspace, tmp_path / str(len(on_class)), *on_class)
+            spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+            record_bean_conditions(workspace, [spring])
+
+        return fill
+
+    a = sources(_built(tmp_path / "a", build()))
+    b = sources(_built(tmp_path / "b", build(_ON_BILLING)))
+    diff = diff_sources(a, b, REDACTOR, REDACTOR)
+    (entry,) = diff.entries
+    assert (entry.kind, entry.change, entry.compatibility) == ("dependency", "changed", None)
+    assert entry.from_ == {"conditions": []}
+    assert entry.to == {"conditions": [{"kind": "property", "expression": _ON_BILLING_EXPRESSION}]}
+    identity = '{"method": "POST", "path": "/v1/charges", "peer": "billing", "protocol": "http"}'
+    assert [line for line in diff.to_text().splitlines() if line.startswith("- ")] == [
+        f"- dependency changed {identity}: conditions"
+    ]
+
+
 def test_a_contract_with_a_new_field_is_changed_and_names_the_field(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -523,7 +646,49 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
+def _credential_condition(workspace: DuckDbWorkspace, root: Path) -> None:
+    """A calling class under `@ConditionalOnProperty(havingValue = <a URL with a password>)`:
+    the expression quotes it verbatim and the exporter strips the userinfo (`redact_json`).
+    `charge()` is also the handler of `POST /charges`, so both kinds carry the condition."""
+    on_url = AnnotationUse(
+        annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+        args={"name": ["billing.url"], "havingValue": "https://ops:hunter2@billing.internal/"},
+    )
+    _billing_client(workspace, root, on_url)
+    _endpoint(workspace, method="POST", path="/charges", handler=_CHARGE)
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    record_bean_conditions(workspace, [spring])
+
+
+@pytest.mark.pins("boundary.a-CONDITION-expression-is-masked-as-the-exporter-masks-it")
+def test_a_condition_expression_is_masked_as_the_exporter_masks_it(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """A condition's `expression` is an annotation's arguments, and the exporter passes it
+    through `redact_json`. The diff makes the same call, so a workspace and its own bundle
+    diff empty and the diff never prints the password the bundle was masked to hide."""
+    workspace = _built(tmp_path / "w", lambda w: _credential_condition(w, tmp_path / "w"))
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    # Not vacuous: both kinds carry the condition, verbatim on one side and masked on the other.
+    for kind in ("endpoint", "dependency"):
+        (row,) = verbatim.rows(KINDS[kind])
+        (shipped,) = masked.rows(KINDS[kind])
+        assert "hunter2" in json.dumps(row["conditions"])
+        assert shipped["conditions"] and "hunter2" not in json.dumps(shipped["conditions"])
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    assert diff_sources(verbatim, masked, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "e", lambda w: None))
+    added = diff_sources(empty, verbatim, REDACTOR, REDACTOR)
+    assert {(e.kind, e.change) for e in added.entries} == {
+        ("endpoint", "added"),
+        ("dependency", "added"),
+    }
+    assert "hunter2" not in json.dumps(added.to_json())
+
+
 @pytest.mark.pins("boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole")
+@pytest.mark.pins("boundary.a-STALE-side-from-schema-5-on-keeps-its-peers")
 def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -532,7 +697,8 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     the diff alone compared them to nothing else, and printed it. Refused like every other
     reader; allowed, because kept bundles are history worth comparing, every scheme-less
     peer with an `@` is masked WHOLE — it cannot be told from a `mailto:` peer, so it is
-    hidden rather than rewritten."""
+    hidden rather than rewritten. Only before graph schema 5: a stale side from 5 on is
+    refused the same way and, allowed, keeps its `mailto:` peer."""
 
     def build(workspace: DuckDbWorkspace) -> None:
         for peer, caller in (
@@ -546,7 +712,7 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
     with pytest.raises(
-        DiffRefused, match="both sides are graph_schema_version 4 and this build is 5"
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 6"
     ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
@@ -558,6 +724,15 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     assert "s3cret" not in json.dumps(allowed.to_json())
     # The text output says why, as the JSON's `producer_changed` does.
     assert allowed.to_text().startswith("**Producer changed**")
+    # Stale, but from graph schema 5 on: `split_url` already dropped the userinfo, so the
+    # hazard is gone and a peer with an `@` is the peer it says — refused, allowed, kept.
+    a5 = sources(_built(tmp_path / "a5", lambda w: None, schema_version=5))
+    b5 = sources(_built(tmp_path / "b5", build, schema_version=5))
+    with pytest.raises(DiffRefused, match="both sides are graph_schema_version 5"):
+        diff_sources(a5, b5, REDACTOR, REDACTOR)
+    kept = diff_sources(a5, b5, REDACTOR, REDACTOR, allow_producer_change=True)
+    assert kept.producer_changed
+    assert "mailto:ops@billing.internal" in {str(e.identity["peer"]) for e in kept.entries}
 
 
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
@@ -624,19 +799,19 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
-    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 5") as refused:
+    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 6") as refused:
         diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 
 
 def test_different_fact_schema_and_vocabulary_versions_refuse_by_name(tmp_path: Path):
-    a = _stamped(tmp_path / "a", boundary_vocabulary_version=2,
+    a = _stamped(tmp_path / "a", boundary_vocabulary_version=1,
                  provenance={**_PROVENANCE, "fact_schema_version": 1})  # fmt: skip
     b = _stamped(tmp_path / "b")
     with pytest.raises(DiffRefused) as refused:
         diff_sources(a, b, REDACTOR, REDACTOR)
     assert "fact_schema_version 1 vs 2" in str(refused.value)
-    assert "boundary_vocabulary_version 2 vs 1" in str(refused.value)
+    assert "boundary_vocabulary_version 1 vs 2" in str(refused.value)
     assert set(refused.value.stamps) == {"fact_schema_version", "boundary_vocabulary_version"}
 
 
@@ -812,7 +987,7 @@ def test_to_json_has_exactly_the_spec_keys(
     assert list(document) == [
         "boundary_vocabulary_version", "a", "b", "producer_changed", "entries", "summary",
     ]  # fmt: skip
-    assert document["boundary_vocabulary_version"] == 1
+    assert document["boundary_vocabulary_version"] == 2
     assert document["a"]["commit"] == "630906a7" and document["b"]["commit"] == "778285e8"  # type: ignore[index]
     assert set(document["a"]) == {"module", "commit", "producer"}  # type: ignore[arg-type]
     assert document["a"]["module"] == "com.acme:orders-service"  # type: ignore[index]

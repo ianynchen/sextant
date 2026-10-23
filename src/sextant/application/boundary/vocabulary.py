@@ -96,6 +96,7 @@ _KIND_LIST = (
             "response_shape",
             "format",
             "headers",
+            "conditions",
             "resolution",
         ),
         evidence=("caller", "documents"),

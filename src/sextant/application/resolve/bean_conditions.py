@@ -91,6 +91,15 @@ spec 2026-10-22 §2d, below):
 * `other` — any annotation in the model's `conditions` block this pass has no rule for is
   written verbatim with `holds = unresolved`; nothing outside that block is read.
 
+**The `profile` and `property` readings above are the repository's, and since spec
+2026-10-23-deployment-set-conditions (ruling 1) they are EVIDENCE, not the verdict**, for
+every kind the bean model marks `set_by: deployment` (CP-47: an environment variable or a
+command-line argument outranks every file the module ships). What is written is `_judged`'s:
+such a condition is `unresolved` unless the environment's own definition decides it — in
+profile environment `p`, a profile term naming `p` holds and `!p` fails — and nothing
+decides one in the base environment. The presence phase judges competitors by the same
+verdicts.
+
 Cost per resolve (GUIDELINES §8.7): the shared `annotation_index` (one decode per load), the
 factory-method fold `beans.declared_beans` already keeps (one `method_declarations` read per
 load, shared with `bean_via`), one `constructor_edges` read, one `type_hierarchy` read, one
@@ -121,6 +130,7 @@ from sextant.application.resolve.beans import declared_beans
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
 from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import (
     bare_descriptor,
     is_type_descriptor,
@@ -174,6 +184,27 @@ INHERITED = "inherited"
 NO_HEIR = "no bean of this module runs this inherited body"
 # The JVM's own name for a constructor, which a member descriptor carries verbatim.
 _CONSTRUCTOR = "<init>"
+# A property condition's evidence quotes the value the module's own configuration sets
+# (spec 2026-10-23-deployment-set-conditions §3b): so the value is masked HERE, by its own
+# key, as every origin writer of a configured value masks it — the built-ins alone, because
+# no redactor reaches a resolve pass from the composition root (`OI-71`, stated on
+# `engines/fluent.py`). The module's OWN rules are applied at every exit, by
+# `redact_condition_evidence`, which reads the format below back.
+_REDACTOR = Redactor.from_rules()
+# The format of one key's sentence in a property condition's evidence — ONE owner, written
+# by `_judged` and read back by `redact_condition_evidence`. `_QUOTED_SETTING` finds each
+# quoted value wherever the sentence stands: alone, or inside a `bean_presence` reason
+# composed with others ("; ") or before a competitor list (`COMPETITORS`).
+_SET_BY_THE_DEPLOYMENT = "` is set by the deployment; this module's `"
+_CONFIGURATION_SETS = "` configuration sets "
+_QUOTED_SETTING = re.compile(
+    "`(?P<key>[^`]+)"
+    + re.escape(_SET_BY_THE_DEPLOYMENT)
+    + "[^`]+"
+    + re.escape(_CONFIGURATION_SETS)
+    + r"`(?P<value>.*?)`(?=; |\Z)",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -250,6 +281,10 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     config = _config_by_environment(workspace)
     environments = sorted(config) or ["default"]
     active = _active_by_environment(workspace, catalogs, config, environments)
+    default_environment = str(_profiles_model(catalogs).get("default_profile", "default"))
+    reading = deployment_reading(
+        active.get(default_environment, ActiveProfiles(known=frozenset())), default_environment
+    )
     constructed = _constructed_by(workspace)
     created = _lambdas_created_by(workspace)
     ancestors = _ancestors(workspace)
@@ -270,10 +305,21 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
         routes = {
             bean: found for bean, found in every.items() if any(route.conditions for route in found)
         }
-        presence = _presence_verdicts(registrations, ancestors, config, environments, active)
+        presence = _presence_verdicts(
+            registrations, ancestors, config, environments, active, default_environment, reading
+        )
         written: dict[str, list[dict[str, Any]]] = {}
         for bean in sorted(routes):
-            written[bean] = _rows_for(bean, routes[bean], config, environments, presence, active)
+            written[bean] = _rows_for(
+                bean,
+                routes[bean],
+                config,
+                environments,
+                presence,
+                active,
+                default_environment,
+                reading,
+            )
             rows.extend(written[bean])
         if dispatch is not None:
             rows.extend(_inherited_rows(reached, dispatch, every, written, environments))
@@ -620,6 +666,8 @@ def _rows_for(
     environments: list[str],
     presence: dict[tuple[str, str, str], _Presence],
     active: dict[str, ActiveProfiles],
+    default_environment: str,
+    reading: str,
 ) -> list[dict[str, Any]]:
     """One row per (route, condition, environment), evaluated; one condition-less row per
     (route, environment) for a route with no condition — `true` for a bean route,
@@ -681,14 +729,17 @@ def _rows_for(
                 continue
             kind, expression = _expression(model, args)
             for environment in environments:
-                if kind == PROFILE:
-                    # An open profile's evidence says why it is open (Task 7b).
-                    holds, resolution, evidence = _profile_holds(expression, active[environment])
-                else:
-                    holds, resolution = _holds(
-                        kind, expression, config.get(environment, {}), environment
-                    )
-                    evidence = "compiler"
+                # An open verdict's evidence says why it is open (Task 7b; spec 2026-10-23).
+                holds, resolution, evidence = _judged(
+                    model,
+                    kind,
+                    expression,
+                    environment,
+                    config.get(environment, {}),
+                    active[environment],
+                    default_environment,
+                    reading,
+                )
                 rows.append(
                     {
                         "bean": bean,
@@ -729,6 +780,8 @@ def _presence_verdicts(
     config: dict[str, dict[str, str | None]],
     environments: list[str],
     active: dict[str, ActiveProfiles],
+    default_environment: str,
+    reading: str,
 ) -> dict[tuple[str, str, str], _Presence]:
     """Every bean-presence condition the module's bean definitions carry, judged per
     environment from those definitions alone (spec §2c, decision 2; CP-44 rows 1-3).
@@ -784,16 +837,23 @@ def _presence_verdicts(
     for registration in registrations:
         unjudged: dict[str, str] = {}
         others = [
-            _expression(found, args)
+            (found, *_expression(found, args))
             for _, found, args in registration.conditions
             if found.kind != PRESENCE
         ]
         for environment in environments:
             states = [
-                _holds(
-                    kind, expression, config.get(environment, {}), environment, active[environment]
+                _judged(
+                    found,
+                    kind,
+                    expression,
+                    environment,
+                    config.get(environment, {}),
+                    active[environment],
+                    default_environment,
+                    reading,
                 )[0]
-                for kind, expression in others
+                for found, kind, expression in others
             ]
             unjudged[environment] = (
                 FAILS
@@ -806,7 +866,7 @@ def _presence_verdicts(
         unseen[registration.symbol] = sorted(
             {
                 name
-                for kind, expression in others
+                for _, kind, expression in others
                 if kind == PROFILE
                 for raw in expression["expressions"]
                 if not any(char in _COMPOSITION for char in str(raw))
@@ -1275,6 +1335,102 @@ def _holds(
     return UNRESOLVED, "unresolved"
 
 
+def _judged(
+    model: ConditionModel,
+    kind: str,
+    expression: dict[str, Any],
+    environment: str,
+    config: dict[str, str | None],
+    active: ActiveProfiles,
+    default_environment: str,
+    reading: str,
+) -> tuple[str, str, str]:
+    """`(holds, resolution, evidence)` for one condition in one environment — the verdict the
+    pass PUBLISHES (spec 2026-10-23-deployment-set-conditions §3b). `_holds` and
+    `_profile_holds` stay the repository's reading by the framework's rule (CP-42, CP-43,
+    CP-45); for a kind the bean model marks `set_by: deployment` (CP-47: an environment
+    variable or a command-line argument outranks every file the module ships) that reading is
+    evidence, never the verdict (ruled 2026-10-23, ruling 1):
+
+    * `profile` — decided only by the environment's own definition: in profile environment
+      `p`, a term naming `p` holds and `!p` fails; nothing decides anything in
+      `default_environment`. Every other term is `unresolved`, its evidence `reading`: one
+      string per module, the same in every environment (`deployment_reading`);
+    * `property` — `unresolved` in every environment, its evidence the value each key's
+      environment configuration resolves (masked by its key, `_REDACTOR`), a placeholder
+      the module does not fill, or that it sets none.
+
+    A kind without `set_by` keeps the framework rule's verdict, `active` being the
+    environment's active profiles by that rule."""
+    if model.members.get("set_by") == "deployment":
+        if kind == PROFILE:
+            own = frozenset() if environment == default_environment else frozenset({environment})
+            return _profile_holds(expression, ActiveProfiles(known=own, otherwise=reading))
+        if kind == PROPERTY:
+            return (
+                UNRESOLVED,
+                "unresolved",
+                "; ".join(
+                    f"`{key}{_SET_BY_THE_DEPLOYMENT}{environment}{_CONFIGURATION_SETS}"
+                    + (
+                        "nothing"
+                        if key not in config
+                        else "a placeholder this module does not fill"
+                        if config[key] is None
+                        else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"
+                    )
+                    for key in expression["keys"]
+                ),
+            )
+    if kind == PROFILE:
+        return _profile_holds(expression, active)
+    holds, resolution = _holds(kind, expression, config, environment)
+    return holds, resolution, "compiler"
+
+
+def redact_condition_evidence(redactor: Redactor, evidence: str) -> str:
+    """A condition's `evidence` — a `bean_conditions`, `bean_presence` or `candidate_presence`
+    row's — masked by `redactor`, the module's own rules, on its way out of any exit (the
+    document, and through it the enrichment brief; the bundle). The writer masked it with the
+    built-ins only (`_REDACTOR`), so the module's `.sextant.yml` additions are applied here:
+    each value a property condition QUOTES (`_QUOTED_SETTING`) is re-masked by its own key
+    (`redact_value`), which `redact_text` cannot do, never seeing the key; the whole string
+    then takes `redact_text` — userinfo stripped, the value patterns applied — which is all
+    evidence quoting no configured value takes (a profile reason, a placeholder's spelling).
+
+    **Stated limit:** a value is read up to the first backtick followed by "; " or the end,
+    so a configured value that itself contains "`; " is re-masked only up to it; the rest
+    still takes `redact_text`."""
+
+    def masked(found: re.Match[str]) -> str:
+        start, end = found.span("value")
+        return (
+            found.string[found.start() : start]
+            + redactor.redact_value(found["key"], found["value"])
+            + found.string[end : found.end()]
+        )
+
+    return redactor.redact_text(_QUOTED_SETTING.sub(masked, evidence))
+
+
+def deployment_reading(base: ActiveProfiles, default_profile: str) -> str:
+    """The evidence of every `profile` condition a deployment sets, ONE string per module and
+    the same in every environment (spec 2026-10-23-deployment-set-conditions §3b, §3c, as
+    ruled at review): the module's own activation as read for its BASE environment (`base`,
+    CP-45) — the reason a placeholder leaves it unknown, the profiles it activates, or both
+    where it names profiles beside the placeholder (`[${X}, prod]`; final review). The
+    reserved `default_profile`, active there only because the module names none (CP-45 row
+    5), is no activation the module makes."""
+    prefix = "active profiles are set by the deployment; "
+    names = sorted(base.known)
+    if names == [default_profile]:
+        names = []
+    own = f"this module's own default is `{','.join(names)}`" if names else None
+    if base.otherwise:
+        return prefix + base.otherwise + (f"; {own}" if own else "")
+    return prefix + (own or "this module activates none")
+
+
 def _profile_holds(expression: dict[str, Any], active: ActiveProfiles) -> tuple[str, str, str]:
     """`(holds, resolution, evidence)` for one `profile` condition against one environment's
     active profiles. ANY listed expression matching accepts (CP-42 row 2), so a plain term
@@ -1429,14 +1585,20 @@ def _active_by_environment(
     """`active_profiles` for this module, with the keys its family's config model names (the
     first catalog carrying a `profiles` block — the family's base catalog) and, for a key
     nothing fills, its raw spelling from the configuration the module ships."""
-    profiles: Mapping[str, Any] = next(
-        (c.config_model["profiles"] for c in catalogs if c.config_model.get("profiles")), {}
-    )
+    profiles = _profiles_model(catalogs)
     unfilled: dict[str, list[str]] = {}
     for row in workspace.query("config_entries"):
         if row["value"] is not None:
             unfilled.setdefault(str(row["key_path"]), []).append(str(row["value"]))
     return active_profiles(config, profiles, environments, unfilled)
+
+
+def _profiles_model(catalogs: list[Catalog]) -> Mapping[str, Any]:
+    """The config model's `profiles` block: the first catalog carrying one, the family's
+    base catalog."""
+    return next(
+        (c.config_model["profiles"] for c in catalogs if c.config_model.get("profiles")), {}
+    )
 
 
 def _config_by_environment(workspace: Workspace) -> dict[str, dict[str, str | None]]:

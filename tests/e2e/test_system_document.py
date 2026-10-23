@@ -113,12 +113,16 @@ def test_a_link_to_a_conditional_endpoint_states_where_the_endpoint_exists(syste
     link is matched and kept as any other — nothing about either side's implementation or
     environment enters the join — and the condition, a property of the INBOUND endpoint,
     travels with it as data: the row states where the endpoint exists, read from
-    `billing-api`'s own `endpoint_conditions` through the federated view."""
+    `billing-api`'s own `endpoint_conditions` through the federated view.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     row = next(
         line for line in system_document.splitlines() if "`orders-api` GET `/balances`" in line
     )
     assert "`billing-api`" in row, row
-    assert "exists in `prod`; not in `default`" in row, row
+    assert "exists in `prod`; not evaluated in `default`" in row, row
 
 
 @pytest.mark.pins("conditions.a-LINK-states-where-its-outbound-caller-exists")
@@ -128,14 +132,18 @@ def test_a_link_from_a_conditional_caller_states_where_the_call_exists(system_do
     conditional-beans §3). The link is matched and kept as any other; the row states the
     OUTBOUND side's existence beside the calling side, as it states the inbound side's beside
     the endpoint — from `orders-api`'s own rows through the federated views, the answer being
-    `bean_presence`'s."""
+    `bean_presence`'s.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     row = next(
         line for line in system_document.splitlines() if "`orders-api` GET `/balances`" in line
     )
-    assert "called only in `prod`; not in `default`" in row, row
+    assert "called only in `prod`; not evaluated in `default`" in row, row
     # Each side states its own: the endpoint's existence stays beside the endpoint.
     assert row.index("called only in") < row.index("`billing-api`"), row
-    assert "exists in `prod`; not in `default`" in row.split("`billing-api`")[1], row
+    assert "exists in `prod`; not evaluated in `default`" in row.split("`billing-api`")[1], row
 
 
 def _analyzed_copy(tmp_path: Path) -> Path:

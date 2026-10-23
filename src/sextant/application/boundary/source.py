@@ -79,6 +79,10 @@ _METADATA_KEY = ("protocol", "direction", "method", "path", "caller")
 _ENDPOINT_METADATA_KEY = ("protocol", "direction", "method", "path", "handler")
 _DEPENDENCY_METADATA_KEY = _METADATA_KEY
 _CONDITION_KEY = ("protocol", "direction", "method", "path", "handler")
+# `endpoint_conditions` carries the `endpoints` row's own `handler` and `caller`, so a
+# dependency is matched on its row plus the `caller`: an outbound row has no handler, and two
+# calls to one address from two callers share that NULL (spec 2026-10-23, ruling 2).
+_DEPENDENCY_CONDITION_KEY = (*_CONDITION_KEY, "caller")
 _FIELD_KEYS = ("wire_name", "wire_type", "wire_format", "required", "nullable")
 
 
@@ -130,6 +134,7 @@ class BoundarySource:
         self._requirements: dict[tuple[object, ...], list[dict[str, object]]] | None = None
         self._headers: dict[tuple[object, ...], list[dict[str, object]]] | None = None
         self._conditions: dict[tuple[object, ...], list[dict[str, object]]] | None = None
+        self._dependency_conditions: dict[tuple[object, ...], list[dict[str, object]]] | None = None
         self._symbol_documents: dict[str, list[tuple[str, str | None]]] | None = None
         self._shape_documents: dict[str, list[tuple[str, str | None]]] | None = None
 
@@ -208,10 +213,7 @@ class BoundarySource:
                 self._requirements_by_row(), members, _ENDPOINT_METADATA_KEY, ("kind", "name")
             ),
             "conditions": self._merged(
-                self._conditions_by_row(),
-                members,
-                _CONDITION_KEY,
-                ("kind", "expression", "environment"),
+                self._conditions_by_row(), members, _CONDITION_KEY, ("kind", "expression")
             ),
             **_attributes(members, "resolution"),
             **self._wire_evidence(members, "handler"),
@@ -224,6 +226,12 @@ class BoundarySource:
             **_attributes(members, "format"),
             "headers": self._merged(
                 self._headers_by_row(), members, _DEPENDENCY_METADATA_KEY, ("name", "value")
+            ),
+            "conditions": self._merged(
+                self._dependency_conditions_by_row(),
+                members,
+                _DEPENDENCY_CONDITION_KEY,
+                ("kind", "expression"),
             ),
             **_attributes(members, "resolution"),
             **self._wire_evidence(members, "caller"),
@@ -371,18 +379,29 @@ class BoundarySource:
 
     def _conditions_by_row(self) -> dict[tuple[object, ...], list[dict[str, object]]]:
         if self._conditions is None:
-            self._conditions = {}
-            for row in self._graph.query("endpoint_conditions"):
-                key = _row_key(row, _CONDITION_KEY)
-                self._conditions.setdefault(key, []).append(
-                    {
-                        "kind": row["kind"],
-                        "expression": row["expression"],
-                        "environment": row["environment"],
-                        "holds": row["holds"],
-                    }
-                )
+            self._read_conditions()
+        assert self._conditions is not None
         return self._conditions
+
+    def _dependency_conditions_by_row(self) -> dict[tuple[object, ...], list[dict[str, object]]]:
+        if self._dependency_conditions is None:
+            self._read_conditions()
+        assert self._dependency_conditions is not None
+        return self._dependency_conditions
+
+    def _read_conditions(self) -> None:
+        """One read, indexed by each key. An entry is the declared `{kind, expression}` only
+        (spec 2026-10-23-deployment-set-conditions, ruling 3): each environment's verdict
+        stays in the workspace, the bundle and the documents, outside the boundary row, so a
+        configuration change is the `boundary-property` change it is and never a
+        `conditions` change too."""
+        self._conditions, self._dependency_conditions = {}, {}
+        for row in self._graph.query("endpoint_conditions"):
+            entry = {"kind": row["kind"], "expression": row["expression"]}
+            self._conditions.setdefault(_row_key(row, _CONDITION_KEY), []).append(entry)
+            self._dependency_conditions.setdefault(
+                _row_key(row, _DEPENDENCY_CONDITION_KEY), []
+            ).append(entry)
 
     @staticmethod
     def _merged(

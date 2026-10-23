@@ -127,14 +127,26 @@ stereotype_name_attrs:
 #                (alias `value`); `having_value` compares case-insensitively, and EMPTY
 #                means "any value but `false`"; an absent key matches exactly when
 #                `match_if_missing` is true (CP-43 rows 2 and 3).
+# `set_by: deployment` (spec 2026-10-23 deployment-set-conditions §3a): the inputs of that
+# kind — the active profiles, a property's value — are set at deployment, and the
+# deployment outranks every file the module ships: the command line and the OS environment
+# (`SPRING_PROFILES_ACTIVE`, `BILLING_ENABLED`) precede `application.properties` and its
+# profile files, and the first source holding a key wins (CP-47, `set_by_probe`). The pass
+# therefore decides such a condition only by the environment's own definition and reports it
+# not evaluated otherwise. `by` stays the probe of the EVALUATION rule. `presence` and
+# `other` carry no `set_by`: a bean's presence is decided by what the code registers.
 conditions:
   profile:  { annotation: org.springframework.context.annotation.Profile,
               expressions: value,
-              by: scripts/probes/cp42_profile_condition.md }
+              set_by: deployment,
+              by: scripts/probes/cp42_profile_condition.md,
+              set_by_probe: scripts/probes/cp47_deployment_overrides.md }
   property: { annotation: org.springframework.boot.autoconfigure.condition.ConditionalOnProperty,
               prefix: prefix, names: [name, value], having_value: havingValue,
               match_if_missing: matchIfMissing,
-              by: scripts/probes/cp43_on_property_condition.md }
+              set_by: deployment,
+              by: scripts/probes/cp43_on_property_condition.md,
+              set_by_probe: scripts/probes/cp47_deployment_overrides.md }
   # Named, never evaluated (spec §4): each is a `Condition` CLASS — code, not
   # configuration (CP-42 row 4; the eighteen autoconfigure ones CP-43 row 5
   # enumerates, less `ConditionalOnProperty`, which is `property` above, and the two

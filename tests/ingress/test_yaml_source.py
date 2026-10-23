@@ -428,6 +428,17 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         ("conditions:\n  profile: {expressions: value, by: p.md}\n", "needs `annotation`"),
         ("conditions:\n  profile: {annotation: com.acme.P}\n", "`by:` probe"),
         ("conditions:\n  other: {by: p.md}\n", "`conditions.other` needs `annotations`"),
+        (
+            (
+                "conditions:\n  profile: {annotation: com.acme.P, by: p.md, "
+                "set_by: deploymnet, set_by_probe: q.md}\n"
+            ),
+            "`conditions.profile.set_by` is `deployment` or absent",
+        ),
+        (
+            "conditions:\n  property: {annotation: com.acme.P, by: p.md, set_by: deployment}\n",
+            "`conditions.property.set_by` needs a `set_by_probe:` probe",
+        ),
         ("presence: {missing: com.acme.M, present: com.acme.P, by: p.md}\n", "`presence` needs"),
         (
             (

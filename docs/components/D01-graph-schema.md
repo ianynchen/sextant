@@ -1101,7 +1101,7 @@ compared by nothing).
 |---|---|---|---|---|
 | `module` | `metadata.json`'s `module` | the module id | kind, languages, `dependency_source` | none |
 | `endpoint` | `endpoints`, inbound | protocol, method, path: the exposed address, which is a topic for a broker, the operation name for GraphQL, the operation's QName for SOAP | the request and response body as field sets by wire name, the same two bodies as descriptors with every type symbol erased, consumes, produces, format, the requirement set (`endpoint_metadata`), the condition set (`endpoint_conditions`), resolution | handler symbols, documents |
-| `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), resolution | caller symbols, documents |
+| `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
 | `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
 | `schedule` | `scheduled_work` | handler, trigger | expression, resolution | catalog |
@@ -1141,6 +1141,15 @@ four handlers behind one wire carry different request shapes, or one method has 
 never whichever row the query happened to order first — M06's no-silent-choice rule, applied
 to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`) are unions.
 
+**A condition set is what the code DECLARES** (spec
+[2026-10-23](../superpowers/specs/2026-10-23-deployment-set-conditions-design.md), rulings 2
+and 3; vocabulary 2). Conditions belong to beans, so an `endpoint` and a `dependency` both
+carry the `{kind, expression}` of the bean their code lives in — a dependency's matched on its
+row and its `caller`, since an outbound row has no handler. Each environment's verdict
+(`environment`, `holds`) stays in the workspace, the bundle and the documents, outside the
+boundary row, so a configuration change is reported once, as the `boundary-property` change
+it is, and only a code change is a `conditions` change.
+
 **Enrichment never enters.** Components, prose and overlays are judgements, not facts
 (`meridian-integration.md` §0a), and `open_questions` and `roots` are Sextant's working state.
 
@@ -1154,7 +1163,7 @@ query in `storage/duckdb/workspace.py`'s registry (`boundary_endpoint`, `boundar
 `boundary_contract`, `boundary_property`, `boundary_schedule`, `boundary_error_handler`;
 `module` is read off `metadata.json`), written as plain `SELECT`s over the exported tables'
 columns so the same query serves a workspace and a bundle's Parquet. `boundary_vocabulary_version`
-(currently `1`) moves with any edit that adds a kind or moves a column between the three
+(currently `2`) moves with any edit that adds a kind or moves a column between the three
 sets, which changes what a comparison means without changing a table — §7 says where it is
 stamped and who compares it.
 
@@ -1301,6 +1310,7 @@ own cadence.
 | 3 | `endpoint_conditions`, a derived table the system tier federates (spec `2026-10-21-conditional-controllers-design.md`) | refused by name by `system analyze`, never a bare `Catalog Error` |
 | 4 | `bean_conditions` (a new derived table) and the views `bean_presence`, `symbol_beans`, `candidate_presence`; `endpoint_conditions` stops being a table and becomes a view gaining `caller`, `via`, `bean_kind`, `bean`; the table `interface_beans` (spec `2026-10-22-conditional-beans-design.md`) | `module analyze` replaces the old table with the view when it opens the workspace (DuckDB refuses `CREATE OR REPLACE VIEW` over a table); `system analyze` refuses a participant that still holds the old table, by name |
 | 5 | No table change: what `endpoints.peer` may hold. Before 2026-10-23 `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`), which no exit could tell from a Spring-WS `mailto:` peer, so a workspace of that vintage is refused rather than masked by a guess (user ruling) | `render`, `enrich`, `export` and `query` refuse it by its stamp; `system analyze` now refuses a participant by the same stamps, naming it and the command; `module diff` refuses two such sides unless the producer change is allowed, and then masks each scheme-less peer with an `@` whole (user ruling) |
+| 6 | No table change: condition verdicts a deployment can change are no longer decided (spec `2026-10-23-deployment-set-conditions-design.md`). A `profile` or `property` condition is `unresolved` unless the environment's own name decides it, and the module's own reading is its evidence | refused by its stamp exactly as at 5, so a workspace holding the older decided verdicts is re-analysed rather than read beside new ones (user ruling, spec §6) |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

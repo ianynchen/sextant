@@ -49,8 +49,8 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
-    "schema_version": 5,
-    "boundary_vocabulary_version": 1,
+    "schema_version": 6,
+    "boundary_vocabulary_version": 2,
     "catalog_hash": "sha256:catalogs",
     "module": {
         "id": "com.acme:orders-service",
@@ -180,6 +180,37 @@ def _catch_all(
             ),
         ],
     )
+
+
+def _service(root: Path, owner: str, method: str, on_class: tuple[AnnotationUse, ...] = ()) -> str:
+    """A `@Service` class with one method, the code an outbound call is made from; `on_class`
+    further annotations on the class (a `@ConditionalOnProperty`). Returns the method."""
+    caller = _MODULE + owner + method
+    write_fact_file(
+        root / f"{owner.replace('/', '_')}.jsonl",
+        _document(owner, OriginTier.MODULE_OUTPUT),
+        [
+            SymbolFact(
+                document_id=owner, symbol=_MODULE + owner, construct_kind=ConstructKind.CLASS
+            ),
+            SymbolFact(
+                document_id=owner,
+                symbol=caller,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + owner,
+            ),
+            *[
+                AnnotationFact(
+                    document_id=owner, target=_MODULE + owner, retention="runtime", use=use
+                )
+                for use in (
+                    AnnotationUse(annotation="org/springframework/stereotype/Service#", args={}),
+                    *on_class,
+                )
+            ],
+        ],
+    )
+    return caller
 
 
 def _two_catch_alls(root: Path, tiers: tuple[OriginTier, OriginTier]) -> Path:
@@ -504,9 +535,14 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
 
     Two handlers behind `GET /**`: A binds `@RequestParam(required = false) q` and
     `@RequestHeader("X-Id")` and sits under `@Profile("prod")`; B binds the same header.
-    The header is one entry, the conditions are A's two environments. The outbound header is
+    The header is one entry, the condition is A's declared one. The outbound header is
     written as `engines/single_call.py` writes one — `caller` the calling method on both
-    tables, so the dependency's join is on `caller`."""
+    tables, so the dependency's join is on `caller`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 3): a row's conditions are
+    the `{kind, expression}` its code declares. The verdict in each environment — here
+    `unresolved` in `default` and `true` in `prod` — is evidence, kept in the workspace and
+    the documents and out of the row a diff compares."""
     facts = tmp_path / "facts"
     header = _annotated_parameter("id", "RequestHeader", value="X-Id")
     _catch_all(facts, "com/acme/a/AController#",
@@ -545,13 +581,50 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
         {"kind": "header", "name": "X-Id", "requirement": "required"},
         {"kind": "param", "name": "q", "requirement": "optional"},
     ]
-    assert [(c["environment"], c["holds"]) for c in endpoint["conditions"]] == [  # type: ignore[attr-defined, union-attr]
-        ("default", "false"),
-        ("prod", "true"),
+    # Ruling 3: the declared `{kind, expression}` once, whatever each environment's verdict.
+    assert endpoint["conditions"] == [
+        {"kind": "profile", "expression": '{"expressions": ["prod"]}'}
     ]
-    assert set(endpoint["conditions"][0]) == {"kind", "expression", "environment", "holds"}  # type: ignore[index]
     (dependency,) = source.rows(KINDS["dependency"])
     assert dependency["headers"] == [{"name": "Accept", "value": "application/json"}]
+
+
+@pytest.mark.pins("boundary.a-DEPENDENCY-condition-is-matched-on-its-CALLER")
+def test_a_dependency_carries_the_conditions_of_the_bean_it_is_called_from(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Spec 2026-10-23-deployment-set-conditions, ruling 2: conditions belong to beans, so
+    every row a bean produces carries them, in either direction. An outbound row has no
+    handler; its code is its `caller`, and the conditions are its caller's bean's, written by
+    the REAL pass. Two calls to one address from two callers, one under
+    `@ConditionalOnProperty`: only that caller's dependency carries the condition, because a
+    dependency's conditions are matched on the row and its `caller`, never on the NULL
+    handler both rows share."""
+    facts = tmp_path / "facts"
+    conditional = AnnotationUse(
+        annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+        args={"name": ["billing.enabled"], "havingValue": "true"},
+    )
+    billing = _service(facts, "com/acme/BillingClient#", "charge().", on_class=(conditional,))
+    ledger = _service(facts, "com/acme/LedgerClient#", "post().")
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        workspace.load_facts(facts)
+        spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+        record_bean_conditions(workspace, [spring])
+        for caller, peer in ((billing, "billing"), (ledger, "ledger")):
+            _endpoint(workspace, direction="outbound", method="POST", path="/v1/charges",
+                      caller=caller, peer=peer)  # fmt: skip
+
+    rows = {r["peer"]: r for r in sources(_built(tmp_path, build)).rows(KINDS["dependency"])}
+    assert rows["billing"]["conditions"] == [
+        {
+            "kind": "property",
+            "expression": '{"having_value": "true", "keys": ["billing.enabled"], '
+            '"match_if_missing": false}',
+        }
+    ]
+    assert rows["ledger"]["conditions"] == []
 
 
 # --- the other kinds --------------------------------------------------------------------
@@ -622,8 +695,8 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
         assert source.producer == {
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
-            "graph_schema_version": 5,
-            "boundary_vocabulary_version": 1,
+            "graph_schema_version": 6,
+            "boundary_vocabulary_version": 2,
             "catalog_hash": "sha256:catalogs",
         }
 

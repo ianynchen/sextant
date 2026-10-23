@@ -2223,21 +2223,35 @@ def test_a_conditional_controller_states_where_it_exists_in_the_document(full_ru
     `application.yml` sets `false`. Each endpoint's detail block carries the two verbose lines
     DERIVED from `endpoint_conditions` — the condition as the code spells it, and where it
     holds among the module's two environments — and both rows stay in the inbound table at
-    `resolved`: the address is read; where it exists is a separate fact, stated, not decided."""
+    `resolved`: the address is read; where it exists is a separate fact, stated, not decided.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, the module's own reading the evidence; `orders.legacy` is set by the
+    deployment, so it is not evaluated in either environment (`application.yml` sets
+    nothing, `application-prod.yml` sets `true`)."""
     document = (full_run / "render" / "architecture.md").read_text()
     assert "| `GET /ops/status` | `OpsController#status` |" in document
     assert "  - Exists only when: the active profile matches one of: `prod`\n" in document
     assert "| `GET /legacy/orders/all` | `LegacyOrdersController#all` |" in document
     assert "  - Exists only when: the configuration key `orders.legacy` is `true`\n" in document
-    # 3 since the conditional beans (spec 2026-10-22-conditional-beans): the two controllers
-    # and `POST /events`, the outbound row of the `@Profile("prod")` audit client, which now
-    # states where it exists the same way.
+    # 2 since spec 2026-10-23-deployment-set-conditions: the `@Profile("prod")` controller and
+    # `POST /events`, the outbound row of the `@Profile("prod")` audit client (3 under the
+    # conditional beans, when the property controller read the same way).
     assert (
         document.count(
-            "  - Of this module's environments: holds in 1 of 2 environments — not in `default`"
+            "  - Of this module's environments: holds in 1 of 2 environments; not evaluated in "
+            "`default` — active profiles are set by the deployment; this module activates "
+            "none\n"
         )
-        == 3
+        == 2
     )
+    assert (
+        "  - Of this module's environments: not evaluated by this analysis in any of the 2 "
+        "environments; in `default` — `orders.legacy` is set by the deployment; this module's "
+        "`default` configuration sets nothing; in `prod` — `orders.legacy` is set by the "
+        "deployment; this module's `prod` configuration sets `true`\n"
+    ) in document
     # Structured first: the bundle carries the rows a machine reads, six of them (the two
     # controllers' four, and `POST /events`' two since the conditional beans).
     import duckdb
@@ -2247,11 +2261,11 @@ def test_a_conditional_controller_states_where_it_exists_in_the_document(full_ru
         f"SELECT path, environment, holds FROM read_parquet('{parquet}') ORDER BY 1, 2"
     ).fetchall()
     assert rows == [
-        ("/events", "default", "false"),
+        ("/events", "default", "unresolved"),
         ("/events", "prod", "true"),
-        ("/legacy/orders/all", "default", "false"),
-        ("/legacy/orders/all", "prod", "true"),
-        ("/ops/status", "default", "false"),
+        ("/legacy/orders/all", "default", "unresolved"),
+        ("/legacy/orders/all", "prod", "unresolved"),
+        ("/ops/status", "default", "unresolved"),
         ("/ops/status", "prod", "true"),
     ]
 
@@ -2270,7 +2284,13 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
     * `PricingController` calls `PricingPolicy#price`: a `@ConditionalOnMissingBean` default
       beside a `@Profile("prod")` override. The default's presence is judged from this
       module's beans only, so its line says so — and so does `prod`'s, where it is ruled
-      out by a bean of this module on the same grounds."""
+      out by a bean of this module on the same grounds.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")` is
+    decided only in `prod`, so `POST /events` and `PromoPricing` exist there and are not
+    evaluated in `default`; `StandardPricing` is open in `default` with its competitor;
+    `orders.notify` is set by the deployment, so neither sender is evaluated anywhere, each
+    environment's line stating what its file sets."""
     document = (full_run / "render" / "architecture.md").read_text()
 
     def block(header: str) -> str:
@@ -2283,16 +2303,20 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
     assert "HttpAuditClient#record" in events
     assert "  - Exists only when: the active profile matches one of: `prod`\n" in events
     assert (
-        "  - Of this module's environments: holds in 1 of 2 environments — not in `default`"
-        in events
-    )
+        "  - Of this module's environments: holds in 1 of 2 environments; not evaluated in "
+        "`default` — active profiles are set by the deployment; this module activates none\n"
+    ) in events
 
     notify = block("— inbound_endpoint, reached by `POST /notify`")
     assert (
         "  - `NotifyController#notify` calls `NotificationSender#send`, answered by one of: "
         "`KafkaNotificationSender`, `LogNotificationSender`\n"
-        "  - in `default`: `LogNotificationSender`\n"
-        "  - in `prod`: `KafkaNotificationSender`\n"
+        "  - not evaluated in `default`: `KafkaNotificationSender`, `LogNotificationSender` — "
+        "`orders.notify` is set by the deployment; this module's `default` configuration sets "
+        "nothing\n"
+        "  - not evaluated in `prod`: `KafkaNotificationSender`, `LogNotificationSender` — "
+        "`orders.notify` is set by the deployment; this module's `prod` configuration sets "
+        "`kafka`\n"
     ) in notify
     # Nothing is dropped: both candidates stay in the step table.
     assert notify.count("| narrowed |") == 2
@@ -2301,7 +2325,10 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
     assert (
         "  - `PricingController#price` calls `PricingPolicy#price`, answered by one of: "
         "`PromoPricing`, `StandardPricing`\n"
-        "  - in `default`: `StandardPricing` (decided from this module's beans only)\n"
         "  - in `prod`: `PromoPricing` (decided from this module's beans only)\n"
+        "  - not evaluated in `default`: `PromoPricing` — active profiles are set by the "
+        "deployment; this module activates none; "
+        "`StandardPricing` — not decided from this module's beans: a competing bean's own "
+        "existence here is open\n"
     ) in pricing
     assert pricing.count("| narrowed |") == 2

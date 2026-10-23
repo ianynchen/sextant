@@ -172,6 +172,7 @@ _DOCUMENT = "sextant/egress/render/document.py"
 _VALUES = "sextant/application/resolve/values.py"
 _VOCABULARY = "sextant/application/boundary/vocabulary.py"
 _DIFF = "sextant/application/boundary/diff.py"
+_BOUNDARY_SOURCE = "sextant/application/boundary/source.py"
 _OBSERVABILITY = "sextant/application/boundary/observability.py"
 _QUESTIONS = "sextant/application/query/questions.py"
 
@@ -851,6 +852,81 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "conditions.a-DEPLOYMENT-set-condition-is-decided-only-by-its-environment": Guard(
+        what="a condition whose kind the bean model marks `set_by: deployment` is decided only "
+        "by the environment's own definition, the module's own reading kept as evidence "
+        "(spec 2026-10-23-deployment-set-conditions §3b)",
+        why='spring-petclinic-rest\'s `@Profile("jdbc")` repositories were published as absent '
+        "in all five environments, though `SPRING_PROFILES_ACTIVE=jdbc` activates them "
+        "(CP-47): the repository's files state a default, never what production activates",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    if model.members.get("set_by") == "deployment":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.the-RESERVED-default-profile-is-no-activation-the-module-makes": Guard(
+        what="a module naming no profile reads `this module activates none` in a deployment-set "
+        "profile's evidence: the reserved `default` profile, active in its base environment only "
+        "because it names none (CP-45 row 5), is not stated as an activation",
+        why="every module without `spring.profiles.active` (the orders-service fixture, most "
+        "services) had its documents say it `activates `default``, a claim about the module "
+        "that is the framework's fallback, not anything the module configures (ruled at review)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="    if names == [default_profile]:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-QUOTED-configured-value-is-masked-by-its-key": Guard(
+        what="the value a property condition's evidence quotes is masked by its own key where "
+        "it is written (`redact_value`), as every origin of a configured value is",
+        why="`bean_conditions` is exported whole and its evidence is masked only by "
+        '`redact_text`, which cannot see the key: `@ConditionalOnProperty("billing.api-token")` '
+        "would ship the token the module's own file sets in the clear",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"',
+                replace='else f"`{config[key]}`"  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
+    "conditions.a-reading-keeps-BOTH-a-placeholder-and-the-profiles-named-beside-it": Guard(
+        what="a module's profile reading that names a placeholder nothing fills and literal "
+        "profiles beside it states both: the placeholder's reason and the module's own default",
+        why="`spring.profiles.active: [${APP_PROFILE}, prod]` activates `prod` itself; a "
+        "reading stating only the placeholder drops what the module does activate",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='        return prefix + base.otherwise + (f"; {own}" if own else "")\n',
+                replace="        return prefix + base.otherwise  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit": Guard(
+        what="every exit printing a condition's evidence — the module document's conditions "
+        "and candidate lines (and through them the enrichment brief), and the bundle — "
+        "re-masks each value a property condition quotes by its key under the module's own "
+        "rules (`redact_condition_evidence`)",
+        why="the writer masks with the built-ins only (no module redactor reaches a resolve "
+        "pass, `OI-71`), and `redact_text` cannot see a key: a `.sextant.yml` naming "
+        "`billing` a secret key would see `billing.enabled`'s configured value in the "
+        "document, the brief and the bundle in the clear",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='            + redactor.redact_value(found["key"], found["value"])\n',
+                replace='            + found["value"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
     # --- a bean that exists in some environments only (spec 2026-10-22-conditional-beans) -
     "beans.a-FACTORY-conditions-only-the-class-it-returns": Guard(
         what="a factory method conditions the classes its body constructs that are assignable "
@@ -1176,6 +1252,20 @@ GUARDS: dict[str, Guard] = {
                 "        reason = redactor.redact_text(refusal.reason)\n",
                 replace="        route = refusal.route  # guard disabled\n"
                 "        reason = refusal.reason\n",
+            ),
+        ),
+    ),
+    "stitch.the-LINKS-legend-says-what-not-evaluated-means-once": Guard(
+        what='where any link end renders "not evaluated", the Links section carries one fixed '
+        "sentence saying what it means and that the participant's module document says why",
+        why="a deployment-set condition leaves most ends not evaluated in every environment, "
+        "and the system document states no reason: without the legend a reader takes it for "
+        "a failure of the analysis, or for the end not existing",
+        edits=(
+            Edit(
+                path="sextant/egress/render/system.py",
+                find='        lines += [_NOT_EVALUATED, ""]\n',
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3687,14 +3777,32 @@ GUARDS: dict[str, Guard] = {
     ),
     "boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole": Guard(
         what="the diff refuses two sides older than this build's graph schema unless allowed, "
-        "and then masks each scheme-less peer with an `@` whole",
+        "and then, for sides older than graph schema 5, masks each scheme-less peer with an "
+        "`@` whole",
         why="before graph schema 5 a split peer kept a URL's password with no scheme in "
         "front; two such analyses agree with each other, so the diff printed it",
         edits=(
             Edit(
                 path=_DIFF,
-                find='    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:\n',
+                find='    if userinfo_in_peers and isinstance(peer, str) and "@" in peer and "://" not in '
+                "peer:\n",
                 replace="    if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "boundary.a-STALE-side-from-schema-5-on-keeps-its-peers": Guard(
+        what="an allowed stale side masks a scheme-less peer with an `@` whole only when its "
+        "graph schema is older than 5, the first whose `split_url` drops the userinfo",
+        why="keyed on any schema but this build's, every bump hides a `mailto:ops@billing` "
+        "peer of a schema-5 side for a hazard that side cannot hold, so the diff reports a "
+        "masked marker where the peer it names is",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='    userinfo_in_peers = int(str(stamps_a["graph_schema_version"])) < '
+                "_USERINFO_IN_PEERS_BEFORE\n",
+                replace='    userinfo_in_peers = stamps_a["graph_schema_version"] != '
+                "GRAPH_SCHEMA_VERSION  # guard disabled\n",
             ),
         ),
     ),
@@ -3745,6 +3853,64 @@ GUARDS: dict[str, Guard] = {
                 path=_DIFF,
                 find="        summary[entry.kind][entry.change] += 1\n",
                 replace="        summary.setdefault(entry.kind, dict.fromkeys(_CHANGES, 0))[entry.change] += 1\n",
+            ),
+        ),
+    ),
+    # --- vocabulary 2: a dependency's conditions, compared as declared (spec 2026-10-23) ---
+    "boundary.a-DEPENDENCY-carries-its-callers-conditions": Guard(
+        what="the `dependency` kind's attributes include `conditions`, so a diff compares the "
+        "conditions of the bean an outbound call is made from (ruling 2, vocabulary 2)",
+        why="conditions belong to beans, and a bean's outbound calls exist only where it "
+        "does: without the attribute a call that gained `@ConditionalOnProperty` — and so "
+        "stops being made in a deployment that leaves the property off — is no change at all",
+        edits=(
+            Edit(
+                path=_VOCABULARY,
+                find='            "headers",\n            "conditions",\n',
+                replace='            "headers",  # guard disabled: no conditions\n',
+            ),
+        ),
+    ),
+    "boundary.a-DEPENDENCY-condition-is-matched-on-its-CALLER": Guard(
+        what="a dependency's conditions are matched on its `endpoints` row plus its `caller`",
+        why="an outbound row has no handler, so two calls to one address from two callers "
+        "share a NULL handler: matched without the caller, a call from an unconditional class "
+        "carries another class's `@ConditionalOnProperty` and reads as switched off with it",
+        edits=(
+            Edit(
+                path=_BOUNDARY_SOURCE,
+                find='_DEPENDENCY_CONDITION_KEY = (*_CONDITION_KEY, "caller")\n',
+                replace="_DEPENDENCY_CONDITION_KEY = _CONDITION_KEY  # guard disabled\n",
+            ),
+        ),
+    ),
+    "boundary.CONDITIONS-diff-as-declared-expressions": Guard(
+        what="an endpoint's or dependency's `conditions` is the declared `{kind, expression}` "
+        "set; each environment's `environment`/`holds` is evidence (ruling 3)",
+        why="a verdict follows the configuration, so with it in the attribute one flipped "
+        "property in the prod file reads twice — a `boundary-property` change and a "
+        "`conditions` change on every route and call the bean produces — and a reader cannot "
+        "tell a code change from a config change",
+        edits=(
+            Edit(
+                path=_BOUNDARY_SOURCE,
+                find='            entry = {"kind": row["kind"], "expression": row["expression"]}\n',
+                replace='            entry = {"kind": row["kind"], "expression": row["expression"], '
+                '"environment": row["environment"], "holds": row["holds"]}  # guard disabled\n',
+            ),
+        ),
+    ),
+    "boundary.a-CONDITION-expression-is-masked-as-the-exporter-masks-it": Guard(
+        what="each condition's `expression` passes through `redact_json` before the diff "
+        "joins or prints it, the call the exporter makes on `endpoint_conditions.expression`",
+        why="an expression quotes annotation arguments verbatim — a `havingValue` URL with its "
+        "password — so a workspace against its own bundle reads every conditioned route and "
+        "call as changed, and the diff's JSON prints the credential the bundle masked",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='            {**entry, "expression": _redacted_json(entry["expression"], redactor)}\n',
+                replace="            {**entry}  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

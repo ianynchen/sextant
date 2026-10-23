@@ -60,6 +60,42 @@ here would restate those documents rather than add anything.
   analyze`). A bundle exported, or a document rendered, before this fix may still carry a
   credential: re-export and re-render it.
 
+### Changed
+
+- **What a deployment can set, the repository no longer decides** (spec
+  `2026-10-23-deployment-set-conditions-design.md`, three rulings, 2026-10-23). The user's
+  reason for the first: "what we are ultimately interested in, is what's in production and
+  this can be set anywhere, helm charts, configmaps etc. there's no way we can tell until
+  deployment is known, which is not part of sextant's job for now".
+  - **Ruling 1: a profile or property condition is "not evaluated" in every environment,
+    `default` included.** The bean model marks `profile` and `property` `set_by: deployment`
+    (probe CP-47: the command line and the OS environment override every configuration file,
+    and a profile file cannot select its own profile). The one thing that still decides is
+    the environment's own name: in profile environment `p`, `@Profile("p")` holds and
+    `@Profile("!p")` fails. The repository's own reading is kept as evidence, one string per
+    module: "active profiles are set by the deployment; this module's own default is
+    `h2,spring-data-jpa`", "this module activates none", or the placeholder reason; for a
+    property, the configured value, masked by its key. The reserved `default` profile counts
+    as no activation. Resolved values (`resolved_config`, peers, paths, links) are untouched.
+    `GRAPH_SCHEMA_VERSION` 5 -> 6 with no table change, so a workspace analysed before this
+    is refused rather than read beside new verdicts. Measured on four corpora, the decided
+    condition verdicts fall from 362 to 0 and the decided `bean_presence` rows from 355 to 30
+    (the ones decided by code).
+  - **Ruling 2: the boundary vocabulary's `dependency` carries `conditions`**, as `endpoint`
+    does, matched on the outbound row plus its caller. `BOUNDARY_VOCABULARY_VERSION` 1 -> 2;
+    a diff across the two versions is refused.
+  - **Ruling 3: the diff compares the declared conditions only**, `{kind, expression}`.
+    Per-environment verdicts are evidence and leave the compared attribute, so a
+    configuration change is one `boundary-property` change and a code change is one
+    `conditions` change.
+  - **A leak the diff closed on the way.** The exporter masks a condition's expression, but
+    the diff compared and printed it verbatim, so a `@ConditionalOnProperty` whose
+    `havingValue` is a URL with a password made a workspace and its own bundle differ and
+    printed the credential. The diff now masks it as the exporter does.
+  - **Every workspace must be re-analysed** (`module analyze`); a bundle exported before this
+    holds verdicts this design says the repository cannot give, so re-export it and re-render
+    its documents. `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` do not move.
+
 ### Added
 
 - **Conditions belong to the bean, not to the controller** (COVERAGE `conditional-controllers`

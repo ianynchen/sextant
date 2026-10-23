@@ -6,6 +6,7 @@ from typing import TypeVar, cast
 import duckdb
 
 from sextant.application.boundary.source import STAMPS, NotABoundarySource
+from sextant.application.resolve.bean_conditions import redact_condition_evidence
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
 
@@ -1281,8 +1282,9 @@ _REDACTED_CANDIDATES = "redacted_candidates"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
 # Free text that QUOTES the grammar — a condition's `evidence`, which repeats its expression
-# (`bean_presence`'s "the configured value is unknown here: …") or a placeholder's raw
-# spelling — masked by `redact_text`, since it is not a JSON document `redact_json` can walk.
+# (`bean_presence`'s "the configured value is unknown here: …"), a placeholder's raw
+# spelling or a configured value — masked by `redact_condition_evidence`: each quoted value by
+# its key, the rest by `redact_text`, since it is not a JSON document `redact_json` can walk.
 _REDACTED_EVIDENCE = "redacted_evidence"
 # `config_entries` is the RAW half of what `resolved_config` holds resolved —
 # the same values, before the resolver joined them — so it masks by the same
@@ -1519,8 +1521,9 @@ _EXPORT_QUERIES = {
     # masks by the address map `endpoints.path` uses. `expression` quotes a condition's
     # annotation arguments verbatim (a `havingValue` is a string out of bytecode), so it takes
     # the `redact_json` pass `annotations.args` takes. `evidence` is free text quoting that
-    # expression, or the raw spelling of a placeholder in the configuration, so it takes
-    # `redact_text` — the same strip, over text that is not a JSON document
+    # expression, the raw spelling of a placeholder in the configuration, or a configured
+    # value, so it takes `redact_condition_evidence` — `redact_text`'s strip, over text that is
+    # not a JSON document, with each configured value it quotes masked by its key
     # (`_REDACTED_EVIDENCE`). `symbol_beans` and `interface_beans` hold symbols only.
     "endpoint_conditions": f"""
         SELECT c.* REPLACE (coalesce(a.masked, c.path) AS path,
@@ -2569,7 +2572,9 @@ class DuckDbWorkspace:
         # reasons are built from the table's expressions, so each composed string is staged
         # as the view spells it rather than masked piecewise. `candidate_presence` carries
         # `bean_presence`'s evidence or `compiler`, and `endpoint_conditions` the table's, so
-        # both are covered without evaluating either view a second time.
+        # both are covered without evaluating either view a second time. Masked by
+        # `redact_condition_evidence`, the one owner of the evidence's format: a value a
+        # property condition quotes is masked by its KEY, which `redact_text` cannot see.
         evidence_rows = self._connection.execute(
             "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
             "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL"
@@ -2580,7 +2585,7 @@ class DuckDbWorkspace:
             [
                 (str(original), masked)
                 for (original,) in evidence_rows
-                if (masked := redactor.redact_text(str(original))) != str(original)
+                if (masked := redact_condition_evidence(redactor, str(original))) != str(original)
             ],
         )
 

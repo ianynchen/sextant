@@ -849,6 +849,17 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
                 raise CatalogError(
                     f"{where}: `conditions.{kind}` needs `annotation` and a `by:` probe"
                 )
+            # Who sets the condition's inputs (spec 2026-10-23 deployment-set-conditions §3a):
+            # a misspelling would silently decide from the module's files again.
+            if "set_by" in entry and entry["set_by"] != "deployment":
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}.set_by` is `deployment` or absent, "
+                    f"got {entry['set_by']!r}"
+                )
+            if "set_by" in entry and not entry.get("set_by_probe"):
+                raise CatalogError(
+                    f"{where}: `conditions.{kind}.set_by` needs a `set_by_probe:` probe"
+                )
     if "presence" in raw:
         presence = raw["presence"]
         strings = ("missing", "present", "order_reason", "present_cycle_reason")

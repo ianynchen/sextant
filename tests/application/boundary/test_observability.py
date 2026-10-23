@@ -22,7 +22,7 @@ _CODE_GROUNDED = [name for name, kind in KINDS.items() if kind.grounded_in_code]
 # Shaped like the fixture's `metadata.json`: one catalog skipped (it feeds `endpoint` and
 # `data-contract`), every kind otherwise fed, formats and peers all resolved.
 BASE: dict[str, object] = {
-    "boundary_vocabulary_version": 1,
+    "boundary_vocabulary_version": 2,
     "module": {"id": "com.acme:orders-service", "dependency_source": "maven"},
     "uncovered": [],
     "coverage": {

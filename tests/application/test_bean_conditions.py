@@ -22,11 +22,18 @@ from sextant.application.resolve.bean_conditions import (
     FAILS,
     HOLDS,
     PROFILE,
+    PROPERTY,
     UNRESOLVED,
+    ActiveProfiles,
+    ConditionModel,
     _holds,
+    _judged,
+    _models,
     _profile_holds,
     active_profiles,
+    deployment_reading,
     record_bean_conditions,
+    redact_condition_evidence,
 )
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.conditions import enclosing_type_of
@@ -48,7 +55,7 @@ from sextant.domain.facts import (
     TypeHeaderFact,
     TypeRef,
 )
-from sextant.domain.redaction import Redactor
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -252,7 +259,11 @@ def test_a_conditional_scanned_class_conditions_its_outbound_row_and_its_schedul
     """`@Service @Profile("prod") ProdSync` makes an outbound call and runs on a clock. Both
     rows are derived from a bean Spring registers only under `prod`, so both carry the
     condition — the outbound one through the `endpoint_conditions` view, the scheduled job
-    through its handler's owner class, which is the one join every row kind shares."""
+    through its handler's owner class, which is the one join every row kind shares.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     sync = ORDERS + "ProdSync#"
     run = method_descriptor(sync, "run", _VOID)
     facts = [
@@ -291,11 +302,11 @@ def test_a_conditional_scanned_class_conditions_its_outbound_row_and_its_schedul
     workspace.close()
 
     assert _verdicts(beans, sync) == {
-        "default": ("class", None, "profile", "false", "resolved"),
+        "default": ("class", None, "profile", "unresolved", "unresolved"),
         "prod": ("class", None, "profile", "true", "resolved"),
     }
     assert {(r["direction"], r["caller"], r["environment"], r["holds"]) for r in viewed} == {
-        ("outbound", _MODULE + run, "default", "false"),
+        ("outbound", _MODULE + run, "default", "unresolved"),
         ("outbound", _MODULE + run, "prod", "true"),
     }
     # The scheduled job finds the same rows through its handler's owner class.
@@ -310,7 +321,11 @@ def test_a_profile_factory_conditions_the_class_it_constructs(tmp_path: Path):
     """`@Bean @Profile("prod") OrderPublisher publisher() { return new KafkaOrderPublisher(); }`
     in an unconditional configuration class. Spring registers the bean only under `prod`, and
     the class whose code runs is `KafkaOrderPublisher` — its own annotations are never
-    consulted on this route (CP-44 row 4), the factory's are."""
+    consulted on this route (CP-44 row 4), the factory's are.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
         *_type(KAFKA, interfaces=(PUBLISHER,)),
@@ -323,7 +338,7 @@ def test_a_profile_factory_conditions_the_class_it_constructs(tmp_path: Path):
 
     via = _factory_symbol(MESSAGING, "publisher", PUBLISHER)
     assert _verdicts(beans, KAFKA) == {
-        "default": ("factory", via, "profile", "false", "resolved"),
+        "default": ("factory", via, "profile", "unresolved", "unresolved"),
         "prod": ("factory", via, "profile", "true", "resolved"),
     }
     # The configuration class itself carries no condition, so it is no conditional bean. The
@@ -364,7 +379,11 @@ def test_a_factory_in_a_conditional_configuration_inherits_the_class_condition(t
     """`@Configuration @ConditionalOnProperty(name = "orders.legacy", havingValue = "true")`
     with an unconditional `@Bean`: Spring skips every `@Bean` of a configuration class whose
     own condition fails (CP-44 row 4), so the constructed class carries the class's
-    condition, as `configuration`."""
+    condition, as `configuration`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `orders.legacy` is
+    set by the deployment (CP-47), so the condition is not evaluated in either environment,
+    whatever the module's files set; the route it is on is what this test pins."""
     legacy_config = ORDERS + "LegacyConfig#"
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
@@ -378,13 +397,13 @@ def test_a_factory_in_a_conditional_configuration_inherits_the_class_condition(t
 
     via = _factory_symbol(legacy_config, "legacyPublisher", PUBLISHER)
     assert _verdicts(beans, LEGACY) == {
-        "default": ("configuration", via, "property", "false", "resolved"),
-        "prod": ("configuration", via, "property", "true", "resolved"),
+        "default": ("configuration", via, "property", "unresolved", "unresolved"),
+        "prod": ("configuration", via, "property", "unresolved", "unresolved"),
     }
     # The configuration class is itself a conditional scanned bean.
     assert _verdicts(beans, legacy_config) == {
-        "default": ("class", None, "property", "false", "resolved"),
-        "prod": ("class", None, "property", "true", "resolved"),
+        "default": ("class", None, "property", "unresolved", "unresolved"),
+        "prod": ("class", None, "property", "unresolved", "unresolved"),
     }
 
 
@@ -404,7 +423,12 @@ def test_two_exclusive_profile_factories_make_the_class_exist_in_each_profile(tm
     """Ruled 2026-10-22: OR across routes. `@Bean @Profile("prod")` and `@Bean
     @Profile("staging")` each register their own definition of `KafkaOrderPublisher`, so it
     exists in `prod` and in `staging` and nowhere else — decided, not `unresolved`. Each
-    factory's own condition rows stay, evaluated, under its own `via`."""
+    factory's own condition rows stay, evaluated, under its own `via`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): each profile is
+    decided only in its own environment, so the class exists in `prod` and in `staging`,
+    decided there by the OR; elsewhere — `default`, and each profile's route in the other's
+    environment — the deployment may activate the profile, so it is not evaluated."""
     staging = ORDERS + "StagingConfig#"
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
@@ -420,16 +444,16 @@ def test_two_exclusive_profile_factories_make_the_class_exist_in_each_profile(tm
     workspace.close()
 
     assert presence == {
-        "default": ("false", "resolved"),
+        "default": ("unresolved", "unresolved"),
         "prod": ("true", "resolved"),
         "staging": ("true", "resolved"),
     }
     assert {(r["via"], r["environment"], r["holds"]) for r in rows} == {
-        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "default", "false"),
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "default", "unresolved"),
         (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "prod", "true"),
-        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "staging", "false"),
-        (_factory_symbol(staging, "publisher", PUBLISHER), "default", "false"),
-        (_factory_symbol(staging, "publisher", PUBLISHER), "prod", "false"),
+        (_factory_symbol(MESSAGING, "publisher", PUBLISHER), "staging", "unresolved"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "default", "unresolved"),
+        (_factory_symbol(staging, "publisher", PUBLISHER), "prod", "unresolved"),
         (_factory_symbol(staging, "publisher", PUBLISHER), "staging", "true"),
     }
 
@@ -441,7 +465,12 @@ def test_an_unconditional_route_beside_a_conditional_factory_makes_the_class_exi
     """Review focus 2, as ruled: a conditional factory of `KafkaOrderPublisher` beside an
     unconditional `@Bean` of it — or beside its own unconditional `@Component` — means the
     class exists in every environment, resolved. The conditional route's rows are still
-    written and still evaluated; the bean's presence is what changes."""
+    written and still evaluated; the bean's presence is what changes.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`. The unconditional route still
+    decides the class's presence everywhere."""
     plain = ORDERS + "DefaultConfig#"
     facts = [
         *_type(PUBLISHER, kind=ConstructKind.INTERFACE),
@@ -469,7 +498,7 @@ def test_an_unconditional_route_beside_a_conditional_factory_makes_the_class_exi
 
     assert presence == {"default": ("true", "resolved"), "prod": ("true", "resolved")}
     assert {(r["environment"], r["holds"], r["resolution"]) for r in conditional} == {
-        ("default", "false", "resolved"),
+        ("default", "unresolved", "unresolved"),
         ("prod", "true", "resolved"),
     }
 
@@ -503,7 +532,11 @@ def test_a_plain_new_outside_any_factory_leaves_the_class_open_where_the_factory
 def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_path: Path):
     """A subclass's `<init>` calls its superclass's — `invokespecial` to a constructor, the
     same instruction a `new` compiles to — and constructs nothing. Read as a second route it
-    would turn every conditional base class with a subclass `unresolved`."""
+    would turn every conditional base class with a subclass `unresolved`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     base = ORDERS + "BaseSync#"
     child = ORDERS + "ChildSync#"
     facts = [
@@ -523,7 +556,7 @@ def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_p
     workspace.close()
 
     assert _verdicts(beans, base) == {
-        "default": ("class", None, "profile", "false", "resolved"),
+        "default": ("class", None, "profile", "unresolved", "unresolved"),
         "prod": ("class", None, "profile", "true", "resolved"),
     }
 
@@ -535,7 +568,11 @@ def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_p
 def test_a_module_local_composed_stereotype_makes_a_conditional_class_a_bean(tmp_path: Path):
     """`@MyService` is the module's own annotation, meta-annotated `@Service`. The scanner
     matches meta-annotations, so `@MyService @Profile("prod") Orders` is a scanned bean — and
-    the annotation type itself, which carries `@Service`, is no bean."""
+    the annotation type itself, which carries `@Service`, is no bean.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     my_service = ORDERS + "MyService#"
     orders = ORDERS + "Orders#"
     facts = [
@@ -547,7 +584,7 @@ def test_a_module_local_composed_stereotype_makes_a_conditional_class_a_bean(tmp
     workspace.close()
 
     assert _verdicts(beans, orders) == {
-        "default": ("class", None, "profile", "false", "resolved"),
+        "default": ("class", None, "profile", "unresolved", "unresolved"),
         "prod": ("class", None, "profile", "true", "resolved"),
     }
     assert {r["bean"] for r in beans} == {_MODULE + orders}
@@ -559,7 +596,11 @@ def test_a_stereotype_through_a_dependency_annotations_recorded_header_makes_a_b
     """Review finding 1's real input, reduced: an auto-configuration annotation from a jar,
     whose header the classpath read recorded as meta-annotated `@Configuration`. Nothing
     names that annotation in code; its header makes the class a configuration bean, and the
-    class's own `@ConditionalOnProperty` conditions it."""
+    class's own `@ConditionalOnProperty` conditions it.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `orders.legacy` is
+    set by the deployment (CP-47), so the condition is not evaluated in any environment,
+    whatever the module's files set; what this test pins is which bean carries it."""
     auto = "org/acme/boot/AutoConfig#"
     wiring = ORDERS + "OrdersAutoConfiguration#"
     facts = [
@@ -581,8 +622,8 @@ def test_a_stereotype_through_a_dependency_annotations_recorded_header_makes_a_b
     workspace.close()
 
     assert _verdicts(beans, wiring) == {
-        "default": ("class", None, "property", "false", "resolved"),
-        "prod": ("class", None, "property", "true", "resolved"),
+        "default": ("class", None, "property", "unresolved", "unresolved"),
+        "prod": ("class", None, "property", "unresolved", "unresolved"),
     }
 
 
@@ -590,7 +631,11 @@ def test_a_stereotype_through_a_dependency_annotations_recorded_header_makes_a_b
 def test_a_condition_carried_on_a_composed_annotation_conditions_its_users(tmp_path: Path):
     """`@LegacyOnly` is the module's own annotation carrying `@ConditionalOnProperty(name =
     "orders.legacy", havingValue = "true")`; a `@Service @LegacyOnly` class carries that
-    condition, its arguments folded from the composition."""
+    condition, its arguments folded from the composition.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `orders.legacy` is
+    set by the deployment (CP-47), so the condition is not evaluated in any environment,
+    whatever the module's files set; what this test pins is which bean carries it."""
     legacy_only = ORDERS + "LegacyOnly#"
     orders = ORDERS + "LegacyOrders#"
     facts = [
@@ -606,8 +651,8 @@ def test_a_condition_carried_on_a_composed_annotation_conditions_its_users(tmp_p
     workspace.close()
 
     assert _verdicts(beans, orders) == {
-        "default": ("class", None, "property", "false", "resolved"),
-        "prod": ("class", None, "property", "true", "resolved"),
+        "default": ("class", None, "property", "unresolved", "unresolved"),
+        "prod": ("class", None, "property", "unresolved", "unresolved"),
     }
 
 
@@ -643,7 +688,11 @@ def test_a_lambda_a_conditional_factory_creates_carries_the_factorys_condition(
     rest.getForObject(…); }` in an unconditional configuration class: the lambda body is
     the factory's code, read off the `dynamic` call edge from `sync` to it (never off its
     name). Its outbound row carries the factory's condition, `via` the factory — not the
-    configuration class's (none)."""
+    configuration class's (none).
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     wiring = ORDERS + "SyncConfig#"
     runnable = "java/lang/Runnable#"
     factory = method_descriptor(wiring, "sync", "()Ljava/lang/Runnable;")
@@ -678,11 +727,11 @@ def test_a_lambda_a_conditional_factory_creates_carries_the_factorys_condition(
     workspace.close()
 
     assert _verdicts(beans, body) == {
-        "default": ("factory", _MODULE + factory, "profile", "false", "resolved"),
+        "default": ("factory", _MODULE + factory, "profile", "unresolved", "unresolved"),
         "prod": ("factory", _MODULE + factory, "profile", "true", "resolved"),
     }
     assert {(r["caller"], r["via"], r["environment"], r["holds"]) for r in viewed} == {
-        (_MODULE + body, _MODULE + factory, "default", "false"),
+        (_MODULE + body, _MODULE + factory, "default", "unresolved"),
         (_MODULE + body, _MODULE + factory, "prod", "true"),
     }
 
@@ -695,7 +744,11 @@ def test_a_row_made_in_a_conditional_factorys_own_body_states_the_factorys_condi
     an unconditional configuration class: the row's code symbol IS the factory method, so
     the owner class (no rows) is the wrong bean. The method is a bean of its own, `via`
     itself, and the row exists only in `local` — the same mechanism a lambda it creates
-    uses."""
+    uses.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("local")`
+    holds in `local`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `local`."""
     wiring = ORDERS + "AdapterConfig#"
     runnable = "java/lang/Runnable#"
     factory = method_descriptor(wiring, "flow", "()Ljava/lang/Runnable;")
@@ -710,11 +763,11 @@ def test_a_row_made_in_a_conditional_factorys_own_body_states_the_factorys_condi
     workspace.close()
 
     assert _verdicts(beans, factory) == {
-        "default": ("factory", _MODULE + factory, "profile", "false", "resolved"),
+        "default": ("factory", _MODULE + factory, "profile", "unresolved", "unresolved"),
         "local": ("factory", _MODULE + factory, "profile", "true", "resolved"),
     }
     assert {(r["caller"], r["via"], r["environment"], r["holds"]) for r in viewed} == {
-        (_MODULE + factory, _MODULE + factory, "default", "false"),
+        (_MODULE + factory, _MODULE + factory, "default", "unresolved"),
         (_MODULE + factory, _MODULE + factory, "local", "true"),
     }
 
@@ -728,7 +781,11 @@ def test_a_call_to_a_conditional_factory_method_is_answered_by_the_methods_own_b
     lists no row for it (a site is listed only when narrowed, or answered by an interface
     bean) and the trace reads as it always did; where a subclass configuration overrides the
     method, the call narrows to both bodies and `candidate_presence` states the base method's
-    own presence: `local` only, while the override exists everywhere."""
+    own presence: `local` only, while the override exists everywhere.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("local")`
+    holds in `local`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `local`."""
     wiring = ORDERS + "AdapterConfig#"
     override = ORDERS + "LocalAdapterConfig#"
     runnable = "java/lang/Runnable#"
@@ -778,7 +835,7 @@ def test_a_call_to_a_conditional_factory_method_is_answered_by_the_methods_own_b
     narrowed.close()
 
     assert candidates == {
-        (factory, "default"): (factory, "false"),
+        (factory, "default"): (factory, "unresolved"),
         (factory, "local"): (factory, "true"),
         (overriding, "default"): (None, "true"),
         (overriding, "local"): (None, "true"),
@@ -792,7 +849,11 @@ def test_two_exclusive_factories_rows_on_one_endpoint_carry_distinct_via(tmp_pat
     """Review finding 3. `KafkaOrderPublisher#send` makes an outbound call and the class is
     registered by a `prod` factory and a `staging` one. Read as "every row must hold", the
     row would exist nowhere; `via` tells the two routes apart, and `bean_presence` — not the
-    rows — says where the row exists."""
+    rows — says where the row exists.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): each profile is
+    decided only in its own environment, so the `staging` route holds in `staging` and is
+    not evaluated elsewhere, and the class exists, decided, in `prod` and `staging` only."""
     staging = ORDERS + "StagingConfig#"
     send = method_descriptor(KAFKA, "send", _VOID)
     facts = [
@@ -824,9 +885,9 @@ def test_two_exclusive_factories_rows_on_one_endpoint_carry_distinct_via(tmp_pat
         (r["environment"], r["holds"])
         for r in viewed
         if r["via"].startswith(_factory_symbol(staging, "publisher", PUBLISHER))
-    } == {("default", "false"), ("prod", "false"), ("staging", "true")}
+    } == {("default", "unresolved"), ("prod", "unresolved"), ("staging", "true")}
     assert presence == {
-        "default": ("false", "resolved"),
+        "default": ("unresolved", "unresolved"),
         "prod": ("true", "resolved"),
         "staging": ("true", "resolved"),
     }
@@ -837,7 +898,12 @@ def test_a_bean_left_open_by_an_unfilled_placeholder_says_the_value_is_unknown(
 ):
     """Minor: `orders.legacy: ${ORDERS_LEGACY}` with nothing filling it. Where the bean's only
     route is open for that reason, `bean_presence` says the configured value is unknown — not
-    that the condition is one this analysis does not evaluate."""
+    that the condition is one this analysis does not evaluate.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `orders.legacy` is
+    set by the deployment, so it is not evaluated in either environment; the evidence is the
+    module's own reading, which in `default` is a placeholder it does not fill and in `prod`
+    the value its file sets."""
     orders = ORDERS + "LegacyOrders#"
     facts = [*_type(orders, [_marker(SERVICE), _on_property("orders.legacy", "true")])]
     workspace = _resolved(tmp_path, facts, default_legacy="${ORDERS_LEGACY}")
@@ -849,9 +915,15 @@ def test_a_bean_left_open_by_an_unfilled_placeholder_says_the_value_is_unknown(
     workspace.close()
 
     assert (rows["default"]["holds"], rows["default"]["resolution"]) == ("unresolved", "unresolved")
-    assert "value is unknown" in str(rows["default"]["evidence"])
+    assert str(rows["default"]["evidence"]) == (
+        "`orders.legacy` is set by the deployment; this module's `default` configuration sets "
+        "a placeholder this module does not fill"
+    )
     assert "does not evaluate" not in str(rows["default"]["evidence"])
-    assert (rows["prod"]["holds"], rows["prod"]["evidence"]) == ("true", "compiler")
+    assert (rows["prod"]["holds"], rows["prod"]["evidence"]) == (
+        "unresolved",
+        "`orders.legacy` is set by the deployment; this module's `prod` configuration sets `true`",
+    )
 
 
 def test_a_condition_annotation_is_not_composed_through_what_it_is_built_on(tmp_path: Path):
@@ -892,7 +964,11 @@ def test_a_new_inside_a_lambda_a_factory_creates_is_that_factorys_construction(
     """Round 1's ruling applied to construction: `@Bean @Profile("prod") OrderPublisher
     publisher() { return lazily(() -> new KafkaOrderPublisher()); }`. The lambda body is the
     factory's code, so the `new` in it is the factory's — `KafkaOrderPublisher` is a `factory`
-    bean `via` `publisher`, absent outside `prod`, and never a plain `new` leaving it open."""
+    bean `via` `publisher`, absent outside `prod`, and never a plain `new` leaving it open.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     publisher = method_descriptor(MESSAGING, "publisher", "()L" + PUBLISHER.removesuffix("#") + ";")
     body = method_descriptor(MESSAGING, "lambda$publisher$0", _VOID)
     facts = [
@@ -934,10 +1010,10 @@ def test_a_new_inside_a_lambda_a_factory_creates_is_that_factorys_construction(
     workspace.close()
 
     assert _verdicts(beans, KAFKA) == {
-        "default": ("factory", _MODULE + publisher, "profile", "false", "resolved"),
+        "default": ("factory", _MODULE + publisher, "profile", "unresolved", "unresolved"),
         "prod": ("factory", _MODULE + publisher, "profile", "true", "resolved"),
     }
-    assert presence == {"default": ("false", "resolved"), "prod": ("true", "resolved")}
+    assert presence == {"default": ("unresolved", "unresolved"), "prod": ("true", "resolved")}
 
 
 # --- `@ConditionalOnMissingBean` / `@ConditionalOnBean` from the module's own beans (§2c) ---
@@ -960,6 +1036,11 @@ AUTH = SPI + "AuthConfiguration#"
 _PARTIAL = "decided from this module's beans only; a library or the processing order may differ"
 _ORDER = "Spring keeps whichever is processed first; the order is not in the code"
 _NEITHER = "neither bean sees the other registered, so both fail whatever the order"
+# An open presence verdict whose competitor's own existence is open (spec 2026-10-23
+# deployment-set-conditions: a profile-gated competitor, outside its own environment).
+_OPEN_COMPETITOR = (
+    "not decided from this module's beans: a competing bean's own existence here is open"
+)
 
 
 def _missing(**args: object) -> AnnotationUse:
@@ -1034,7 +1115,12 @@ def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registe
     """The brief's case, Apollo's `AuthConfiguration` reduced: the default `UserService` is
     `@ConditionalOnMissingBean(UserService.class)` and the override is `@Profile("ldap")`. The
     default's class exists in every environment but `ldap`, decided from this module's own
-    beans — `partial`, with that reason, never `resolved`."""
+    beans — `partial`, with that reason, never `resolved`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so the competitor's own existence is open there and so
+    is this verdict."""
     facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
     workspace = _resolved(tmp_path, facts, environments=("ldap",))
     rows = _presence_rows(workspace, DEFAULT_USERS)
@@ -1047,7 +1133,7 @@ def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registe
     workspace.close()
 
     assert rows == {
-        "default": ("true", "partial", _PARTIAL),
+        "default": ("unresolved", "unresolved", _OPEN_COMPETITOR),
         "ldap": ("false", "partial", _PARTIAL),
     }
     assert json.loads(str(expression)) == {
@@ -1057,12 +1143,17 @@ def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registe
         "names": [],
         "annotations": [],
     }
-    assert presence == {"default": ("true", "partial"), "ldap": ("false", "partial")}
+    assert presence == {"default": ("unresolved", "unresolved"), "ldap": ("false", "partial")}
 
 
 def test_on_bean_is_the_inverse_of_on_missing_bean(tmp_path: Path):
     """`@Bean @ConditionalOnBean(UserService.class) UserAudit userAudit()` beside the `ldap`
-    override alone: the audit exists only where a `UserService` does — `ldap` — `partial`."""
+    override alone: the audit exists only where a `UserService` does — `ldap` — `partial`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so the competitor's own existence is open there and so
+    is this verdict."""
     facts = [
         *_users(LDAP_USERS),
         *_type(AUDIT),
@@ -1079,7 +1170,7 @@ def test_on_bean_is_the_inverse_of_on_missing_bean(tmp_path: Path):
     workspace.close()
 
     assert rows == {
-        "default": ("false", "partial", _PARTIAL),
+        "default": ("unresolved", "unresolved", _OPEN_COMPETITOR),
         "ldap": ("true", "partial", _PARTIAL),
     }
 
@@ -1121,8 +1212,14 @@ def test_two_missing_bean_defaults_are_unresolved(tmp_path: Path):
 
 def test_two_missing_bean_defaults_decide_where_one_of_them_is_absent(tmp_path: Path):
     """The mutual case is open only where BOTH defaults' other conditions hold: with the
-    second under `@Profile("ldap")`, outside `ldap` it is absent for its own reason and the
-    first is decided — present, `partial`; in `ldap` both stay open, by the order."""
+    second under `@Profile("!ldap")`, in `ldap` it is absent for its own reason and the first
+    is decided — present, `partial`; in `default` both stay open, by the order.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("ldap")`
+    would no longer make the second absent anywhere — it is decided only in `ldap`, where it
+    holds — so the second is under `@Profile("!ldap")`, which `ldap`'s own name decides: it
+    fails there, and the first is decided present; in `default` the deployment decides, and
+    both stay open, by the order."""
     facts = [
         *_users(DEFAULT_USERS, LOCAL_USERS),
         *_type(AUTH, [_marker(CONFIGURATION)]),
@@ -1137,7 +1234,7 @@ def test_two_missing_bean_defaults_decide_where_one_of_them_is_absent(tmp_path: 
             AUTH,
             "localUserService",
             USER_SERVICE,
-            [_marker(BEAN), _profile("ldap"), _missing(value=[USER_SERVICE])],
+            [_marker(BEAN), _profile("!ldap"), _missing(value=[USER_SERVICE])],
             [LOCAL_USERS],
         ),
     ]
@@ -1145,9 +1242,9 @@ def test_two_missing_bean_defaults_decide_where_one_of_them_is_absent(tmp_path: 
     rows = _presence_rows(workspace, DEFAULT_USERS)
     workspace.close()
 
-    assert rows["default"] == ("true", "partial", _PARTIAL)
-    assert rows["ldap"][:2] == ("unresolved", "unresolved")
-    assert _ORDER in str(rows["ldap"][2])
+    assert rows["ldap"] == ("true", "partial", _PARTIAL)
+    assert rows["default"][:2] == ("unresolved", "unresolved")
+    assert _ORDER in str(rows["default"][2])
 
 
 def test_a_competitor_under_an_unevaluated_condition_leaves_the_default_unresolved(
@@ -1191,7 +1288,12 @@ def test_a_competitor_under_an_unevaluated_condition_leaves_the_default_unresolv
 def test_an_unannotated_missing_bean_checks_the_factorys_return_type(tmp_path: Path):
     """CP-44 row 1: `@Bean @ConditionalOnMissingBean UserService defaultUserService()` names no
     type, name or annotation, so Spring checks the method's declared return type — the same
-    verdict as naming `UserService` outright."""
+    verdict as naming `UserService` outright.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so the competitor's own existence is open there and so
+    is this verdict."""
     facts = _default_beside_ldap([_missing()])
     workspace = _resolved(tmp_path, facts, environments=("ldap",))
     rows = _presence_rows(workspace, DEFAULT_USERS)
@@ -1203,7 +1305,7 @@ def test_an_unannotated_missing_bean_checks_the_factorys_return_type(tmp_path: P
     workspace.close()
 
     assert rows == {
-        "default": ("true", "partial", _PARTIAL),
+        "default": ("unresolved", "unresolved", _OPEN_COMPETITOR),
         "ldap": ("false", "partial", _PARTIAL),
     }
     assert json.loads(str(expression))["types"] == [USER_SERVICE]
@@ -1234,6 +1336,43 @@ def test_an_unconditional_subtype_competitor_makes_the_default_absent_everywhere
     assert rows == {
         "default": ("false", "partial", _PARTIAL),
         "ldap": ("false", "partial", _PARTIAL),
+    }
+
+
+def test_a_missing_bean_whose_only_competitor_a_profile_gates_is_decided_only_in_that_profile(
+    tmp_path: Path,
+):
+    """Spec 2026-10-23-deployment-set-conditions §3b: the presence rule is unchanged, and it
+    propagates what its competitors' conditions now say. The `ldap` override's `@Profile`
+    is decided only in `ldap`, where it holds, so the default FAILS there; in `default` and
+    `local` the deployment may activate `ldap`, so the default is open. A competitor with no
+    condition at all is decided by the code alone, and still decides it everywhere."""
+    gated = _default_beside_ldap([_missing(value=[USER_SERVICE])])
+    workspace = _resolved(tmp_path / "gated", gated, environments=("ldap", "local"))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+    unconditional = [
+        *_users(DEFAULT_USERS),
+        *_type(LDAP_USERS, [_marker(SERVICE)], interfaces=(USER_SERVICE,)),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path / "plain", unconditional, environments=("ldap", "local"))
+    decided = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows["ldap"] == ("false", "partial", _PARTIAL)
+    for environment in ("default", "local"):
+        assert rows[environment][:2] == ("unresolved", "unresolved")
+        assert str(rows[environment][2]).startswith("not decided from this module's beans")
+    assert decided == {
+        environment: ("false", "partial", _PARTIAL) for environment in ("default", "ldap", "local")
     }
 
 
@@ -1270,7 +1409,12 @@ def test_a_name_criterion_matches_a_bean_by_its_name(
     tmp_path: Path, override: str, name: str, expected: str
 ):
     """`@ConditionalOnMissingBean(name = …)` asks `containsBean` (CP-44 row 2): it matches the
-    `ldap` override by the override's own bean NAME, whatever its type."""
+    `ldap` override by the override's own bean NAME, whatever its type.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so where the override is a matching competitor this
+    verdict is open there. A name that matches no competitor still decides it."""
     facts = [
         *_users(DEFAULT_USERS),
         *_type(AUTH, [_marker(CONFIGURATION)]),
@@ -1304,13 +1448,22 @@ def test_a_name_criterion_matches_a_bean_by_its_name(
     rows = _presence_rows(workspace, DEFAULT_USERS)
     workspace.close()
 
-    assert rows["default"] == ("true", "partial", _PARTIAL)
+    assert rows["default"] == (
+        ("true", "partial", _PARTIAL)
+        if expected == "true"
+        else ("unresolved", "unresolved", _OPEN_COMPETITOR)
+    )
     assert rows["ldap"] == (expected, "partial", _PARTIAL)
 
 
 def test_an_annotation_criterion_matches_a_bean_whose_class_carries_it(tmp_path: Path):
     """`@ConditionalOnBean(annotation = Directory.class)`: a separate criterion (CP-44 row 2),
-    matched by the competitor's class carrying the annotation."""
+    matched by the competitor's class carrying the annotation.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so where the override is a matching competitor this
+    verdict is open there."""
     directory = SPI + "Directory#"
     facts = [
         *_type(directory, kind=ConstructKind.ANNOTATION),
@@ -1331,7 +1484,7 @@ def test_an_annotation_criterion_matches_a_bean_whose_class_carries_it(tmp_path:
     workspace.close()
 
     assert rows == {
-        "default": ("false", "partial", _PARTIAL),
+        "default": ("unresolved", "unresolved", _OPEN_COMPETITOR),
         "ldap": ("true", "partial", _PARTIAL),
     }
 
@@ -1339,7 +1492,13 @@ def test_an_annotation_criterion_matches_a_bean_whose_class_carries_it(tmp_path:
 def test_on_bean_needs_every_criterion_and_on_missing_bean_fails_on_any(tmp_path: Path):
     """CP-44 row 2: `isAllMatched` against `isAnyMatched`. A type the `ldap` override has and a
     name nothing has: `@ConditionalOnBean` of both fails everywhere; `@ConditionalOnMissingBean`
-    of both fails in `ldap`, where the type matches."""
+    of both fails in `ldap`, where the type matches.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so where the override is a matching competitor this
+    verdict is open there. `@ConditionalOnBean` still fails everywhere: its name criterion
+    has no competitor at all."""
     facts = [
         *_users(DEFAULT_USERS, LDAP_USERS),
         *_type(AUDIT),
@@ -1368,7 +1527,7 @@ def test_on_bean_needs_every_criterion_and_on_missing_bean_fails_on_any(tmp_path
     workspace.close()
 
     assert {e: v[0] for e, v in audit.items()} == {"default": "false", "ldap": "false"}
-    assert {e: v[0] for e, v in default.items()} == {"default": "true", "ldap": "false"}
+    assert {e: v[0] for e, v in default.items()} == {"default": "unresolved", "ldap": "false"}
 
 
 def test_a_missing_bean_on_a_configuration_class_does_not_count_its_own_factories(
@@ -1377,7 +1536,12 @@ def test_a_missing_bean_on_a_configuration_class_does_not_count_its_own_factorie
     """`@Configuration @ConditionalOnMissingBean(UserService.class) Fallback` with `@Bean
     UserService fallbackUserService()`: the class's condition is judged before its own `@Bean`s
     are read (CP-44 row 4), so they are no competitor of it — only the `ldap` override is, and
-    the fallback's class carries the configuration's verdict."""
+    the fallback's class carries the configuration's verdict.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the `ldap` override's
+    `@Profile("ldap")` is decided only in `ldap`, where it holds; in `default` the
+    deployment may activate `ldap`, so where the override is a matching competitor this
+    verdict is open there."""
     fallback = SPI + "Fallback#"
     facts = [
         *_users(DEFAULT_USERS, LDAP_USERS),
@@ -1397,7 +1561,7 @@ def test_a_missing_bean_on_a_configuration_class_does_not_count_its_own_factorie
     workspace.close()
 
     assert {(r["bean_kind"], r["environment"], r["holds"], r["resolution"]) for r in rows} == {
-        ("configuration", "default", "true", "partial"),
+        ("configuration", "default", "unresolved", "unresolved"),
         ("configuration", "ldap", "false", "partial"),
     }
 
@@ -1494,20 +1658,25 @@ def test_the_evidence_lists_the_competitors_and_a_profile_no_environment_activat
     """Ruled at review: a presence verdict's evidence names, after its reason, the competitors
     that decided it — as JSON. Here the module resolves only `default`, so the `ldap` override
     is absent everywhere and the default holds; the row says so, and says `ldap` is a profile
-    the module names but no environment file activates (OI-168's boundary)."""
+    the module names but no environment file activates (OI-168's boundary).
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("ldap")` is
+    not evaluated in `default` — the deployment may activate `ldap` — so the override is
+    listed as open there, not absent, and the default is open with it; the note naming the
+    missing `ldap` environment stands."""
     facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
     workspace = _resolved(tmp_path, facts, environments=())
     rows = _presence_rows(workspace, DEFAULT_USERS)
     listed = _competitors(workspace, DEFAULT_USERS)
     workspace.close()
 
-    assert rows == {"default": ("true", "partial", _PARTIAL)}
+    assert rows == {"default": ("unresolved", "unresolved", _OPEN_COMPETITOR)}
     assert listed == {
         "default": [
             {
                 "bean": _MODULE + LDAP_USERS,
                 "via": _factory_symbol(AUTH, "ldapUserService", USER_SERVICE),
-                "holds": "false",
+                "holds": "unresolved",
                 "note": "profile `ldap` is named but this module has no `ldap` environment",
             }
         ]
@@ -1574,7 +1743,11 @@ def test_an_open_verdict_names_the_competitor_that_leaves_it_open(tmp_path: Path
 def test_a_chain_of_presence_conditions_is_decided_in_dependency_order(tmp_path: Path):
     """A `@ConditionalOnMissingBean(Notifier)` waits on B `@ConditionalOnBean(Channel)`, which
     waits on C `@Profile("ldap")`. In `ldap` C exists, so B does, so A does not; elsewhere
-    the reverse — each `partial` but C's own, which is a profile."""
+    the reverse — each `partial` but C's own, which is a profile.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): C's
+    `@Profile("ldap")` is decided only in `ldap`; in `default` the deployment may activate
+    it, so the openness propagates down the chain and B and A are both open there."""
     notifier = SPI + "Notifier#"
     channel = SPI + "Channel#"
     a, b, c = SPI + "Fallback#", SPI + "MailNotifier#", SPI + "SmtpChannel#"
@@ -1593,8 +1766,8 @@ def test_a_chain_of_presence_conditions_is_decided_in_dependency_order(tmp_path:
     first, second = _presence(workspace, a), _presence(workspace, b)
     workspace.close()
 
-    assert second == {"default": ("false", "partial"), "ldap": ("true", "partial")}
-    assert first == {"default": ("true", "partial"), "ldap": ("false", "partial")}
+    assert second == {"default": ("unresolved", "unresolved"), "ldap": ("true", "partial")}
+    assert first == {"default": ("unresolved", "unresolved"), "ldap": ("false", "partial")}
 
 
 def test_two_on_bean_conditions_waiting_on_each_other_both_fail(tmp_path: Path):
@@ -1719,11 +1892,18 @@ def test_an_inherited_body_exists_exactly_where_the_bean_that_inherits_it_does(t
     its own — it runs as part of `LocalSender`, the one bean whose class resolves `send` to
     it (JVMS 5.4.3.3, the module's own `Dispatch.resolve`). So the candidate exists where
     `LocalSender` does (`default`, the key `false`), and `KafkaSender#send` where `KafkaSender`
-    does (`prod`) — never "everywhere" because its abstract class carries no condition."""
+    does (`prod`) — never "everywhere" because its abstract class carries no condition.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): ruoyi's beans are
+    gated on a property the deployment sets, so neither sender's existence is evaluated
+    anywhere, and the verdicts no longer tell the two heirs apart. The inherited body's own
+    rows still do: they are `LocalSender`'s route, copied under the body, and never
+    `KafkaSender`'s."""
     workspace = _resolved(tmp_path, _senders())
     inherited = _MODULE + method_descriptor(ABSTRACT_SENDER, "send", _VOID)
     overriding = _MODULE + method_descriptor(KAFKA_SENDER, "send", _VOID)
     abstract_presence = _presence(workspace, method_descriptor(ABSTRACT_SENDER, "send", _VOID))
+    routes = {r["via"] for r in workspace.query("bean_conditions") if r["bean"] == inherited}
     local_presence = _presence(workspace, LOCAL_SENDER)
     mapped = {r["symbol"]: r["bean"] for r in workspace.query("symbol_beans")}
     candidates = {
@@ -1733,15 +1913,19 @@ def test_an_inherited_body_exists_exactly_where_the_bean_that_inherits_it_does(t
     }
     workspace.close()
 
-    assert local_presence == {"default": ("true", "resolved"), "prod": ("false", "resolved")}
+    assert local_presence == {
+        "default": ("unresolved", "unresolved"),
+        "prod": ("unresolved", "unresolved"),
+    }
     assert abstract_presence == local_presence
+    assert routes == {_MODULE + LOCAL_SENDER}
     assert mapped[inherited] == inherited
     assert mapped[overriding] == _MODULE + KAFKA_SENDER
     assert candidates == {
-        (inherited, "default"): (inherited, "true", "resolved"),
-        (inherited, "prod"): (inherited, "false", "resolved"),
-        (overriding, "default"): (_MODULE + KAFKA_SENDER, "false", "resolved"),
-        (overriding, "prod"): (_MODULE + KAFKA_SENDER, "true", "resolved"),
+        (inherited, "default"): (inherited, "unresolved", "unresolved"),
+        (inherited, "prod"): (inherited, "unresolved", "unresolved"),
+        (overriding, "default"): (_MODULE + KAFKA_SENDER, "unresolved", "unresolved"),
+        (overriding, "prod"): (_MODULE + KAFKA_SENDER, "unresolved", "unresolved"),
     }
 
 
@@ -1770,7 +1954,11 @@ def test_an_interface_default_method_exists_wherever_any_bean_inheriting_it_does
 ):
     """`interface Greeter { default void greet() {…} }` implemented, without overriding, by
     `@Component @Profile("prod") EnGreeter` and `@Component @Profile("staging") FrGreeter`:
-    the default body runs as part of both, so it exists where either does — the OR."""
+    the default body runs as part of both, so it exists where either does — the OR.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): each profile is
+    decided only in its own environment, so the body exists, decided, in `prod` and
+    `staging`, and is not evaluated in `default`."""
     greeter, en, fr = ORDERS + "Greeter#", ORDERS + "EnGreeter#", ORDERS + "FrGreeter#"
     hello = method_descriptor(NOTICES, "hello", _VOID)
     facts = [
@@ -1787,7 +1975,7 @@ def test_an_interface_default_method_exists_wherever_any_bean_inheriting_it_does
     workspace.close()
 
     assert presence == {
-        "default": ("false", "resolved"),
+        "default": ("unresolved", "unresolved"),
         "prod": ("true", "resolved"),
         "staging": ("true", "resolved"),
     }
@@ -2054,7 +2242,13 @@ def test_a_profile_group_is_followed_transitively_and_a_cycle_terminates():
 def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_path: Path):
     """Through `resolve_config` and the shipped catalog: petclinic's shape. The Spring Data
     JPA repository exists in the base environment and is open in the profile file's, its
-    evidence naming why; the JDBC one exists nowhere."""
+    evidence naming why; the JDBC one exists nowhere.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the active profiles
+    the configuration lists are now the EVIDENCE, never the verdict — the deployment sets
+    them (CP-47) — so neither repository is evaluated in either environment, and every
+    environment's evidence states one reading, the module's own activation as read for
+    its base environment (ruled at review)."""
     jpa, jdbc = ORDERS + "SpringDataOwnerRepository#", ORDERS + "JdbcOwnerRepository#"
     facts = [
         *_type(jpa, [_marker(COMPONENT), _profile("spring-data-jpa")]),
@@ -2074,22 +2268,29 @@ def test_the_pass_reads_the_active_profiles_from_the_resolved_configuration(tmp_
     workspace.close()
 
     assert _verdicts(rows, jpa) == {
-        "default": ("class", None, "profile", "true", "resolved"),
+        "default": ("class", None, "profile", "unresolved", "unresolved"),
         "mysql": ("class", None, "profile", "unresolved", "unresolved"),
     }
     assert _verdicts(rows, jdbc) == {
-        "default": ("class", None, "profile", "false", "resolved"),
-        "mysql": ("class", None, "profile", "false", "resolved"),
+        "default": ("class", None, "profile", "unresolved", "unresolved"),
+        "mysql": ("class", None, "profile", "unresolved", "unresolved"),
     }
-    assert presence[(_MODULE + jpa, "mysql")] == (
-        "unresolved",
-        _OPEN_IN_A_PROFILE_FILE,
+    own = (
+        "active profiles are set by the deployment; this module's own default is "
+        "`h2,spring-data-jpa`"
     )
+    for bean in (jpa, jdbc):
+        for environment in ("default", "mysql"):
+            assert presence[(_MODULE + bean, environment)] == ("unresolved", own)
 
 
 def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: Path):
     """Apollo's shape through the whole pass: the evidence names `${apollo_profile}`, read
-    off the configuration the module ships."""
+    off the configuration the module ships.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): the placeholder
+    reason survives as the evidence, after the statement that the deployment sets the active
+    profiles."""
     ldap = ORDERS + "LdapUserService#"
     facts = [*_type(ldap, [_marker(SERVICE), _profile("ldap")])]
     workspace = _resolved(
@@ -2106,7 +2307,8 @@ def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: 
     workspace.close()
 
     reason = (
-        "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+        "active profiles are set by the deployment; the active profiles here come from "
+        "`${apollo_profile}`, which this module does not fill"
     )
     assert presence == {"default": ("unresolved", reason), "github": ("unresolved", reason)}
 
@@ -2161,7 +2363,12 @@ def test_a_repository_interface_is_a_bean_whose_implementation_answers_the_call(
     `SpringDataOwnerRepository` in the base environment (CP-46 rows 2, 4, 6), and it answers
     `ClinicService#saveOwner`'s call to `OwnerRepository#save` — beside the JDBC class, which
     exists nowhere here. The call names a body only the JDBC class has, so without the route
-    the site would read as answered by nothing in `default`."""
+    the site would read as answered by nothing in `default`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): an active profile is
+    set by the deployment, so neither repository's existence is evaluated in either
+    environment — the module's own `spring-data-jpa` is the evidence, not the verdict. The
+    proxy is still a candidate of the call, which is what the route makes it."""
     workspace = _resolved(
         tmp_path,
         _owner_repositories(),
@@ -2173,17 +2380,25 @@ def test_a_repository_interface_is_a_bean_whose_implementation_answers_the_call(
     workspace.close()
 
     assert _verdicts(rows, SPRING_DATA_OWNERS) == {
-        "default": ("proxy", None, "profile", "true", "resolved"),
+        "default": ("proxy", None, "profile", "unresolved", "unresolved"),
         "mysql": ("proxy", None, "profile", "unresolved", "unresolved"),
     }
     proxy = _MODULE + SPRING_DATA_OWNERS
     jdbc = _MODULE + method_descriptor(JDBC_OWNERS, "save", _VOID)
     assert candidates == {
-        (None, proxy, "default"): ("true", "resolved"),
+        (None, proxy, "default"): ("unresolved", "unresolved"),
         (None, proxy, "mysql"): ("unresolved", "unresolved"),
-        (jdbc, _MODULE + JDBC_OWNERS, "default"): ("false", "resolved"),
-        (jdbc, _MODULE + JDBC_OWNERS, "mysql"): ("false", "resolved"),
+        (jdbc, _MODULE + JDBC_OWNERS, "default"): ("unresolved", "unresolved"),
+        (jdbc, _MODULE + JDBC_OWNERS, "mysql"): ("unresolved", "unresolved"),
     }
+    [evidence] = {
+        r["evidence"]
+        for r in rows
+        if r["bean"] == proxy and r["environment"] == "default" and r["kind"] == "profile"
+    }
+    assert evidence == (
+        "active profiles are set by the deployment; this module's own default is `spring-data-jpa`"
+    )
 
 
 def test_a_no_repository_bean_interface_is_no_bean(tmp_path: Path):
@@ -2237,7 +2452,11 @@ def test_an_interface_marked_repository_definition_is_a_bean_without_extending_r
 def test_a_repository_definition_through_a_composed_annotation_is_a_bean(tmp_path: Path):
     """The registration annotation is composed like a stereotype: `@MyRepository`, the module's
     own annotation meta-annotated `@RepositoryDefinition`, makes the interface carrying it a
-    bean, and the annotation type itself is none."""
+    bean, and the annotation type itself is none.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     mine = ORDERS + "MyRepository#"
     facts = [
         *_type(mine, [_marker(_REPOSITORY_DEFINITION)], kind=ConstructKind.ANNOTATION),
@@ -2254,7 +2473,7 @@ def test_a_repository_definition_through_a_composed_annotation_is_a_bean(tmp_pat
 
     assert interfaces == {_MODULE + SPRING_DATA_OWNERS}
     assert _verdicts(rows, SPRING_DATA_OWNERS) == {
-        "default": ("proxy", None, "profile", "false", "resolved"),
+        "default": ("proxy", None, "profile", "unresolved", "unresolved"),
         "prod": ("proxy", None, "profile", "true", "resolved"),
     }
 
@@ -2292,28 +2511,18 @@ _CHARGES = "https://user:secret@billing.internal/charges"
 _VAULT = "https://ops:s3cr3t@vault.internal/token"
 
 
-def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_export(
-    tmp_path: Path,
-):
-    """Whole-branch review, Important: the conditions views went out verbatim. A conditional
-    client calling `https://user:secret@billing.internal/charges`, under
-    `@ConditionalOnProperty(name = "billing.vault", havingValue = "https://ops:s3cr3t@…")` on a
-    key whose placeholder nothing fills — so the address reaches `endpoint_conditions.path`,
-    and the argument `bean_conditions.expression`, `endpoint_conditions.expression`, and the
-    reason `bean_presence` and `candidate_presence` give (the call through `Billing` narrows
-    to the live and the stub body). `endpoints.path` and `annotations.args` mask both; no
-    exported file may carry either in the clear.
-
-    The address is set on the row WHOLE, `peer` NULL — the shape a base-url composition
-    writes (2F design §4) — because a literal URL is split into `peer` and `path`, and
-    building a composed client here would test the fluent engine, not the exporter."""
+def _billing_facts(having: str) -> list[object]:
+    """`LiveBilling` under `@ConditionalOnProperty(name = "billing.vault", havingValue =
+    having)` calls `https://user:secret@…/charges` (the address set on the row by the caller);
+    `StubBilling` is the unconditional other body of `Billing`, and `Notices#push` calls
+    through `Billing`, so the site narrows to both."""
     charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
     push = method_descriptor(NOTICES, "push", _VOID)
     on_vault = AnnotationUse(
         annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
-        args={"name": ["billing.vault"], "havingValue": _VAULT},
+        args={"name": ["billing.vault"], "havingValue": having},
     )
-    facts = [
+    return [
         *_type(BILLING, kind=ConstructKind.INTERFACE),
         _declaration(BILLING, "charge"),
         *_type(LIVE_BILLING, [_marker(COMPONENT), on_vault], interfaces=(BILLING,)),
@@ -2338,6 +2547,31 @@ def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_exp
         *_body(NOTICES, "push"),
         *_calls(push, BILLING, "charge"),
     ]
+
+
+def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_export(
+    tmp_path: Path,
+):
+    """Whole-branch review, Important: the conditions views went out verbatim. A conditional
+    client calling `https://user:secret@billing.internal/charges`, under
+    `@ConditionalOnProperty(name = "billing.vault", havingValue = "https://ops:s3cr3t@…")` on a
+    key whose placeholder nothing fills — so the address reaches `endpoint_conditions.path`,
+    and the argument `bean_conditions.expression`, `endpoint_conditions.expression`, and the
+    reason `bean_presence` and `candidate_presence` give (the call through `Billing` narrows
+    to the live and the stub body). `endpoints.path` and `annotations.args` mask both; no
+    exported file may carry either in the clear.
+
+    The address is set on the row WHOLE, `peer` NULL — the shape a base-url composition
+    writes (2F design §4) — because a literal URL is split into `peer` and `path`, and
+    building a composed client here would test the fluent engine, not the exporter.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): a property is set by
+    the deployment, so `bean_presence` and `candidate_presence` now give the module's own
+    reading as the reason — the placeholder `billing.vault` holds — instead of quoting the
+    expression; the argument still reaches both expressions, which is where it is looked
+    for."""
+    charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
+    facts = _billing_facts(_VAULT)
     workspace = _resolved(
         tmp_path, facts, "spring-resttemplate", base={"billing.vault": "${BILLING_VAULT}"}
     )
@@ -2355,10 +2589,360 @@ def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_exp
         ).fetchall()
         assert exported[table], f"{table} exported no row, so this proves nothing"
     assert any("billing.internal/charges" in str(row) for row in exported["endpoint_conditions"])
-    assert any("vault.internal" in str(row) for row in exported["bean_presence"])
-    assert any("vault.internal" in str(row) for row in exported["candidate_presence"])
+    assert any("vault.internal" in str(row) for row in exported["bean_conditions"])
+    assert any("vault.internal" in str(row) for row in exported["endpoint_conditions"])
+    for table in ("bean_presence", "candidate_presence"):
+        assert any("`billing.vault` is set by the deployment" in str(r) for r in exported[table])
     for parquet in sorted((bundle / "graph").glob("*.parquet")):
         cells = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
         assert not any(
             "user:secret@" in str(cell) or "s3cr3t" in str(cell) for row in cells for cell in row
         ), f"{parquet.name} shipped a credential in the clear"
+
+
+@pytest.mark.pins("conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit")
+@pytest.mark.parametrize(
+    "rules",
+    [
+        RedactionRules(key_patterns=("vault",)),
+        RedactionRules(value_patterns=("^kept-quiet-7$",)),
+    ],
+    ids=["key-pattern", "value-pattern"],
+)
+def test_a_quoted_configured_value_is_masked_by_the_modules_own_rules_on_export(
+    tmp_path: Path, rules: RedactionRules
+):
+    """Final review, Important: the bundle masked a condition's evidence by `redact_text`
+    alone, which cannot see a key — so `billing.vault`, which the module's `.sextant.yml`
+    names a secret (`key_patterns: [vault]`), shipped the value its file sets in the clear,
+    and a value pattern anchored on the value alone never matched the sentence quoting it.
+    Every table carrying the evidence masks it under the module's own rules."""
+    charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
+    workspace = _resolved(
+        tmp_path,
+        _billing_facts("on"),
+        "spring-resttemplate",
+        base={"billing.vault": "kept-quiet-7"},
+    )
+    workspace._connection.execute(
+        "UPDATE endpoints SET path = ?, peer = NULL WHERE caller = ?", [_CHARGES, _MODULE + charge]
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules(rules))
+    workspace.close()
+
+    for table in ("endpoint_conditions", "bean_conditions", "bean_presence", "candidate_presence"):
+        rows = duckdb.sql(
+            f"SELECT evidence FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        assert any(
+            f"this module's `prod` configuration sets `{REDACTED}`" in str(evidence)
+            for (evidence,) in rows
+        ), table
+        assert not any("kept-quiet-7" in str(evidence) for (evidence,) in rows), table
+
+
+def test_the_shipped_bean_model_states_which_condition_kinds_a_deployment_sets():
+    """CP-47: an active profile and a property are set by the deployment (an environment
+    variable or a command-line argument outranks any file the module ships), and a bean's
+    presence is decided by what the code registers. That is catalog data, not a rule the
+    resolve pass knows: `profile` and `property` carry `set_by: deployment`, with the probe
+    that measured it beside the probe of the evaluation rule; `presence` carries neither."""
+    spring = next(
+        c.bean_model
+        for c in YamlCatalogSource(CATALOGS).load()
+        if c.bean_model.get("id") == "spring"
+    )
+    models = {model.kind: model for model in _models(spring).values()}
+
+    for kind in ("profile", "property"):
+        assert models[kind].members["set_by"] == "deployment"
+        assert models[kind].members["set_by_probe"] == (
+            "scripts/probes/cp47_deployment_overrides.md"
+        )
+        assert models[kind].members["by"] != models[kind].members["set_by_probe"]
+    assert "set_by" not in models["presence"].members
+    assert "set_by" not in models["other"].members
+
+
+# --- what a deployment can set, the repository does not decide (spec 2026-10-23
+# deployment-set-conditions §3b) ----------------------------------------------------------
+#
+# `_judged` is what the pass publishes: a kind the bean model marks `set_by: deployment` is
+# decided only by the environment's own definition, the module's own reading kept as the
+# evidence. The models are built here, so the rule is seen to read the data, not Spring.
+
+_BY_DEPLOYMENT = {"set_by": "deployment", "set_by_probe": "probe.md"}
+_PROFILE_BY_DEPLOYMENT = ConditionModel(
+    kind=PROFILE, annotation="com/acme/Profile#", members={"expressions": "value", **_BY_DEPLOYMENT}
+)
+_PROPERTY_BY_DEPLOYMENT = ConditionModel(
+    kind=PROPERTY, annotation="com/acme/OnProperty#", members=dict(_BY_DEPLOYMENT)
+)
+_SET_BY_DEPLOYMENT = "active profiles are set by the deployment; "
+
+
+def _judged_profile(
+    names: list[str], environment: str, base: ActiveProfiles
+) -> tuple[str, str, str]:
+    """`names` judged in `environment` of a module whose BASE environment's own reading is
+    `base` — the one reading every environment's evidence states."""
+    return _judged(
+        _PROFILE_BY_DEPLOYMENT,
+        PROFILE,
+        {"expressions": names},
+        environment,
+        {},
+        base,
+        "default",
+        deployment_reading(base, "default"),
+    )
+
+
+def _judged_property(
+    keys: list[str], environment: str, config: dict[str, str | None]
+) -> tuple[str, str, str]:
+    expression = {"keys": keys, "having_value": "true", "match_if_missing": False}
+    return _judged(
+        _PROPERTY_BY_DEPLOYMENT,
+        PROPERTY,
+        expression,
+        environment,
+        config,
+        ActiveProfiles(known=frozenset()),
+        "default",
+        "unused: a property's evidence is its configured value",
+    )
+
+
+def test_a_profile_environment_decides_a_term_naming_itself():
+    """In environment `h2`, `@Profile("h2")` holds and `@Profile("!h2")` fails: the
+    environment's own definition is the profile file `application-h2.yml`, selected by
+    activating `h2`."""
+    reading = ActiveProfiles(known=frozenset({"h2", "spring-data-jpa"}))
+
+    assert _judged_profile(["h2"], "h2", reading) == (HOLDS, "resolved", "compiler")
+    assert _judged_profile(["!h2"], "h2", reading) == (FAILS, "resolved", "compiler")
+
+
+@pytest.mark.pins("conditions.a-DEPLOYMENT-set-condition-is-decided-only-by-its-environment")
+def test_a_profile_the_deployment_activates_is_not_evaluated_and_states_the_modules_reading():
+    """petclinic's `@Profile("jdbc")` in `mysql`: an environment variable or a command-line
+    argument can activate `jdbc` (CP-47), so it is not evaluated, and the module's own
+    reading is the evidence — what `application.properties` activates, `h2,spring-data-jpa`,
+    stated as ONE string in every environment (ruled at review), so the document states the
+    five environments on one line (spec §3c)."""
+    base = ActiveProfiles(known=frozenset({"h2", "spring-data-jpa"}))
+
+    holds, resolution, evidence = _judged_profile(["jdbc"], "mysql", base)
+
+    assert holds == UNRESOLVED
+    assert resolution == "unresolved"
+    assert evidence == (
+        "active profiles are set by the deployment; this module's own default is "
+        "`h2,spring-data-jpa`"
+    )
+    for environment in ("default", "h2", "hsqldb", "postgres"):
+        assert _judged_profile(["jdbc"], environment, base)[2] == evidence
+
+
+def test_nothing_decides_a_profile_in_the_default_environment():
+    """Ruled 1: `default` has no definition of its own to decide by — not even the reserved
+    `default` profile, which Spring activates only where the deployment activates none."""
+    reading = ActiveProfiles(known=frozenset({"h2", "spring-data-jpa"}))
+    named = _SET_BY_DEPLOYMENT + "this module's own default is `h2,spring-data-jpa`"
+    none = _SET_BY_DEPLOYMENT + "this module activates none"
+
+    assert _judged_profile(["default"], "default", reading) == (UNRESOLVED, "unresolved", named)
+    assert _judged_profile(["!prod"], "default", reading) == (UNRESOLVED, "unresolved", named)
+    assert _judged_profile(["h2"], "default", ActiveProfiles(known=frozenset())) == (
+        UNRESOLVED,
+        "unresolved",
+        none,
+    )
+
+
+@pytest.mark.pins("conditions.the-RESERVED-default-profile-is-no-activation-the-module-makes")
+def test_a_module_naming_no_profile_activates_none():
+    """CP-45 row 5: with no profile key set, the base environment's reading is the reserved
+    `default` profile — active there only because the module names none. That is no
+    activation the module makes, so the evidence says it activates none; a profile the
+    module does name beside it is stated."""
+    silent = _active({"orders.legacy": "true"}, ("default", "prod"))
+    named = _active({"spring.profiles.default": "local"}, ("default", "prod"))
+
+    assert silent["default"].known == frozenset({"default"})
+    assert _judged_profile(["prod"], "default", silent["default"])[2] == (
+        "active profiles are set by the deployment; this module activates none"
+    )
+    assert deployment_reading(named["default"], "default") == (
+        "active profiles are set by the deployment; this module's own default is `local`"
+    )
+
+
+def test_a_placeholder_reading_survives_as_the_evidence():
+    """Apollo: the module's own reading is that a placeholder nothing fills supplies the
+    list. That reason is the evidence, not replaced by a list of names.
+
+    Re-pinned by the final review: a profile the reading names beside the placeholder
+    (`github`, here) is stated after the reason, not dropped."""
+    reason = (
+        "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+    )
+    reading = ActiveProfiles(known=frozenset({"github"}), otherwise=reason)
+
+    assert _judged_profile(["ldap"], "github", reading) == (
+        UNRESOLVED,
+        "unresolved",
+        _SET_BY_DEPLOYMENT + reason + "; this module's own default is `github`",
+    )
+    assert _judged_profile(["github"], "github", reading) == (HOLDS, "resolved", "compiler")
+
+
+@pytest.mark.pins("conditions.a-reading-keeps-BOTH-a-placeholder-and-the-profiles-named-beside-it")
+def test_a_reading_naming_a_placeholder_and_a_profile_beside_it_states_both():
+    """Final review: `spring.profiles.active: [${APP_PROFILE}, prod]` — the module activates
+    `prod` itself AND leaves the rest to a placeholder nothing fills. The reading states both,
+    the placeholder's reason and the module's own default, never one in place of the other;
+    so does `spring.profiles.include: prod` beside an unfilled `spring.profiles.active`."""
+    reason = "the active profiles here come from `${APP_PROFILE}`, which this module does not fill"
+    listed = _active(
+        {"spring.profiles.active[0]": None, "spring.profiles.active[1]": "prod"},
+        ("default", "prod"),
+        **{"spring__profiles__active[0]": ["${APP_PROFILE}"]},
+    )
+    included = _active(
+        {"spring.profiles.active": None, "spring.profiles.include": "prod"},
+        ("default", "prod"),
+        spring__profiles__active=["${APP_PROFILE}"],
+    )
+    both = _SET_BY_DEPLOYMENT + reason + "; this module's own default is `prod`"
+
+    assert listed["default"] == ActiveProfiles(known=frozenset({"prod"}), otherwise=reason)
+    assert deployment_reading(listed["default"], "default") == both
+    assert deployment_reading(included["default"], "default") == both
+
+
+def test_a_property_the_deployment_sets_is_never_decided_and_states_the_files_value():
+    """`@ConditionalOnProperty(name = "billing.enabled", havingValue = "true")`: an
+    environment variable `BILLING_ENABLED` outranks every file the module ships (CP-47), so
+    no environment decides it; the value the module's own configuration resolves is the
+    evidence — or that it sets nothing."""
+    assert _judged_property(["billing.enabled"], "prod", {"billing.enabled": "false"}) == (
+        UNRESOLVED,
+        "unresolved",
+        (
+            "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+            "`false`"
+        ),
+    )
+    assert _judged_property(["billing.enabled"], "prod", {}) == (
+        UNRESOLVED,
+        "unresolved",
+        (
+            "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+            "nothing"
+        ),
+    )
+    assert _judged_property(["a.on", "b.on"], "default", {"a.on": "true"}) == (
+        UNRESOLVED,
+        "unresolved",
+        (
+            "`a.on` is set by the deployment; this module's `default` configuration sets `true`; "
+            "`b.on` is set by the deployment; this module's `default` configuration sets nothing"
+        ),
+    )
+    assert _judged_property(["billing.enabled"], "prod", {"billing.enabled": None})[2] == (
+        "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+        "a placeholder this module does not fill"
+    )
+
+
+@pytest.mark.pins("conditions.a-QUOTED-configured-value-is-masked-by-its-key")
+def test_a_property_conditions_quoted_value_is_masked_by_its_key():
+    """The evidence quotes a configured value, and `bean_conditions` is exported whole with
+    its evidence masked only by `redact_text`, which cannot see the key. So the value is
+    masked where it is written, by its own key, as every origin of a configured value is:
+    `@ConditionalOnProperty("billing.api-token")` must never carry the token."""
+    _, _, evidence = _judged_property(
+        ["billing.api-token"], "prod", {"billing.api-token": "s3cr3t"}
+    )
+
+    assert "s3cr3t" not in evidence
+    assert evidence == (
+        "`billing.api-token` is set by the deployment; this module's `prod` configuration sets "
+        f"`{REDACTED}`"
+    )
+
+
+_BILLING_ON = (
+    "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+    "`kept-quiet-7`"
+)
+
+
+@pytest.mark.pins("conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit")
+def test_a_quoted_value_is_re_masked_by_its_key_under_the_modules_own_rules():
+    """The writer masks with the built-ins only (no module redactor reaches a resolve pass,
+    `OI-71`), so every exit re-masks the evidence with the module's own rules through ONE
+    function beside the writer: each quoted value by its key (`redact_value`), so a
+    `.sextant.yml` key pattern `billing` masks it — `redact_text` alone cannot, never seeing
+    the key — and a value pattern anchored on the value alone masks it too. A value quoted
+    inside a composed `bean_presence` reason, beside another reason and a competitor list, is
+    found where it is."""
+    by_key = Redactor.from_rules(RedactionRules(key_patterns=("billing",)))
+    by_value = Redactor.from_rules(RedactionRules(value_patterns=("^kept-quiet-7$",)))
+    masked = _BILLING_ON.replace("`kept-quiet-7`", f"`{REDACTED}`")
+
+    assert redact_condition_evidence(by_key, _BILLING_ON) == masked
+    assert redact_condition_evidence(by_value, _BILLING_ON) == masked
+    assert redact_condition_evidence(Redactor.from_rules(), _BILLING_ON) == _BILLING_ON
+    composed = (
+        "a condition this analysis does not evaluate: {}; "
+        + _BILLING_ON
+        + '; competitors: [{"bean": "x", "holds": "true"}]'
+    )
+    assert redact_condition_evidence(by_key, composed) == composed.replace(
+        "`kept-quiet-7`", f"`{REDACTED}`"
+    )
+
+
+def test_evidence_quoting_no_configured_value_takes_the_free_text_pass_alone():
+    """A profile reason, a placeholder's raw spelling, `compiler`: nothing names a key, so
+    `redact_text` is the whole rule — userinfo stripped, the value patterns applied."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("apollo_[a-z]+",)))
+    reason = (
+        "active profiles are set by the deployment; the active profiles here come from "
+        "`${apollo_profile}`, which this module does not fill"
+    )
+
+    assert redact_condition_evidence(redactor, reason) == reason.replace("apollo_profile", REDACTED)
+    assert redact_condition_evidence(redactor, "compiler") == "compiler"
+    assert redact_condition_evidence(redactor, "see https://ops:s3cr3t@vault.internal") == (
+        "see https://vault.internal"
+    )
+
+
+def test_a_kind_no_deployment_sets_keeps_the_framework_rules_verdict():
+    """A model without `set_by` is judged by the framework's rule (`_holds`,
+    `_profile_holds`) exactly: the rule reads the bean model, it does not assume Spring."""
+    unmarked = ConditionModel(kind=PROPERTY, annotation="com/acme/OnProperty#", members={})
+    expression = {"keys": ["billing.enabled"], "having_value": "true", "match_if_missing": False}
+    config: dict[str, str | None] = {"billing.enabled": "false"}
+    reading = ActiveProfiles(known=frozenset({"h2"}))
+    profile = ConditionModel(kind=PROFILE, annotation="com/acme/Profile#", members={})
+
+    unused = "unused without `set_by`"
+
+    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default", unused) == (
+        *_holds(PROPERTY, expression, config, "prod"),
+        "compiler",
+    )
+    assert _judged(unmarked, PROPERTY, expression, "prod", config, reading, "default", unused) == (
+        FAILS,
+        "resolved",
+        "compiler",
+    )
+    assert _judged(
+        profile, PROFILE, {"expressions": ["jdbc"]}, "default", {}, reading, "default", unused
+    ) == _profile_holds({"expressions": ["jdbc"]}, reading)
