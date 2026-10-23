@@ -54,10 +54,10 @@ nothing reads that query today (it is logged instead, §4).
 ### 3b. `resolved_schedules`, a derived table
 
 ```text
-handler               trigger    expression                         environment  value          unresolved_reason
-OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   default      0 0 * * * *    NULL
-OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   prod         0 */5 * * * *  NULL
-OrderSweeper#purge()  fixedRate  ${orders.purge.rate}               prod         NULL           missing_key
+handler               trigger    expression                         environment  keys                     value          unresolved_reason
+OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   default      ["orders.sweep.cron"]    0 0 * * * *    NULL
+OrderSweeper#sweep()  cron       ${orders.sweep.cron:0 0 * * * *}   prod         ["orders.sweep.cron"]    0 */5 * * * *  NULL
+OrderSweeper#purge()  fixedRate  ${orders.purge.rate}               prod         ["orders.purge.rate"]    NULL           missing_key
 ```
 
 - One row per (`scheduled_work` row whose `expression` holds the placeholder opener, environment of
@@ -70,9 +70,17 @@ OrderSweeper#purge()  fixedRate  ${orders.purge.rate}               prod        
   lookup.
 - Written by a new pass after `resolve_config` and after the scheduled-work engine, reset whole
   per resolve like every derived table.
-- Exported in the bundle. Its `value` is masked by `redact_text` (a cron, rate or delay is
-  neither a credential nor keyed, and `redact_text` applies the module's value patterns); the
-  export ratchet requires the export query.
+- Exported in the bundle. ~~Its `value` is masked by `redact_text` (a cron, rate or delay is
+  neither a credential nor keyed, and `redact_text` applies the module's value patterns)~~ —
+  *amended 2026-10-23 (final review, ruled):* the premise was wrong. A schedule IS the value
+  of the key that configures it, and the key rule masks that key's value in
+  `resolved_config` (`app.token.cleanup.cron` holds `token`, a built-in pattern), so a
+  `value` masked by `redact_text` alone shipped what `resolved_config` hid. Each row carries
+  `keys`, every key the substitution asked the lookup for, in order (a JSON array), and both
+  exits mask through one function beside the writer, `redact_schedule_value(redactor, keys,
+  value)`: whole when any key matches the key rule (`Redactor.masks_key`, the test
+  `redact_value` applies), `redact_text` otherwise. The export ratchet requires the export
+  query.
 - `GRAPH_SCHEMA_VERSION` 6 → 7: a new derived table. The D01 version table gains the row.
 
 ### 3c. What the document says

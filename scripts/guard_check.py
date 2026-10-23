@@ -3118,9 +3118,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_RESOLVED_SCHEDULES,
-                find='            value, reason = substitute(str(job["expression"]), placeholders, lookup)\n',
-                replace='            value, reason = substitute(str(job["expression"]), '
-                '{**placeholders, "default_separator": ""}, lookup)  # guard disabled\n',
+                find='                str(job["expression"]), placeholders, _recording(lookup, asked)\n',
+                replace='                str(job["expression"]), {**placeholders, "default_separator": ""}, '
+                "_recording(lookup, asked)  # guard disabled\n",
             ),
         ),
     ),
@@ -3141,18 +3141,30 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "schedules.a-configured-VALUE-is-masked-on-export": Guard(
-        what="`resolved_schedules.value` leaves the bundle through `redact_text`, staged into "
-        "the address map whose rule that is",
-        why="the column is configuration read into the bundle; unstaged, a value the module "
+        what="`resolved_schedules.value` leaves the bundle through `redact_schedule_value`, "
+        "joined from the map staged on (keys, value)",
+        why="the column is configuration read into the bundle; unjoined, a value the module "
         "configured with a credential in it ships in the clear while the workspace's every "
         "other exit masks it — the one-exit-forgot defect `field_writes.value` shipped",
         edits=(
             Edit(
                 path=_WORKSPACE,
-                find='            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "\n'
-                '            "UNION SELECT DISTINCT value FROM resolved_schedules WHERE value IS NOT NULL"\n',
-                replace='            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"'
-                "  # guard disabled\n",
+                find="               coalesce(v.masked, s.value) AS value, s.unresolved_reason\n",
+                replace="               s.value AS value, s.unresolved_reason  -- guard disabled\n",
+            ),
+        ),
+    ),
+    "schedules.a-value-whose-KEY-names-a-secret-is-masked-whole": Guard(
+        what="a configured schedule masks WHOLE where a key its expression was read through "
+        "names a secret, at the bundle and the document alike (`redact_schedule_value`)",
+        why='`@Scheduled(cron = "${app.token.cleanup.cron}")`: `resolved_config` masks the '
+        "key's value by the key rule, and without the test the schedule that IS that value "
+        "ships in the clear beside it — one exit undoing the mask the other applied",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find="    if any(redactor.masks_key(key) for key in keys):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

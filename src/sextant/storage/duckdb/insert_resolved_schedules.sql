@@ -7,16 +7,19 @@
 -- Python-built derivation.
 --
 -- Parameters:
---   $rows -- {handler, trigger, expression, environment, value, unresolved_reason}
---             rows, one per (placeholder job, environment of `resolved_config`); the
---             first three are the job's `scheduled_work` columns verbatim. `value` is
---             NULL exactly when `unresolved_reason` is set, one of D01's closed set.
-INSERT INTO resolved_schedules (handler, trigger, expression, environment, value,
+--   $rows -- {handler, trigger, expression, environment, keys, value,
+--             unresolved_reason} rows, one per (placeholder job, environment of
+--             `resolved_config`); the first three are the job's `scheduled_work` columns
+--             verbatim, `keys` a JSON array of the keys the substitution asked for.
+--             `value` is NULL exactly when `unresolved_reason` is set, one of D01's
+--             closed set.
+INSERT INTO resolved_schedules (handler, trigger, expression, environment, keys, value,
                                 unresolved_reason)
-SELECT r.handler, r.trigger, r.expression, r.environment, r.value, r.unresolved_reason
+SELECT r.handler, r.trigger, r.expression, r.environment, r.keys, r.value,
+       r.unresolved_reason
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         handler VARCHAR, trigger VARCHAR, expression VARCHAR, environment VARCHAR,
-        value VARCHAR, unresolved_reason VARCHAR
+        keys VARCHAR, value VARCHAR, unresolved_reason VARCHAR
     )[]
 ) AS r);

@@ -8,15 +8,20 @@ one placeholder rule (`resolve/config.py::substitute`). Every test drives the sh
 over hand-built facts spelled the way the extractor spells them.
 """
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import derive_endpoints
-from sextant.application.resolve.resolved_schedules import record_resolved_schedules
+from sextant.application.resolve.resolved_schedules import (
+    record_resolved_schedules,
+    redact_schedule_value,
+)
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -28,6 +33,7 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -366,3 +372,102 @@ def test_a_second_resolve_replaces_the_rows(tmp_path: Path):
     workspace.close()
 
     assert rows == [(SWEEP, "cron", "${orders.sweep.cron}", "default", "0 0 * * * *", None)]
+
+
+def test_each_row_names_the_keys_its_expression_asked_for_in_order(tmp_path: Path):
+    """`keys` is every key `substitute` asked the environment's lookup for, in the order it
+    asked — what the redactor's key rule is applied to at every exit."""
+    expression = "${orders.sweep.seconds} ${orders.sweep.rest}"
+    workspace = _resolved(
+        tmp_path,
+        {"cron": expression},
+        {"application.yml": {"orders.sweep.seconds": "0", "orders.sweep.rest": "0 * * * *"}},
+    )
+    keys = [json.loads(str(r["keys"])) for r in workspace.query("resolved_schedules")]
+    workspace.close()
+
+    assert keys == [["orders.sweep.seconds", "orders.sweep.rest"]]
+
+
+def test_a_value_is_masked_whole_when_any_of_its_keys_names_a_secret():
+    redactor = Redactor.from_rules()
+    keys = ["orders.sweep.seconds", "app.token.cleanup.cron"]
+    assert redact_schedule_value(redactor, keys, "0 0 3 * * *") == REDACTED
+
+
+def test_a_value_is_masked_whole_under_a_sextant_yml_key_pattern():
+    redactor = Redactor.from_rules(RedactionRules(key_patterns=("orders.sweep",)))
+    assert redact_schedule_value(redactor, ["orders.sweep.cron"], "0 0 3 * * *") == REDACTED
+
+
+def test_a_value_under_ordinary_keys_takes_the_text_rule():
+    """No key names a secret, so the value takes `redact_text`: shown, its userinfo stripped."""
+    redactor = Redactor.from_rules()
+    assert redact_schedule_value(redactor, ["orders.sweep.cron"], "0 0 3 * * *") == "0 0 3 * * *"
+    assert (
+        redact_schedule_value(redactor, ["orders.sweep.cron"], "https://u:p@h/x") == "https://h/x"
+    )
+
+
+def _bundle_values(workspace: DuckDbWorkspace, tmp_path: Path, redactor: Redactor) -> list[object]:
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, redactor)
+    return [
+        row[0]
+        for row in duckdb.sql(
+            "SELECT value FROM "
+            f"read_parquet('{bundle / 'graph' / 'resolved_schedules.parquet'}') ORDER BY environment"
+        ).fetchall()
+    ]
+
+
+@pytest.mark.pins("schedules.a-value-whose-KEY-names-a-secret-is-masked-whole")
+def test_a_schedule_whose_key_names_a_secret_is_masked_whole_in_the_bundle(tmp_path: Path):
+    """`@Scheduled(cron = "${app.token.cleanup.cron}")` with no `.sextant.yml`: the key rule
+    masks the key's value in `resolved_config`, and the schedule that IS that value ships
+    masked the same way, never as the cron."""
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${app.token.cleanup.cron}"},
+        {"application.yml": {"app.token.cleanup.cron": "0 0 3 * * *"}},
+    )
+    values = _bundle_values(workspace, tmp_path, Redactor.from_rules())
+    config = duckdb.sql(
+        "SELECT value FROM "
+        f"read_parquet('{tmp_path / 'bundle' / 'graph' / 'resolved_config.parquet'}') "
+        "WHERE key = 'app.token.cleanup.cron'"
+    ).fetchall()
+    kept = [row["value"] for row in workspace.query("resolved_schedules")]
+    workspace.close()
+
+    assert config == [(REDACTED,)]
+    assert values == [REDACTED]
+    assert kept == ["0 0 3 * * *"]
+
+
+@pytest.mark.pins("schedules.a-value-whose-KEY-names-a-secret-is-masked-whole")
+def test_a_schedule_under_a_sextant_yml_key_pattern_is_masked_whole_in_the_bundle(
+    tmp_path: Path,
+):
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${orders.sweep.cron}"},
+        {"application.yml": {"orders.sweep.cron": "0 0 3 * * *"}},
+    )
+    redactor = Redactor.from_rules(RedactionRules(key_patterns=("orders.sweep",)))
+    values = _bundle_values(workspace, tmp_path, redactor)
+    workspace.close()
+
+    assert values == [REDACTED]
+
+
+def test_a_schedule_under_an_ordinary_key_ships_its_value_in_the_bundle(tmp_path: Path):
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${orders.sweep.cron}"},
+        {"application.yml": {"orders.sweep.cron": "0 0 3 * * *"}},
+    )
+    values = _bundle_values(workspace, tmp_path, Redactor.from_rules())
+    workspace.close()
+
+    assert values == ["0 0 3 * * *"]

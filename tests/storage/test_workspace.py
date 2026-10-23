@@ -2293,16 +2293,18 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
 @pytest.mark.pins("schedules.a-configured-VALUE-is-masked-on-export")
 def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     """Spec 2026-10-23-configured-schedules §3b: `resolved_schedules.value` is configuration
-    read into the bundle, so it leaves through `redact_text` — the address map's rule — while
-    the workspace keeps it verbatim. A cron is never a credential, which is why the case is a
-    value the module configured by mistake: the rule, not the expected shape, is what masks."""
+    read into the bundle, so it leaves through `redact_schedule_value` — under an ordinary
+    key, `redact_text`'s rule — while the workspace keeps it verbatim. A cron is never a
+    credential, which is why the case is a value the module configured by mistake: the rule,
+    not the expected shape, is what masks."""
     workspace = _workspace_with_an_endpoint(tmp_path)
     secret = "https://u:hunter2@h/0 0 * * * *"
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'prod', ?, NULL), "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'prod', "
+        "'[\"orders.sweep.cron\"]', ?, NULL), "
         "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'default', "
-        "'0 0 * * * *', NULL)",
+        "'[\"orders.sweep.cron\"]', '0 0 * * * *', NULL)",
         [secret],
     )
     bundle = tmp_path / "bundle"

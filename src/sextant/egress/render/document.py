@@ -43,6 +43,7 @@ from sextant.application.resolve.bean_conditions import (
     redact_condition_evidence,
 )
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.resolved_schedules import redact_schedule_value
 
 # The root a trace ran from, for the addresses it carries (2Q close, defect 1).
 # Imported for its TYPE and read field by field: the join from a root to the
@@ -1784,12 +1785,15 @@ def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) ->
     """One job's per-environment values, in the rows' environment order: environments that
     read the same thing share one entry (`` `v` in `a`, `b` ``), and one whose value could
     not be read says so with its reason (`` not set in `prod` (missing_key) ``). A value is
-    masked by this exit's redactor before it is compared, so two environments that differ
-    only in what the redactor hides read as the one entry they render as."""
+    masked by this exit's redactor before it is compared — whole where a key it was read
+    through names a secret (`redact_schedule_value`, the decision the bundle takes too) —
+    so two environments that differ only in what the redactor hides read as the one entry
+    they render as."""
     environments: dict[tuple[str | None, str | None], list[str]] = {}
     for row in rows:
         value = row["value"]
-        shown = None if value is None else redactor.redact_text(str(value))
+        keys = json.loads(str(row["keys"]))
+        shown = None if value is None else redact_schedule_value(redactor, keys, str(value))
         reason = None if value is not None else str(row["unresolved_reason"])
         environments.setdefault((shown, reason), []).append(f"`{row['environment']}`")
     entries = []

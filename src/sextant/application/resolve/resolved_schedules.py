@@ -15,17 +15,26 @@ opener mean here exactly what they mean in a configuration file. Only the LOOKUP
 pass's: one environment's `resolved_config` rows, keyed as the model's `key_matching` says.
 Those values are already fully substituted, so the lookup never recurses.
 
+**Every exit masks a value by the keys it was read through.** Each row carries `keys`, every
+key `substitute` asked the environment's lookup for, in order (a JSON array, the
+`participants.aliases` convention). A schedule IS the value of the key that configures it,
+so where that key names a secret — `app.token.cleanup.cron`, whose value `resolved_config`
+masks by the key rule — the schedule masks whole as well; `redact_schedule_value` is that
+decision, called by the bundle export and the document alike.
+
 **What it does not do.** A SpEL `#{…}` expression holds no placeholder opener and gets no
 rows; nothing here evaluates one (spec §4). A job with a literal expression gets none either:
 its `scheduled_work` row already says everything.
 """
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import placeholder_rule, substitute
 from sextant.domain.config_keys import normalize_key
+from sextant.domain.redaction import REDACTED, Redactor
 
 
 def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -58,19 +67,46 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
     for environment in sorted(by_environment):
         lookup = _environment_lookup(by_environment[environment], key_matching)
         for job in jobs:
-            value, reason = substitute(str(job["expression"]), placeholders, lookup)
+            asked: list[str] = []
+            value, reason = substitute(
+                str(job["expression"]), placeholders, _recording(lookup, asked)
+            )
             rows.append(
                 {
                     "handler": job["handler"],
                     "trigger": job["trigger"],
                     "expression": job["expression"],
                     "environment": environment,
+                    "keys": json.dumps(list(dict.fromkeys(asked))),
                     "value": value,
                     "unresolved_reason": reason,
                 }
             )
     if rows:
         workspace.derive("resolved_schedules_insert", rows=rows)
+
+
+def redact_schedule_value(redactor: Redactor, keys: Sequence[str], value: str) -> str:
+    """A configured schedule as an exit may print it: masked WHOLE when any key it was read
+    through names a secret — the test `redact_value` masks a configuration value by, so the
+    schedule and the `resolved_config` row it was read from mask alike — and otherwise
+    through `redact_text`, the value patterns and URL userinfo stripping. The one decision
+    for `resolved_schedules.value`; the bundle export and the document both call it."""
+    if any(redactor.masks_key(key) for key in keys):
+        return REDACTED
+    return redactor.redact_text(value)
+
+
+def _recording(
+    lookup: Callable[[str], tuple[str | None, str | None]], asked: list[str]
+) -> Callable[[str], tuple[str | None, str | None]]:
+    """`lookup`, noting in `asked` every key it is asked for."""
+
+    def recorded(ref_key: str) -> tuple[str | None, str | None]:
+        asked.append(ref_key)
+        return lookup(ref_key)
+
+    return recorded
 
 
 def _environment_lookup(

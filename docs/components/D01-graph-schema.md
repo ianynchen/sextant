@@ -966,8 +966,11 @@ repository cannot know.
 the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
 (`scheduled_work` row whose expression holds the config model's placeholder opener,
 environment of `resolved_config`), carrying `handler`, `trigger`, `expression`,
-`environment`, `value` and `unresolved_reason` — the last one of the closed set
-`resolved_config` uses, `value` NULL exactly when it is set. The first three are the job's
+`environment`, `keys`, `value` and `unresolved_reason` — the last one of the closed set
+`resolved_config` uses, `value` NULL exactly when it is set. `keys` is a JSON array of every
+key the substitution asked that environment's configuration for, in the order it asked: a
+schedule is the value of the key that configures it, so every exit masks `value` whole where
+one of them names a secret, as `resolved_config` masks that key's own value. The first three are the job's
 `scheduled_work` columns verbatim and together are its identity: a method with two
 schedules of one kind (`@Schedules`) is two jobs sharing `handler` and `trigger`, and only
 `expression` attributes a value to its own. The expression is substituted by the same placeholder rule

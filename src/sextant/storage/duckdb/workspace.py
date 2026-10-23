@@ -7,6 +7,7 @@ import duckdb
 
 from sextant.application.boundary.source import STAMPS, NotABoundarySource
 from sextant.application.resolve.bean_conditions import redact_condition_evidence
+from sextant.application.resolve.resolved_schedules import redact_schedule_value
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
 
@@ -721,7 +722,7 @@ _NAMED_QUERIES = {
     # (NFR-1): a job has one row per environment, and two schedules of one kind on one
     # method (`@Schedules`) differ in `expression`.
     "resolved_schedules": """
-        SELECT handler, trigger, expression, environment, value, unresolved_reason
+        SELECT handler, trigger, expression, environment, keys, value, unresolved_reason
         FROM resolved_schedules
         ORDER BY handler, trigger, expression, environment
     """,
@@ -1256,8 +1257,9 @@ _NAMED_QUERIES = {
 # must not be duplicated — not the column:
 #
 #   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
-#                `endpoint_metadata.path`, `endpoint_conditions.path`,
-#                `resolved_schedules.value` (`redact_text`, the same rule)
+#                `endpoint_metadata.path`, `endpoint_conditions.path`
+#   schedules    `resolved_schedules.value` (`redact_schedule_value`: whole by the
+#                keys it was read through, else `redact_text`)
 #   candidates   `open_questions.candidates` (`redact_candidates`)
 #   the grammar  `call_sites.arguments`, `annotations.args`,
 #                `return_flows.value`, `method_returns.value`,
@@ -1297,6 +1299,10 @@ _REDACTED_PAYLOADS = "redacted_payloads"
 # spelling or a configured value — masked by `redact_condition_evidence`: each quoted value by
 # its key, the rest by `redact_text`, since it is not a JSON document `redact_json` can walk.
 _REDACTED_EVIDENCE = "redacted_evidence"
+# `resolved_schedules.value`, keyed on (keys, value) — a schedule is the value of the keys
+# that configure it, so it masks by them (`redact_schedule_value`), as `resolved_config`'s
+# map keys on (key, value).
+_REDACTED_SCHEDULE_VALUES = "redacted_schedule_values"
 # `config_entries` is the RAW half of what `resolved_config` holds resolved —
 # the same values, before the resolver joined them — so it masks by the same
 # rule through the same `Redactor.redact_value`, keyed on the entry's own
@@ -1400,16 +1406,17 @@ _EXPORT_QUERIES = {
     "error_handlers": _NAMED_QUERIES["error_handlers"],
     # Spec 2026-10-23-configured-schedules §3b: a job's schedule as each environment's
     # configuration resolves it. `value` IS configuration read into the bundle, so it masks
-    # — but by `redact_text`, the address map's rule, not the key-based one: a cron, rate or
-    # delay is neither a credential nor keyed (the row carries the handler, not the key the
-    # placeholder named), and `redact_text` applies the module's value patterns and URL
-    # userinfo stripping. One map per rule, so it joins `_REDACTED_ADDRESSES`. `expression`
-    # is `scheduled_work.expression` verbatim, and travels as that column does.
+    # as configuration does: WHOLE where a key it was read through names a secret — the
+    # schedule of `${app.token.cleanup.cron}` is that key's value, which `resolved_config`
+    # masks by the key — and otherwise by `redact_text`, the value patterns and URL userinfo
+    # stripping (`redact_schedule_value`, the one decision the document makes too). `keys`
+    # are configuration key NAMES, exported as `resolved_config.key` is. `expression` is
+    # `scheduled_work.expression` verbatim, and travels as that column does.
     "resolved_schedules": f"""
-        SELECT s.handler, s.trigger, s.expression, s.environment,
-               coalesce(a.masked, s.value) AS value, s.unresolved_reason
+        SELECT s.handler, s.trigger, s.expression, s.environment, s.keys,
+               coalesce(v.masked, s.value) AS value, s.unresolved_reason
         FROM resolved_schedules s
-        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.value
+        LEFT JOIN {_REDACTED_SCHEDULE_VALUES} v ON v.keys = s.keys AND v.value = s.value
         ORDER BY s.handler, s.trigger, s.expression, s.environment
     """,
     # `arguments` and `args` carry JSON the analysis read out of code, and a
@@ -2428,6 +2435,7 @@ class DuckDbWorkspace:
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
                 _REDACTED_EVIDENCE,
+                _REDACTED_SCHEDULE_VALUES,
             )
         return list(_EXPORTED_TABLES)
 
@@ -2451,7 +2459,7 @@ class DuckDbWorkspace:
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name NOT IN "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -2461,6 +2469,7 @@ class DuckDbWorkspace:
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
                 _REDACTED_EVIDENCE,
+                _REDACTED_SCHEDULE_VALUES,
                 _ENDPOINT_CANDIDATES,
                 _ROUTE_REQUIREMENTS,
                 _CHANNEL_BINDINGS,
@@ -2534,10 +2543,6 @@ class DuckDbWorkspace:
         # map is what keeps a shadow row and the row it anticipates spelled alike.
         # Empty on every analysis but a `--shadow` one, which costs this UNION a
         # scan of an empty table.
-        # `resolved_schedules.value` joins because its rule is this map's rule,
-        # `redact_text` (spec 2026-10-23-configured-schedules §3b) — a configured
-        # schedule is neither keyed nor a credential, and one map per rule is what
-        # keeps a second `redact_text` map from drifting beside this one.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
@@ -2545,8 +2550,7 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
-            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT value FROM resolved_schedules WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,
@@ -2555,6 +2559,23 @@ class DuckDbWorkspace:
                 (str(address), masked)
                 for (address,) in address_rows
                 if (masked := redactor.redact_text(str(address))) != str(address)
+            ],
+        )
+
+        # Keyed on (keys, value) and masked by `redact_schedule_value` — the one decision
+        # `resolved_schedules.value` takes at every exit (spec 2026-10-23-configured-
+        # schedules §3b): whole where a key names a secret, `redact_text` otherwise.
+        schedule_rows = self._connection.execute(
+            "SELECT DISTINCT keys, value FROM resolved_schedules WHERE value IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_SCHEDULE_VALUES,
+            "keys VARCHAR, value VARCHAR, masked VARCHAR",
+            [
+                (str(keys), str(value), masked)
+                for keys, value in schedule_rows
+                if (masked := redact_schedule_value(redactor, json.loads(str(keys)), str(value)))
+                != str(value)
             ],
         )
 

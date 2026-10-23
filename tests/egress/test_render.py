@@ -1383,12 +1383,14 @@ def _configured(
     handler: str = SWEEP,
     expression: str = SWEEP_CRON,
     trigger: str = "cron",
+    keys: tuple[str, ...] = ("orders.sweep.cron",),
 ) -> dict[str, object]:
     return {
         "handler": handler,
         "trigger": trigger,
         "expression": expression,
         "environment": environment,
+        "keys": json.dumps(list(keys)),
         "value": value,
         "unresolved_reason": reason,
     }
@@ -1499,3 +1501,38 @@ def test_a_configured_schedule_value_passes_the_render_redactor():
     )
     assert "ACME_A1B2" not in text
     assert f"  - as configured in this repository: `{REDACTED}` in `prod`\n" in text
+
+
+TOKEN_CRON = "${app.token.cleanup.cron}"
+
+
+@pytest.mark.pins("schedules.a-value-whose-KEY-names-a-secret-is-masked-whole")
+def test_a_schedule_whose_key_names_a_secret_is_masked_whole_in_the_document():
+    """The key rule masks `app.token.cleanup.cron`'s value in `resolved_config` (`token`, a
+    built-in pattern), so the schedule that IS that value masks whole too — by the keys its
+    expression asked for, not by what the cron looks like."""
+    text = _schedules_document(
+        [_job(SWEEP, TOKEN_CRON)],
+        [
+            _configured(
+                "prod", "0 0 3 * * *", expression=TOKEN_CRON, keys=("app.token.cleanup.cron",)
+            )
+        ],
+    )
+    assert "0 0 3 * * *" not in text
+    assert f"  - as configured in this repository: `{REDACTED}` in `prod`\n" in text
+
+
+@pytest.mark.pins("schedules.a-value-whose-KEY-names-a-secret-is-masked-whole")
+def test_a_schedule_under_a_sextant_yml_key_pattern_is_masked_whole_in_the_document():
+    redactor = Redactor.from_rules(RedactionRules(key_patterns=("orders.sweep",)))
+    text = _schedules_document(
+        [_job(SWEEP, SWEEP_CRON)], [_configured("prod", "0 */5 * * * *")], redactor
+    )
+    assert "0 */5 * * * *" not in text
+    assert f"  - as configured in this repository: `{REDACTED}` in `prod`\n" in text
+
+
+def test_a_schedule_under_an_ordinary_key_shows_its_value_in_the_document():
+    text = _schedules_document([_job(SWEEP, SWEEP_CRON)], [_configured("prod", "0 */5 * * * *")])
+    assert "  - as configured in this repository: `0 */5 * * * *` in `prod`\n" in text

@@ -242,6 +242,12 @@ CREATE TABLE IF NOT EXISTS resolved_schedules (
     expression        TEXT,
     -- One of `resolved_config`'s environments.
     environment       TEXT,
+    -- Every key the substitution asked this environment's configuration for, in the
+    -- order it asked, as a JSON array (the `participants.aliases` convention). What the
+    -- redactor's KEY rule is applied to at every exit: a schedule is the value of the
+    -- key that configures it, so a key naming a secret masks the value whole
+    -- (`resolve/resolved_schedules.py::redact_schedule_value`).
+    keys              TEXT,
     -- The expression with every placeholder substituted from that environment's
     -- resolved configuration, or the annotation's own `:default` where none sets the
     -- key. NULL exactly when `unresolved_reason` is set.
