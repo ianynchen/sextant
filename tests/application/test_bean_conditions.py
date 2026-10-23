@@ -11,6 +11,7 @@ and their bean model, on hand-built facts spelled the way the extractor spells t
 coordinates on every declared symbol, bare descriptors on every call target).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -818,3 +819,459 @@ def test_a_new_inside_a_lambda_a_factory_creates_is_that_factorys_construction(
         "prod": ("factory", _MODULE + publisher, "profile", "true", "resolved"),
     }
     assert presence == {"default": ("false", "resolved"), "prod": ("true", "resolved")}
+
+
+# --- `@ConditionalOnMissingBean` / `@ConditionalOnBean` from the module's own beans (§2c) ---
+#
+# CP-44 rows 1-3, 6: `value`/`type` are one set of types; `name` and `annotation` are separate
+# criteria; `@ConditionalOnBean` needs every criterion matched, `@ConditionalOnMissingBean`
+# fails on any; an unannotated use on a `@Bean` method checks its declared return type; the
+# search sees what is registered so far, which is why every verdict here is `partial`.
+
+MISSING = "org/springframework/boot/autoconfigure/condition/ConditionalOnMissingBean#"
+PRESENT = "org/springframework/boot/autoconfigure/condition/ConditionalOnBean#"
+ON_CLASS = "org/springframework/boot/autoconfigure/condition/ConditionalOnClass#"
+SPI = "com/acme/auth/"
+USER_SERVICE = SPI + "UserService#"
+DEFAULT_USERS = SPI + "DefaultUserService#"
+LDAP_USERS = SPI + "LdapUserService#"
+LOCAL_USERS = SPI + "LocalUserService#"
+AUDIT = SPI + "UserAudit#"
+AUTH = SPI + "AuthConfiguration#"
+_PARTIAL = "decided from this module's beans only; a library or the processing order may differ"
+_ORDER = "Spring keeps whichever is processed first; the order is not in the code"
+
+
+def _missing(**args: object) -> AnnotationUse:
+    return AnnotationUse(annotation=MISSING, args=args)
+
+
+def _present(**args: object) -> AnnotationUse:
+    return AnnotationUse(annotation=PRESENT, args=args)
+
+
+def _users(*implementations: str) -> list[object]:
+    """`interface UserService` and each implementation of it, unannotated."""
+    facts = _type(USER_SERVICE, kind=ConstructKind.INTERFACE)
+    for implementation in implementations:
+        facts += _type(implementation, interfaces=(USER_SERVICE,))
+    return facts
+
+
+def _default_beside_ldap(default_uses: list[AnnotationUse]) -> list[object]:
+    """`@Configuration AuthConfiguration` with a default `@Bean UserService defaultUserService()
+    { return new DefaultUserService(); }` under `default_uses`, beside `@Bean @Profile("ldap")
+    UserService ldapUserService() { return new LdapUserService(); }`."""
+    return [
+        *_users(DEFAULT_USERS, LDAP_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), *default_uses],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH, "ldapUserService", USER_SERVICE, [_marker(BEAN), _profile("ldap")], [LDAP_USERS]
+        ),
+    ]
+
+
+def _presence_rows(workspace: DuckDbWorkspace, bean: str) -> dict[str, tuple[object, ...]]:
+    return {
+        str(r["environment"]): (r["holds"], r["resolution"], r["evidence"])
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + bean and r["kind"] == "presence"
+    }
+
+
+def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registers(
+    tmp_path: Path,
+):
+    """The brief's case, Apollo's `AuthConfiguration` reduced: the default `UserService` is
+    `@ConditionalOnMissingBean(UserService.class)` and the override is `@Profile("ldap")`. The
+    default's class exists in every environment but `ldap`, decided from this module's own
+    beans — `partial`, with that reason, never `resolved`."""
+    facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    [expression] = {
+        r["expression"]
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + DEFAULT_USERS and r["kind"] == "presence"
+    }
+    presence = _presence(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows == {
+        "default": ("true", "partial", _PARTIAL),
+        "ldap": ("false", "partial", _PARTIAL),
+    }
+    assert json.loads(str(expression)) == {
+        "annotation": MISSING,
+        "types": [USER_SERVICE],
+        "names": [],
+        "annotations": [],
+    }
+    assert presence == {"default": ("true", "partial"), "ldap": ("false", "partial")}
+
+
+def test_on_bean_is_the_inverse_of_on_missing_bean(tmp_path: Path):
+    """`@Bean @ConditionalOnBean(UserService.class) UserAudit userAudit()` beside the `ldap`
+    override alone: the audit exists only where a `UserService` does — `ldap` — `partial`."""
+    facts = [
+        *_users(LDAP_USERS),
+        *_type(AUDIT),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH, "ldapUserService", USER_SERVICE, [_marker(BEAN), _profile("ldap")], [LDAP_USERS]
+        ),
+        *_method(
+            AUTH, "userAudit", AUDIT, [_marker(BEAN), _present(value=[USER_SERVICE])], [AUDIT]
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, AUDIT)
+    workspace.close()
+
+    assert rows == {
+        "default": ("false", "partial", _PARTIAL),
+        "ldap": ("true", "partial", _PARTIAL),
+    }
+
+
+def test_two_missing_bean_defaults_are_unresolved(tmp_path: Path):
+    """Review focus 3. Two `@Bean`s each `@ConditionalOnMissingBean(UserService.class)`, both
+    otherwise unconditional: Spring registers whichever it processes first and skips the other,
+    and which is first is not in the code — `unresolved` for both, never a pick."""
+    facts = [
+        *_users(DEFAULT_USERS, LOCAL_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "localUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [LOCAL_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    first = _presence_rows(workspace, DEFAULT_USERS)
+    second = _presence_rows(workspace, LOCAL_USERS)
+    workspace.close()
+
+    for rows in (first, second):
+        assert {(holds, resolution) for holds, resolution, _ in rows.values()} == {
+            ("unresolved", "unresolved")
+        }
+        assert all(_ORDER in str(evidence) for _, _, evidence in rows.values())
+        assert set(rows) == {"default", "ldap"}
+
+
+def test_two_missing_bean_defaults_decide_where_one_of_them_is_absent(tmp_path: Path):
+    """The mutual case is open only where BOTH defaults' other conditions hold: with the
+    second under `@Profile("ldap")`, outside `ldap` it is absent for its own reason and the
+    first is decided — present, `partial`; in `ldap` both stay open, by the order."""
+    facts = [
+        *_users(DEFAULT_USERS, LOCAL_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "localUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _profile("ldap"), _missing(value=[USER_SERVICE])],
+            [LOCAL_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows["default"] == ("true", "partial", _PARTIAL)
+    assert rows["ldap"][:2] == ("unresolved", "unresolved")
+    assert _ORDER in str(rows["ldap"][2])
+
+
+def test_a_competitor_under_an_unevaluated_condition_leaves_the_default_unresolved(
+    tmp_path: Path,
+):
+    """The override is `@ConditionalOnClass(name = "com.unboundid.ldap.sdk.LDAPConnection")` —
+    a classpath question this analysis does not answer — so whether a `UserService` competes
+    is unknown in every environment, and the default's verdict is `unresolved` there."""
+    facts = [
+        *_users(DEFAULT_USERS, LDAP_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+        *_method(
+            AUTH,
+            "ldapUserService",
+            USER_SERVICE,
+            [
+                _marker(BEAN),
+                AnnotationUse(
+                    annotation=ON_CLASS, args={"name": ["com.unboundid.ldap.sdk.LDAPConnection"]}
+                ),
+            ],
+            [LDAP_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert {(holds, resolution) for holds, resolution, _ in rows.values()} == {
+        ("unresolved", "unresolved")
+    }
+
+
+def test_an_unannotated_missing_bean_checks_the_factorys_return_type(tmp_path: Path):
+    """CP-44 row 1: `@Bean @ConditionalOnMissingBean UserService defaultUserService()` names no
+    type, name or annotation, so Spring checks the method's declared return type — the same
+    verdict as naming `UserService` outright."""
+    facts = _default_beside_ldap([_missing()])
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    [expression] = {
+        r["expression"]
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + DEFAULT_USERS and r["kind"] == "presence"
+    }
+    workspace.close()
+
+    assert rows == {
+        "default": ("true", "partial", _PARTIAL),
+        "ldap": ("false", "partial", _PARTIAL),
+    }
+    assert json.loads(str(expression))["types"] == [USER_SERVICE]
+
+
+def test_an_unconditional_subtype_competitor_makes_the_default_absent_everywhere(
+    tmp_path: Path,
+):
+    """`@Service LdapUserService implements UserService`, scanned and unconditional, is a bean
+    OF `UserService` — its registered type is a subtype of the criterion — so the default
+    fails in every environment. Still `partial`: a presence verdict always is."""
+    facts = [
+        *_users(DEFAULT_USERS),
+        *_type(LDAP_USERS, [_marker(SERVICE)], interfaces=(USER_SERVICE,)),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE])],
+            [DEFAULT_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows == {
+        "default": ("false", "partial", _PARTIAL),
+        "ldap": ("false", "partial", _PARTIAL),
+    }
+
+
+def test_a_factory_declared_as_the_supertype_is_no_bean_of_the_subtype(tmp_path: Path):
+    """The search matches a factory by its DECLARED return type (CP-44 row 3, `isTypeMatch`
+    on the definition, nothing instantiated): `ldapUserService()` returns `UserService`, so it
+    is no bean of `LdapUserService`, and `@ConditionalOnMissingBean(LdapUserService.class)`
+    holds everywhere."""
+    facts = _default_beside_ldap([_missing(value=[LDAP_USERS])])
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows == {
+        "default": ("true", "partial", _PARTIAL),
+        "ldap": ("true", "partial", _PARTIAL),
+    }
+
+
+@pytest.mark.parametrize(
+    ("override", "name", "expected"),
+    [
+        # A factory is named by its method (or `@Bean(name)`, CP-27 row 14).
+        ("factory", "ldapUserService", "false"),
+        ("factory", "somethingElse", "true"),
+        # A scanned class by its simple name uncapitalised (CP-44 row 6)...
+        ("scanned", "ldapUserService", "false"),
+        # ...or by its stereotype's naming attribute when it gives one.
+        ("named", "directory", "false"),
+        ("named", "ldapUserService", "true"),
+    ],
+)
+def test_a_name_criterion_matches_a_bean_by_its_name(
+    tmp_path: Path, override: str, name: str, expected: str
+):
+    """`@ConditionalOnMissingBean(name = …)` asks `containsBean` (CP-44 row 2): it matches the
+    `ldap` override by the override's own bean NAME, whatever its type."""
+    facts = [
+        *_users(DEFAULT_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(name=[name])],
+            [DEFAULT_USERS],
+        ),
+    ]
+    if override == "factory":
+        facts += [
+            *_type(LDAP_USERS, interfaces=(USER_SERVICE,)),
+            *_method(
+                AUTH,
+                "ldapUserService",
+                USER_SERVICE,
+                [_marker(BEAN), _profile("ldap")],
+                [LDAP_USERS],
+            ),
+        ]
+    else:
+        stereotype = (
+            AnnotationUse(annotation=SERVICE, args={"value": "directory"})
+            if override == "named"
+            else _marker(SERVICE)
+        )
+        facts += _type(LDAP_USERS, [stereotype, _profile("ldap")], interfaces=(USER_SERVICE,))
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert rows["default"] == ("true", "partial", _PARTIAL)
+    assert rows["ldap"] == (expected, "partial", _PARTIAL)
+
+
+def test_an_annotation_criterion_matches_a_bean_whose_class_carries_it(tmp_path: Path):
+    """`@ConditionalOnBean(annotation = Directory.class)`: a separate criterion (CP-44 row 2),
+    matched by the competitor's class carrying the annotation."""
+    directory = SPI + "Directory#"
+    facts = [
+        *_type(directory, kind=ConstructKind.ANNOTATION),
+        *_users(),
+        *_type(
+            LDAP_USERS,
+            [_marker(SERVICE), _marker(directory), _profile("ldap")],
+            interfaces=(USER_SERVICE,),
+        ),
+        *_type(AUDIT),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH, "userAudit", AUDIT, [_marker(BEAN), _present(annotation=[directory])], [AUDIT]
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = _presence_rows(workspace, AUDIT)
+    workspace.close()
+
+    assert rows == {
+        "default": ("false", "partial", _PARTIAL),
+        "ldap": ("true", "partial", _PARTIAL),
+    }
+
+
+def test_on_bean_needs_every_criterion_and_on_missing_bean_fails_on_any(tmp_path: Path):
+    """CP-44 row 2: `isAllMatched` against `isAnyMatched`. A type the `ldap` override has and a
+    name nothing has: `@ConditionalOnBean` of both fails everywhere; `@ConditionalOnMissingBean`
+    of both fails in `ldap`, where the type matches."""
+    facts = [
+        *_users(DEFAULT_USERS, LDAP_USERS),
+        *_type(AUDIT),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH, "ldapUserService", USER_SERVICE, [_marker(BEAN), _profile("ldap")], [LDAP_USERS]
+        ),
+        *_method(
+            AUTH,
+            "userAudit",
+            AUDIT,
+            [_marker(BEAN), _present(value=[USER_SERVICE], name=["nobody"])],
+            [AUDIT],
+        ),
+        *_method(
+            AUTH,
+            "defaultUserService",
+            USER_SERVICE,
+            [_marker(BEAN), _missing(value=[USER_SERVICE], name=["nobody"])],
+            [DEFAULT_USERS],
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    audit = _presence_rows(workspace, AUDIT)
+    default = _presence_rows(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert {e: v[0] for e, v in audit.items()} == {"default": "false", "ldap": "false"}
+    assert {e: v[0] for e, v in default.items()} == {"default": "true", "ldap": "false"}
+
+
+def test_a_missing_bean_on_a_configuration_class_does_not_count_its_own_factories(
+    tmp_path: Path,
+):
+    """`@Configuration @ConditionalOnMissingBean(UserService.class) Fallback` with `@Bean
+    UserService fallbackUserService()`: the class's condition is judged before its own `@Bean`s
+    are read (CP-44 row 4), so they are no competitor of it — only the `ldap` override is, and
+    the fallback's class carries the configuration's verdict."""
+    fallback = SPI + "Fallback#"
+    facts = [
+        *_users(DEFAULT_USERS, LDAP_USERS),
+        *_type(AUTH, [_marker(CONFIGURATION)]),
+        *_method(
+            AUTH, "ldapUserService", USER_SERVICE, [_marker(BEAN), _profile("ldap")], [LDAP_USERS]
+        ),
+        *_type(fallback, [_marker(CONFIGURATION), _missing(value=[USER_SERVICE])]),
+        *_method(fallback, "fallbackUserService", USER_SERVICE, [_marker(BEAN)], [DEFAULT_USERS]),
+    ]
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    rows = [
+        r
+        for r in workspace.query("bean_conditions")
+        if r["bean"] == _MODULE + DEFAULT_USERS and r["kind"] == "presence"
+    ]
+    workspace.close()
+
+    assert {(r["bean_kind"], r["environment"], r["holds"], r["resolution"]) for r in rows} == {
+        ("configuration", "default", "true", "partial"),
+        ("configuration", "ldap", "false", "partial"),
+    }
+
+
+def test_a_resolved_route_decides_presence_over_a_partial_one(tmp_path: Path):
+    """`bean_presence`'s precedence: a class the presence rule leaves `partial` on one route
+    but that an unconditional scan also registers exists everywhere, `resolved` — the partial
+    route decides nothing there."""
+    facts = _default_beside_ldap([_missing(value=[USER_SERVICE])])
+    facts = [
+        f
+        for f in facts
+        if not (isinstance(f, AnnotationFact) and f.target == _MODULE + DEFAULT_USERS)
+    ]
+    facts += _annotated(DEFAULT_USERS, [_marker(COMPONENT)])
+    workspace = _resolved(tmp_path, facts, environments=("ldap",))
+    presence = _presence(workspace, DEFAULT_USERS)
+    workspace.close()
+
+    assert presence == {"default": ("true", "resolved"), "ldap": ("true", "resolved")}

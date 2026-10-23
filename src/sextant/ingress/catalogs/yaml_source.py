@@ -821,7 +821,7 @@ _CONDITION_KINDS = ("profile", "property", "other")
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
     """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
-    `stereotypes` / `configuration_annotation` — naming the file
+    `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` — naming the file
     (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
     framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
     measured is a guess, and a typo here would silently strip every bean of its condition."""
@@ -850,8 +850,8 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
                 )
     if "presence" in raw:
         presence = raw["presence"]
-        strings = ("missing", "present")
-        lists = ("type_attrs", "name_attrs")
+        strings = ("missing", "present", "order_reason")
+        lists = ("type_attrs", "name_attrs", "annotation_attrs")
         if (
             not isinstance(presence, dict)
             or not all(isinstance(presence.get(key), str) for key in strings)
@@ -860,7 +860,8 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
         ):
             raise CatalogError(
                 f"{where}: `presence` needs `missing` and `present` (annotation names), "
-                "`type_attrs` and `name_attrs` (lists) and a `by:` probe"
+                "`type_attrs`, `name_attrs` and `annotation_attrs` (lists), `order_reason` "
+                "and a `by:` probe"
             )
     # Which classes are beans at all (CP-44 row 5): an empty or malformed list would make
     # every scanned class unconditional without a word, the failure the blocks above refuse.
@@ -881,6 +882,18 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
             raise CatalogError(
                 f"{where}: `configuration_annotation` must be one annotation name, "
                 f"got {configuration!r}"
+            )
+    # The attribute naming a scanned bean, per stereotype (CP-44 row 6): a malformed entry
+    # would give every scanned class its default name, read as decided.
+    if "stereotype_name_attrs" in raw:
+        naming = raw["stereotype_name_attrs"]
+        if not isinstance(naming, dict) or not all(
+            isinstance(name, str) and name and isinstance(attr, str) and attr
+            for name, attr in naming.items()
+        ):
+            raise CatalogError(
+                f"{where}: `stereotype_name_attrs` must map each annotation name to one "
+                f"attribute, got {naming!r}"
             )
 
 

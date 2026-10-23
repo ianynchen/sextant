@@ -529,8 +529,10 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- (a condition on a scanned class), `factory` (on the `@Bean` method that constructs and
 -- returns it) or `configuration` (on that method's configuration class); `via` is that
 -- method, NULL for `class`. `kind`, `expression` and `holds` are the conditions pass's
--- encoding (CP-42, CP-43): `profile`, `property` or `other`, the expression JSON typed per
--- kind, and the framework's own verdict for that environment or `unresolved`. A route with
+-- encoding (CP-42, CP-43, CP-44): `profile`, `property`, `presence` (a bean-presence
+-- condition judged from the module's own beans, `resolution = partial` with the reason in
+-- `evidence`, spec §2c) or `other`, the expression JSON typed per kind, and the framework's
+-- own verdict for that environment or `unresolved`. A route with
 -- NO condition — an unconditional scan or factory of a class that also has a conditional
 -- route, or a plain `new` of it outside any factory (`bean_kind = constructed`) — is one row
 -- per environment with `kind` NULL: `true`, or `unresolved` for a plain `new`. Written only
@@ -1248,7 +1250,16 @@ WHERE b.kind IS NOT NULL;
 -- holds where any route holds, fails where every route fails, and is `unresolved` otherwise,
 -- its evidence then naming what left each open route open: a plain `new`, a configured
 -- value this analysis does not know (a placeholder nothing fills), a composed profile
--- expression, or a condition it does not evaluate.
+-- expression, a condition it does not evaluate, or a bean-presence verdict left open.
+--
+-- `resolution` says how firmly (spec §2c): a bean-presence verdict is `partial`, decided
+-- from the module's own beans only, and a verdict resting on one is `partial` too —
+-- `unresolved` > `partial` > `resolved`, by what DECIDES the outcome. A route that fails is
+-- `resolved` when a `resolved` row fails it and `partial` when only `partial` rows do; one
+-- that holds is `partial` when any of its rows is. The bean holds `resolved` when a
+-- `resolved` route holds — a `partial` route beside it decides nothing — and `partial` when
+-- only `partial` routes hold; it fails `partial` when any failing route is `partial`. A
+-- `partial` verdict's evidence is the reason its `partial` rows give.
 CREATE OR REPLACE VIEW bean_presence AS
 WITH reasons AS (
     SELECT *,
@@ -1267,7 +1278,15 @@ routes AS (
            CASE WHEN bool_or(holds = 'false') THEN 'false'
                 WHEN bool_and(holds = 'true') THEN 'true'
                 ELSE 'unresolved' END AS holds,
-           string_agg(DISTINCT reason, '; ' ORDER BY reason) AS reason
+           CASE WHEN bool_or(holds = 'false' AND resolution = 'resolved') THEN 'resolved'
+                WHEN bool_or(holds = 'false') THEN 'partial'
+                WHEN bool_and(holds = 'true') AND bool_and(resolution = 'resolved')
+                     THEN 'resolved'
+                WHEN bool_and(holds = 'true') THEN 'partial'
+                ELSE 'unresolved' END AS resolution,
+           string_agg(DISTINCT reason, '; ' ORDER BY reason) AS reason,
+           string_agg(DISTINCT evidence, '; ' ORDER BY evidence)
+               FILTER (WHERE resolution = 'partial') AS hedge
     FROM reasons
     GROUP BY bean, coalesce(via, ''), environment
 )
@@ -1275,9 +1294,18 @@ SELECT bean, environment,
        CASE WHEN bool_or(holds = 'true') THEN 'true'
             WHEN bool_and(holds = 'false') THEN 'false'
             ELSE 'unresolved' END AS holds,
-       CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'resolved'
+       CASE WHEN bool_or(holds = 'true' AND resolution = 'resolved') THEN 'resolved'
+            WHEN bool_or(holds = 'true') THEN 'partial'
+            WHEN bool_and(holds = 'false') AND bool_and(resolution = 'resolved') THEN 'resolved'
+            WHEN bool_and(holds = 'false') THEN 'partial'
             ELSE 'unresolved' END AS resolution,
-       CASE WHEN bool_or(holds = 'true') OR bool_and(holds = 'false') THEN 'compiler'
+       CASE WHEN bool_or(holds = 'true' AND resolution = 'resolved') THEN 'compiler'
+            WHEN bool_or(holds = 'true')
+                 THEN string_agg(DISTINCT hedge, '; ' ORDER BY hedge) FILTER (WHERE holds = 'true')
+            WHEN bool_and(holds = 'false') AND bool_and(resolution = 'resolved') THEN 'compiler'
+            WHEN bool_and(holds = 'false')
+                 THEN string_agg(DISTINCT hedge, '; ' ORDER BY hedge)
+                          FILTER (WHERE resolution = 'partial')
             ELSE string_agg(DISTINCT reason, '; ' ORDER BY reason)
                      FILTER (WHERE holds = 'unresolved')
             END AS evidence

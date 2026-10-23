@@ -1,8 +1,8 @@
 # CP-44 — where Spring evaluates a condition on a bean, and what `@ConditionalOnMissingBean` checks
 
-**Version scope.** Everything below is measured against **`spring-context`, `spring-beans` and
-`spring-web` as their own manifests state them** (`Implementation-Version` — `7.0.9` for all
-three when this record was made) and **`spring-boot-autoconfigure` as its own manifest states
+**Version scope.** Everything below is measured against **`spring-context`, `spring-beans`,
+`spring-web` and `spring-core` as their own manifests state them** (`Implementation-Version` — `7.0.9` for all
+four when this record was made) and **`spring-boot-autoconfigure` as its own manifest states
 it** (`4.1.1`), read by `probe.py` out of the jars in the local Maven repository — never the
 directory name this harness found them under, which is the CP-5 failure the convention exists
 to prevent. The rules are platform behaviour of the Spring Framework (`7.0.9`) and Spring Boot
@@ -28,7 +28,7 @@ cell lists them in the same order.
 
 | what the run read | 7.0.9 | 4.1.1 |
 |---|---|---|
-| artifact reporting this version | spring-context, spring-beans, spring-web | spring-boot-autoconfigure |
+| artifact reporting this version | spring-context, spring-beans, spring-web, spring-core | spring-boot-autoconfigure |
 | where the jar states that version | MANIFEST.MF | MANIFEST.MF |
 
 | # | question | artifact | version | observed |
@@ -38,6 +38,7 @@ cell lists them in the same order.
 | 3 | which definitions the search sees, and when | `spring-boot-autoconfigure`, `spring-context`, `spring-beans` | 4.1.1, 7.0.9, 7.0.9 | `OnBeanCondition.getConfigurationPhase` is `REGISTER_BEAN`; `ConditionEvaluator.shouldSkip(metadata, phase)` compares the condition's own phase with the phase it was handed before `Condition.matches`; the parser hands `PARSE_CONFIGURATION`, the bean-definition reader `REGISTER_BEAN`; in `loadBeanDefinitionsForBeanMethod` `shouldSkip` (offset 26) comes BEFORE `registerBeanDefinition` (offset 758); the search is `getBeanNamesForType(ResolvableType, includeNonSingletons=true, allowEagerInit=false)`, which reads fields `beanDefinitionNames`, `manualSingletonNames` and tests each name with `isTypeMatch` |
 | 4 | every `ConditionEvaluator.shouldSkip` call site, and what it is handed | `spring-context` | 7.0.9 | `ConditionEvaluator` is package-private (`javap` header), so only the 129 classes of its own package can call it; 5 call it directly: `AnnotatedBeanDefinitionReader#doRegisterBean` hands `AnnotatedGenericBeanDefinition.getMetadata` with no phase, so the evaluator picks one; `ClassPathScanningCandidateComponentProvider#isConditionMatch` hands `MetadataReader.getAnnotationMetadata` with no phase, so the evaluator picks one; `ConfigurationClassBeanDefinitionReader#loadBeanDefinitionsForBeanMethod` hands `BeanMethod.getMetadata` with REGISTER_BEAN; `ConfigurationClassBeanDefinitionReader$TrackedConditionEvaluator#shouldSkip` hands `ConfigurationClass.getMetadata` with REGISTER_BEAN; `ConfigurationClassParser#processConfigurationClass` hands `ConfigurationClass.getMetadata` with PARSE_CONFIGURATION; `ConfigurationClassBeanDefinitionReader$TrackedConditionEvaluator` is called from `ConfigurationClassBeanDefinitionReader#loadBeanDefinitionsForConfigurationClass`, which returns (offset 61) after a skip BEFORE it reads `getBeanMethods` (offset 75); the wrapper's own `shouldSkip` runs `isImported -> getImportedBy -> shouldSkip -> getMetadata`; `ConfigurationClassParser.processConfigurationClass` is reached from `parse`, `processImports`, `processMemberClasses`; the scanner's `isCandidateComponent` runs `isConditionMatch` |
 | 5 | which annotations make a class a scanned bean | `spring-context`, `spring-web` | 7.0.9, 7.0.9 | the scanner's `registerDefaultFilters` builds an `AnnotationTypeFilter` for `Component`; reaches `@Component` directly or through meta-annotations: `@Component` yes, `@Service` yes, `@Repository` yes, `@Controller` yes, `@Configuration` yes, `@RestController` yes, `@ControllerAdvice` yes, `@RestControllerAdvice` yes |
+| 6 | how a scanned class is named | `spring-context`, `spring-web`, `spring-core` | 7.0.9, 7.0.9, 7.0.9 | `AnnotationBeanNameGenerator.generateBeanName` runs `determineBeanNameFromAnnotation -> hasText -> buildDefaultBeanName`; `buildDefaultBeanName` runs `getBeanClassName -> getShortName -> uncapitalizeAsProperty`; `ClassUtils.getShortName` keeps the text after the last `.`, cut at `$$`, and replaces `$` with `.`; `StringUtils.uncapitalizeAsProperty` returns the name unchanged when `charAt(0)` and `charAt(1)` are both `isUpperCase`, else runs `changeFirstCharacterCase`; the attribute aliased (`@AliasFor`, followed) to `@Component`'s `value`: `@Component` value, `@Service` value, `@Repository` value, `@Controller` value, `@Configuration` value, `@RestController` value, `@ControllerAdvice` name, `@RestControllerAdvice` name |
 
 ## What the rows say
 
@@ -96,7 +97,24 @@ built on (`@RestController` through `@Controller`, `@RestControllerAdvice` throu
 `@ControllerAdvice`). This row is an addition to the four the plan named, for the model's
 `stereotypes` list.
 
+**Row 6 — a scanned bean's name.** Added for the `name` criterion of row 2 (Task 3 of the
+`conditional-beans` plan): a `@ConditionalOnMissingBean(name = …)` asks `containsBean`, so
+what a scanned class is CALLED decides it. `generateBeanName` takes the explicit name the
+annotations give and, when that has no text, `buildDefaultBeanName`: the class name after its
+last `.` (cut at a `$$` proxy suffix, `$` read as `.` — `Outer$Inner` is `Outer.Inner`),
+uncapitalised unless its first two characters are both upper case (`OrderService` →
+`orderService`, `URLMapper` stays `URLMapper`). The explicit name is `@Component`'s `value`,
+which each listed stereotype reaches through `@AliasFor` — through `value` on six of them, and
+through `name` on `@ControllerAdvice` and `@RestControllerAdvice`, whose `value` aliases
+`basePackages` instead. The bean model's `stereotype_name_attrs` is this row.
+
 ## What this does NOT measure
+
+* **A name given through a composed stereotype or `@Named`.** Row 6 follows `@AliasFor` across
+  the eight listed stereotypes only; a module's own annotation built on one of them names the
+  bean only if ITS attribute is aliased the same way, which this probe does not read, and
+  `determineBeanNameFromAnnotation`'s convention-based and `jakarta.inject.Named` paths are not
+  exercised.
 
 * **That the order configuration classes are processed in is the order the module's own
   facts imply.** Row 3 shows the search reads what is registered when it runs; the order the

@@ -98,6 +98,21 @@ stereotypes:
   - org.springframework.web.bind.annotation.ControllerAdvice
   - org.springframework.web.bind.annotation.RestControllerAdvice
 configuration_annotation: org.springframework.context.annotation.Configuration
+# `stereotype_name_attrs` — the attribute of each stereotype that names the bean: the one
+# aliased (`@AliasFor`, followed) to `@Component`'s `value` — `name`, not `value`, on the two
+# advice annotations, whose `value` aliases `basePackages`. A scanned class naming none is
+# called by its simple name (after the last `.`, `$` read as `.`), uncapitalised unless its
+# first two letters are both upper case (CP-44 row 6: `buildDefaultBeanName` ->
+# `getShortName` -> `uncapitalizeAsProperty`). Read by the `name` criterion of `presence`.
+stereotype_name_attrs:
+  org.springframework.stereotype.Component: value
+  org.springframework.stereotype.Service: value
+  org.springframework.stereotype.Repository: value
+  org.springframework.stereotype.Controller: value
+  org.springframework.web.bind.annotation.RestController: value
+  org.springframework.context.annotation.Configuration: value
+  org.springframework.web.bind.annotation.ControllerAdvice: name
+  org.springframework.web.bind.annotation.RestControllerAdvice: name
 
 # **A bean that exists in one environment only** (spec 2026-10-21 conditional-controllers,
 # ruled 2026-10-22; generalized to every bean by 2026-10-22 conditional-beans).
@@ -122,13 +137,13 @@ conditions:
               by: scripts/probes/cp43_on_property_condition.md }
   # Named, never evaluated (spec §4): each is a `Condition` CLASS — code, not
   # configuration (CP-42 row 4; the eighteen autoconfigure ones CP-43 row 5
-  # enumerates, less `ConditionalOnProperty`, which is `property` above). A bean
-  # under one writes its rows verbatim with `holds = unresolved`.
+  # enumerates, less `ConditionalOnProperty`, which is `property` above, and the two
+  # bean-presence ones, which are `presence` below). A bean under one writes its rows
+  # verbatim with `holds = unresolved`.
   other:
     by: scripts/probes/cp43_on_property_condition.md
     annotations:
       - org.springframework.context.annotation.Conditional
-      - org.springframework.boot.autoconfigure.condition.ConditionalOnBean
       - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperties
       - org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty
       - org.springframework.boot.autoconfigure.condition.ConditionalOnClass
@@ -136,7 +151,6 @@ conditions:
       - org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
       - org.springframework.boot.autoconfigure.condition.ConditionalOnJava
       - org.springframework.boot.autoconfigure.condition.ConditionalOnJndi
-      - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
       - org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass
       - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWarDeployment
       - org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication
@@ -151,13 +165,16 @@ conditions:
 # `@ConditionalOnMissingBean` / `@ConditionalOnBean` check the beans registered SO FAR
 # (row 3), so a verdict from one module's own beans is `partial`. `type_attrs` are the
 # attributes naming the TYPE checked (`value` and `type` are one set, row 2); `name_attrs`
-# the attribute naming a bean by name; a use with neither (and no `annotation`) on a
-# `@Bean` method checks the method's own return type (row 1). Until the presence pass reads
-# this block the two annotations are also listed under `other` above, so they stay
-# `unresolved`, verbatim.
+# the attribute naming a bean by name; `annotation_attrs` the attribute naming an
+# annotation the bean's class carries — each a separate criterion (row 2); a use with none
+# of them on a `@Bean` method checks the method's own return type (row 1). `order_reason` is
+# what a verdict left open by a loop of these conditions says — two defaults each missing the
+# other: the container keeps the first it reads (row 3), and nothing in the code orders them.
 presence:
   missing: org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
   present: org.springframework.boot.autoconfigure.condition.ConditionalOnBean
   type_attrs: [value, type]
   name_attrs: [name]
+  annotation_attrs: [annotation]
+  order_reason: Spring keeps whichever is processed first; the order is not in the code
   by: scripts/probes/cp44_bean_registration_conditions.md

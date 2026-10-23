@@ -63,19 +63,25 @@ What it evaluates, and what it refuses (spec 2026-10-21 §3b, §4; unchanged by 
   (case-insensitive; EMPTY means "not `false`", CP-43 row 2); an absent key is decided by
   `match_if_missing` (CP-43 row 3); a key whose value is a placeholder nobody filled is
   `unresolved` there.
+* `presence` — the model's `presence` block, `@ConditionalOnMissingBean` / `@ConditionalOnBean`
+  (spec §2c, decision 2 as ruled; CP-44 rows 1-3, 6): judged AFTER the others, from the
+  module's own bean definitions — a competitor exists where its own conditions all hold —
+  and published at `partial` with the reason `ON_MODULE_BEANS`, since the container's search
+  sees what is registered so far and a library may register more (`_presence_verdicts`).
 * `other` — any annotation in the model's `conditions` block this pass has no rule for is
-  written verbatim with `holds = unresolved`; nothing outside that block is read. The
-  bean-presence conditions (`presence`) are among them until their own phase evaluates
-  them (spec §2c).
+  written verbatim with `holds = unresolved`; nothing outside that block is read.
 
 Cost per resolve (GUIDELINES §8.7): the shared `annotation_index` (one decode per load), the
 factory-method fold `beans.declared_beans` already keeps (one `method_declarations` read per
 load, shared with `bean_via`), one `constructor_edges` read, one `type_hierarchy` read, one
 `resolved_config` read and one insert — once per distinct bean model, none per catalog, per
-bean or per row.
+bean or per row. The presence phase reads nothing more: its competitors are the definitions
+`_routes` already found, matched in memory (one scan of them per presence condition), and its
+verdicts settle in rounds over (condition, environment) pairs.
 """
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -84,14 +90,35 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import declared_beans
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
-from sextant.domain.symbols import bare_descriptor, is_type_descriptor, method_name, type_descriptor
+from sextant.domain.symbols import (
+    bare_descriptor,
+    is_type_descriptor,
+    method_name,
+    simple_name,
+    type_descriptor,
+)
 
 PROFILE = "profile"
 PROPERTY = "property"
 OTHER = "other"
+PRESENCE = "presence"
 HOLDS = "true"
 FAILS = "false"
 UNRESOLVED = "unresolved"
+# Every bean-presence verdict's resolution and reason (spec §2c, decision 2 as ruled): the
+# search sees the definitions registered so far (CP-44 row 3), and this pass sees only the
+# module's own — a library, or the order the container reads the module in, may differ.
+PARTIAL = "partial"
+ON_MODULE_BEANS = (
+    "decided from this module's beans only; a library or the processing order may differ"
+)
+_COMPETITOR_OPEN = "whether a competing bean exists here is not decided"
+# CP-44 row 1: with no type, name or annotation the type is deduced from a factory method's
+# return type, and anywhere else `validate` refuses the use.
+_NO_CRITERION = (
+    "names no type, name or annotation, which the container refuses outside a factory method"
+)
+_TYPE_VARIABLE = "the factory method returns a type variable, so the type checked is not known"
 # The characters that make a profile string an EXPRESSION rather than a name (CP-42 row 3):
 # a composition over several active profiles, which this analysis does not evaluate.
 _COMPOSITION = set("&|()")
@@ -129,6 +156,34 @@ class _Route:
     conditions: tuple[tuple[str, ConditionModel, dict[str, Any]], ...]
 
 
+@dataclass(frozen=True)
+class _Registration:
+    """One bean DEFINITION the container registers — a scanned class (`class`) or a factory
+    method (`factory`), never a class merely constructed — as a bean-presence search sees it
+    (CP-44 rows 2, 3, 6): the type it is matched by (the class, or the method's declared
+    return type), its bean name (None where it is not known), the annotations of that type,
+    and every condition the container evaluates on it as (holder, model, args), the holder
+    being the class or method the annotation is on. `owner` is a factory's own class: a
+    condition on that class is judged before the class's factory methods are read."""
+
+    route: str
+    symbol: str
+    owner: str | None
+    registered: str | None
+    name: str | None
+    annotations: frozenset[str]
+    conditions: tuple[tuple[str, ConditionModel, dict[str, Any]], ...]
+
+
+@dataclass(frozen=True)
+class _Presence:
+    """One bean-presence condition, judged once per environment for every route it is on:
+    the structured expression its rows carry and its verdict per environment."""
+
+    expression: dict[str, Any]
+    verdicts: dict[str, tuple[str, str, str]]
+
+
 def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> None:
     vocabularies = _bean_models(catalogs)
     if not vocabularies:
@@ -141,9 +196,10 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     ancestors = _ancestors(workspace)
     rows: list[dict[str, Any]] = []
     for model in vocabularies:
-        routes = _routes(workspace, model, index, constructed, created, ancestors)
+        routes, registrations = _routes(workspace, model, index, constructed, created, ancestors)
+        presence = _presence_verdicts(registrations, ancestors, config, environments)
         for bean in sorted(routes):
-            rows.extend(_rows_for(bean, routes[bean], config, environments))
+            rows.extend(_rows_for(bean, routes[bean], config, environments, presence))
     if rows:
         workspace.derive("bean_conditions_insert", rows=rows)
 
@@ -179,6 +235,16 @@ def _models(model: dict[str, Any]) -> dict[str, ConditionModel]:
             continue
         symbol = type_descriptor(entry["annotation"])
         models[symbol] = ConditionModel(kind=kind, annotation=symbol, members=dict(entry))
+    # The bean-presence conditions (spec §2c), each judged from the module's own beans by
+    # `_presence_verdicts` — `mode` says which of the two (CP-44 row 2: `isAnyMatched` for
+    # `missing`, `isAllMatched` for `present`).
+    presence = model.get("presence") or {}
+    for mode in ("missing", "present"):
+        if presence.get(mode):
+            symbol = type_descriptor(str(presence[mode]))
+            models[symbol] = ConditionModel(
+                kind=PRESENCE, annotation=symbol, members={**presence, "mode": mode}
+            )
     return models
 
 
@@ -189,14 +255,20 @@ def _routes(
     constructed: dict[str, list[str]],
     created: dict[str, list[str]],
     ancestors: dict[str, list[str]],
-) -> dict[str, list[_Route]]:
+) -> tuple[dict[str, list[_Route]], list[_Registration]]:
     """Every class with at least one CONDITIONAL route, mapped to all of its routes —
-    conditional or not, since an unconditional second route decides where it exists."""
+    conditional or not, since an unconditional second route decides where it exists — and
+    every bean definition of the module, conditional or not, for the bean-presence search."""
     conditions = _models(model)
+    naming = {
+        type_descriptor(str(name)): str(attr)
+        for name, attr in (model.get("stereotype_name_attrs") or {}).items()
+    }
     stereotypes = {type_descriptor(str(name)) for name in model.get("stereotypes", ())}
     if model.get("configuration_annotation"):
         stereotypes.add(type_descriptor(str(model["configuration_annotation"])))
     annotation_types = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
+    raw = index
     index = _effective_index(workspace, index, annotation_types, {*stereotypes, *conditions})
 
     def conditions_on(target: str | None, bean_kind: str) -> list[tuple[str, ConditionModel, Any]]:
@@ -206,7 +278,15 @@ def _routes(
             if bare_descriptor(descriptor) in conditions
         ]
 
+    # The annotations each type carries, bare — what an `annotation` criterion asks of the
+    # type a bean is matched by.
+    annotated = {
+        bare_descriptor(target): frozenset(bare_descriptor(descriptor) for descriptor, _ in uses)
+        for target, uses in index.items()
+        if is_type_descriptor(target)
+    }
     routes: dict[str, list[_Route]] = {}
+    registrations: list[_Registration] = []
     for target, uses in index.items():
         # An annotation or interface TYPE carrying a stereotype is a composed stereotype or a
         # type nothing instantiates — never a scanned bean itself.
@@ -215,10 +295,43 @@ def _routes(
         if is_type_descriptor(target) and any(
             bare_descriptor(descriptor) in stereotypes for descriptor, _ in uses
         ):
-            routes.setdefault(target, []).append(
-                _Route(CLASS, None, tuple(conditions_on(target, CLASS)))
+            on_class = tuple(conditions_on(target, CLASS))
+            routes.setdefault(target, []).append(_Route(CLASS, None, on_class))
+            registrations.append(
+                _Registration(
+                    route=CLASS,
+                    symbol=target,
+                    owner=None,
+                    registered=bare_descriptor(target),
+                    name=_scanned_name(target, raw.get(target, ()), naming, conditions),
+                    annotations=annotated.get(bare_descriptor(target), frozenset()),
+                    conditions=tuple((target, found, args) for _, found, args in on_class),
+                )
             )
     factories = declared_beans(workspace, model).by_method
+    for declared in sorted(factories):
+        bean = factories[declared]
+        owner = enclosing_type_of(declared)
+        registrations.append(
+            _Registration(
+                route=FACTORY,
+                symbol=declared,
+                owner=owner,
+                registered=bean.erased_return,
+                name=bean.name,
+                annotations=annotated.get(bean.erased_return or "", frozenset()),
+                conditions=(
+                    *(
+                        (declared, found, args)
+                        for _, found, args in conditions_on(declared, FACTORY)
+                    ),
+                    *(
+                        (owner or "", found, args)
+                        for _, found, args in conditions_on(owner, CONFIGURATION)
+                    ),
+                ),
+            )
+        )
     # A lambda body a factory creates is that factory's code (ruled 2026-10-22), so a `new`
     # in it is the factory's construction too — the creating factory answers for it.
     creator: dict[str, str] = {}
@@ -254,7 +367,40 @@ def _routes(
         routes.setdefault(body, []).append(_Route(FACTORY, creating, route_conditions_of(creating)))
     return {
         bean: found for bean, found in routes.items() if any(route.conditions for route in found)
-    }
+    }, registrations
+
+
+def _scanned_name(
+    target: str,
+    uses: Iterable[tuple[str, dict[str, Any]]],
+    naming: dict[str, str],
+    conditions: dict[str, ConditionModel],
+) -> str | None:
+    """A scanned class's bean name (CP-44 row 6): the text its stereotype's naming attribute
+    gives, else its simple name — after the last `.`, cut at `$$`, `$` read as `.` —
+    uncapitalised unless its first two characters are both upper case. A class that is a
+    bean only through a COMPOSED stereotype and carries an argument on any annotation may be
+    named by it (an `@AliasFor` this analysis does not read): None, the name not known."""
+    direct = False
+    composing = []
+    for descriptor, args in uses:
+        attribute = naming.get(bare_descriptor(descriptor))
+        if attribute is None:
+            if bare_descriptor(descriptor) not in conditions:
+                composing.append(args)
+            continue
+        direct = True
+        value = args.get(attribute)
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, str) and value.strip():
+            return value
+    if not direct and any(composing):
+        return None
+    short = simple_name(bare_descriptor(target)).split("$$", 1)[0].replace("$", ".")
+    if len(short) > 1 and short[0].isupper() and short[1].isupper():
+        return short
+    return short[:1].lower() + short[1:]
 
 
 def _rows_for(
@@ -262,10 +408,12 @@ def _rows_for(
     routes: list[_Route],
     config: dict[str, dict[str, str | None]],
     environments: list[str],
+    presence: dict[tuple[str, str, str], _Presence],
 ) -> list[dict[str, Any]]:
     """One row per (route, condition, environment), evaluated; one condition-less row per
     (route, environment) for a route with no condition — `true` for a bean route,
-    `unresolved` for a plain `new`. `bean_presence` folds them."""
+    `unresolved` for a plain `new`. A bean-presence condition's rows carry the verdict its
+    holder's condition was judged to (`_presence_verdicts`). `bean_presence` folds them."""
     distinct = sorted(
         {(route.route, route.via or ""): route for route in routes}.values(),
         key=lambda route: (route.route, route.via or ""),
@@ -294,6 +442,32 @@ def _rows_for(
                 )
             continue
         for bean_kind, model, args in route.conditions:
+            if model.kind == PRESENCE:
+                # The class or method the annotation is on, which `_presence_verdicts` keys by.
+                holder = (
+                    bean
+                    if bean_kind == CLASS
+                    else route.via
+                    if bean_kind == FACTORY
+                    else enclosing_type_of(route.via or "")
+                )
+                judged = presence[_presence_key(holder or "", model, args)]
+                for environment in environments:
+                    holds, resolution, evidence = judged.verdicts[environment]
+                    rows.append(
+                        {
+                            "bean": bean,
+                            "bean_kind": bean_kind,
+                            "via": route.via,
+                            "kind": PRESENCE,
+                            "expression": json.dumps(judged.expression, sort_keys=True),
+                            "environment": environment,
+                            "holds": holds,
+                            "resolution": resolution,
+                            "evidence": evidence,
+                        }
+                    )
+                continue
             kind, expression = _expression(model, args)
             for environment in environments:
                 holds, resolution = _holds(
@@ -313,6 +487,216 @@ def _rows_for(
                     }
                 )
     return rows
+
+
+def _presence_key(holder: str, model: ConditionModel, args: dict[str, Any]) -> tuple[str, str, str]:
+    return holder, model.annotation, json.dumps(args, sort_keys=True)
+
+
+def _listed(members: dict[str, Any], attrs: str, args: dict[str, Any]) -> list[str]:
+    """Every value the use gives under any attribute `members[attrs]` names, once, sorted."""
+    return sorted(
+        {value for attr in members.get(attrs, ()) for value in _strings(args.get(str(attr)))}
+    )
+
+
+# A criterion's state against the competitors that match it: one exists there (`_MET`), none
+# does or could (`_UNMET`), or which is not known (`UNRESOLVED`); None while a competitor's
+# own verdict is still being decided.
+_MET = "met"
+_UNMET = "unmet"
+
+
+def _presence_verdicts(
+    registrations: list[_Registration],
+    ancestors: dict[str, list[str]],
+    config: dict[str, dict[str, str | None]],
+    environments: list[str],
+) -> dict[tuple[str, str, str], _Presence]:
+    """Every bean-presence condition the module's bean definitions carry, judged per
+    environment from those definitions alone (spec §2c, decision 2; CP-44 rows 1-3).
+
+    A condition's CRITERIA are each type of `type_attrs` (one set, row 2), each name of
+    `name_attrs` and each annotation of `annotation_attrs` — or, with none of them on a
+    factory method, the method's declared return type (row 1). Its COMPETITORS are the
+    module's other bean definitions: one matches a type when the type it is matched by is
+    that type or a subtype (`type_hierarchy`), a name when its bean name is that name, an
+    annotation when its type carries it. A condition on a class is judged before that class's
+    own factory methods are read (row 4), so they are no competitor of it. A competitor
+    EXISTS in an environment where every condition on it holds — its own presence conditions
+    too — so the verdicts are decided together, in memory, until nothing changes:
+
+    * `missing` (`isAnyMatched`) fails where some criterion has a competitor that exists,
+      holds where no criterion has one that exists or could, and is `unresolved` otherwise;
+    * `present` (`isAllMatched`) holds where every criterion has a competitor that exists,
+      fails where some criterion has none that exists or could, `unresolved` otherwise.
+
+    A condition still undecided when nothing changes waits on itself through its competitors
+    — two defaults each missing the other — and the container keeps whichever it reads first:
+    `unresolved`, with that reason. Every decided verdict is `partial`, with the stated reason.
+    Cost: one pass over the definitions per condition to find its competitors, then rounds
+    over (condition, environment) pairs, each round deciding at least one — no table read."""
+    by_symbol = {registration.symbol: registration for registration in registrations}
+    closure: dict[str, frozenset[str]] = {}
+
+    def supertypes(bare: str) -> frozenset[str]:
+        if bare not in closure:
+            seen: set[str] = set()
+            pending = [bare]
+            while pending:
+                current = pending.pop()
+                if current not in seen:
+                    seen.add(current)
+                    pending.extend(ancestors.get(current, ()))
+            closure[bare] = frozenset(seen)
+        return closure[bare]
+
+    # Each (definition, environment)'s verdict on the conditions this phase does not judge.
+    base: dict[str, dict[str, str]] = {}
+    for registration in registrations:
+        unjudged: dict[str, str] = {}
+        for environment in environments:
+            states = [
+                _holds(kind, expression, config.get(environment, {}), environment)[0]
+                for kind, expression in (
+                    _expression(found, args)
+                    for _, found, args in registration.conditions
+                    if found.kind != PRESENCE
+                )
+            ]
+            unjudged[environment] = (
+                FAILS
+                if FAILS in states
+                else HOLDS
+                if all(state == HOLDS for state in states)
+                else UNRESOLVED
+            )
+        base[registration.symbol] = unjudged
+
+    expressions: dict[tuple[str, str, str], dict[str, Any]] = {}
+    modes: dict[tuple[str, str, str], str] = {}
+    criteria: dict[tuple[str, str, str], list[list[tuple[str, bool]]]] = {}
+    reasons: dict[tuple[str, str, str], str] = {}
+    # What a verdict left open by a loop of these conditions says — two beans that each
+    # register only where the other does not: the model's `order_reason` (CP-44 row 3).
+    orders: dict[tuple[str, str, str], str] = {}
+    held: dict[str, list[tuple[str, str, str]]] = {}
+    for registration in registrations:
+        for holder, found, args in registration.conditions:
+            if found.kind != PRESENCE:
+                continue
+            key = _presence_key(holder, found, args)
+            held.setdefault(registration.symbol, []).append(key)
+            if key in expressions:
+                continue
+            members = found.members
+            types = [bare_descriptor(v) for v in _listed(members, "type_attrs", args)]
+            names = _listed(members, "name_attrs", args)
+            annotations = [bare_descriptor(v) for v in _listed(members, "annotation_attrs", args)]
+            if not (types or names or annotations):
+                factory = by_symbol.get(holder)
+                if factory is None or factory.route != FACTORY:
+                    reasons[key] = _NO_CRITERION
+                elif factory.registered is None:
+                    reasons[key] = _TYPE_VARIABLE
+                else:
+                    types = [factory.registered]
+            expressions[key] = {
+                "annotation": found.annotation,
+                "types": types,
+                "names": names,
+                "annotations": annotations,
+            }
+            modes[key] = str(members["mode"])
+            orders[key] = str(members["order_reason"])
+            competitors = [
+                other for other in registrations if holder not in (other.symbol, other.owner)
+            ]
+            criteria[key] = [
+                *(
+                    [
+                        (other.symbol, True)
+                        for other in competitors
+                        if other.registered is not None and wanted in supertypes(other.registered)
+                    ]
+                    for wanted in types
+                ),
+                *(
+                    [
+                        (other.symbol, other.name is not None)
+                        for other in competitors
+                        if other.name is None or other.name == wanted
+                    ]
+                    for wanted in names
+                ),
+                *(
+                    [(other.symbol, True) for other in competitors if wanted in other.annotations]
+                    for wanted in annotations
+                ),
+            ]
+
+    verdict: dict[tuple[str, str, str], dict[str, str | None]] = {
+        key: {environment: UNRESOLVED if key in reasons else None for environment in environments}
+        for key in expressions
+    }
+
+    def exists(symbol: str, environment: str) -> str | None:
+        states: list[str | None] = [base[symbol][environment]]
+        states.extend(verdict[key][environment] for key in held.get(symbol, ()))
+        if FAILS in states:
+            return FAILS
+        if None in states:
+            return None
+        return HOLDS if all(state == HOLDS for state in states) else UNRESOLVED
+
+    def judge(key: tuple[str, str, str], environment: str) -> str | None:
+        states: list[str | None] = []
+        for matches in criteria[key]:
+            found = [(exists(symbol, environment), sure) for symbol, sure in matches]
+            if any(state == HOLDS and sure for state, sure in found):
+                states.append(_MET)
+            elif all(state == FAILS for state, _ in found):
+                states.append(_UNMET)
+            elif any(state is None for state, _ in found):
+                states.append(None)
+            else:
+                states.append(UNRESOLVED)
+        decisive, needed = (_MET, _UNMET) if modes[key] == "missing" else (_UNMET, _MET)
+        if decisive in states:
+            return FAILS
+        if all(state == needed for state in states):
+            return HOLDS
+        return None if None in states else UNRESOLVED
+
+    pending = sorted(
+        (key, environment)
+        for key, per_environment in verdict.items()
+        for environment, state in per_environment.items()
+        if state is None
+    )
+    while pending:
+        decided = []
+        for key, environment in pending:
+            state = judge(key, environment)
+            if state is not None:
+                verdict[key][environment] = state
+                decided.append((key, environment))
+        if not decided:
+            break
+        done = set(decided)
+        pending = [item for item in pending if item not in done]
+
+    judged: dict[tuple[str, str, str], _Presence] = {}
+    for key, per_environment in verdict.items():
+        stated: dict[str, tuple[str, str, str]] = {}
+        for environment, final in per_environment.items():
+            if final in (HOLDS, FAILS):
+                stated[environment] = (str(final), PARTIAL, ON_MODULE_BEANS)
+                continue
+            reason = reasons.get(key) or (orders[key] if final is None else _COMPETITOR_OPEN)
+            stated[environment] = (UNRESOLVED, UNRESOLVED, f"{ON_MODULE_BEANS}; {reason}")
+        judged[key] = _Presence(expression=expressions[key], verdicts=stated)
+    return judged
 
 
 def _effective_index(

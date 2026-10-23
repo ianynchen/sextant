@@ -399,9 +399,12 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         "  present: com.acme.Present\n"
         "  type_attrs: [value, type]\n"
         "  name_attrs: [name]\n"
+        "  annotation_attrs: [annotation]\n"
+        "  order_reason: the order is not in the code\n"
         "  by: probe.md\n"
         "stereotypes: [com.acme.Component]\n"
-        "configuration_annotation: com.acme.Config\n",
+        "configuration_annotation: com.acme.Config\n"
+        "stereotype_name_attrs: {com.acme.Component: value}\n",
     )
     (tmp_path / "invented-di.yml").write_text(
         _HEADER + "bean_model: tiny\nmatches: {}\n", encoding="utf-8"
@@ -412,6 +415,8 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
     assert catalog.bean_model["conditions"]["profile"]["annotation"] == "com.acme.Profile"
     assert catalog.bean_model["stereotypes"] == ["com.acme.Component"]
     assert catalog.bean_model["presence"]["name_attrs"] == ["name"]
+    assert catalog.bean_model["presence"]["annotation_attrs"] == ["annotation"]
+    assert catalog.bean_model["stereotype_name_attrs"] == {"com.acme.Component": "value"}
 
 
 @pytest.mark.parametrize(
@@ -430,6 +435,22 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
             ),
             "`presence` needs",
         ),
+        (
+            (
+                "presence: {missing: com.acme.M, present: com.acme.P, type_attrs: [value], "
+                "name_attrs: [name], order_reason: x, by: p.md}\n"
+            ),
+            "`annotation_attrs`",
+        ),
+        (
+            (
+                "presence: {missing: com.acme.M, present: com.acme.P, type_attrs: [value], "
+                "name_attrs: [name], annotation_attrs: [annotation], by: p.md}\n"
+            ),
+            "`order_reason`",
+        ),
+        ("stereotype_name_attrs: [value]\n", "`stereotype_name_attrs` must map"),
+        ("stereotype_name_attrs: {com.acme.Component: 7}\n", "`stereotype_name_attrs` must map"),
         ("stereotypes: []\n", "`stereotypes` must be a non-empty list"),
         ("stereotypes: com.acme.Component\n", "`stereotypes` must be a non-empty list"),
         ("stereotypes: [com.acme.Component, 7]\n", "`stereotypes` must be a non-empty list"),
@@ -452,3 +473,20 @@ def test_a_malformed_condition_vocabulary_is_refused_naming_the_model_file(
 
     assert "tiny.yml" in str(raised.value)
     assert complaint in str(raised.value)
+
+
+def test_the_shipped_spring_model_reads_bean_presence_only_through_presence():
+    """Spec 2026-10-22-conditional-beans §2c: `@ConditionalOnMissingBean` / `@ConditionalOnBean`
+    are evaluated from the module's own beans, so they leave the unevaluated `other` list — a
+    second listing there would write them `unresolved` beside their evaluated rows."""
+    spring = next(
+        c.bean_model
+        for c in YamlCatalogSource(catalogs_dir()).load()
+        if c.bean_model.get("id") == "spring"
+    )
+    presence = spring["presence"]
+    other = spring["conditions"]["other"]["annotations"]
+
+    assert presence["missing"].endswith(".ConditionalOnMissingBean")
+    assert presence["present"].endswith(".ConditionalOnBean")
+    assert {presence["missing"], presence["present"]}.isdisjoint(other)

@@ -23,6 +23,9 @@ READER = "org.springframework.context.annotation.ConfigurationClassBeanDefinitio
 SCANNER = "org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider"
 FACTORY = "org.springframework.beans.factory.support.DefaultListableBeanFactory"
 LISTABLE = "org.springframework.beans.factory.ListableBeanFactory"
+NAMER = "org.springframework.context.annotation.AnnotationBeanNameGenerator"
+CLASS_UTILS = "org.springframework.util.ClassUtils"
+STRING_UTILS = "org.springframework.util.StringUtils"
 STEREOTYPES = {
     "context": [
         "org.springframework.stereotype.Component",
@@ -379,11 +382,96 @@ def row_5(context: Path, web: Path, versions: dict[str, str]) -> str:
     )
 
 
+def aliases(jar: Path, name: str) -> dict[str, tuple[str, str]]:
+    """Each attribute of annotation `name` that carries `@AliasFor` naming ANOTHER annotation:
+    attribute -> (that annotation, its attribute — the same name when `attribute` is unset)."""
+    found: dict[str, tuple[str, str]] = {}
+    blocks = re.split(
+        r"^  public abstract \S+ (\w+)\(\);$", javap(jar, name, "-v"), flags=re.MULTILINE
+    )
+    for attribute, block in zip(blocks[1::2], blocks[2::2], strict=True):
+        body = block.split("\n\n", 1)[0]
+        target = re.search(r"AliasFor\(\s*annotation=class L([\w/$]+);", body)
+        if target:
+            named = re.search(r'attribute="(\w+)"', body)
+            found[attribute] = (
+                target.group(1).replace("/", "."),
+                named.group(1) if named else attribute,
+            )
+    return found
+
+
+def row_6(context: Path, web: Path, core: Path, versions: dict[str, str]) -> str:
+    namer = methods(javap(context, NAMER, "-c", "-p"))
+    generate = chain(
+        method(namer, "generateBeanName"),
+        ["determineBeanNameFromAnnotation", "hasText", "buildDefaultBeanName"],
+    )
+    default = next(
+        (
+            body
+            for header, body in namer.items()
+            if re.search(r"buildDefaultBeanName\([\w.]+BeanDefinition\)", header)
+        ),
+        [],
+    )
+    built = chain(default, ["getBeanClassName", "getShortName", "uncapitalizeAsProperty"])
+    short = method(methods(javap(core, CLASS_UTILS, "-c", "-p")), "getShortName")
+    pushed = [ins.rest for ins in short if ins.op == "bipush"]
+    cut = "`$$`" if any("String $$" in ins.rest for ins in short) else "MISSING `$$`"
+    replaced = (
+        "replaces `$` with `.`"
+        if pushed[-2:] == ["36", "46"] and "replace" in calls(short)
+        else "MISSING replace"
+    )
+    last = "after the last `.`" if pushed[:1] == ["46"] else "MISSING lastIndexOf"
+    uncap = methods(javap(core, STRING_UTILS, "-c", "-p"))
+    uncapitalize = method(uncap, "uncapitalizeAsProperty")
+    tested = [ins.rest for ins in uncapitalize if "charAt" in ins.rest or "isUpperCase" in ins.rest]
+    both = sum("isUpperCase" in t for t in tested) == 2 and sum("charAt" in t for t in tested) == 2
+    lowers = chain(uncapitalize, ["changeFirstCharacterCase"])
+    component = STEREOTYPES["context"][0]
+
+    def jar_of(name: str) -> Path:
+        return context if name in STEREOTYPES["context"] else web
+
+    def names_bean(name: str, attribute: str, seen: frozenset[tuple[str, str]]) -> bool:
+        if (name, attribute) == (component, "value"):
+            return True
+        if (name, attribute) in seen or name not in (*STEREOTYPES["context"], *STEREOTYPES["web"]):
+            return False
+        target = aliases(jar_of(name), name).get(attribute)
+        return target is not None and names_bean(*target, seen | {(name, attribute)})
+
+    def naming(name: str) -> str:
+        if name == component:
+            return "value"
+        found = [a for a in aliases(jar_of(name), name) if names_bean(name, a, frozenset())]
+        return ", ".join(found) or "NONE"
+
+    named = ", ".join(
+        f"`@{n.rsplit('.', 1)[-1]}` {naming(n)}"
+        for n in [*STEREOTYPES["context"], *STEREOTYPES["web"]]
+    )
+    return (
+        f"| 6 | how a scanned class is named | `spring-context`, `spring-web`, `spring-core` "
+        f"| {versions['context']}, {versions['web']}, {versions['core']} "
+        f"| `AnnotationBeanNameGenerator.generateBeanName` runs `{generate}`; "
+        f"`buildDefaultBeanName` runs `{built}`; `ClassUtils.getShortName` keeps the text "
+        f"{last}, cut at {cut}, and {replaced}; `StringUtils.uncapitalizeAsProperty` returns "
+        f"the name unchanged when "
+        f"{'`charAt(0)` and `charAt(1)` are both `isUpperCase`' if both else 'MISSING test'}, "
+        f"else runs `{lowers}`; the attribute aliased (`@AliasFor`, followed) to `@Component`'s "
+        f"`value`: {named} |"
+    )
+
+
 def main() -> int:
     artifacts = {
         "context": newest_jar("org.springframework", "spring-context"),
         "beans": newest_jar("org.springframework", "spring-beans"),
         "web": newest_jar("org.springframework", "spring-web"),
+        "core": newest_jar("org.springframework", "spring-core"),
         "auto": newest_jar("org.springframework.boot", "spring-boot-autoconfigure"),
     }
     if any(jar is None for jar in artifacts.values()):
@@ -395,6 +483,7 @@ def main() -> int:
         "context": "spring-context",
         "beans": "spring-beans",
         "web": "spring-web",
+        "core": "spring-core",
         "auto": "spring-boot-autoconfigure",
     }
     columns = list(dict.fromkeys(versions.values()))
@@ -418,6 +507,7 @@ def main() -> int:
     print(row_3(jars["auto"], jars["context"], jars["beans"], versions))
     print(row_4(jars["context"], versions["context"]))
     print(row_5(jars["context"], jars["web"], versions))
+    print(row_6(jars["context"], jars["web"], jars["core"], versions))
     return 0
 
 
