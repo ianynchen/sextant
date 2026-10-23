@@ -106,6 +106,13 @@ SEXTANT_VERSION = version("sextant")
 #             puts a password into every document and bundle made from it. Bumped so every
 #             reader refuses one rather than guessing at it (user ruling, 2026-10-23): in
 #             text that shape cannot be told from a Spring-WS `mailto:ops@billing` peer.
+#     6       no table change: condition verdicts a deployment can change are no longer
+#             decided (spec 2026-10-23-deployment-set-conditions). A `profile` or
+#             `property` condition is `unresolved` unless the environment's own name
+#             decides it, the module's own reading kept as evidence, so a workspace of the
+#             older vintage holds decided verdicts this build says the repository cannot
+#             give — bumped so it is refused and re-analysed, never read beside new ones
+#             (user ruling, 2026-10-23, §6).
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -117,5 +124,5 @@ SEXTANT_VERSION = version("sextant")
 #             without changing a single table or fact: a consumer comparing two bundles
 #             reads this stamp to know whether the same words were used on both sides.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 5
+GRAPH_SCHEMA_VERSION = 6
 BOUNDARY_VOCABULARY_VERSION = 1

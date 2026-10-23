@@ -212,7 +212,12 @@ def test_the_pass_writes_one_row_per_condition_and_environment_through_the_shipp
     `@Profile("prod")` and one under `@ConditionalOnProperty(name = "orders.legacy",
     havingValue = "true")`, against two environments (`application.yml`,
     `application-prod.yml` with `orders.legacy: true`). Each condition is one row per
-    environment, structured; an unconditional controller writes nothing."""
+    environment, structured; an unconditional controller writes nothing.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): a profile and a
+    property are set by the deployment (CP-47), so only `@Profile("prod")` in `prod` stays
+    decided — by the environment's own name. `orders.legacy` is not evaluated anywhere,
+    whatever `application-prod.yml` sets."""
     facts = tmp_path / "facts"
     ops = "com/acme/orders/OpsController#"
     legacy = "com/acme/orders/LegacyOrdersController#"
@@ -265,10 +270,10 @@ def test_the_pass_writes_one_row_per_condition_and_environment_through_the_shipp
         for r in rows
     }
     assert by == {
-        ("OpsController#status", "default"): ("profile", "false", "resolved"),
+        ("OpsController#status", "default"): ("profile", "unresolved", "unresolved"),
         ("OpsController#status", "prod"): ("profile", "true", "resolved"),
-        ("LegacyOrdersController#legacy", "default"): ("property", "false", "resolved"),
-        ("LegacyOrdersController#legacy", "prod"): ("property", "true", "resolved"),
+        ("LegacyOrdersController#legacy", "default"): ("property", "unresolved", "unresolved"),
+        ("LegacyOrdersController#legacy", "prod"): ("property", "unresolved", "unresolved"),
     }
     # The structured expression is what a machine reads: typed per kind, never prose.
     expressions = {r["kind"]: r["expression"] for r in rows}
@@ -284,7 +289,11 @@ def test_a_declared_key_nobody_filled_is_unresolved_not_absent(tmp_path: Path):
     reference resolves `missing_key` in the config layer — the same reason as a key the
     environment never declares — but WITH its file as `source`. The framework would see some
     value there and this analysis does not know which: `unresolved`, never the absent case
-    `match_if_missing` decides."""
+    `match_if_missing` decides.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): no environment
+    decides a property the deployment sets, so the declared placeholder shows in the
+    evidence — the module's own `default` configuration sets a placeholder, not nothing."""
     facts = tmp_path / "facts"
     legacy = "com/acme/orders/LegacyOrdersController#"
     _controller(
@@ -301,9 +310,25 @@ def test_a_declared_key_nobody_filled_is_unresolved_not_absent(tmp_path: Path):
     _config(facts, "application.yml", {"orders.legacy": "${ORDERS_LEGACY}"})
     _config(facts, "application-prod.yml", {"orders.legacy": "true"})
     rows = _rows_through_spring_web(tmp_path, facts)
-    assert {(r["environment"], r["holds"], r["resolution"]) for r in rows} == {
-        ("default", "unresolved", "unresolved"),
-        ("prod", "true", "resolved"),
+    assert {(r["environment"], r["holds"], r["resolution"], r["evidence"]) for r in rows} == {
+        (
+            "default",
+            "unresolved",
+            "unresolved",
+            (
+                "`orders.legacy` is set by the deployment; this module's `default` configuration "
+                "sets a placeholder this module does not fill"
+            ),
+        ),
+        (
+            "prod",
+            "unresolved",
+            "unresolved",
+            (
+                "`orders.legacy` is set by the deployment; this module's `prod` configuration "
+                "sets `true`"
+            ),
+        ),
     }
 
 

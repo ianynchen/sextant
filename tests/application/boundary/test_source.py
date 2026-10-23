@@ -49,7 +49,7 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
-    "schema_version": 5,
+    "schema_version": 6,
     "boundary_vocabulary_version": 1,
     "catalog_hash": "sha256:catalogs",
     "module": {
@@ -506,7 +506,11 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
     `@RequestHeader("X-Id")` and sits under `@Profile("prod")`; B binds the same header.
     The header is one entry, the conditions are A's two environments. The outbound header is
     written as `engines/single_call.py` writes one — `caller` the calling method on both
-    tables, so the dependency's join is on `caller`."""
+    tables, so the dependency's join is on `caller`.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): `@Profile("prod")`
+    holds in `prod`, decided by the environment's own name, and is not evaluated in
+    `default`, where the deployment may activate `prod`."""
     facts = tmp_path / "facts"
     header = _annotated_parameter("id", "RequestHeader", value="X-Id")
     _catch_all(facts, "com/acme/a/AController#",
@@ -546,7 +550,7 @@ def test_requirements_conditions_and_headers_are_sorted_sets(
         {"kind": "param", "name": "q", "requirement": "optional"},
     ]
     assert [(c["environment"], c["holds"]) for c in endpoint["conditions"]] == [  # type: ignore[attr-defined, union-attr]
-        ("default", "false"),
+        ("default", "unresolved"),
         ("prod", "true"),
     ]
     assert set(endpoint["conditions"][0]) == {"kind", "expression", "environment", "holds"}  # type: ignore[index]
@@ -622,7 +626,7 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
         assert source.producer == {
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
-            "graph_schema_version": 5,
+            "graph_schema_version": 6,
             "boundary_vocabulary_version": 1,
             "catalog_hash": "sha256:catalogs",
         }

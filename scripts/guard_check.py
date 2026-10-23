@@ -851,6 +851,35 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "conditions.a-DEPLOYMENT-set-condition-is-decided-only-by-its-environment": Guard(
+        what="a condition whose kind the bean model marks `set_by: deployment` is decided only "
+        "by the environment's own definition, the module's own reading kept as evidence "
+        "(spec 2026-10-23-deployment-set-conditions §3b)",
+        why='spring-petclinic-rest\'s `@Profile("jdbc")` repositories were published as absent '
+        "in all five environments, though `SPRING_PROFILES_ACTIVE=jdbc` activates them "
+        "(CP-47): the repository's files state a default, never what production activates",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='    if model.members.get("set_by") == "deployment":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-QUOTED-configured-value-is-masked-by-its-key": Guard(
+        what="the value a property condition's evidence quotes is masked by its own key where "
+        "it is written (`redact_value`), as every origin of a configured value is",
+        why="`bean_conditions` is exported whole and its evidence is masked only by "
+        '`redact_text`, which cannot see the key: `@ConditionalOnProperty("billing.api-token")` '
+        "would ship the token the module's own file sets in the clear",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"',
+                replace='else f"`{config[key]}`"  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
     # --- a bean that exists in some environments only (spec 2026-10-22-conditional-beans) -
     "beans.a-FACTORY-conditions-only-the-class-it-returns": Guard(
         what="a factory method conditions the classes its body constructs that are assignable "
