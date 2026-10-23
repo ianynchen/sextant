@@ -1137,3 +1137,53 @@ def test_a_reason_every_candidate_of_a_line_shares_is_said_once():
         f"  - not evaluated in `pg`: `KafkaSender` — {shared}; `RedisSender` — {other}\n" in block
     )
     assert block.count("`h2`, `mysql`") == 1
+
+
+@pytest.mark.pins("schedules.the-DOCUMENT-states-a-schedules-configured-values")
+@pytest.mark.pins("render.OUTBOUND-rows-and-schedules-state-their-condition")
+def test_a_conditional_placeholder_job_states_its_configured_value_first_then_its_conditions():
+    """A `@ConditionalOnProperty` scheduler whose job reads its cron from configuration: one
+    detail block, headed by the job's whole identity, says first what this repository
+    configures for the schedule per environment and then where the bean exists — the
+    configured line is the job's own, the conditions its bean's."""
+    handler = JOBS + "nightly()."
+    cron = "${jobs.nightly.cron}"
+    expression = '{"having_value": "true", "keys": ["jobs.enabled"], "match_if_missing": false}'
+    document = _document(
+        scheduled_work=[
+            {
+                "handler": handler,
+                "trigger": "cron",
+                "expression": cron,
+                "resolution": "unresolved",
+                "evidence": "compiler",
+                "catalog_id": "spring-scheduling",
+            }
+        ],
+        resolved_schedules=[
+            {
+                "handler": handler,
+                "trigger": "cron",
+                "expression": cron,
+                "environment": environment,
+                "keys": '["jobs.nightly.cron"]',
+                "value": value,
+                "unresolved_reason": None if value else "missing_key",
+            }
+            for environment, value in (
+                ("default", "0 0 1 * * *"),
+                ("prod", "0 0 1 * * *"),
+                ("staging", None),
+            )
+        ],
+        bean_conditions=_condition(JOBS, "property", expression, PROD_ONLY),
+        bean_presence=_presence(JOBS, PROD_ONLY),
+        symbol_beans=[_belongs(handler, JOBS)],
+    )
+    assert _block(document, "Jobs#nightly") == (
+        f"- `com/acme/Jobs#nightly().` — cron `{cron}`\n"
+        "  - as configured in this repository: `0 0 1 * * *` in `default`, `prod`; "
+        "not set in `staging` (missing_key)\n"
+        "  - Exists only when: the configuration key `jobs.enabled` is `true`\n"
+        f"{OF_ENVIRONMENTS}\n"
+    )
