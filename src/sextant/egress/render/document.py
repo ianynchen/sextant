@@ -803,19 +803,79 @@ def _route_words(rows: Sequence[Mapping[str, object]]) -> str:
 
 
 def _presence_verdict(rows: Sequence[Mapping[str, object]]) -> str:
-    """Where a bean exists among the module's environments, from its `bean_presence` rows."""
+    """Where a bean exists among the module's environments, from its `bean_presence` rows —
+    an environment left open saying why, in words (`_reason_words`)."""
     holds = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "true")
     fails = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "false")
     unread = sorted(str(r["environment"]) for r in rows if str(r["holds"]) == "unresolved")
+    # The open environments grouped by what left them open, in environment order.
+    why: dict[str, list[str]] = {}
+    for row in sorted(rows, key=lambda r: str(r["environment"])):
+        if str(row["holds"]) == "unresolved":
+            why.setdefault(_reason_words(row.get("evidence")) or "", []).append(
+                str(row["environment"])
+            )
     total = len(rows)
     if unread and len(unread) == total:
-        return f"not evaluated by this analysis in any of the {total} environments"
+        verdict = f"not evaluated by this analysis in any of the {total} environments"
+        if len(why) == 1:
+            [reason] = why
+            return verdict + (f" — {reason}" if reason else "")
+        return verdict + "".join(
+            f"; in {', '.join(f'`{e}`' for e in environments)}" + (f" — {reason}" if reason else "")
+            for reason, environments in why.items()
+        )
     verdict = f"holds in {len(holds)} of {total} environments"
     if fails:
         verdict += " — not in " + ", ".join(f"`{e}`" for e in fails)
-    if unread:
-        verdict += "; not evaluated in " + ", ".join(f"`{e}`" for e in unread)
+    for reason, environments in why.items():
+        verdict += "; not evaluated in " + ", ".join(f"`{e}`" for e in environments)
+        verdict += f" — {reason}" if reason else ""
     return verdict
+
+
+def _reason_words(evidence: object) -> str | None:
+    """What left a verdict open, in words, from the evidence a `bean_presence` (or
+    `candidate_presence`) row carries — None where it names nothing (`compiler`). The JSON a
+    reason quotes is spelled as the document spells it elsewhere: an annotation by its name, a
+    property by its keys, a profile expression by its text; a presence verdict's competitor
+    list (after `COMPETITORS`) is left to the line that names the competitors."""
+    text = str(evidence or "")
+    if not text or text == "compiler":
+        return None
+    decoder = json.JSONDecoder()
+    words: list[str] = []
+    at = 0
+    while at < len(text):
+        if text.startswith(COMPETITORS, at):
+            try:
+                _, at = decoder.raw_decode(text, at + len(COMPETITORS))
+                continue
+            except ValueError:
+                pass
+        if text[at] == "{":
+            try:
+                value, end = decoder.raw_decode(text, at)
+            except ValueError:
+                value, end = None, at
+            if isinstance(value, dict):
+                words.append(_json_words(value))
+                at = end
+                continue
+        words.append(text[at])
+        at += 1
+    return "".join(words) or None
+
+
+def _json_words(value: Mapping[str, Any]) -> str:
+    """One structured expression a reason quotes, as the document names it."""
+    if "annotation" in value:
+        return f"`@{simple_name(bare_descriptor(str(value['annotation'])))}`"
+    if "keys" in value:
+        return ", ".join(f"`{key}`" for key in value["keys"])
+    if "expressions" in value:
+        return ", ".join(f"`{expression}`" for expression in value["expressions"])
+    return f"`{json.dumps(value, sort_keys=True)}`"
 
 
 def _condition_words(kind: str, expression: str, rows: Sequence[Mapping[str, object]] = ()) -> str:
@@ -1989,6 +2049,9 @@ def _candidate_sites(
     return sites
 
 
+# The key a framework-generated implementation is listed under in a site's candidates: it has
+# no body of the module, so the interface bean it implements names it.
+_PROXY_KEY = "proxy:"
 # A candidate whose verdict rests on a bean-presence condition judged from the module's own
 # beans (spec §2c) says so beside its name.
 _PARTIAL_CANDIDATE = " (decided from this module's beans only)"
@@ -1997,20 +2060,21 @@ _PARTIAL_CANDIDATE = " (decided from this module's beans only)"
 def _candidate_entries(
     trace: Trace, candidates: Mapping[tuple[str, int], Sequence[Mapping[str, object]]]
 ) -> list[DetailEntry]:
-    """Which candidates of each NARROWED call site in this trace exist in each environment
-    (spec 2026-10-22-conditional-beans §3, second bullet): the site and every candidate it
-    may dispatch to, then one line per environment naming the candidates whose bean exists
-    there, then the candidates not evaluated there. Stated, not decided — the step table and
-    the diagram still show every candidate, and nothing is dropped from either.
+    """Which candidates of each call site in this trace exist in each environment (spec
+    2026-10-22-conditional-beans §3, second bullet; Task 7b fix ruling 1): the site and every
+    candidate it may dispatch to, then one line per environment naming the candidates whose
+    bean exists there, then the candidates not evaluated there and why. Stated, not decided —
+    the step table and the diagram still show every candidate, and nothing is dropped.
 
-    Read from `candidate_presence` alone, which lists a site only where at least one
-    candidate is a conditional bean: a site with no such candidate gets no lines and renders
-    exactly as it did before. Environments whose lines would read the same share one."""
+    Read from `candidate_presence` alone, which lists a NARROWED site where at least one
+    candidate is a conditional bean, and a site of any resolution where a framework-generated
+    implementation of an interface bean answers it: a site with neither gets no lines and
+    renders exactly as it did before. Environments whose lines would read the same share one."""
     entries: list[DetailEntry] = []
     stated: set[tuple[str, int]] = set()
     for step in trace.steps:
         site = (step.caller, step.ordinal)
-        if step.resolution != Resolution.NARROWED or site in stated or site not in candidates:
+        if site in stated or site not in candidates:
             continue
         stated.add(site)
         entries.extend(_site_entries(step, candidates[site]))
@@ -2018,24 +2082,38 @@ def _candidate_entries(
 
 
 def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[DetailEntry]:
-    """One narrowed site's lines, from its `candidate_presence` rows."""
-    owners = {str(row["callee"]): _candidate_owner(str(row["callee"])) for row in rows}
+    """One site's lines, from its `candidate_presence` rows. A row with no `callee` is the
+    framework's own implementation of the interface bean it names (CP-46)."""
+    owners = {
+        str(row["callee"]): _candidate_owner(str(row["callee"]))
+        for row in rows
+        if row["callee"] is not None
+    }
     # The diagram's own naming rule: a simple name, or the full type where two collide.
     labels = _sequence_labels({owner: owner for owner in owners.values()})
-    named = {callee: labels[owner] for callee, owner in owners.items()}
+    named = {callee: f"`{labels[owner]}`" for callee, owner in owners.items()}
+    for row in rows:
+        if row["callee"] is None:
+            interface = simple_name(bare_descriptor(str(row["bean"])))
+            named[_PROXY_KEY + str(row["bean"])] = (
+                f"a framework-generated implementation of `{interface}`"
+            )
     present: dict[str, list[str]] = {}
     unread: dict[str, list[str]] = {}
     # Environments where a candidate the line leaves out was ruled out by the same kind of
     # verdict (`partial`): the line is then as hedged as one that names a `partial` candidate.
     ruled_out_partially: set[str] = set()
     for row in rows:
-        environment, label = str(row["environment"]), named[str(row["callee"])]
+        environment = str(row["environment"])
+        callee = row["callee"]
+        label = named[str(callee) if callee is not None else _PROXY_KEY + str(row["bean"])]
         present.setdefault(environment, [])
         if str(row["holds"]) == "true":
             hedge = _PARTIAL_CANDIDATE if str(row["resolution"]) == "partial" else ""
-            present[environment].append(f"`{label}`{hedge}")
+            present[environment].append(f"{label}{hedge}")
         elif str(row["holds"]) == "unresolved":
-            unread.setdefault(environment, []).append(f"`{label}`")
+            reason = _reason_words(row.get("evidence"))
+            unread.setdefault(environment, []).append(f"{label} — {reason}" if reason else label)
         elif str(row["resolution"]) == "partial":
             ruled_out_partially.add(environment)
     target = step.target or ""
@@ -2045,7 +2123,7 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
                 f"`{_short_handler(bare_descriptor(step.caller))}` calls "
                 f"`{_short_handler(target)}`, answered by one of"
             ),
-            _runs(", ".join(f"`{label}`" for label in sorted(set(named.values())))),
+            _runs(", ".join(sorted(set(named.values())))),
             None,
         )
     ]
@@ -2067,7 +2145,8 @@ def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[Deta
     for environments, body in sorted(lines, key=lambda line: line[0].split("`")[1]):
         entries.append(DetailEntry(_runs(f"in {environments}"), _runs(body), None))
     for environments, listed in _shared_lines(unread):
-        body = ", ".join(listed)
+        # A reason carries commas of its own, so reasoned candidates are separated more firmly.
+        body = ("; " if any(" — " in item for item in listed) else ", ").join(listed)
         entries.append(DetailEntry(_runs(f"not evaluated in {environments}"), _runs(body), None))
     return entries
 

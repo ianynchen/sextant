@@ -882,10 +882,13 @@ _NAMED_QUERIES = {
     # ruling 3): every candidate of a site with a conditional one, per environment. Ordered on
     # the site, then the candidate, then the environment — the order a trace block reads it.
     "candidate_presence": """
-        SELECT caller, ordinal, callee, bean, environment, holds, resolution
+        SELECT caller, ordinal, callee, bean, environment, holds, resolution, evidence
         FROM candidate_presence
-        ORDER BY caller, ordinal, callee, environment
+        ORDER BY caller, ordinal, callee NULLS LAST, bean, environment
     """,
+    # Every interface the framework registers and implements at run time, with each type it
+    # is assignable to (CP-46) — what `candidate_presence` matches a call site's named type on.
+    "interface_beans": "SELECT bean, type FROM interface_beans ORDER BY bean, type",
     # The lambda bodies each method's `dynamic` call sites create (spec 2026-10-22-conditional-
     # beans §2a): a body a factory method creates is that factory's code. `invoke_kind` is the
     # site's own dispatch form; the reader keeps the synthetic bodies (lambdas) among them.
@@ -1272,6 +1275,7 @@ _EXPORT_QUERIES = {
     "bean_presence": _NAMED_QUERIES["bean_presence"],
     "symbol_beans": _NAMED_QUERIES["symbol_beans"],
     "candidate_presence": _NAMED_QUERIES["candidate_presence"],
+    "interface_beans": _NAMED_QUERIES["interface_beans"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
@@ -1489,6 +1493,7 @@ _NAMED_DERIVATIONS = {
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
     "bean_conditions_reset": "reset_bean_conditions.sql",
     "bean_conditions_insert": "insert_bean_conditions.sql",
+    "interface_beans_insert": "insert_interface_beans.sql",
     # D01's system scope, written by `application/stitch`. A reset/insert pair each,
     # both run once per `system analyze` — unlike the resolve tables above, where the
     # reset is the pipeline's and the insert is per catalog.

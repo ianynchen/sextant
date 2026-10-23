@@ -4,6 +4,7 @@ inbound endpoint got in PR #61, all read from ONE index over `bean_conditions` a
 `bean_presence` — never from per-kind copies, and "holds in N of M" from `bean_presence` alone
 (two mutually exclusive factories would otherwise read as "exists nowhere")."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -788,3 +789,101 @@ def test_a_row_in_an_inherited_body_no_bean_runs_says_it_is_not_decided():
         "  - Exists only when: no bean of this module runs this inherited body — not decided\n"
     ) in block + "\n"
     assert "not evaluated by this analysis in any of the 3 environments" in block
+
+
+# --- an open verdict says why; a framework-generated implementation is a candidate -------
+
+APOLLO = "the active profiles here come from `${apollo_profile}`, which this module does not fill"
+
+
+def test_a_row_open_in_some_environments_says_why_in_words():
+    """Task 7b fix ruling 3: `not evaluated in …` names what left the verdict open — the
+    evidence's reason, its JSON spelled as the document spells it."""
+    handler = USERS + "all()."
+    holds = {"default": "unresolved", "github": "unresolved", "kubernetes": "true"}
+    presence = [
+        {**row, "evidence": APOLLO if row["holds"] == "unresolved" else "compiler"}
+        for row in _presence(USERS, holds)
+    ]
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_condition(USERS, "profile", '{"expressions": ["kubernetes"]}', holds),
+        bean_presence=presence,
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert f"holds in 1 of 3 environments; not evaluated in `default`, `github` — {APOLLO}" in block
+
+
+def test_a_condition_not_evaluated_is_named_not_quoted_as_json():
+    handler = USERS + "all()."
+    unresolved = {"default": "unresolved", "prod": "unresolved"}
+    expression = '{"annotation": "org/springframework/context/annotation/Conditional#", "args": {}}'
+    presence = [
+        {**row, "evidence": "a condition this analysis does not evaluate: " + expression}
+        for row in _presence(USERS, unresolved, "unresolved")
+    ]
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_condition(USERS, "other", expression, unresolved, resolution="unresolved"),
+        bean_presence=presence,
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "not evaluated by this analysis in any of the 2 environments — a condition this "
+        "analysis does not evaluate: `@Conditional`"
+    ) in block
+
+
+def test_a_framework_generated_implementation_answers_a_call_beside_the_classes():
+    """CP-46: `SpringDataOwnerRepository` is an interface Spring Data implements at run time.
+    Its `candidate_presence` rows carry no `callee`; the site names it as the framework's
+    implementation, says where it exists, and says why it is open where it is."""
+    jdbc = COORDS + "com/acme/JdbcOwnerRepositoryImpl#send()."
+    proxy = COORDS + "com/acme/SpringDataOwnerRepository#"
+    trace = _narrowed_trace(jdbc, target="com/acme/OwnerRepository#send().")
+    opened = "named only in the base's `spring.profiles.active` — the activation selecting `mysql` decides it"
+    document = _traced(
+        trace,
+        candidate_presence=[
+            *_candidate(
+                jdbc,
+                COORDS + "com/acme/JdbcOwnerRepositoryImpl#",
+                {"default": "false", "mysql": "false"},
+            ),
+            {**_candidate(None, proxy, {"default": "true"})[0], "callee": None},  # type: ignore[arg-type]
+            {
+                **_candidate(None, proxy, {"mysql": "unresolved"}, "unresolved")[0],  # type: ignore[arg-type]
+                "evidence": opened,
+            },
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert (
+        "  - `Api#send` calls `OwnerRepository#send`, answered by one of: `JdbcOwnerRepositoryImpl`, "
+        "a framework-generated implementation of `SpringDataOwnerRepository`\n"
+        "  - in `default`: a framework-generated implementation of `SpringDataOwnerRepository`\n"
+        "  - not evaluated in `mysql`: a framework-generated implementation of "
+        f"`SpringDataOwnerRepository` — {opened}\n"
+    ) in block + "\n"
+
+
+def test_a_resolved_call_into_an_interface_only_the_framework_implements_names_it():
+    """A call whose named method no class of the module implements is RESOLVED to the
+    boundary; where an interface bean's implementation answers it, the site says so rather
+    than reading as answered by nothing."""
+    proxy = COORDS + "com/acme/SpringDataOwnerRepository#"
+    narrowed = _narrowed_trace(COORDS + "com/acme/Unused#send().")
+    boundary = replace(
+        narrowed.steps[1],
+        callee=None,
+        resolution=Resolution.RESOLVED,
+        target="com/acme/OwnerRepository#send().",
+    )
+    trace = replace(narrowed, steps=(narrowed.steps[0], boundary))
+    rows = [{**row, "callee": None} for row in _candidate(None, proxy, {"default": "true"})]  # type: ignore[arg-type]
+    block = _block(_traced(trace, candidate_presence=rows), "Api#handle")
+    assert (
+        "  - in `default`: a framework-generated implementation of `SpringDataOwnerRepository`\n"
+    ) in block + "\n"

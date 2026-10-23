@@ -306,12 +306,21 @@ def test_candidate_verdicts_name_a_site_and_group_each_candidates_environments_b
         {"caller": caller, "ordinal": 0, "callee": plain, "environment": "prod"} | _VERDICT_FALSE,
         {"caller": caller, "ordinal": 1, "callee": plain, "environment": "prod"} | _VERDICT_TRUE,
         {"caller": other, "ordinal": 0, "callee": plain, "environment": "prod"} | _VERDICT_TRUE,
+        {
+            "caller": caller,
+            "ordinal": 0,
+            "callee": None,
+            "bean": "sextant-jvm maven g/a 1 com/acme/spi/SpringDataUsers#",
+            "environment": "prod",
+        }
+        | _VERDICT_TRUE,
     ]
 
     assert field_check._candidate_verdicts(rows, ["Orders#place@0"]) == {
         "Orders#place@0": {
             "LdapUsers": {"true/resolved": ["prod"], "false/partial": ["default"]},
             "PlainUsers": {"false/partial": ["prod"]},
+            "SpringDataUsers (framework-generated)": {"true/resolved": ["prod"]},
         }
     }
 

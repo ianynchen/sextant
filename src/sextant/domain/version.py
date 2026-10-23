@@ -94,7 +94,9 @@ SEXTANT_VERSION = version("sextant")
 #             and becomes a VIEW joining endpoint rows to it, gaining `caller`, `via`, `bean_kind` and `bean`; the view
 #             `bean_presence` folds it into where each bean exists; the view `symbol_beans`
 #             is the one rule mapping code to its bean, and `candidate_presence` states
-#             which candidates of a narrowed call exist per environment. A workspace
+#             which candidates of a narrowed call exist per environment; `interface_beans`
+#             names every interface the framework implements at run time (CP-46), whose
+#             implementation `candidate_presence` lists as a candidate. A workspace
 #             holding the old table is refused by name by `system analyze` and rebuilt by
 #             `module analyze`.
 FACT_SCHEMA_VERSION = 5

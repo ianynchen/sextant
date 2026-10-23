@@ -527,8 +527,9 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- class whose code runs, spelled as `symbols.symbol` spells a type (the spelling
 -- `symbols.enclosing` uses, which is how every derived row finds it); `bean_kind` is `class`
 -- (a condition on a scanned class), `factory` (on the `@Bean` method that constructs and
--- returns it) or `configuration` (on that method's configuration class); `via` is that
--- method, NULL for `class`. `kind`, `expression` and `holds` are the conditions pass's
+-- returns it), `configuration` (on that method's configuration class) or `proxy` (on an
+-- INTERFACE the framework registers and implements at run time, CP-46 — the bean is the
+-- interface); `via` is that method, NULL for `class` and `proxy`. `kind`, `expression` and `holds` are the conditions pass's
 -- encoding (CP-42, CP-43, CP-44): `profile`, `property`, `presence` (a bean-presence
 -- condition judged from the module's own beans, `resolution = partial` with the reason in
 -- `evidence`, spec §2c) or `other`, the expression JSON typed per kind, and the framework's
@@ -548,6 +549,17 @@ CREATE TABLE IF NOT EXISTS bean_conditions (
     holds       TEXT,
     resolution  TEXT,
     evidence    TEXT
+);
+
+-- Every INTERFACE the framework registers as a bean and implements at run time (CP-46; the
+-- bean model's `interface_registrations`), conditional or not, one row per type it is
+-- assignable to — itself and every supertype `type_hierarchy` reaches, bare. Written by the
+-- conditions pass beside `bean_conditions` and replaced whole with it; read by
+-- `candidate_presence`, where a call naming one of those types is answered by the
+-- framework's implementation too.
+CREATE TABLE IF NOT EXISTS interface_beans (
+    bean TEXT,
+    type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS endpoint_metadata (
@@ -1315,35 +1327,71 @@ SELECT bean, environment,
 FROM routes
 GROUP BY bean, environment;
 
--- Which candidates of a NARROWED call site exist in each environment (spec 2026-10-22-
--- conditional-beans §3, second bullet; Task 5 ruling 3): the per-site, per-environment answer
--- as rows, so a machine reads it without re-implementing the join. Read, never written:
--- `call_edges` and its `narrowed` resolution are unchanged (spec §4), and every candidate is
--- here — none dropped in any environment. A site is listed only where at least one candidate's
--- bean is conditional (`symbol_beans`); then every candidate of it is listed, a conditional
--- one with its bean's `bean_presence` verdict and resolution, an unconditional one with `bean`
--- NULL holding `true` (`resolved`) in every environment the module resolves. A site none of
--- whose candidates is conditional has no rows, and its trace renders as it always did.
+-- Which candidates of a call site exist in each environment (spec 2026-10-22-conditional-beans
+-- §3, second bullet; Task 5 ruling 3; Task 7b fix ruling 1): the per-site, per-environment
+-- answer as rows, so a machine reads it without re-implementing the join. Read, never
+-- written: `call_edges` and its resolutions are unchanged (spec §4), and every candidate is
+-- here — none dropped in any environment. A site is listed where a NARROWED candidate's bean
+-- is conditional (`symbol_beans`), or where an INTERFACE bean's framework-generated
+-- implementation answers it — an `interface` call naming a type the interface is assignable
+-- to (`interface_beans`), whatever the site's resolution. Then every candidate of it is
+-- listed: a body with a conditional bean with its bean's `bean_presence` verdict, resolution
+-- and evidence; a body with none with `bean` NULL holding `true` (`resolved`) in every
+-- environment; a framework-generated implementation with `callee` NULL and `bean` the
+-- interface, its `bean_presence` verdict where it is conditional and `true` everywhere where
+-- it is not. A site with none of these has no rows, and its trace renders as it always did.
+-- The environments are the module's: those the conditions pass wrote, or (a module whose
+-- only interface beans are unconditional) `resolved_config`'s, else `default`, as the pass
+-- has them.
 --
 -- Equi-joins only, for the reason `symbol_beans` gives (§8.7): one hash join per step, and
--- the unconditional arm a cross join against the handful of environments.
+-- the unconditional arms cross joins against the handful of environments.
 CREATE OR REPLACE VIEW candidate_presence AS
-WITH candidates AS (
-    SELECT DISTINCT c.caller, c.ordinal, c.callee, m.bean
+WITH edges AS (
+    SELECT DISTINCT c.caller, c.ordinal, c.callee, c.resolution, m.bean
     FROM call_edges c
     LEFT JOIN symbol_beans m ON m.symbol = c.callee
-    WHERE c.resolution = 'narrowed' AND c.callee IS NOT NULL
+    WHERE c.callee IS NOT NULL
 ),
-sites AS (SELECT DISTINCT caller, ordinal FROM candidates WHERE bean IS NOT NULL),
+proxied AS (
+    SELECT DISTINCT c.caller, c.ordinal, i.bean
+    FROM call_edges c
+    JOIN interface_beans i ON i.type = split_part(c.target, '#', 1) || '#'
+    WHERE c.invoke_kind = 'interface'
+),
+sites AS (
+    SELECT DISTINCT caller, ordinal FROM edges WHERE resolution = 'narrowed' AND bean IS NOT NULL
+    UNION
+    SELECT DISTINCT caller, ordinal FROM proxied
+),
 listed AS (
-    SELECT c.* FROM candidates c
-    JOIN sites s ON s.caller = c.caller AND s.ordinal = c.ordinal
+    SELECT e.caller, e.ordinal, e.callee, e.bean FROM edges e
+    JOIN sites s ON s.caller = e.caller AND s.ordinal = e.ordinal
 ),
-environments AS (SELECT DISTINCT environment FROM bean_conditions)
-SELECT l.caller, l.ordinal, l.callee, l.bean, p.environment, p.holds, p.resolution
+conditional AS (SELECT DISTINCT bean FROM bean_conditions),
+environments AS (
+    SELECT environment FROM bean_conditions
+    UNION
+    SELECT environment FROM resolved_config
+    UNION
+    SELECT 'default' AS environment
+    WHERE NOT EXISTS (SELECT 1 FROM bean_conditions) AND NOT EXISTS (SELECT 1 FROM resolved_config)
+)
+SELECT l.caller, l.ordinal, l.callee, l.bean, p.environment, p.holds, p.resolution, p.evidence
 FROM listed l JOIN bean_presence p ON p.bean = l.bean
 UNION ALL
 SELECT l.caller, l.ordinal, l.callee, NULL AS bean, e.environment, 'true' AS holds,
-       'resolved' AS resolution
+       'resolved' AS resolution, 'compiler' AS evidence
 FROM listed l CROSS JOIN environments e
-WHERE l.bean IS NULL;
+WHERE l.bean IS NULL
+UNION ALL
+SELECT x.caller, x.ordinal, NULL AS callee, x.bean, p.environment, p.holds, p.resolution,
+       p.evidence
+FROM proxied x JOIN bean_presence p ON p.bean = x.bean
+UNION ALL
+SELECT x.caller, x.ordinal, NULL AS callee, x.bean, e.environment, 'true' AS holds,
+       'resolved' AS resolution, 'compiler' AS evidence
+FROM proxied x
+LEFT JOIN conditional k ON k.bean = x.bean
+CROSS JOIN environments e
+WHERE k.bean IS NULL;

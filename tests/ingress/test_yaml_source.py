@@ -464,6 +464,13 @@ def test_a_bean_model_carrying_a_well_formed_condition_vocabulary_loads(tmp_path
         ("stereotypes: com.acme.Component\n", "`stereotypes` must be a non-empty list"),
         ("stereotypes: [com.acme.Component, 7]\n", "`stereotypes` must be a non-empty list"),
         ("configuration_annotation: [com.acme.Config]\n", "`configuration_annotation` must"),
+        ("interface_registrations: []\n", "`interface_registrations` must"),
+        ("interface_registrations: [{supertypes: [], by: p.md}]\n", "`interface_registrations`"),
+        ("interface_registrations: [{supertypes: [com.acme.Repo]}]\n", "`interface_registrations`"),
+        (
+            "interface_registrations: [{supertypes: [com.acme.Repo], excluded_by: [x], by: p.md}]\n",
+            "`interface_registrations`",
+        ),
     ],
 )
 def test_a_malformed_condition_vocabulary_is_refused_naming_the_model_file(

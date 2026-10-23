@@ -27,6 +27,14 @@ Which classes are beans, and which conditions apply — the container's own rule
   before it reads them).
 * A class merely constructed is never handed to the evaluator (row 4), so its own
   annotations are not consulted on that route.
+* `proxy` — an INTERFACE the framework registers and implements at run time (the bean
+  model's `interface_registrations`; CP-46, `scripts/probes/cp46_repository_interface_beans.md`:
+  Spring Data's repository scanner is the component scanner, its own filters admitting an
+  interface assignable to `Repository` or carrying `@RepositoryDefinition`, refusing one
+  carrying `@NoRepositoryBean`, and evaluating the interface's own conditions). The bean is
+  the interface; every interface bean, conditional or not, is written to `interface_beans`
+  with each type it is assignable to, which is how `candidate_presence` lists the
+  framework's implementation as a candidate of a call naming one of them.
 * A lambda body a factory method's own body creates (the `dynamic` call edge from it to a
   synthetic body, followed through lambdas it creates in turn) is that factory's code: its
   bean is the lambda body itself, on the factory's route, `via` the method — a functional
@@ -146,6 +154,9 @@ FACTORY = "factory"
 CONFIGURATION = "configuration"
 # The route of a class constructed outside any factory method's body.
 CONSTRUCTED = "constructed"
+# The route of an INTERFACE the framework registers and implements at run time (CP-46): the
+# bean is the interface, its implementation a proxy the framework generates.
+PROXY = "proxy"
 # An inherited body no bean of the module resolves its method to (ruled 2026-10-22): it runs
 # as part of no bean here, so where it exists is not decided.
 INHERITED = "inherited"
@@ -234,8 +245,17 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
     reached = _reached_bodies(workspace)
     dispatch = workspace.once(dispatch_of) if reached else None
     rows: list[dict[str, Any]] = []
+    proxies: list[dict[str, str]] = []
     for model in vocabularies:
         every, registrations = _routes(workspace, model, index, constructed, created, ancestors)
+        # Every interface bean, conditional or not, and each type it is assignable to: what a
+        # call site names decides whether the framework's implementation answers it.
+        proxies.extend(
+            {"bean": bean, "type": supertype}
+            for bean, found in sorted(every.items())
+            if any(route.route == PROXY for route in found)
+            for supertype in sorted(_supertypes_of(bare_descriptor(bean), ancestors))
+        )
         routes = {
             bean: found for bean, found in every.items() if any(route.conditions for route in found)
         }
@@ -248,6 +268,8 @@ def record_bean_conditions(workspace: Workspace, catalogs: list[Catalog]) -> Non
             rows.extend(_inherited_rows(reached, dispatch, every, written, environments))
     if rows:
         workspace.derive("bean_conditions_insert", rows=rows)
+    if proxies:
+        workspace.derive("interface_beans_insert", rows=proxies)
 
 
 def _reached_bodies(workspace: Workspace) -> dict[str, tuple[str, str, str]]:
@@ -285,7 +307,8 @@ def _inherited_rows(
     beans = {
         bare_descriptor(bean): bean
         for bean, found in routes.items()
-        if is_type_descriptor(bean) and any(route.route in (CLASS, FACTORY) for route in found)
+        if is_type_descriptor(bean)
+        and any(route.route in (CLASS, FACTORY, PROXY) for route in found)
     }
     rows: list[dict[str, Any]] = []
     for body, (name, descriptor, enclosing) in sorted(reached.items()):
@@ -390,7 +413,17 @@ def _routes(
         stereotypes.add(type_descriptor(str(model["configuration_annotation"])))
     annotation_types = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     raw = index
-    index = _effective_index(workspace, index, annotation_types, {*stereotypes, *conditions})
+    interface_registrations = list(model.get("interface_registrations") or ())
+    # The annotations an interface registration reads, so a composed one counts as for classes.
+    registration_marks = {
+        type_descriptor(str(entry[key]))
+        for entry in interface_registrations
+        for key in ("annotation", "excluded_by")
+        if entry.get(key)
+    }
+    index = _effective_index(
+        workspace, index, annotation_types, {*stereotypes, *conditions, *registration_marks}
+    )
 
     def conditions_on(target: str | None, bean_kind: str) -> list[tuple[str, ConditionModel, Any]]:
         return [
@@ -429,6 +462,25 @@ def _routes(
                     conditions=tuple((target, found, args) for _, found, args in on_class),
                 )
             )
+    # An INTERFACE the framework registers and implements at run time (CP-46) is a route like
+    # a scanned class's: the scanner evaluates the interface's own conditions (row 6).
+    for interface in _registered_interfaces(
+        workspace, interface_registrations, annotated, ancestors
+    ):
+        on_interface = tuple(conditions_on(interface, PROXY))
+        routes.setdefault(interface, []).append(_Route(PROXY, None, on_interface))
+        registrations.append(
+            _Registration(
+                route=PROXY,
+                symbol=interface,
+                owner=None,
+                registered=bare_descriptor(interface),
+                # The name the framework gives its implementation was not measured.
+                name=None,
+                annotations=annotated.get(bare_descriptor(interface), frozenset()),
+                conditions=tuple((interface, found, args) for _, found, args in on_interface),
+            )
+        )
     factories = declared_beans(workspace, model).by_method
     for declared in sorted(factories):
         bean = factories[declared]
@@ -490,7 +542,7 @@ def _routes(
     registers: dict[str, set[str]] = {}
     for registered_class, found in routes.items():
         for route in found:
-            if route.route == CLASS:
+            if route.route in (CLASS, PROXY):
                 registers.setdefault(registered_class, set()).add(registered_class)
             elif route.route == FACTORY and route.via is not None:
                 registers.setdefault(route.via, set()).add(registered_class)
@@ -577,7 +629,7 @@ def _rows_for(
                 # The class or method the annotation is on, which `_presence_verdicts` keys by.
                 holder = (
                     bean
-                    if bean_kind == CLASS
+                    if bean_kind in (CLASS, PROXY)
                     else route.via
                     if bean_kind == FACTORY
                     else enclosing_type_of(route.via or "")
@@ -1074,6 +1126,51 @@ def _assignable(child: str, declared: str, ancestors: dict[str, list[str]]) -> b
         seen.add(current)
         pending.extend(ancestors.get(current, ()))
     return False
+
+
+def _supertypes_of(bare: str, ancestors: dict[str, list[str]]) -> set[str]:
+    """`bare` and every type it is a subtype of (`type_hierarchy`, transitively)."""
+    seen: set[str] = set()
+    pending = [bare]
+    while pending:
+        current = pending.pop()
+        if current not in seen:
+            seen.add(current)
+            pending.extend(ancestors.get(current, ()))
+    return seen
+
+
+def _registered_interfaces(
+    workspace: Workspace,
+    entries: list[dict[str, Any]],
+    annotated: dict[str, frozenset[str]],
+    ancestors: dict[str, list[str]],
+) -> list[str]:
+    """The module's interfaces the framework registers as beans (CP-46): one assignable to an
+    entry's `supertypes` (row 4), or carrying its `annotation` on itself or an interface it
+    extends (row 2) — never one carrying `excluded_by` itself (rows 2, 3). Composed
+    annotations count, as for classes. **Stated limits:** whether scanning runs, and from
+    which packages, is the module's configuration and not read; a nested interface is not
+    refused; an annotation on a DEPENDENCY interface it extends is not read."""
+    if not entries:
+        return []
+    found: list[str] = []
+    for row in workspace.query("interface_declarations"):
+        interface = str(row["symbol"])
+        bare = bare_descriptor(interface)
+        above = _supertypes_of(bare, ancestors)
+        own = annotated.get(bare, frozenset())
+        for entry in entries:
+            excluded = entry.get("excluded_by")
+            if excluded and type_descriptor(str(excluded)) in own:
+                continue
+            marker = entry.get("annotation")
+            if any(type_descriptor(str(name)) in above for name in entry["supertypes"]) or (
+                marker and any(type_descriptor(str(marker)) in annotated.get(t, ()) for t in above)
+            ):
+                found.append(interface)
+                break
+    return sorted(set(found))
 
 
 def _delegates(caller: str, built: str, ancestors: dict[str, list[str]]) -> bool:

@@ -977,6 +977,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.an-INTERFACE-the-framework-implements-is-a-route": Guard(
+        what="an interface the framework registers and implements at run time (CP-46) is a "
+        "registration route with its own conditions, and its implementation answers calls "
+        "naming a type it is assignable to",
+        why='spring-petclinic-rest\'s `@Profile("spring-data-jpa")` Spring Data repositories '
+        "are interfaces; without the route every repository call was published as answered by "
+        "nothing in any environment, though the active profile makes the framework implement it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find="    for interface in _registered_interfaces(\n        workspace, interface_registrations, annotated, ancestors\n    ):\n",
+                replace="    for interface in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.OUTBOUND-rows-and-schedules-state-their-condition": Guard(
         what="an outbound call and a scheduled job of a conditional bean get the two lines "
         "saying where it exists, read through the same index the inbound rows use",

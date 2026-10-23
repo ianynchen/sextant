@@ -398,14 +398,20 @@ def _candidate_verdicts(
     rows: list[dict[str, object]], sites: list[str]
 ) -> dict[str, dict[str, dict[str, list[str]]]]:
     """The pure half of `_candidate_presence`: a symbol is named by its last `/`-separated
-    segment, the method without its signature, a candidate by its class alone."""
+    segment, the method without its signature, a candidate by its class alone — a
+    framework-generated implementation (no `callee`, CP-46) by its interface and
+    `(framework-generated)`."""
     found: dict[str, dict[str, dict[str, list[str]]]] = {site: {} for site in sites}
     for row in rows:
         caller = str(row["caller"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("(")[0]
         site = f"{caller}@{row['ordinal']}"
         if site not in found:
             continue
-        candidate = str(row["callee"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("#")[0]
+        if row["callee"] is None:
+            interface = str(row["bean"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("#")[0]
+            candidate = f"{interface} (framework-generated)"
+        else:
+            candidate = str(row["callee"]).rsplit(" ", 1)[-1].rsplit("/", 1)[-1].split("#")[0]
         verdict = f"{row['holds']}/{row['resolution']}"
         found[site].setdefault(candidate, {}).setdefault(verdict, []).append(
             str(row["environment"])

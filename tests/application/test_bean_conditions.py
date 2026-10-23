@@ -1931,3 +1931,124 @@ def test_the_pass_names_the_placeholder_the_active_profiles_come_from(tmp_path: 
         "the active profiles here come from `${apollo_profile}`, which this module does not fill"
     )
     assert presence == {"default": ("unresolved", reason), "github": ("unresolved", reason)}
+
+
+# --- an interface the framework implements at run time (CP-46; Task 7b fix ruling 1) ------
+
+_REPOSITORY = "org/springframework/data/repository/Repository#"
+_NO_REPOSITORY_BEAN = "org/springframework/data/repository/NoRepositoryBean#"
+_STEREO_REPOSITORY = "org/springframework/stereotype/Repository#"
+OWNERS = ORDERS + "OwnerRepository#"
+SPRING_DATA_OWNERS = ORDERS + "SpringDataOwnerRepository#"
+JDBC_OWNERS = ORDERS + "JdbcOwnerRepositoryImpl#"
+CLINIC = ORDERS + "ClinicService#"
+
+
+def _owner_repositories(*extra: object) -> list[object]:
+    """spring-petclinic-rest's shape: `interface OwnerRepository { void save(); }`;
+    `@Profile("spring-data-jpa") interface SpringDataOwnerRepository extends OwnerRepository,
+    Repository<Owner, Integer>`; `@Repository @Profile("jdbc") JdbcOwnerRepositoryImpl
+    implements OwnerRepository`; `@Service ClinicService#saveOwner` calls
+    `OwnerRepository#save`."""
+    save_owner = method_descriptor(CLINIC, "saveOwner", _VOID)
+    return [
+        *_type(OWNERS, kind=ConstructKind.INTERFACE),
+        _declaration(OWNERS, "save"),
+        *_type(
+            SPRING_DATA_OWNERS,
+            [_profile("spring-data-jpa")],
+            kind=ConstructKind.INTERFACE,
+            interfaces=(OWNERS, _REPOSITORY),
+        ),
+        *_type(JDBC_OWNERS, [_marker(_STEREO_REPOSITORY), _profile("jdbc")], interfaces=(OWNERS,)),
+        *_body(JDBC_OWNERS, "save"),
+        *_type(CLINIC, [_marker(SERVICE)]),
+        *_body(CLINIC, "saveOwner"),
+        *_calls(save_owner, OWNERS, "save"),
+        *extra,
+    ]
+
+
+def _candidates(workspace: DuckDbWorkspace) -> dict[tuple[object, object, str], tuple[str, str]]:
+    return {
+        (r["callee"], r["bean"], str(r["environment"])): (str(r["holds"]), str(r["resolution"]))
+        for r in workspace.query("candidate_presence")
+    }
+
+
+@pytest.mark.pins("beans.an-INTERFACE-the-framework-implements-is-a-route")
+def test_a_repository_interface_is_a_bean_whose_implementation_answers_the_call(tmp_path: Path):
+    """With `spring.profiles.active=spring-data-jpa`, Spring Data registers a proxy for
+    `SpringDataOwnerRepository` in the base environment (CP-46 rows 2, 4, 6), and it answers
+    `ClinicService#saveOwner`'s call to `OwnerRepository#save` — beside the JDBC class, which
+    exists nowhere here. The call names a body only the JDBC class has, so without the route
+    the site would read as answered by nothing in `default`."""
+    workspace = _resolved(
+        tmp_path,
+        _owner_repositories(),
+        environments=("mysql",),
+        base={"spring.profiles.active": "spring-data-jpa"},
+    )
+    rows = workspace.query("bean_conditions")
+    candidates = _candidates(workspace)
+    workspace.close()
+
+    assert _verdicts(rows, SPRING_DATA_OWNERS) == {
+        "default": ("proxy", None, "profile", "true", "resolved"),
+        "mysql": ("proxy", None, "profile", "unresolved", "unresolved"),
+    }
+    proxy = _MODULE + SPRING_DATA_OWNERS
+    jdbc = _MODULE + method_descriptor(JDBC_OWNERS, "save", _VOID)
+    assert candidates == {
+        (None, proxy, "default"): ("true", "resolved"),
+        (None, proxy, "mysql"): ("unresolved", "unresolved"),
+        (jdbc, _MODULE + JDBC_OWNERS, "default"): ("false", "resolved"),
+        (jdbc, _MODULE + JDBC_OWNERS, "mysql"): ("false", "resolved"),
+    }
+
+
+def test_a_no_repository_bean_interface_is_no_bean(tmp_path: Path):
+    """CP-46 rows 2-3: `@NoRepositoryBean` refuses the interface carrying it — a base
+    repository others extend — and only that one."""
+    base = ORDERS + "BaseRepository#"
+    facts = [
+        *_type(
+            base,
+            [AnnotationUse(annotation=_NO_REPOSITORY_BEAN, args={}), _profile("prod")],
+            kind=ConstructKind.INTERFACE,
+            interfaces=(_REPOSITORY,),
+        ),
+        *_type(
+            SPRING_DATA_OWNERS, [_profile("prod")], kind=ConstructKind.INTERFACE, interfaces=(base,)
+        ),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = {r["bean"] for r in workspace.query("bean_conditions")}
+    interfaces = {r["bean"] for r in workspace.query("interface_beans")}
+    workspace.close()
+
+    assert beans == interfaces == {_MODULE + SPRING_DATA_OWNERS}
+
+
+def test_an_unconditional_repository_interface_answers_its_calls_everywhere(tmp_path: Path):
+    """No condition on the interface: no `bean_conditions` row (an unconditional bean), and
+    its implementation is still a candidate of the call, present in every environment."""
+    facts = [
+        *_type(OWNERS, kind=ConstructKind.INTERFACE),
+        _declaration(OWNERS, "save"),
+        *_type(SPRING_DATA_OWNERS, kind=ConstructKind.INTERFACE, interfaces=(OWNERS, _REPOSITORY)),
+        *_type(CLINIC, [_marker(SERVICE)]),
+        *_body(CLINIC, "saveOwner"),
+        *_calls(method_descriptor(CLINIC, "saveOwner", _VOID), OWNERS, "save"),
+    ]
+    workspace = _resolved(tmp_path, facts)
+    beans = workspace.query("bean_conditions")
+    candidates = _candidates(workspace)
+    workspace.close()
+
+    assert beans == []
+    proxy = _MODULE + SPRING_DATA_OWNERS
+    assert candidates == {
+        (None, proxy, "default"): ("true", "resolved"),
+        (None, proxy, "prod"): ("true", "resolved"),
+    }

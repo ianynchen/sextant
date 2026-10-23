@@ -821,7 +821,8 @@ _CONDITION_KINDS = ("profile", "property", "other")
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
     """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
-    `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` — naming the file
+    `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` /
+    `interface_registrations` — naming the file
     (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
     framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
     measured is a guess, and a typo here would silently strip every bean of its condition."""
@@ -894,6 +895,30 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
             raise CatalogError(
                 f"{where}: `stereotype_name_attrs` must map each annotation name to one "
                 f"attribute, got {naming!r}"
+            )
+    # Interfaces the framework registers and implements at run time (CP-46): a malformed entry
+    # would leave every such interface without a route, its calls reading as unanswered.
+    if "interface_registrations" in raw:
+        registrations = raw["interface_registrations"]
+        optional = ("annotation", "excluded_by")
+        if (
+            not isinstance(registrations, list)
+            or not registrations
+            or not all(
+                isinstance(entry, dict)
+                and isinstance(entry.get("supertypes"), list)
+                and entry["supertypes"]
+                and all(isinstance(name, str) and name for name in entry["supertypes"])
+                and all(isinstance(entry.get(key, ""), str) for key in optional)
+                and isinstance(entry.get("by"), str)
+                and entry["by"]
+                for entry in registrations
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `interface_registrations` must be a non-empty list of entries, each "
+                "with `supertypes` (a non-empty list of type names), optional `annotation` and "
+                f"`excluded_by` (annotation names) and a `by:` probe, got {registrations!r}"
             )
 
 
