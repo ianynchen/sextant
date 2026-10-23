@@ -896,6 +896,37 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "conditions.a-reading-keeps-BOTH-a-placeholder-and-the-profiles-named-beside-it": Guard(
+        what="a module's profile reading that names a placeholder nothing fills and literal "
+        "profiles beside it states both: the placeholder's reason and the module's own default",
+        why="`spring.profiles.active: [${APP_PROFILE}, prod]` activates `prod` itself; a "
+        "reading stating only the placeholder drops what the module does activate",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='        return prefix + base.otherwise + (f"; {own}" if own else "")\n',
+                replace="        return prefix + base.otherwise  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit": Guard(
+        what="every exit printing a condition's evidence — the module document's conditions "
+        "and candidate lines (and through them the enrichment brief), and the bundle — "
+        "re-masks each value a property condition quotes by its key under the module's own "
+        "rules (`redact_condition_evidence`)",
+        why="the writer masks with the built-ins only (no module redactor reaches a resolve "
+        "pass, `OI-71`), and `redact_text` cannot see a key: a `.sextant.yml` naming "
+        "`billing` a secret key would see `billing.enabled`'s configured value in the "
+        "document, the brief and the bundle in the clear",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/bean_conditions.py",
+                find='            + redactor.redact_value(found["key"], found["value"])\n',
+                replace='            + found["value"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
     # --- a bean that exists in some environments only (spec 2026-10-22-conditional-beans) -
     "beans.a-FACTORY-conditions-only-the-class-it-returns": Guard(
         what="a factory method conditions the classes its body constructs that are assignable "
@@ -1221,6 +1252,20 @@ GUARDS: dict[str, Guard] = {
                 "        reason = redactor.redact_text(refusal.reason)\n",
                 replace="        route = refusal.route  # guard disabled\n"
                 "        reason = refusal.reason\n",
+            ),
+        ),
+    ),
+    "stitch.the-LINKS-legend-says-what-not-evaluated-means-once": Guard(
+        what='where any link end renders "not evaluated", the Links section carries one fixed '
+        "sentence saying what it means and that the participant's module document says why",
+        why="a deployment-set condition leaves most ends not evaluated in every environment, "
+        "and the system document states no reason: without the legend a reader takes it for "
+        "a failure of the analysis, or for the end not existing",
+        edits=(
+            Edit(
+                path="sextant/egress/render/system.py",
+                find='        lines += [_NOT_EVALUATED, ""]\n',
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3732,14 +3777,32 @@ GUARDS: dict[str, Guard] = {
     ),
     "boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole": Guard(
         what="the diff refuses two sides older than this build's graph schema unless allowed, "
-        "and then masks each scheme-less peer with an `@` whole",
+        "and then, for sides older than graph schema 5, masks each scheme-less peer with an "
+        "`@` whole",
         why="before graph schema 5 a split peer kept a URL's password with no scheme in "
         "front; two such analyses agree with each other, so the diff printed it",
         edits=(
             Edit(
                 path=_DIFF,
-                find='    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:\n',
+                find='    if userinfo_in_peers and isinstance(peer, str) and "@" in peer and "://" not in '
+                "peer:\n",
                 replace="    if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "boundary.a-STALE-side-from-schema-5-on-keeps-its-peers": Guard(
+        what="an allowed stale side masks a scheme-less peer with an `@` whole only when its "
+        "graph schema is older than 5, the first whose `split_url` drops the userinfo",
+        why="keyed on any schema but this build's, every bump hides a `mailto:ops@billing` "
+        "peer of a schema-5 side for a hazard that side cannot hold, so the diff reports a "
+        "masked marker where the peer it names is",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='    userinfo_in_peers = int(str(stamps_a["graph_schema_version"])) < '
+                "_USERINFO_IN_PEERS_BEFORE\n",
+                replace='    userinfo_in_peers = stamps_a["graph_schema_version"] != '
+                "GRAPH_SCHEMA_VERSION  # guard disabled\n",
             ),
         ),
     ),

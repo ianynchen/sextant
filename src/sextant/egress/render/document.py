@@ -35,7 +35,13 @@ from sextant.application.ports.detector import ModuleModel
 # — this module never reaches for a workspace, which is the import-linter
 # contract "Egress is read-only" in one line.
 from sextant.application.query.trace import Step, Trace
-from sextant.application.resolve.bean_conditions import COMPETITORS, INHERITED, NO_HEIR, PRESENCE
+from sextant.application.resolve.bean_conditions import (
+    COMPETITORS,
+    INHERITED,
+    NO_HEIR,
+    PRESENCE,
+    redact_condition_evidence,
+)
 from sextant.application.resolve.pipeline import ResolveReport
 
 # The root a trace ran from, for the addresses it carries (2Q close, defect 1).
@@ -717,19 +723,32 @@ class _BeanConditions:
     beans: dict[str, str]
 
 
-def _bean_conditions(report: ResolveReport) -> _BeanConditions:
+def _bean_conditions(report: ResolveReport, redactor: Redactor) -> _BeanConditions:
+    """The index, each presence verdict's evidence masked by `redactor` as it is read
+    (`_masked_evidence`)."""
     routes: dict[str, dict[str | None, list[Mapping[str, object]]]] = {}
     for row in report.bean_conditions:
         routes.setdefault(str(row["bean"]), {}).setdefault(_opt(row.get("via")), []).append(row)
     presence: dict[str, list[Mapping[str, object]]] = {}
     for row in report.bean_presence:
-        presence.setdefault(str(row["bean"]), []).append(row)
+        presence.setdefault(str(row["bean"]), []).append(_masked_evidence(row, redactor))
     beans = {str(row["symbol"]): str(row["bean"]) for row in report.symbol_beans}
     return _BeanConditions(routes, presence, beans)
 
 
 def _opt(value: object) -> str | None:
     return None if value is None else str(value)
+
+
+def _masked_evidence(row: Mapping[str, object], redactor: Redactor) -> Mapping[str, object]:
+    """A `bean_presence` or `candidate_presence` row, whose evidence the document states as a
+    reason, with that evidence masked by this exit's redactor — the module's own rules —
+    through the one owner of the evidence's format: a value a property condition quotes is
+    masked by its key (`redact_condition_evidence`)."""
+    evidence = row.get("evidence")
+    if evidence is None:
+        return row
+    return {**row, "evidence": redact_condition_evidence(redactor, str(evidence))}
 
 
 def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEntry]:
@@ -1363,11 +1382,15 @@ def assemble_module_document(
 
     The two columns that can carry an address — `path`, through
     `_wire_identity`, and `peer` — pass `redactor` on their way into a line.
-    Nothing else here renders a configuration VALUE: the module document names
+    One thing here renders a configuration VALUE: a property condition's
+    evidence quotes the value each environment's configuration sets (spec
+    2026-10-23-deployment-set-conditions §3b), stated on a bean's conditions
+    line and a trace's candidate lines — so both read their evidence through
+    `_masked_evidence`, which masks each quoted value by its key under this
+    redactor (`redact_condition_evidence`). Otherwise the module document names
     the expression a row carries and the KEYS pass 2 could not resolve, never
     the values behind them, so the resolved-config exposure this redactor
-    closes is the export exit's (`storage/duckdb/workspace.py`), not this
-    one's."""
+    closes is the export exit's (`storage/duckdb/workspace.py`)."""
     fields_by_shape = _fields_by_shape(shape_fields)
     origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
     throws_by_root = _throws_by_root(reachable_throws)
@@ -1429,7 +1452,7 @@ def assemble_module_document(
     structure_end = len(sections)
 
     # Read once, by every section below that states where a derived row exists.
-    beans = _bean_conditions(report)
+    beans = _bean_conditions(report, redactor)
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
@@ -1592,7 +1615,7 @@ def assemble_module_document(
     # module starts any work" is a finding; a section that disappears leaves a
     # reader unable to tell it from a Sextant that never walked (FR-17).
     sections.append(MachineHeading(2, "Traces"))
-    sections.extend(_trace_sections(traces, redactor, _candidate_sites(report)))
+    sections.extend(_trace_sections(traces, redactor, _candidate_sites(report, redactor)))
 
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
@@ -2040,12 +2063,15 @@ def _trace_detail(
 
 
 def _candidate_sites(
-    report: ResolveReport,
+    report: ResolveReport, redactor: Redactor
 ) -> dict[tuple[str, int], list[Mapping[str, object]]]:
-    """`candidate_presence` grouped by call site, `(caller, ordinal)` — read once."""
+    """`candidate_presence` grouped by call site, `(caller, ordinal)` — read once, each row's
+    evidence masked by `redactor` as it is read (`_masked_evidence`)."""
     sites: dict[tuple[str, int], list[Mapping[str, object]]] = {}
     for row in report.candidate_presence:
-        sites.setdefault((str(row["caller"]), cast(int, row["ordinal"])), []).append(row)
+        sites.setdefault((str(row["caller"]), cast(int, row["ordinal"])), []).append(
+            _masked_evidence(row, redactor)
+        )
     return sites
 
 

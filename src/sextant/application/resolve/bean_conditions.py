@@ -185,12 +185,26 @@ NO_HEIR = "no bean of this module runs this inherited body"
 # The JVM's own name for a constructor, which a member descriptor carries verbatim.
 _CONSTRUCTOR = "<init>"
 # A property condition's evidence quotes the value the module's own configuration sets
-# (spec 2026-10-23-deployment-set-conditions §3b), and `bean_conditions` is exported whole,
-# its evidence only through `redact_text`, which cannot see the key: so the value is masked
-# HERE, by its own key, as every origin writer of a configured value masks it — the
-# built-ins alone, because no redactor reaches a resolve pass from the composition root
-# (`OI-71`, stated on `engines/fluent.py`).
+# (spec 2026-10-23-deployment-set-conditions §3b): so the value is masked HERE, by its own
+# key, as every origin writer of a configured value masks it — the built-ins alone, because
+# no redactor reaches a resolve pass from the composition root (`OI-71`, stated on
+# `engines/fluent.py`). The module's OWN rules are applied at every exit, by
+# `redact_condition_evidence`, which reads the format below back.
 _REDACTOR = Redactor.from_rules()
+# The format of one key's sentence in a property condition's evidence — ONE owner, written
+# by `_judged` and read back by `redact_condition_evidence`. `_QUOTED_SETTING` finds each
+# quoted value wherever the sentence stands: alone, or inside a `bean_presence` reason
+# composed with others ("; ") or before a competitor list (`COMPETITORS`).
+_SET_BY_THE_DEPLOYMENT = "` is set by the deployment; this module's `"
+_CONFIGURATION_SETS = "` configuration sets "
+_QUOTED_SETTING = re.compile(
+    "`(?P<key>[^`]+)"
+    + re.escape(_SET_BY_THE_DEPLOYMENT)
+    + "[^`]+"
+    + re.escape(_CONFIGURATION_SETS)
+    + r"`(?P<value>.*?)`(?=; |\Z)",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -1357,8 +1371,7 @@ def _judged(
                 UNRESOLVED,
                 "unresolved",
                 "; ".join(
-                    f"`{key}` is set by the deployment; this module's `{environment}` "
-                    "configuration sets "
+                    f"`{key}{_SET_BY_THE_DEPLOYMENT}{environment}{_CONFIGURATION_SETS}"
                     + (
                         "nothing"
                         if key not in config
@@ -1375,22 +1388,47 @@ def _judged(
     return holds, resolution, "compiler"
 
 
+def redact_condition_evidence(redactor: Redactor, evidence: str) -> str:
+    """A condition's `evidence` — a `bean_conditions`, `bean_presence` or `candidate_presence`
+    row's — masked by `redactor`, the module's own rules, on its way out of any exit (the
+    document, and through it the enrichment brief; the bundle). The writer masked it with the
+    built-ins only (`_REDACTOR`), so the module's `.sextant.yml` additions are applied here:
+    each value a property condition QUOTES (`_QUOTED_SETTING`) is re-masked by its own key
+    (`redact_value`), which `redact_text` cannot do, never seeing the key; the whole string
+    then takes `redact_text` — userinfo stripped, the value patterns applied — which is all
+    evidence quoting no configured value takes (a profile reason, a placeholder's spelling).
+
+    **Stated limit:** a value is read up to the first backtick followed by "; " or the end,
+    so a configured value that itself contains "`; " is re-masked only up to it; the rest
+    still takes `redact_text`."""
+
+    def masked(found: re.Match[str]) -> str:
+        start, end = found.span("value")
+        return (
+            found.string[found.start() : start]
+            + redactor.redact_value(found["key"], found["value"])
+            + found.string[end : found.end()]
+        )
+
+    return redactor.redact_text(_QUOTED_SETTING.sub(masked, evidence))
+
+
 def deployment_reading(base: ActiveProfiles, default_profile: str) -> str:
     """The evidence of every `profile` condition a deployment sets, ONE string per module and
     the same in every environment (spec 2026-10-23-deployment-set-conditions §3b, §3c, as
     ruled at review): the module's own activation as read for its BASE environment (`base`,
-    CP-45) — the reason a placeholder leaves it unknown, or the profiles it activates. The
+    CP-45) — the reason a placeholder leaves it unknown, the profiles it activates, or both
+    where it names profiles beside the placeholder (`[${X}, prod]`; final review). The
     reserved `default_profile`, active there only because the module names none (CP-45 row
     5), is no activation the module makes."""
     prefix = "active profiles are set by the deployment; "
-    if base.otherwise:
-        return prefix + base.otherwise
     names = sorted(base.known)
     if names == [default_profile]:
         names = []
-    if not names:
-        return prefix + "this module activates none"
-    return prefix + f"this module's own default is `{','.join(names)}`"
+    own = f"this module's own default is `{','.join(names)}`" if names else None
+    if base.otherwise:
+        return prefix + base.otherwise + (f"; {own}" if own else "")
+    return prefix + (own or "this module activates none")
 
 
 def _profile_holds(expression: dict[str, Any], active: ActiveProfiles) -> tuple[str, str, str]:

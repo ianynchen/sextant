@@ -213,6 +213,21 @@ The rulings made while building, each with its pin:
   diff compared and printed it verbatim, so a `havingValue` URL carrying a password made a
   workspace and its own bundle differ and printed the credential. Found by review of §3e's
   change; closed in the same branch.
+- **A property's evidence states the value, not what it would decide.** §3b's "and what it
+  would decide" was not built: the evidence states the value the environment's configuration
+  sets (`` … this module's `prod` configuration sets `false` ``), or `sets nothing`, or a
+  placeholder this module does not fill — as §3c shows the lines read.
+- **One owner of the evidence format, masked at every exit** (final review, ruled). The
+  writer masks a quoted value with the built-ins only (no module redactor reaches a resolve
+  pass, `OI-71`), so `redact_condition_evidence`, beside the writer, re-masks each quoted
+  value by its key under the MODULE's rules and the rest by `redact_text`; the module
+  document's conditions and candidate lines (and through them the enrichment brief) and the
+  bundle's evidence all call it. A reading naming both a placeholder and profiles beside it
+  states both.
+- **The system document's legend** (ruled). Wherever any link end reads "not evaluated", the
+  Links section carries one fixed sentence, once: *Not evaluated:* this analysis does not
+  decide whether that end exists there — most often because the deployment sets its
+  condition; the participant's module document says why.
 
 The loader refuses a `set_by` other than `deployment`, and a `set_by` with no `set_by_probe`.
 `by:` keeps naming the evaluation-rule probe; the new key `set_by_probe:` names CP-47.

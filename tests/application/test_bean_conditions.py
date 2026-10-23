@@ -33,6 +33,7 @@ from sextant.application.resolve.bean_conditions import (
     active_profiles,
     deployment_reading,
     record_bean_conditions,
+    redact_condition_evidence,
 )
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.conditions import enclosing_type_of
@@ -54,7 +55,7 @@ from sextant.domain.facts import (
     TypeHeaderFact,
     TypeRef,
 )
-from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -2510,34 +2511,18 @@ _CHARGES = "https://user:secret@billing.internal/charges"
 _VAULT = "https://ops:s3cr3t@vault.internal/token"
 
 
-def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_export(
-    tmp_path: Path,
-):
-    """Whole-branch review, Important: the conditions views went out verbatim. A conditional
-    client calling `https://user:secret@billing.internal/charges`, under
-    `@ConditionalOnProperty(name = "billing.vault", havingValue = "https://ops:s3cr3t@…")` on a
-    key whose placeholder nothing fills — so the address reaches `endpoint_conditions.path`,
-    and the argument `bean_conditions.expression`, `endpoint_conditions.expression`, and the
-    reason `bean_presence` and `candidate_presence` give (the call through `Billing` narrows
-    to the live and the stub body). `endpoints.path` and `annotations.args` mask both; no
-    exported file may carry either in the clear.
-
-    The address is set on the row WHOLE, `peer` NULL — the shape a base-url composition
-    writes (2F design §4) — because a literal URL is split into `peer` and `path`, and
-    building a composed client here would test the fluent engine, not the exporter.
-
-    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): a property is set by
-    the deployment, so `bean_presence` and `candidate_presence` now give the module's own
-    reading as the reason — the placeholder `billing.vault` holds — instead of quoting the
-    expression; the argument still reaches both expressions, which is where it is looked
-    for."""
+def _billing_facts(having: str) -> list[object]:
+    """`LiveBilling` under `@ConditionalOnProperty(name = "billing.vault", havingValue =
+    having)` calls `https://user:secret@…/charges` (the address set on the row by the caller);
+    `StubBilling` is the unconditional other body of `Billing`, and `Notices#push` calls
+    through `Billing`, so the site narrows to both."""
     charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
     push = method_descriptor(NOTICES, "push", _VOID)
     on_vault = AnnotationUse(
         annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
-        args={"name": ["billing.vault"], "havingValue": _VAULT},
+        args={"name": ["billing.vault"], "havingValue": having},
     )
-    facts = [
+    return [
         *_type(BILLING, kind=ConstructKind.INTERFACE),
         _declaration(BILLING, "charge"),
         *_type(LIVE_BILLING, [_marker(COMPONENT), on_vault], interfaces=(BILLING,)),
@@ -2562,6 +2547,31 @@ def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_exp
         *_body(NOTICES, "push"),
         *_calls(push, BILLING, "charge"),
     ]
+
+
+def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_export(
+    tmp_path: Path,
+):
+    """Whole-branch review, Important: the conditions views went out verbatim. A conditional
+    client calling `https://user:secret@billing.internal/charges`, under
+    `@ConditionalOnProperty(name = "billing.vault", havingValue = "https://ops:s3cr3t@…")` on a
+    key whose placeholder nothing fills — so the address reaches `endpoint_conditions.path`,
+    and the argument `bean_conditions.expression`, `endpoint_conditions.expression`, and the
+    reason `bean_presence` and `candidate_presence` give (the call through `Billing` narrows
+    to the live and the stub body). `endpoints.path` and `annotations.args` mask both; no
+    exported file may carry either in the clear.
+
+    The address is set on the row WHOLE, `peer` NULL — the shape a base-url composition
+    writes (2F design §4) — because a literal URL is split into `peer` and `path`, and
+    building a composed client here would test the fluent engine, not the exporter.
+
+    Re-pinned by spec 2026-10-23-deployment-set-conditions (ruling 1): a property is set by
+    the deployment, so `bean_presence` and `candidate_presence` now give the module's own
+    reading as the reason — the placeholder `billing.vault` holds — instead of quoting the
+    expression; the argument still reaches both expressions, which is where it is looked
+    for."""
+    charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
+    facts = _billing_facts(_VAULT)
     workspace = _resolved(
         tmp_path, facts, "spring-resttemplate", base={"billing.vault": "${BILLING_VAULT}"}
     )
@@ -2588,6 +2598,48 @@ def test_a_conditional_outbound_address_and_condition_argument_are_masked_on_exp
         assert not any(
             "user:secret@" in str(cell) or "s3cr3t" in str(cell) for row in cells for cell in row
         ), f"{parquet.name} shipped a credential in the clear"
+
+
+@pytest.mark.pins("conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit")
+@pytest.mark.parametrize(
+    "rules",
+    [
+        RedactionRules(key_patterns=("vault",)),
+        RedactionRules(value_patterns=("^kept-quiet-7$",)),
+    ],
+    ids=["key-pattern", "value-pattern"],
+)
+def test_a_quoted_configured_value_is_masked_by_the_modules_own_rules_on_export(
+    tmp_path: Path, rules: RedactionRules
+):
+    """Final review, Important: the bundle masked a condition's evidence by `redact_text`
+    alone, which cannot see a key — so `billing.vault`, which the module's `.sextant.yml`
+    names a secret (`key_patterns: [vault]`), shipped the value its file sets in the clear,
+    and a value pattern anchored on the value alone never matched the sentence quoting it.
+    Every table carrying the evidence masks it under the module's own rules."""
+    charge = method_descriptor(LIVE_BILLING, "charge", _VOID)
+    workspace = _resolved(
+        tmp_path,
+        _billing_facts("on"),
+        "spring-resttemplate",
+        base={"billing.vault": "kept-quiet-7"},
+    )
+    workspace._connection.execute(
+        "UPDATE endpoints SET path = ?, peer = NULL WHERE caller = ?", [_CHARGES, _MODULE + charge]
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules(rules))
+    workspace.close()
+
+    for table in ("endpoint_conditions", "bean_conditions", "bean_presence", "candidate_presence"):
+        rows = duckdb.sql(
+            f"SELECT evidence FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        assert any(
+            f"this module's `prod` configuration sets `{REDACTED}`" in str(evidence)
+            for (evidence,) in rows
+        ), table
+        assert not any("kept-quiet-7" in str(evidence) for (evidence,) in rows), table
 
 
 def test_the_shipped_bean_model_states_which_condition_kinds_a_deployment_sets():
@@ -2730,7 +2782,10 @@ def test_a_module_naming_no_profile_activates_none():
 
 def test_a_placeholder_reading_survives_as_the_evidence():
     """Apollo: the module's own reading is that a placeholder nothing fills supplies the
-    list. That reason is the evidence, not replaced by a list of names."""
+    list. That reason is the evidence, not replaced by a list of names.
+
+    Re-pinned by the final review: a profile the reading names beside the placeholder
+    (`github`, here) is stated after the reason, not dropped."""
     reason = (
         "the active profiles here come from `${apollo_profile}`, which this module does not fill"
     )
@@ -2739,9 +2794,33 @@ def test_a_placeholder_reading_survives_as_the_evidence():
     assert _judged_profile(["ldap"], "github", reading) == (
         UNRESOLVED,
         "unresolved",
-        _SET_BY_DEPLOYMENT + reason,
+        _SET_BY_DEPLOYMENT + reason + "; this module's own default is `github`",
     )
     assert _judged_profile(["github"], "github", reading) == (HOLDS, "resolved", "compiler")
+
+
+@pytest.mark.pins("conditions.a-reading-keeps-BOTH-a-placeholder-and-the-profiles-named-beside-it")
+def test_a_reading_naming_a_placeholder_and_a_profile_beside_it_states_both():
+    """Final review: `spring.profiles.active: [${APP_PROFILE}, prod]` — the module activates
+    `prod` itself AND leaves the rest to a placeholder nothing fills. The reading states both,
+    the placeholder's reason and the module's own default, never one in place of the other;
+    so does `spring.profiles.include: prod` beside an unfilled `spring.profiles.active`."""
+    reason = "the active profiles here come from `${APP_PROFILE}`, which this module does not fill"
+    listed = _active(
+        {"spring.profiles.active[0]": None, "spring.profiles.active[1]": "prod"},
+        ("default", "prod"),
+        **{"spring__profiles__active[0]": ["${APP_PROFILE}"]},
+    )
+    included = _active(
+        {"spring.profiles.active": None, "spring.profiles.include": "prod"},
+        ("default", "prod"),
+        spring__profiles__active=["${APP_PROFILE}"],
+    )
+    both = _SET_BY_DEPLOYMENT + reason + "; this module's own default is `prod`"
+
+    assert listed["default"] == ActiveProfiles(known=frozenset({"prod"}), otherwise=reason)
+    assert deployment_reading(listed["default"], "default") == both
+    assert deployment_reading(included["default"], "default") == both
 
 
 def test_a_property_the_deployment_sets_is_never_decided_and_states_the_files_value():
@@ -2793,6 +2872,54 @@ def test_a_property_conditions_quoted_value_is_masked_by_its_key():
     assert evidence == (
         "`billing.api-token` is set by the deployment; this module's `prod` configuration sets "
         f"`{REDACTED}`"
+    )
+
+
+_BILLING_ON = (
+    "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+    "`kept-quiet-7`"
+)
+
+
+@pytest.mark.pins("conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit")
+def test_a_quoted_value_is_re_masked_by_its_key_under_the_modules_own_rules():
+    """The writer masks with the built-ins only (no module redactor reaches a resolve pass,
+    `OI-71`), so every exit re-masks the evidence with the module's own rules through ONE
+    function beside the writer: each quoted value by its key (`redact_value`), so a
+    `.sextant.yml` key pattern `billing` masks it — `redact_text` alone cannot, never seeing
+    the key — and a value pattern anchored on the value alone masks it too. A value quoted
+    inside a composed `bean_presence` reason, beside another reason and a competitor list, is
+    found where it is."""
+    by_key = Redactor.from_rules(RedactionRules(key_patterns=("billing",)))
+    by_value = Redactor.from_rules(RedactionRules(value_patterns=("^kept-quiet-7$",)))
+    masked = _BILLING_ON.replace("`kept-quiet-7`", f"`{REDACTED}`")
+
+    assert redact_condition_evidence(by_key, _BILLING_ON) == masked
+    assert redact_condition_evidence(by_value, _BILLING_ON) == masked
+    assert redact_condition_evidence(Redactor.from_rules(), _BILLING_ON) == _BILLING_ON
+    composed = (
+        "a condition this analysis does not evaluate: {}; "
+        + _BILLING_ON
+        + '; competitors: [{"bean": "x", "holds": "true"}]'
+    )
+    assert redact_condition_evidence(by_key, composed) == composed.replace(
+        "`kept-quiet-7`", f"`{REDACTED}`"
+    )
+
+
+def test_evidence_quoting_no_configured_value_takes_the_free_text_pass_alone():
+    """A profile reason, a placeholder's raw spelling, `compiler`: nothing names a key, so
+    `redact_text` is the whole rule — userinfo stripped, the value patterns applied."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("apollo_[a-z]+",)))
+    reason = (
+        "active profiles are set by the deployment; the active profiles here come from "
+        "`${apollo_profile}`, which this module does not fill"
+    )
+
+    assert redact_condition_evidence(redactor, reason) == reason.replace("apollo_profile", REDACTED)
+    assert redact_condition_evidence(redactor, "compiler") == "compiler"
+    assert redact_condition_evidence(redactor, "see https://ops:s3cr3t@vault.internal") == (
+        "see https://vault.internal"
     )
 
 

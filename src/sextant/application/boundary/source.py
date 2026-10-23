@@ -391,9 +391,10 @@ class BoundarySource:
 
     def _read_conditions(self) -> None:
         """One read, indexed by each key. An entry is the declared `{kind, expression}` only
-        (spec 2026-10-23-deployment-set-conditions, ruling 3): each environment's verdict is
-        evidence, so a configuration change is the `boundary-property` change it is and never
-        a `conditions` change too."""
+        (spec 2026-10-23-deployment-set-conditions, ruling 3): each environment's verdict
+        stays in the workspace, the bundle and the documents, outside the boundary row, so a
+        configuration change is the `boundary-property` change it is and never a
+        `conditions` change too."""
         self._conditions, self._dependency_conditions = {}, {}
         for row in self._graph.query("endpoint_conditions"):
             entry = {"kind": row["kind"], "expression": row["expression"]}

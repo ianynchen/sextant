@@ -76,6 +76,11 @@ _CHANGES: tuple[Change, ...] = ("added", "removed", "changed")
 _VERSIONS = ("graph_schema_version", "fact_schema_version", "boundary_vocabulary_version")
 # A difference here changes rows with no code change: refused unless allowed, then labelled.
 _PRODUCER = ("sextant_version", "catalog_hash", "redaction_set_hash")
+# The first graph schema whose `split_url` drops a URL's userinfo from the peer: an analysis
+# older than it may hold a peer carrying a password with its scheme gone, which a stale side
+# the diff is allowed to read then masks whole (`_masked`). Not `GRAPH_SCHEMA_VERSION`: a
+# side refused only for being older than this build holds no such peer from 5 on.
+_USERINFO_IN_PEERS_BEFORE = 5
 # The attributes that are sets, not values: rows joined by masking take their union.
 _SETS = ("requirements", "conditions", "headers")
 # The sets whose change is labelled: what the server requires of a request (M06 step 3).
@@ -154,7 +159,8 @@ class Diff:
         lines = []
         if self.producer_changed:
             # The JSON's `producer_changed`, said where a reader of the text will see it: rows
-            # can differ with no code change, and a stale side's peers print masked.
+            # can differ with no code change, and a side older than graph schema 5 prints
+            # its scheme-less `@` peers masked.
             lines += ["**Producer changed** — see `producer` in the JSON output.", ""]
         lines += ["| kind | added | removed | changed |", "|---|---|---|---|"]
         for name, counts in self.summary.items():
@@ -188,11 +194,11 @@ def diff_sources(
     # Equal rule sets make this either side's own; differing ones (allowed) make it both.
     redactor = redactor_a.union(redactor_b)
     # Both sides share one graph schema by now (`_VERSIONS`), so one answer covers both.
-    stale = stamps_a["graph_schema_version"] != GRAPH_SCHEMA_VERSION
+    userinfo_in_peers = int(str(stamps_a["graph_schema_version"])) < _USERINFO_IN_PEERS_BEFORE
     entries: list[Entry] = []
     for kind in KINDS.values():
-        before = _indexed(kind, a.rows(kind), redactor, stale)
-        after = _indexed(kind, b.rows(kind), redactor, stale)
+        before = _indexed(kind, a.rows(kind), redactor, userinfo_in_peers)
+        after = _indexed(kind, b.rows(kind), redactor, userinfo_in_peers)
         entries.extend(_compared(kind, before, after))
     order = {name: position for position, name in enumerate(KINDS)}
     entries.sort(
@@ -260,9 +266,11 @@ def _refuse_or_allow(
         raise DiffRefused(f"cannot diff: {described(versions)}", tuple(versions))
     # A side older than this build may hold what the build no longer writes — before graph
     # schema 5, a peer carrying a URL's password with its scheme gone — and every other
-    # reader refuses such a workspace (user ruling, 2026-10-23). The diff alone can be told
-    # to read one anyway, because a kept bundle is history the user asked to compare; it is
-    # then labelled, and such a peer is masked whole (`_masked`).
+    # reader refuses such a workspace (user ruling, 2026-10-23): so ANY graph schema but this
+    # build's is refused here. The diff alone can be told to read one anyway, because a kept
+    # bundle is history the user asked to compare; it is then labelled, and — only from
+    # before graph schema 5 (`_USERINFO_IN_PEERS_BEFORE`), where the hazard exists — such a
+    # peer is masked whole (`_masked`).
     stale = stamps_a["graph_schema_version"] != GRAPH_SCHEMA_VERSION
     if stale and not allow_producer_change:
         raise DiffRefused(
@@ -291,11 +299,11 @@ def _refuse_or_allow(
 
 
 def _indexed(
-    kind: Kind, rows: Iterable[dict[str, object]], redactor: Redactor, stale: bool
+    kind: Kind, rows: Iterable[dict[str, object]], redactor: Redactor, userinfo_in_peers: bool
 ) -> dict[tuple[object, ...], dict[str, object]]:
     index: dict[tuple[object, ...], dict[str, object]] = {}
     for row in rows:
-        masked = _masked(kind, row, redactor, stale)
+        masked = _masked(kind, row, redactor, userinfo_in_peers)
         key = tuple(masked[column] for column in kind.identity)
         index[key] = _joined(kind, index[key], masked) if key in index else masked
     return index
@@ -306,7 +314,7 @@ def _attribute_keys(kind: Kind) -> list[str]:
 
 
 def _masked(
-    kind: Kind, row: dict[str, object], redactor: Redactor, stale: bool
+    kind: Kind, row: dict[str, object], redactor: Redactor, userinfo_in_peers: bool
 ) -> dict[str, object]:
     """The row as the exporter would have shipped it, cut to identity, attributes and
     evidence: `path`/`peer` through `redact_text`, a property's value through
@@ -314,10 +322,12 @@ def _masked(
     `_EXPORT_QUERIES` makes on the same columns. A condition entry is replaced, never
     edited: the source shares one entry between the kinds that carry it.
 
-    From an analysis older than graph schema 5 (`stale`, allowed by the caller), a peer
-    with an `@` and no `scheme://` is masked WHOLE: it may be a split URL's authority with
-    its password kept, and in text that cannot be told from a `mailto:ops@billing` peer, so
-    it is hidden rather than rewritten into a host either way."""
+    From an analysis older than graph schema 5 (`userinfo_in_peers`, a stale side the caller
+    allowed), a peer with an `@` and no `scheme://` is masked WHOLE: it may be a split URL's
+    authority with its password kept, and in text that cannot be told from a
+    `mailto:ops@billing` peer, so it is hidden rather than rewritten into a host either way.
+    A stale side from graph schema 5 on keeps such a peer: `split_url` already dropped the
+    userinfo there, so the `@` is the peer's own."""
     projected = {
         **{column: row[column] for column in kind.identity},
         **{key: row[key] for key in _attribute_keys(kind)},
@@ -328,7 +338,7 @@ def _masked(
         if column in kind.identity and projected[column] is not None:
             projected[column] = redactor.redact_text(str(projected[column]))
     peer = projected.get("peer")
-    if stale and isinstance(peer, str) and "@" in peer and "://" not in peer:
+    if userinfo_in_peers and isinstance(peer, str) and "@" in peer and "://" not in peer:
         projected["peer"] = REDACTED
     if kind.name == "boundary-property":
         key = str(row["key"])

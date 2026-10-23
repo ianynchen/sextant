@@ -14,6 +14,7 @@ from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.resolve.roots import Root, RootIdentity
 from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import render_module_document
 
 MODULE = ModuleModel(
@@ -943,6 +944,67 @@ def test_a_property_condition_names_each_environments_configured_value():
         f"{evidence['default']}; in `prod` — {evidence['prod']}; in `staging` — "
         f"{evidence['staging']}"
     ) in block
+
+
+@pytest.mark.pins("conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit")
+@pytest.mark.parametrize(
+    "rules",
+    [
+        RedactionRules(key_patterns=("billing",)),
+        RedactionRules(value_patterns=("^kept-quiet-7$",)),
+    ],
+    ids=["key-pattern", "value-pattern"],
+)
+def test_a_quoted_configured_value_is_masked_by_the_modules_own_rules_in_the_document(
+    rules: RedactionRules,
+):
+    """Final review, Important: the evidence is masked where it is written by the built-ins
+    alone, so a key the module's `.sextant.yml` names a secret (`billing`), or a value its
+    value pattern matches, reached the conditions line and a trace's candidate line in the
+    clear — and through the document, the enrichment brief. Both lines mask it under the
+    module's own rules, the redactor this exit is handed."""
+    handler = USERS + "all()."
+    kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
+    unresolved = {"prod": "unresolved"}
+    evidence = (
+        "`billing.enabled` is set by the deployment; this module's `prod` configuration sets "
+        "`kept-quiet-7`"
+    )
+    expression = '{"having_value": "true", "keys": ["billing.enabled"], "match_if_missing": false}'
+    report = ResolveReport(
+        facts_loaded=1,
+        coverage={"documents": 1},
+        endpoints=[_inbound(handler)],
+        bean_conditions=_with_evidence(
+            _condition(USERS, "property", expression, unresolved, resolution="unresolved"),
+            evidence,
+        ),
+        bean_presence=_with_evidence(_presence(USERS, unresolved, "unresolved"), evidence),
+        symbol_beans=[_belongs(handler, USERS)],
+        candidate_presence=_with_evidence(
+            [
+                *_candidate(kafka_send, KAFKA, unresolved, "unresolved"),
+                *_candidate(redis_send, REDIS, {"prod": "true"}),
+            ],
+            evidence,
+        ),
+    )
+    document = render_module_document(
+        MODULE,
+        report,
+        "a3f91c",
+        traces=[_narrowed_trace(kafka_send, redis_send)],
+        redactor=Redactor.from_rules(rules),
+    )
+
+    masked = evidence.replace("`kept-quiet-7`", f"`{REDACTED}`")
+    assert f"not evaluated by this analysis in any of the 1 environments — {masked}" in (
+        _block(document, "Users#all")
+    )
+    assert f"  - not evaluated in `prod`: `KafkaSender` — {masked}" in _block(
+        document, "Api#handle"
+    )
+    assert "kept-quiet-7" not in document
 
 
 def test_a_condition_not_evaluated_is_named_not_quoted_as_json():

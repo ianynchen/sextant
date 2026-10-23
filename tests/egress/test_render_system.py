@@ -96,3 +96,38 @@ def test_a_call_from_a_bean_open_in_every_environment_is_not_called_anywhere_dec
     calling_side = row.split("`owners`")[0]
     assert "called" not in calling_side, row
     assert "— not evaluated in `default`, `h2`, `hsqldb`, `mysql`, `postgres`" in calling_side, row
+
+
+_NOT_EVALUATED_LEGEND = (
+    "*Not evaluated:* this analysis does not decide whether that end exists there — most often "
+    "because the deployment sets its condition; the participant's module document says why."
+)
+
+
+def _document(*links: Link) -> str:
+    return render_system_document(
+        participants=(),
+        links=links,
+        unmatched=(),
+        uncalled_endpoints=(),
+        route_refusals=(),
+        environment="default",
+        redactor=Redactor.from_rules(RedactionRules()),
+    )
+
+
+@pytest.mark.pins("stitch.the-LINKS-legend-says-what-not-evaluated-means-once")
+def test_the_links_section_says_once_what_not_evaluated_means_where_an_end_is():
+    """Ruled at the final review: "not evaluated" beside a link end is the module document's
+    verdict, whose reason lives there — so the Links section says once, in one fixed
+    sentence, what it means and where the reason is, however many ends carry it; a document
+    where every end is decided carries no such sentence."""
+    open_end = _link(to_conditions=tuple((e, "unresolved") for e in FIVE))
+    open_caller = _link(from_conditions=tuple((e, "unresolved") for e in FIVE))
+    decided = _link(to_conditions=(("default", "true"), ("prod", "false")))
+
+    document = _document(open_end, open_caller, decided)
+    links = document.split("## Links", 1)[1].split("\n## ", 1)[0]
+    assert links.count(_NOT_EVALUATED_LEGEND) == 1, links
+    assert document.count(_NOT_EVALUATED_LEGEND) == 1
+    assert _NOT_EVALUATED_LEGEND not in _document(decided, _link())

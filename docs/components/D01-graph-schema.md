@@ -1146,9 +1146,9 @@ to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`
 and 3; vocabulary 2). Conditions belong to beans, so an `endpoint` and a `dependency` both
 carry the `{kind, expression}` of the bean their code lives in — a dependency's matched on its
 row and its `caller`, since an outbound row has no handler. Each environment's verdict
-(`environment`, `holds`) is evidence: it stays in the workspace, the bundle and the documents
-and leaves the compared attribute, so a configuration change is reported once, as the
-`boundary-property` change it is, and only a code change is a `conditions` change.
+(`environment`, `holds`) stays in the workspace, the bundle and the documents, outside the
+boundary row, so a configuration change is reported once, as the `boundary-property` change
+it is, and only a code change is a `conditions` change.
 
 **Enrichment never enters.** Components, prose and overlays are judgements, not facts
 (`meridian-integration.md` §0a), and `open_questions` and `roots` are Sextant's working state.

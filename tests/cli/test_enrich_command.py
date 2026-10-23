@@ -28,6 +28,7 @@ from sextant.application.enrich.tools import ToolExecutor
 from sextant.application.ports.enrichment import EnrichmentAnswers, EnrichmentBrief
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.redaction import REDACTED
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -281,6 +282,58 @@ def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
     # Calls nothing (2K design §3): no overlay, no changed rendered output.
     assert not (module_root / ENRICHMENT_FILE).is_file()
     assert markdown_path.read_bytes() == before
+
+
+def test_a_quoted_configured_value_is_masked_by_the_modules_own_rules_at_every_exit(
+    compiled_fixture: Path, tmp_path: Path
+):
+    """Final review, Important, live: `orders.notify` is set by the deployment, and the
+    evidence of both `@ConditionalOnProperty` senders quotes what `application-prod.yml` sets
+    (`kafka`); `orders.legacy`'s quotes `true`. The module's own `.sextant.yml` names
+    `notify` a secret key and `^true$` a secret value — rules no resolve pass sees (`OI-71`).
+    The rendered document, the enrichment brief built from it, and every exported table
+    carrying the evidence state the masked marker and never either value.
+
+    Unmarked: `guard_check.py` copies no `orders-service`, so the guard
+    `conditions.a-QUOTED-value-is-masked-by-the-modules-own-rules-at-every-exit` is measured
+    on the synthetic tests of each exit (`test_bean_conditions.py`, `test_render_conditions.py`)."""
+    import duckdb
+
+    root = tmp_path / "orders-service"
+    shutil.copytree(compiled_fixture, root)
+    config = root / ".sextant.yml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "  key_patterns:\n    - dsn\n",
+            "  key_patterns:\n    - dsn\n    - notify\n  value_patterns:\n    - ^true$\n",
+        ),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    for command in (["analyze"], ["render"], ["export"], ["enrich", "--dry-run"]):
+        result = runner.invoke(cli, ["module", command[0], str(root), *command[1:]])
+        assert result.exit_code == 0, result.output
+
+    notify = "`orders.notify` is set by the deployment; this module's `prod` configuration sets "
+    legacy = "`orders.legacy` is set by the deployment; this module's `prod` configuration sets "
+    document = (root / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
+    brief = json.loads((root / ".sextant" / "enrich-brief.json").read_text(encoding="utf-8"))
+    for text in (document, brief["prompt"]):
+        assert f"{notify}`{REDACTED}`" in text
+        assert f"{legacy}`{REDACTED}`" in text
+        assert f"{notify}`kafka`" not in text
+        assert f"{legacy}`true`" not in text
+
+    evidence: list[str] = []
+    for table in ("endpoint_conditions", "bean_conditions", "bean_presence", "candidate_presence"):
+        [parquet] = list((root / ".sextant").rglob(f"graph/{table}.parquet"))
+        evidence += [
+            str(cell)
+            for (cell,) in duckdb.sql(f"SELECT evidence FROM read_parquet('{parquet}')").fetchall()
+        ]
+    assert any(f"{notify}`{REDACTED}`" in cell for cell in evidence)
+    assert any(f"{legacy}`{REDACTED}`" in cell for cell in evidence)
+    assert not any(f"{notify}`kafka`" in cell or f"{legacy}`true`" in cell for cell in evidence)
 
 
 def test_a_second_runs_brief_carries_the_machine_document_not_the_enriched_one(

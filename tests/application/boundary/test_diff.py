@@ -688,6 +688,7 @@ def test_a_condition_expression_is_masked_as_the_exporter_masks_it(
 
 
 @pytest.mark.pins("boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole")
+@pytest.mark.pins("boundary.a-STALE-side-from-schema-5-on-keeps-its-peers")
 def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):
@@ -696,7 +697,8 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     the diff alone compared them to nothing else, and printed it. Refused like every other
     reader; allowed, because kept bundles are history worth comparing, every scheme-less
     peer with an `@` is masked WHOLE — it cannot be told from a `mailto:` peer, so it is
-    hidden rather than rewritten."""
+    hidden rather than rewritten. Only before graph schema 5: a stale side from 5 on is
+    refused the same way and, allowed, keeps its `mailto:` peer."""
 
     def build(workspace: DuckDbWorkspace) -> None:
         for peer, caller in (
@@ -722,6 +724,15 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     assert "s3cret" not in json.dumps(allowed.to_json())
     # The text output says why, as the JSON's `producer_changed` does.
     assert allowed.to_text().startswith("**Producer changed**")
+    # Stale, but from graph schema 5 on: `split_url` already dropped the userinfo, so the
+    # hazard is gone and a peer with an `@` is the peer it says — refused, allowed, kept.
+    a5 = sources(_built(tmp_path / "a5", lambda w: None, schema_version=5))
+    b5 = sources(_built(tmp_path / "b5", build, schema_version=5))
+    with pytest.raises(DiffRefused, match="both sides are graph_schema_version 5"):
+        diff_sources(a5, b5, REDACTOR, REDACTOR)
+    kept = diff_sources(a5, b5, REDACTOR, REDACTOR, allow_producer_change=True)
+    assert kept.producer_changed
+    assert "mailto:ops@billing.internal" in {str(e.identity["peer"]) for e in kept.entries}
 
 
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
