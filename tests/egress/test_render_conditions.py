@@ -6,6 +6,8 @@ inbound endpoint got in PR #61, all read from ONE index over `bean_conditions` a
 
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
@@ -136,6 +138,7 @@ OF_ENVIRONMENTS = (
 )
 
 
+@pytest.mark.pins("render.OUTBOUND-rows-and-schedules-state-their-condition")
 def test_an_outbound_call_of_a_conditional_bean_states_where_it_exists():
     """A client class under `@Profile("prod")`: its outbound row gets the two lines its
     caller's bean carries — the call exists only where its bean does."""
@@ -151,6 +154,7 @@ def test_an_outbound_call_of_a_conditional_bean_states_where_it_exists():
     assert OF_ENVIRONMENTS in block
 
 
+@pytest.mark.pins("render.OUTBOUND-rows-and-schedules-state-their-condition")
 def test_a_scheduled_job_of_a_conditional_bean_states_where_it_exists():
     handler = JOBS + "nightly()."
     document = _document(
@@ -286,6 +290,7 @@ def _two_exclusive_factories() -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.pins("render.existence-is-read-from-PRESENCE-only")
 def test_two_exclusive_factories_state_each_route_and_the_presence_verdict():
     """Neither factory's row holds everywhere, and read as one list of conditions the bean
     would exist nowhere. It exists in `prod` (one factory) and `staging` (the other): the
@@ -587,6 +592,7 @@ def _traced(trace: Trace, **tables: list[dict[str, object]]) -> str:
     return render_module_document(MODULE, report, "a3f91c", traces=[trace])
 
 
+@pytest.mark.pins("render.a-NARROWED-site-states-its-candidates-per-environment")
 def test_a_narrowed_site_states_which_candidates_exist_in_each_environment():
     """Two `@ConditionalOnProperty` senders behind one interface call — `sender-type=kafka`
     in `application-kafka.yml`, `redis` in `application.yml`. The trace still lists both; the

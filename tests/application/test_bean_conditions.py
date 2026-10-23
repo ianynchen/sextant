@@ -318,6 +318,7 @@ def test_a_profile_factory_conditions_the_class_it_constructs(tmp_path: Path):
     assert {r["bean"] for r in beans} == {_MODULE + KAFKA}
 
 
+@pytest.mark.pins("beans.a-FACTORY-conditions-only-the-class-it-returns")
 def test_a_factory_conditions_only_the_class_it_returns(tmp_path: Path):
     """Review focus 1. The same factory also builds a helper it hands to the bean
     (`new KafkaOrderPublisher(new RecordFormatter())` in the source). The helper is not
@@ -383,6 +384,7 @@ def _presence(workspace: DuckDbWorkspace, bean: str) -> dict[str, tuple[object, 
     }
 
 
+@pytest.mark.pins("beans.registration-ROUTES-combine-by-OR")
 def test_two_exclusive_profile_factories_make_the_class_exist_in_each_profile(tmp_path: Path):
     """Ruled 2026-10-22: OR across routes. `@Bean @Profile("prod")` and `@Bean
     @Profile("staging")` each register their own definition of `KafkaOrderPublisher`, so it
@@ -514,6 +516,7 @@ def test_a_subclass_constructor_calling_super_is_not_a_second_registration(tmp_p
 # --- a stereotype or a condition through a COMPOSED annotation (CP-44 row 5) --------------
 
 
+@pytest.mark.pins("beans.a-COMPOSED-stereotype-or-condition-is-followed")
 def test_a_module_local_composed_stereotype_makes_a_conditional_class_a_bean(tmp_path: Path):
     """`@MyService` is the module's own annotation, meta-annotated `@Service`. The scanner
     matches meta-annotations, so `@MyService @Profile("prod") Orders` is a scanned bean — and
@@ -568,6 +571,7 @@ def test_a_stereotype_through_a_dependency_annotations_recorded_header_makes_a_b
     }
 
 
+@pytest.mark.pins("beans.a-COMPOSED-stereotype-or-condition-is-followed")
 def test_a_condition_carried_on_a_composed_annotation_conditions_its_users(tmp_path: Path):
     """`@LegacyOnly` is the module's own annotation carrying `@ConditionalOnProperty(name =
     "orders.legacy", havingValue = "true")`; a `@Service @LegacyOnly` class carries that
@@ -616,6 +620,7 @@ def _outbound_call(caller: str, ordinal: int = 0) -> CallSiteFact:
     )
 
 
+@pytest.mark.pins("beans.a-LAMBDA-a-factory-creates-is-the-factorys-code")
 def test_a_lambda_a_conditional_factory_creates_carries_the_factorys_condition(
     tmp_path: Path,
 ):
@@ -767,6 +772,7 @@ def test_a_condition_annotation_is_not_composed_through_what_it_is_built_on(tmp_
     assert {r["kind"] for r in beans} == {"property"}
 
 
+@pytest.mark.pins("beans.a-LAMBDA-a-factory-creates-is-the-factorys-code")
 def test_a_new_inside_a_lambda_a_factory_creates_is_that_factorys_construction(
     tmp_path: Path,
 ):
@@ -907,6 +913,8 @@ def _competitors(workspace: DuckDbWorkspace, bean: str, via: str | None = None) 
     }
 
 
+@pytest.mark.pins("beans.MISSING-BEAN-reads-the-modules-competitors")
+@pytest.mark.pins("beans.every-presence-verdict-is-PARTIAL")
 def test_a_missing_bean_default_exists_everywhere_but_where_the_override_registers(
     tmp_path: Path,
 ):
@@ -1302,6 +1310,7 @@ def test_a_resolved_route_decides_presence_over_a_partial_one(tmp_path: Path):
 # --- review round: same-class routes, the competitor list, chains and loops --------------
 
 
+@pytest.mark.pins("beans.a-SAME-CLASS-route-is-never-a-competitor")
 def test_two_routes_of_one_class_never_compete_with_each_other(tmp_path: Path):
     """Ruled at review: the condition asks whether ANOTHER bean of the type exists. Two
     factories both returning `new DefaultUserService()` — one `@ConditionalOnMissingBean
@@ -1337,6 +1346,7 @@ def test_two_routes_of_one_class_never_compete_with_each_other(tmp_path: Path):
     assert presence == {"default": ("true", "partial"), "ldap": ("true", "partial")}
 
 
+@pytest.mark.pins("beans.a-SAME-CLASS-route-is-never-a-competitor")
 def test_two_missing_bean_routes_of_one_class_exist_in_every_order(tmp_path: Path):
     """Two `@ConditionalOnMissingBean(UserService.class)` factories of the SAME class: whichever
     Spring keeps, the class exists — no order question, so no `unresolved`."""
@@ -1641,6 +1651,7 @@ def test_an_inherited_body_no_bean_resolves_to_is_unresolved(tmp_path: Path):
     }
 
 
+@pytest.mark.pins("beans.an-INHERITED-body-takes-the-OR-of-the-beans-that-run-it")
 def test_an_interface_default_method_exists_wherever_any_bean_inheriting_it_does(
     tmp_path: Path,
 ):

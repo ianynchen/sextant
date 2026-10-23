@@ -291,3 +291,30 @@ def test_a_banner_with_no_java_version_line_is_refused_rather_than_assumed_right
         field_check._refused_if_wrong_jdk(tmp_path, "mvn", "21")
 
     assert "no `Java version:` line" in str(refused.value)
+
+
+def test_candidate_verdicts_name_a_site_and_group_each_candidates_environments_by_verdict():
+    """`candidate_presence` rows are read as `Owner#method@ordinal`, one entry per candidate
+    class, its environments grouped by `holds/resolution` — and only the sites the pin names."""
+    caller = "sextant-jvm maven g/a 1 com/acme/Orders#place(sig_1)."
+    other = "sextant-jvm maven g/a 1 com/acme/Other#run(sig_2)."
+    ldap = "sextant-jvm maven g/a 1 com/acme/spi/LdapUsers#find(sig_3)."
+    plain = "sextant-jvm maven g/a 1 com/acme/spi/PlainUsers#find(sig_3)."
+    rows: list[dict[str, object]] = [
+        {"caller": caller, "ordinal": 0, "callee": ldap, "environment": "prod"} | _VERDICT_TRUE,
+        {"caller": caller, "ordinal": 0, "callee": ldap, "environment": "default"} | _VERDICT_FALSE,
+        {"caller": caller, "ordinal": 0, "callee": plain, "environment": "prod"} | _VERDICT_FALSE,
+        {"caller": caller, "ordinal": 1, "callee": plain, "environment": "prod"} | _VERDICT_TRUE,
+        {"caller": other, "ordinal": 0, "callee": plain, "environment": "prod"} | _VERDICT_TRUE,
+    ]
+
+    assert field_check._candidate_verdicts(rows, ["Orders#place@0"]) == {
+        "Orders#place@0": {
+            "LdapUsers": {"true/resolved": ["prod"], "false/partial": ["default"]},
+            "PlainUsers": {"false/partial": ["prod"]},
+        }
+    }
+
+
+_VERDICT_TRUE = {"holds": "true", "resolution": "resolved"}
+_VERDICT_FALSE = {"holds": "false", "resolution": "partial"}
