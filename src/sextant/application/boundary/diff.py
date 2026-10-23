@@ -310,7 +310,9 @@ def _masked(
 ) -> dict[str, object]:
     """The row as the exporter would have shipped it, cut to identity, attributes and
     evidence: `path`/`peer` through `redact_text`, a property's value through
-    `redact_value` — the calls `_EXPORT_QUERIES` makes on the same columns.
+    `redact_value`, each condition's `expression` through `redact_json` — the calls
+    `_EXPORT_QUERIES` makes on the same columns. A condition entry is replaced, never
+    edited: the source shares one entry between the kinds that carry it.
 
     From an analysis older than graph schema 5 (`stale`, allowed by the caller), a peer
     with an `@` and no `scheme://` is masked WHOLE: it may be a split URL's authority with
@@ -337,10 +339,19 @@ def _masked(
         # Not `error-handler.response_shape`: that column is a shape id, not a descriptor.
         for column in _DESCRIPTORS:
             projected[column] = _each(projected[column], _structure)
+    if "conditions" in projected:
+        projected["conditions"] = [
+            {**entry, "expression": _redacted_json(entry["expression"], redactor)}
+            for entry in cast(list[dict[str, object]], projected["conditions"])
+        ]
     for column in _SETS:
         if column in projected:
             projected[column] = _canonical(projected[column])
     return projected
+
+
+def _redacted_json(expression: object, redactor: Redactor) -> object:
+    return None if expression is None else redactor.redact_json(str(expression))
 
 
 def _each(value: object, mask: Callable[[str], object]) -> object:

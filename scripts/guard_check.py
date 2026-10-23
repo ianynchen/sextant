@@ -3837,6 +3837,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "boundary.a-CONDITION-expression-is-masked-as-the-exporter-masks-it": Guard(
+        what="each condition's `expression` passes through `redact_json` before the diff "
+        "joins or prints it, the call the exporter makes on `endpoint_conditions.expression`",
+        why="an expression quotes annotation arguments verbatim — a `havingValue` URL with its "
+        "password — so a workspace against its own bundle reads every conditioned route and "
+        "call as changed, and the diff's JSON prints the credential the bundle masked",
+        edits=(
+            Edit(
+                path=_DIFF,
+                find='            {**entry, "expression": _redacted_json(entry["expression"], redactor)}\n',
+                replace="            {**entry}  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "query.impact-returns-THREE-partitions": Guard(
         what="`impact` answers `definite`, `possible` and `unknown_regions` apart, never as "
         "one list or one count",

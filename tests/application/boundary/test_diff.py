@@ -532,6 +532,11 @@ def test_a_config_change_is_a_boundary_property_change_and_not_a_conditions_chan
 
     a = sources(_built(tmp_path / "a", build("true")))
     b = sources(_built(tmp_path / "b", build("false")))
+    # Not vacuous: both kinds carry the declared condition on both sides.
+    declared = [{"kind": "property", "expression": _ON_BILLING_EXPRESSION}]
+    for side in (a, b):
+        for kind in ("endpoint", "dependency"):
+            assert [row["conditions"] for row in side.rows(KINDS[kind])] == [declared]
     diff = diff_sources(a, b, REDACTOR, REDACTOR)
     assert [(e.kind, e.change, e.identity) for e in diff.entries] == [
         ("boundary-property", "changed", {"key": "billing.enabled", "environment": "prod"})
@@ -639,6 +644,47 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert dependency.identity["peer"] == "https://billing.internal"
     assert prop.to == {"value": REDACTED, "unresolved_reason": None}
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
+
+
+def _credential_condition(workspace: DuckDbWorkspace, root: Path) -> None:
+    """A calling class under `@ConditionalOnProperty(havingValue = <a URL with a password>)`:
+    the expression quotes it verbatim and the exporter strips the userinfo (`redact_json`).
+    `charge()` is also the handler of `POST /charges`, so both kinds carry the condition."""
+    on_url = AnnotationUse(
+        annotation="org/springframework/boot/autoconfigure/condition/ConditionalOnProperty#",
+        args={"name": ["billing.url"], "havingValue": "https://ops:hunter2@billing.internal/"},
+    )
+    _billing_client(workspace, root, on_url)
+    _endpoint(workspace, method="POST", path="/charges", handler=_CHARGE)
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    record_bean_conditions(workspace, [spring])
+
+
+@pytest.mark.pins("boundary.a-CONDITION-expression-is-masked-as-the-exporter-masks-it")
+def test_a_condition_expression_is_masked_as_the_exporter_masks_it(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """A condition's `expression` is an annotation's arguments, and the exporter passes it
+    through `redact_json`. The diff makes the same call, so a workspace and its own bundle
+    diff empty and the diff never prints the password the bundle was masked to hide."""
+    workspace = _built(tmp_path / "w", lambda w: _credential_condition(w, tmp_path / "w"))
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    # Not vacuous: both kinds carry the condition, verbatim on one side and masked on the other.
+    for kind in ("endpoint", "dependency"):
+        (row,) = verbatim.rows(KINDS[kind])
+        (shipped,) = masked.rows(KINDS[kind])
+        assert "hunter2" in json.dumps(row["conditions"])
+        assert shipped["conditions"] and "hunter2" not in json.dumps(shipped["conditions"])
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    assert diff_sources(verbatim, masked, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "e", lambda w: None))
+    added = diff_sources(empty, verbatim, REDACTOR, REDACTOR)
+    assert {(e.kind, e.change) for e in added.entries} == {
+        ("endpoint", "added"),
+        ("dependency", "added"),
+    }
+    assert "hunter2" not in json.dumps(added.to_json())
 
 
 @pytest.mark.pins("boundary.a-STALE-side-refuses-and-allowed-masks-its-peers-whole")
