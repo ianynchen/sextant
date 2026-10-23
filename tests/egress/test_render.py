@@ -1279,3 +1279,52 @@ def test_a_temporal_row_renders_its_kind_and_an_eventbus_row_does_not():
 
     assert "temporal" in _VERBED_PROTOCOLS
     assert "eventbus" in _VERBLESS_PROTOCOLS
+
+
+def _row(direction: str, path: str, format_resolution: str) -> dict[str, object]:
+    return {
+        "protocol": "http",
+        "direction": direction,
+        "method": "GET",
+        "path": path,
+        "handler": "s maven c 1 com/acme/C#list().",
+        "peer": "billing" if direction == "outbound" else None,
+        "format_resolution": format_resolution,
+        "resolution": "resolved",
+        "evidence": "compiler",
+    }
+
+
+def test_unresolved_outbound_formats_do_not_make_the_endpoint_format_partial(tmp_path: Path):
+    """`endpoint.format` is about the rows the `endpoint` kind holds. Outbound rows belong to
+    `dependency`, which has no format attribute on the map, so they cannot inflate it."""
+    report = replace(
+        REPORT,
+        endpoints=[
+            _row("inbound", "/v1/orders", "resolved"),
+            _row("outbound", "/v1/bill", "unresolved"),
+            _row("outbound", "/v1/ship", "unresolved"),
+        ],
+    )
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["coverage"]["format_unresolved"] == 0
+    assert written["coverage"]["inbound_total"] == 1
+    assert "endpoint" not in written["observability"]["attributes"]
+
+
+def test_an_unresolved_inbound_format_is_counted_against_the_inbound_rows(tmp_path: Path):
+    report = replace(
+        REPORT,
+        endpoints=[
+            _row("inbound", "/v1/orders", "unresolved"),
+            _row("inbound", "/v1/items", "resolved"),
+            _row("outbound", "/v1/bill", "unresolved"),
+        ],
+    )
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+    assert written["observability"]["attributes"]["endpoint"]["format"] == {
+        "verdict": "partial",
+        "reasons": ["1 of 2 formats unresolved"],
+    }

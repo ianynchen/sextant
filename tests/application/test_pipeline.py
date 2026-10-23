@@ -8,6 +8,7 @@ from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
 from fixture_build import compile_fixture
+from sextant.application.boundary.vocabulary import KINDS
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
@@ -4345,8 +4346,17 @@ def test_a_catalog_skipped_by_capability_gating_contributes_no_shapes(tmp_path: 
     names = [f["wire_name"] for f in shape_fields_of(workspace, ORDER_REQUEST)]
     workspace.close()
 
-    assert SkippedCatalog("invented-demanding", ("constant_propagation",)) in (
-        report.skipped_catalogs
+    # Re-pinned 2026-10-22: a `SkippedCatalog` now also carries the kinds the catalog would
+    # have fed (`feeds`, spec 2026-10-22 §4b), so equality names them. Inbound, with the
+    # shape model's blocks, is `endpoint` and `data-contract`.
+    assert (
+        SkippedCatalog(
+            "invented-demanding",
+            ("constant_propagation",),
+            ("endpoint", "data-contract"),
+            "missing_capability",
+        )
+        in report.skipped_catalogs
     )
     assert "customer_id" in names
     assert "internalTrace" not in names
@@ -4428,8 +4438,14 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
     workspace.close()
 
     assert report.endpoints == []
+    # Re-pinned 2026-10-22, for the same cause as above: equality now includes `feeds`.
     assert (
-        SkippedCatalog("spring-web", ("annotation_args", "type_annotations"))
+        SkippedCatalog(
+            "spring-web",
+            ("annotation_args", "type_annotations"),
+            ("endpoint", "data-contract"),
+            "missing_capability",
+        )
         in report.skipped_catalogs
     )
 
@@ -4649,3 +4665,27 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # pass the profile must see, exactly like the fifteen above it.
         "record_value_resolutions",
     ]
+
+
+def test_the_report_counts_the_catalogs_that_ran_per_kind_and_names_what_each_skipped_one_feeds(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """The observability map (spec 2026-10-22 §4b) is a function of two recorded facts: how
+    many catalogs that RAN feed each kind, and what each SKIPPED catalog would have fed. The
+    scheduling catalog is the one that feeds `schedule`, and it runs on the fixture."""
+    _, report = resolved_fixture
+    assert report.catalogs_run["schedule"] == 1
+    assert report.catalogs_run["endpoint"] > 5
+    # Not catalog-fed kinds are never counted, and a count is never zero.
+    assert set(report.catalogs_run) <= {
+        "endpoint",
+        "dependency",
+        "data-contract",
+        "schedule",
+        "error-handler",
+    }
+    assert all(count > 0 for count in report.catalogs_run.values())
+    # A skipped catalog names only kinds the vocabulary has. (Some feed none: a `config_join`
+    # catalog writes a channel edge, which no kind reads, so an empty `feeds` is an answer.)
+    assert all(set(skipped.feeds) <= set(KINDS) for skipped in report.skipped_catalogs)
+    assert any(skipped.feeds for skipped in report.skipped_catalogs)

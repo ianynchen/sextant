@@ -237,6 +237,14 @@ agent.
 *The query surface answers structural questions only. Sextant never produces prose about
 what code is for.*
 
+*State: **partial — six questions at module scope**, built 2026-10-22 and callable in process
+only (`sextant.api.query`): where a symbol is defined, what calls it, what it calls, what
+implements it, what references a type, and what a change to it would affect, the last in
+three parts. Still waiting, under the language gate of 2026-09-18 that was reopened for the
+function alone: which symbols match a name, the routes between two symbols, which endpoint an
+address belongs to, what happens when an endpoint is called, and every command-line and plugin
+form. See [M09](components/M09-query.md).*
+
 ### FR-15 — Overlays
 
 Sextant accepts overlays: statements about the graph that did not come from reading
@@ -347,11 +355,12 @@ granularity at which architecture is compared and exported. Each kind names what
 derived from and what identifies it, so two analyses can be compared kind by kind rather than
 row by row.
 
-*State: unimplemented, and tracked on
-[`java-kotlin-delivery-list.md`](java-kotlin-delivery-list.md) since 2026-09-11. The
-`dependency` kind derives from edges and dispatch, which did not exist when
-`docs/meridian-integration.md` was written and do now (F8) — so the thing that would have
-blocked it is gone, and it has been unblocked and unbuilt since.*
+*State: **implemented** (2026-10-22, `boundary_vocabulary_version` 1). Seven kinds — `module`,
+`endpoint`, `dependency`, `data-contract`, `boundary-property`, `schedule`, `error-handler` —
+each with the columns that identify an entry, the ones that are its attributes and the ones
+that are evidence; the wire is the identity and the handler is evidence. See
+[D01](components/D01-graph-schema.md) §3, "The boundary vocabulary". It was tracked on
+[`java-kotlin-delivery-list.md`](java-kotlin-delivery-list.md) from 2026-09-11 until built.*
 
 ### FR-22 — Derivation diff
 
@@ -360,7 +369,11 @@ the typed change-set in the boundary vocabulary: per kind, entries `added | remo
 changed`, with `from`/`to` attribute values on `changed`, each entry carrying evidence
 pointers to the symbols and documents that ground it.
 
-*State: unimplemented. This is what the drift scenario waits on.*
+*State: **implemented at module scope** (2026-10-22): `sextant module diff` and
+`sextant.api.diff`, each side a module, workspace or bundle, refusing by name where the two
+analyses are not comparable and labelling a producer change it was told to allow. A
+**system-scope** diff, over `links` and `participants`, is deferred. See
+[M00](components/M00-cli.md). This is what the drift scenario waits on, and no longer waits.*
 
 ### FR-23 — Observability map
 
@@ -369,9 +382,20 @@ For any analysis, Sextant answers **per boundary kind, and per attribute where t
 catalogs, the uncovered files, and the shipped coverage cells for the module's languages and
 frameworks.
 
-*State: unimplemented. Every input it needs is already published — `manifest.json` carries
-the gaps and the skipped catalogs with their reasons, `coverage` carries the uncovered files,
-and `docs/COVERAGE.md` carries the cells — so this is an assembly rather than a measurement.*
+*State: **implemented** (2026-10-22). `analyze` writes `observability` into `metadata.json`,
+a pure function of the measurements beside it — uncovered files, partial documents, skipped
+catalogs and the kinds each would have fed, `dependency_source` — with the reasons; the
+exporter copies it into the manifest, and `sextant.api.observability` answers it in process.
+`KNOWN_GAPS` is listed as stated boundaries and never folded into a verdict. A skipped
+catalog counts by its recorded `cause`: one skipped because its framework is absent from a
+classpath the build tool resolved is not a gap (nothing to observe) and moves no verdict, nor
+is one superseded by a sibling catalog that ran in its place, while a missing extractor
+capability, an absence on a `declared` classpath and unrecorded coordinates still degrade
+(ruled 2026-10-22). The per-attribute
+clause is met where a measurement names one (`endpoint.format`, `dependency.peer`); the
+shipped coverage cells of `docs/COVERAGE.md` are not an input, because a cell describes
+Sextant and the map describes this analysis. See
+[D05](components/D05-manifest-and-state.md) §3.*
 
 ### FR-24 — Library embedding
 
@@ -380,18 +404,19 @@ wrapper over the same operations. No subprocess *required* of the caller, no glo
 environment reads — the caller supplies configuration as an object. The enrichment step's language-model port stays a
 port, so an embedding caller supplies its own.
 
-*State: **partial** — two clauses met outright, one met with a carve-out the requirement
-itself names, one partial, one unmet and one never measured. Clause by clause, on
-2026-09-10, rather than summarised into a single word:*
+*State: **partial** — five clauses met (one with a carve-out the requirement itself names)
+and one never measured. Clause by clause, first on 2026-09-10 and amended on 2026-10-22 when
+`query`, `diff` and the configuration objects landed, rather than summarised into a single
+word:*
 
 | Clause | State |
 |---|---|
-| the four operations are callable in-process | **two of the four this clause names.** It names `analyze`, `query`, `export` and `diff`; `sextant.api` ships `analyze` (`:770`) and `export` (`:1416`), and `query` and `diff` are absent — `diff` being FR-22. `sextant.api` also ships `render` and `enrich`, which this clause does not name, so the module surface is four operations and the clause's own score is two |
-| the CLI is a thin wrapper over the same operations | **met.** Each verb in `src/sextant/cli/app.py` calls into `sextant.api` |
+| the four operations are callable in-process | **met, four of the four this clause names.** It names `analyze`, `query`, `export` and `diff`, and `sextant.api` ships all four: `query` answers six module-scope questions (FR-10's partial state) and `diff` is FR-22. It also ships `render`, `enrich`, `system_analyze` and `observability` (FR-23), which this clause does not name |
+| the CLI is a thin wrapper over the same operations | **met.** Each verb in `src/sextant/cli/app.py` calls into `sextant.api`. `query` has no command-line form, by the language gate on the agent query surface |
 | no subprocess *required of the caller* | **met as written** — an embedding caller calls `sextant.api` in-process and shells out to nothing. **The stronger reading is false**: Sextant itself cannot run `analyze` without a subprocess — the JVM extractor is launched with `subprocess.run` (`src/sextant/ingress/extract/jvm/scanner.py:41`, `:60`), Gradle detection shells out (`ingress/detect/gradle.py:319`), `protoc` likewise (`ingress/read/proto_source.py:124`), and `api.py:389`, `:399`, `:409` run `git` for provenance. Which reading is meant matters, so both are stated |
 | no global state | **not assessed here** — no measurement was taken, and saying so beats guessing |
 | no environment reads | **one, and it is the carved-out one.** `src/sextant/agents/tradewind.py:343` reads an API key for the language-model adapter, which this requirement's own last sentence says an embedding caller replaces |
-| the caller supplies configuration as an object | **not met.** `analyze(path, *, allow_resolve=False)` takes a path and a flag; there is no configuration object to supply |
+| the caller supplies configuration as an object | **met.** `AnalyzeOptions(allow_resolve, shadow, workspace_dir)` for `analyze` and `DiffOptions(allow_producer_change)` for `diff` carry the knobs the command line has and no others; the flag form of `analyze` stays for compatibility, and giving both is refused |
 
 > **The wording was also strengthened in W51 and is restored.** `docs/meridian-integration.md:105`
 > says *"No subprocess **required**"* — a claim about the caller not having to shell out to
@@ -414,10 +439,10 @@ carry for any requirement: how much of each is built today.
 
 | Requirement | Component | State |
 |---|---|---|
-| FR-21 boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) | unimplemented |
-| FR-22 derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) | unimplemented |
-| FR-23 observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) | unimplemented |
-| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — FR-24's own six-row table measures each clause; `query`, `diff` and a configuration object are the unmet ones |
+| FR-21 boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) | implemented (2026-10-22) |
+| FR-22 derivation diff | [M00](components/M00-cli.md), [D06](components/D06-bundle-format.md) | implemented at module scope (2026-10-22); system diff deferred |
+| FR-23 observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) | implemented (2026-10-22) |
+| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — FR-24's own six-row table measures each clause; five are met and "no global state" was never measured |
 
 ---
 
@@ -609,7 +634,7 @@ Component designs live in [components/](components/README.md).
 | FR-19 | Exclusion and redaction | [D04](components/D04-config-and-exclusion.md), [M03](components/M03-scanner.md) |
 | FR-20 | Command surface | [M00](components/M00-cli.md) |
 | FR-21 | Boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) |
-| FR-22 | Derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) |
+| FR-22 | Derivation diff | [M00](components/M00-cli.md), [D06](components/D06-bundle-format.md) |
 | FR-23 | Observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) |
 | FR-24 | Library embedding | [M00](components/M00-cli.md), `sextant.api` |
 

@@ -7,10 +7,16 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from sextant.application.boundary.observability import observability_of
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.domain.version import (
+    BOUNDARY_VOCABULARY_VERSION,
+    FACT_SCHEMA_VERSION,
+    GRAPH_SCHEMA_VERSION,
+    SEXTANT_VERSION,
+)
 
 # What Sextant knowingly does not do, rotated whole rather than narrowed as
 # capability lands (spec ruling I3): a gap that closes retires by name, and
@@ -66,6 +72,7 @@ def write_metadata(
     descriptors_not_interpreted: tuple[str, ...] = (),
     libraries_not_scanned: tuple[str, ...] = (),
     detect_notes: tuple[str, ...] = (),
+    catalog_hash: str | None = None,
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
@@ -85,8 +92,32 @@ def write_metadata(
         if direction in ("outbound", "both"):
             outbound[protocol] = outbound.get(protocol, 0) + 1
 
+    # The two shares the map's attribute verdicts read (spec 2026-10-22 §4a), measured off
+    # the same rows counted above. `inbound_total` is the rows the `endpoint` kind holds (the
+    # `inbound` dict's own predicate), so outbound rows, which belong to `dependency`, cannot
+    # inflate the format share; the peer share is over the outbound side, where a `both` row
+    # counts.
+    inbound_rows = [
+        endpoint for endpoint in report.endpoints if endpoint["direction"] in ("inbound", "both")
+    ]
+    coverage = dict(report.coverage)
+    coverage["format_unresolved"] = sum(
+        1 for endpoint in inbound_rows if endpoint.get("format_resolution") == "unresolved"
+    )
+    coverage["inbound_total"] = len(inbound_rows)
+    outbound_rows = [
+        endpoint for endpoint in report.endpoints if endpoint["direction"] in ("outbound", "both")
+    ]
+    coverage["peer_unresolved"] = sum(
+        1 for endpoint in outbound_rows if endpoint.get("peer") is None
+    )
+    coverage["outbound_total"] = len(outbound_rows)
+
     document: dict[str, object] = {
         "schema_version": GRAPH_SCHEMA_VERSION,
+        # The vocabulary generation (FR-21) the boundary entries a reader derives from
+        # this workspace are named in; `export` copies it into the manifest's `producer`.
+        "boundary_vocabulary_version": BOUNDARY_VOCABULARY_VERSION,
         "module": {
             "id": module.module_id,
             "kind": module.kind,
@@ -155,7 +186,7 @@ def write_metadata(
                 for one in scanners
             ],
         },
-        "coverage": report.coverage,
+        "coverage": coverage,
         # The profiles this module resolved (D06 §3 "environments" — the
         # sibling field the bundle manifest carries), sorted rather than
         # left in `resolved_config`'s own environment-then-key order: this
@@ -212,10 +243,27 @@ def write_metadata(
             {
                 "catalog_id": skipped.catalog_id,
                 "missing_capabilities": list(skipped.missing_capabilities),
+                # What the skipped catalog would have fed (spec 2026-10-22 §4b): the map
+                # reads this when the catalogs are not in hand.
+                "feeds": list(skipped.feeds),
+                # Which gate skipped it (`SkippedCatalog.cause`), so the map tells a
+                # framework simply not used from a gap without parsing the reason above.
+                # Absent, never null, for a skip read back with none recorded.
+                **({} if skipped.cause is None else {"cause": skipped.cause}),
             }
             for skipped in report.skipped_catalogs
         ],
+        # How many catalogs that ran feed each kind; a kind nothing ran for is absent.
+        "catalogs_run": dict(sorted(report.catalogs_run.items())),
         "query": ["sextant module render"],
     }
+    # The identity of the framework knowledge this run used (spec 2026-10-22 §3d), recorded
+    # here because the diff reads it long after the catalogs are gone, and `export` copies
+    # it. Absent, never a placeholder, where a caller did not compute one.
+    if catalog_hash is not None:
+        document["catalog_hash"] = catalog_hash
+    # Last, computed from the dictionary as written (spec 2026-10-22 §4): the map is a pure
+    # function of these measurements, and `export` copies it rather than re-deriving it.
+    document["observability"] = observability_of(document).to_json()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

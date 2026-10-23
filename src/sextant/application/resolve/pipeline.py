@@ -11,7 +11,7 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoint_conditions import record_endpoint_conditions
-from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints_with_runs
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
@@ -56,6 +56,9 @@ class ResolveReport:
     facts_loaded: int
     endpoints: list[dict[str, object]] = field(default_factory=list)
     skipped_catalogs: list[SkippedCatalog] = field(default_factory=list)
+    # How many catalogs that RAN feed each boundary kind (spec 2026-10-22 §4b); kinds with
+    # none are absent. Written to `metadata.json` because a bundle's reader has no catalogs.
+    catalogs_run: dict[str, int] = field(default_factory=dict)
     coverage: dict[str, object] = field(default_factory=dict)
     shapes: list[dict[str, object]] = field(default_factory=list)
     # The two NON-WIRE families (2O design §4): work the framework starts on a
@@ -209,7 +212,7 @@ def resolve(
     # other writer runs below `derive_endpoints` either way, so nothing else moves.
     reset_open_questions(workspace)
     with _timed("derive_endpoints"):
-        skipped = derive_endpoints(workspace, declared, capabilities)
+        skipped, catalogs_run = derive_endpoints_with_runs(workspace, declared, capabilities)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the
@@ -347,6 +350,7 @@ def resolve(
         value_resolutions=recorded,
         endpoints=workspace.query("endpoints"),
         skipped_catalogs=skipped,
+        catalogs_run=catalogs_run,
         coverage=coverage_of(workspace),
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),

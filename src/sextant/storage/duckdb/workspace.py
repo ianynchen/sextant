@@ -5,6 +5,7 @@ from typing import TypeVar, cast
 
 import duckdb
 
+from sextant.application.boundary.source import STAMPS, NotABoundarySource
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
 
@@ -724,6 +725,77 @@ _NAMED_QUERIES = {
         ORDER BY advice, handler, exception, status, response_shape,
                  declared_by, scope::VARCHAR, resolution, evidence, catalog_id
     """,
+    # Spec 2026-10-22-boundary-vocabulary-and-diff §2: one query per boundary kind, read by
+    # `application/boundary/source.py` over a workspace and over a bundle's Parquet alike,
+    # so each is plain SELECT over the exported tables' columns. One row per table row —
+    # grouping on identity is the reader's, because it must treat NULL as equal to NULL
+    # and SQL equality does not.
+    #
+    # The ORDER BY is identity, then every attribute, then the evidence columns, so the
+    # rows arrive in a fixed order (NFR-1). It decides no attribute: where the rows of a
+    # group disagree on one, the reader carries every distinct value, sorted, as
+    # `{"several": [...]}`, never the value of whichever row came first.
+    # The `direction` test is the same text as `Kind.where` in the vocabulary (a test pins
+    # it): a `both` row is one wire identity on each side.
+    "boundary_endpoint": """
+        SELECT protocol, method, path, request_shape, response_shape, consumes, produces,
+               format, resolution, direction, handler, caller, catalog_id
+        FROM endpoints WHERE direction IN ('inbound', 'both')
+        ORDER BY protocol, method, path, request_shape, response_shape, consumes, produces,
+                 format, resolution, direction, handler, caller, catalog_id
+    """,
+    "boundary_dependency": """
+        SELECT protocol, method, path, peer, request_shape, response_shape, format,
+               resolution, direction, handler, caller, catalog_id
+        FROM endpoints WHERE direction IN ('outbound', 'both')
+        ORDER BY protocol, method, path, peer, request_shape, response_shape, format,
+                 resolution, direction, handler, caller, catalog_id
+    """,
+    "boundary_contract": """
+        SELECT shape_id, content_hash, origin_tier FROM shapes
+        ORDER BY shape_id, content_hash, origin_tier
+    """,
+    "boundary_property": """
+        SELECT key, environment, value, unresolved_reason, source FROM resolved_config
+        ORDER BY key, environment, value, unresolved_reason, source
+    """,
+    "boundary_schedule": """
+        SELECT handler, trigger, expression, resolution, catalog_id FROM scheduled_work
+        ORDER BY handler, trigger, expression, resolution, catalog_id
+    """,
+    "boundary_error_handler": """
+        SELECT handler, exception, advice, scope, status, response_shape, catalog_id
+        FROM error_handlers
+        ORDER BY handler, exception, advice, status, response_shape, scope::VARCHAR,
+                 catalog_id
+    """,
+    # The documents that declare the symbols the boundary rows name — every handler and
+    # caller an endpoint row carries, and the handler of a schedule and of an error
+    # handler — so the reader learns each row's documents and their `origin_tier` in one
+    # read rather than one per row. `symbols` is already limited to the documents the
+    # multi-release selection kept. A symbol declared in two documents is two rows.
+    "boundary_symbol_documents": """
+        SELECT DISTINCT s.symbol AS symbol, d.relative_path, d.origin_tier
+        FROM symbols s JOIN documents d ON d.document_id = s.document_id
+        WHERE s.symbol IN (
+            SELECT handler FROM endpoints UNION SELECT caller FROM endpoints
+            UNION SELECT handler FROM scheduled_work UNION SELECT handler FROM error_handlers
+        )
+        ORDER BY s.symbol, d.relative_path, d.origin_tier
+    """,
+    # A shape's declaring document. The shape id is the symbol with its module prefix
+    # (`<scanner> <build> <coordinates> <version> `) removed, and the prefix holds the only
+    # spaces a symbol has, so the last space-separated token of the symbol IS the shape id —
+    # an equality, which the engine hashes, where a suffix test would be a scan per shape.
+    # A declared schema's bare name matches no symbol and has no row here, which is right:
+    # no class file declares it.
+    "boundary_shape_documents": """
+        SELECT DISTINCT sh.shape_id AS shape_id, d.relative_path, d.origin_tier
+        FROM shapes sh
+        JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = sh.shape_id
+        JOIN documents d ON d.document_id = s.document_id
+        ORDER BY sh.shape_id, d.relative_path, d.origin_tier
+    """,
     # 2Q `I1`'s root set — the methods a trace starts at, with the kind of
     # thing that starts it and the wire address that reaches it. Ordered on the
     # whole row because that is all there is: `handler` alone is not total (one
@@ -883,6 +955,152 @@ _NAMED_QUERIES = {
         SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence,
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
+    """,
+    # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
+    # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk
+    # behind `impact` one read per hop of its frontier, never one per symbol it reaches.
+    #
+    # A symbol is placed by its declaring document's path and the line extent its fact
+    # gives. A line of 0 is the class file stating none — always so for a type or a field —
+    # and comes back NULL, the export index's own rule (`located_symbols` above).
+    #
+    # `type_hierarchy` and a signature name a type BARE (D00 §5a) while `symbols`,
+    # `call_edges.caller` and `.callee` carry the module coordinates, so the caller hands a
+    # type over bare and a hierarchy row joins `symbols` on the symbol's last
+    # space-separated token, as `boundary_shape_documents` does. Every answer is ordered on
+    # the symbol, then the file, so a symbol two documents declare is two rows in a fixed
+    # order (NFR-1).
+    "question_source": """
+        SELECT s.symbol AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM symbols s JOIN documents d ON d.document_id = s.document_id
+        WHERE s.symbol = ?
+        ORDER BY symbol, file
+    """,
+    # One hop each way. A call that left the workspace has no callee — no body was read —
+    # and is not a symbol, so `question_callees` leaves it out.
+    "question_callers": """
+        SELECT DISTINCT e.caller AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM call_edges e
+        LEFT JOIN symbols s ON s.symbol = e.caller
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE e.callee = ?
+        ORDER BY symbol, file
+    """,
+    "question_callees": """
+        SELECT DISTINCT e.callee AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM call_edges e
+        LEFT JOIN symbols s ON s.symbol = e.callee
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE e.caller = ? AND e.callee IS NOT NULL
+        ORDER BY symbol, file
+    """,
+    # The direct subtypes of a BARE type — a class's superclass and every interface it
+    # declares are each a row, so this is "implements or extends".
+    "question_implementations": """
+        SELECT DISTINCT coalesce(s.symbol, t.child) AS symbol, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM type_hierarchy t
+        LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE t.ancestor = ?
+        ORDER BY symbol, file
+    """,
+    # What references a BARE type: a member whose signature names it as a parameter's type
+    # or as what it returns (a field's own type is its `returns`), at ANY depth of type
+    # arguments — `List<Money>` and `Map<String, Money>` both name `Money` — and a direct
+    # subtype.
+    #
+    # **The signature rows are CANDIDATES, confirmed by the caller.** A recursive walk of
+    # the JSON in SQL needs `json_tree`, which the dependency floor (`duckdb>=1.1`) does
+    # not have, so this read selects every member whose signature TEXT contains the bare
+    # type — which a true match always does, the descriptor being written verbatim in the
+    # JSON — and hands the text over; `application/query/questions.py` walks the parsed
+    # signature and drops a row that merely contains it (`com/a/Money#` inside
+    # `com/b/com/a/Money#`, or inside an annotation's arguments). `kind` says which arm a
+    # row came from: `signature` rows are to be confirmed, `subtype` rows are answers.
+    "question_uses": """
+        WITH subject AS (SELECT ?::VARCHAR AS type),
+        users AS (
+            SELECT 'signature' AS kind, s.symbol AS symbol, s.signature::VARCHAR AS signature
+            FROM symbols s JOIN subject ON contains(s.signature::VARCHAR, subject.type)
+            UNION
+            SELECT 'subtype' AS kind, coalesce(s.symbol, t.child) AS symbol, NULL AS signature
+            FROM type_hierarchy t
+            JOIN subject ON t.ancestor = subject.type
+            LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+        )
+        SELECT DISTINCT u.kind AS kind, u.symbol AS symbol, u.signature AS signature,
+               d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM users u
+        LEFT JOIN symbols s ON s.symbol = u.symbol
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        ORDER BY symbol, file, kind
+    """,
+    # A type's own members — what `impact` of a type seeds its walk with beside the type,
+    # because a change to the type is a change to what its members' callers depend on.
+    "question_members": """
+        SELECT symbol FROM symbols WHERE enclosing = ? ORDER BY symbol
+    """,
+    # One hop of `impact`'s upstream walk, for the WHOLE frontier at once: `walked` is a
+    # list of `{symbol, bare, owner}` (the caller splits the symbol, through the one seam
+    # that knows its grammar), and every row names the walked symbol it came from.
+    #
+    #   caller      a call edge whose callee is the walked symbol, with its resolution
+    #   signature   a CANDIDATE member whose signature text contains the walked type, with
+    #               that text, for the caller to confirm (`question_uses` says why)
+    #   use         a direct subtype of the walked type
+    #   unread      a call edge whose target names the walked symbol and whose callee is
+    #               NULL — the callee's body was not read, so whether the call dispatches
+    #               to the walked symbol is unconfirmed
+    #   unscanned   a DIRECT ancestor of the walked symbol's own type (or of the type
+    #               itself) that this workspace never read, through which code it holds no
+    #               body for may call in (`type_hierarchy` rows are direct only)
+    #
+    # The last two are where the walk cannot see, and the caller lists them rather than
+    # walking them.
+    "question_impact_step": """
+        WITH walked AS (
+            SELECT w.symbol AS symbol, w.bare AS bare, w.owner AS owner
+            FROM (
+                SELECT unnest(?::STRUCT(symbol VARCHAR, bare VARCHAR, owner VARCHAR)[]) AS w
+            )
+        ),
+        reached AS (
+            SELECT 'caller' AS arm, w.symbol AS walked, e.caller AS symbol,
+                   e.resolution AS resolution, NULL AS signature
+            FROM call_edges e JOIN walked w ON e.callee = w.symbol
+            UNION ALL
+            -- Only a walked TYPE is looked for in signature text (a type's bare descriptor
+            -- is its own owner): a member's descriptor is no type a signature names, and
+            -- containment is the one join here that is not an equality.
+            SELECT 'signature', w.symbol, s.symbol, 'resolved', s.signature::VARCHAR
+            FROM symbols s JOIN walked w
+              ON w.bare = w.owner AND contains(s.signature::VARCHAR, w.bare)
+            UNION ALL
+            SELECT 'use', w.symbol, coalesce(s.symbol, t.child), 'resolved', NULL
+            FROM type_hierarchy t
+            JOIN walked w ON t.ancestor = w.bare
+            LEFT JOIN symbols s ON regexp_extract(s.symbol, '[^ ]+$') = t.child
+            UNION ALL
+            SELECT 'unread', w.symbol, e.caller, e.resolution, NULL
+            FROM call_edges e JOIN walked w ON e.target = w.bare
+            WHERE e.callee IS NULL
+            UNION ALL
+            SELECT 'unscanned', w.symbol, t.ancestor, NULL, NULL
+            FROM type_hierarchy t JOIN walked w ON t.child = w.owner
+            WHERE NOT t.scanned
+        )
+        SELECT DISTINCT r.arm AS arm, r.walked AS walked, r.symbol AS symbol,
+               r.resolution AS resolution, r.signature AS signature, d.relative_path AS file,
+               nullif(s.line_start, 0) AS line_start, nullif(s.line_end, 0) AS line_end
+        FROM reached r
+        LEFT JOIN symbols s ON s.symbol = r.symbol
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        ORDER BY arm, walked, symbol, resolution, file
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
@@ -1327,6 +1545,8 @@ _FACT_ONLY = frozenset(
         "facts",
         "selected_documents",
         "constants",
+        "question_source",
+        "question_members",
     }
 )
 
@@ -1517,6 +1737,210 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
         )
         for name, value in params.items()
     }
+
+
+def _run_named(
+    connection: duckdb.DuckDBPyConnection, name: str, params: dict[str, object]
+) -> list[dict[str, object]]:
+    cursor = connection.execute(_NAMED_QUERIES[name], list(_bound(params).values()) or None)
+    columns = [column[0] for column in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    for column in _DECODED_COLUMNS.get(name, ()):
+        for row in rows:
+            text = row[column]
+            row[column] = None if text is None else json.loads(str(text))
+    return rows
+
+
+# The tables the boundary queries read (spec 2026-10-22 §2): the ten a bundle ships as
+# `graph/<name>.parquet` and a workspace holds as tables or views of the same name. The set
+# the `boundary_*` queries above name and nothing else, so a read-only open creates only
+# what the diff can ask for.
+READ_ONLY_TABLES = (
+    "documents",
+    "endpoint_conditions",
+    "endpoint_metadata",
+    "endpoints",
+    "error_handlers",
+    "resolved_config",
+    "scheduled_work",
+    "shape_fields",
+    "shapes",
+    "symbols",
+)
+
+
+def _sql_string(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+_WORKSPACE_FILE = "workspace.duckdb"
+_LOOKED_FOR = (
+    "a workspace (a directory holding workspace.duckdb and metadata.json, usually "
+    "<module>/.sextant) or a bundle (a directory holding manifest.json and graph/)"
+)
+
+
+def _json_document(directory: Path, name: str) -> dict[str, object]:
+    file = directory / name
+    if not file.is_file():
+        raise NotABoundarySource(directory, f"{name} is missing")
+    return cast(dict[str, object], json.loads(file.read_text(encoding="utf-8")))
+
+
+def _block(document: dict[str, object], *path: str) -> dict[str, object]:
+    for step in path:
+        document = cast(dict[str, object], document.get(step) or {})
+    return document
+
+
+def _required(where: Path, document: dict[str, object], *path: str) -> str:
+    value = _block(document, *path[:-1]).get(path[-1])
+    if value is None:
+        raise NotABoundarySource(where, f"its {path[0]} document names no {'.'.join(path)}")
+    return str(value)
+
+
+def _names(document: dict[str, object], key: str) -> list[str]:
+    return [str(name) for name in cast(list[object], document.get(key, []))]
+
+
+class ReadOnlyGraph:
+    """A workspace or an exported bundle opened to be read and never changed, behind the
+    `GraphReader` port. The named queries run on either unchanged because both are presented
+    as views called what the queries call them."""
+
+    def __init__(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        *,
+        module: dict[str, object],
+        commit: str,
+        producer: dict[str, object],
+        environments: list[str],
+        is_bundle: bool,
+        module_root: Path | None,
+    ) -> None:
+        self._connection = connection
+        self._module = module
+        self._commit = commit
+        self._producer = producer
+        self._environments = environments
+        self._is_bundle = is_bundle
+        self._module_root = module_root
+
+    @property
+    def module(self) -> dict[str, object]:
+        return self._module
+
+    @property
+    def commit(self) -> str:
+        return self._commit
+
+    @property
+    def producer(self) -> dict[str, object]:
+        return self._producer
+
+    @property
+    def environments(self) -> list[str]:
+        return self._environments
+
+    @property
+    def is_bundle(self) -> bool:
+        return self._is_bundle
+
+    @property
+    def module_root(self) -> Path | None:
+        return self._module_root
+
+    def query(self, name: str, **params: object) -> list[dict[str, object]]:
+        return _run_named(self._connection, name, params)
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def _views(connection: duckdb.DuckDBPyConnection, definition: Callable[[str], str]) -> None:
+    for table in READ_ONLY_TABLES:
+        connection.execute(f"CREATE VIEW {table} AS {definition(table)}")
+
+
+def open_read_only(path: Path) -> ReadOnlyGraph:
+    """`path` is `<module>/.sextant`, `<module>` (whose `.sextant` is used) or a bundle
+    directory. Nothing is created, migrated or written: a workspace is attached READ_ONLY
+    (which `DuckDbWorkspace.__init__` is not — it runs the schema on every open) and a
+    bundle's Parquet is only read. Raises `NotABoundarySource` for anything else."""
+    if (path / "manifest.json").is_file():
+        return _open_bundle(path)
+    for workspace in (path, path / ".sextant"):
+        if (workspace / _WORKSPACE_FILE).is_file():
+            return _open_workspace(workspace)
+    raise NotABoundarySource(path, f"neither is there {_LOOKED_FOR}")
+
+
+def _open_workspace(workspace: Path) -> ReadOnlyGraph:
+    metadata = _json_document(workspace, "metadata.json")
+    provenance = _block(metadata, "provenance")
+    found: dict[str, object] = {
+        "sextant_version": provenance.get("sextant_version"),
+        "fact_schema_version": provenance.get("fact_schema_version"),
+        "graph_schema_version": metadata.get("schema_version"),
+        "boundary_vocabulary_version": metadata.get("boundary_vocabulary_version"),
+        "catalog_hash": metadata.get("catalog_hash"),
+    }
+    _required(workspace, metadata, "module", "id")
+    commit = _required(workspace, metadata, "provenance", "commit")
+    connection = duckdb.connect()
+    try:
+        # READ_ONLY is the guarantee: the engine refuses any write.
+        connection.execute(
+            f"ATTACH {_sql_string(str(workspace / _WORKSPACE_FILE))} AS w (READ_ONLY)"
+        )
+        _views(connection, lambda table: f"SELECT * FROM w.{table}")
+    except duckdb.Error as error:
+        connection.close()
+        raise NotABoundarySource(workspace, f"it could not be opened read-only: {error}") from error
+    return ReadOnlyGraph(
+        connection,
+        module=_block(metadata, "module"),
+        commit=commit,
+        producer={name: value for name, value in found.items() if value is not None},
+        environments=_names(metadata, "environments"),
+        is_bundle=False,
+        module_root=workspace.parent,
+    )
+
+
+def _open_bundle(bundle: Path) -> ReadOnlyGraph:
+    manifest = _json_document(bundle, "manifest.json")
+    _required(bundle, manifest, "module", "id")
+    commit = _required(bundle, manifest, "source", "commit")
+    missing = [t for t in READ_ONLY_TABLES if not (bundle / "graph" / f"{t}.parquet").is_file()]
+    if missing:
+        raise NotABoundarySource(
+            bundle, f"its graph/ lacks {', '.join(missing)} (exported by an older Sextant)"
+        )
+    producer = _block(manifest, "producer")
+    connection = duckdb.connect()
+    try:
+        _views(
+            connection,
+            lambda table: (
+                f"SELECT * FROM read_parquet({_sql_string(str(bundle / 'graph' / f'{table}.parquet'))})"
+            ),
+        )
+    except duckdb.Error as error:
+        connection.close()
+        raise NotABoundarySource(bundle, f"it could not be opened read-only: {error}") from error
+    return ReadOnlyGraph(
+        connection,
+        module=_block(manifest, "module"),
+        commit=commit,
+        producer={name: producer[name] for name in STAMPS if producer.get(name) is not None},
+        environments=_names(manifest, "environments"),
+        is_bundle=True,
+        module_root=None,
+    )
 
 
 class StaleParticipantError(RuntimeError):
@@ -1772,16 +2196,7 @@ class DuckDbWorkspace:
         return value
 
     def _read(self, name: str, params: dict[str, object]) -> list[dict[str, object]]:
-        cursor = self._connection.execute(
-            _NAMED_QUERIES[name], list(_bound(params).values()) or None
-        )
-        columns = [column[0] for column in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        for column in _DECODED_COLUMNS.get(name, ()):
-            for row in rows:
-                text = row[column]
-                row[column] = None if text is None else json.loads(str(text))
-        return rows
+        return _run_named(self._connection, name, params)
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         graph = destination / "graph"

@@ -54,7 +54,7 @@ Kafka              | Kafka      | smallrye-reactive-messaging
 JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
 Google Pub/Sub     | Pub/Sub    |
-Meridian           | —          | FR-21 FR-22 FR-23 FR-24
+Meridian           | —          |
 Async              | Async      | quartz akka-pekko-actors
 ```
 
@@ -69,6 +69,11 @@ Spring Data REST's *projections, excerpts, HAL affordances, `@CrossOrigin`, even
 QueryDSL web support* row and the Servlet *`@WebServlet`'s other attributes, `@WebFilter` /
 `@WebListener`* row are boundaries their own designs STATE at `C` (2O design §2c; CP-9), not
 open work. Every Spring Boot REST inbound row that was work is shipped.
+
+**Meridian joined this block on 2026-10-22**, when `FR-21`–`FR-24` — its four ids — closed (Group
+H, spec `docs/superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md`, plan
+`docs/superpowers/plans/2026-10-22-boundary-vocabulary-and-diff.md`). It has no COVERAGE column,
+so no cell moves: the register's `—` says so, and its row empties because its ids did.
 
 **SSE is NOT here any more.** Its gap is JAX-RS `@Produces(SERVER_SENT_EVENTS)`, which is
 Java — so it is real work, sequenced after Spring Boot, not something scoped away.
@@ -559,28 +564,44 @@ open. Naming them is what the Kafka row did when `kafka-batch-generics` closed.
 | `quartz` | **named 2026-09-22 (Group D register close)** — Quartz has no catalog at all: `@DisallowConcurrentExecution`, `Job` implementations and `JobDetail` builders are a second scheduler writing to the same `scheduled_work` table, COVERAGE §5.12, tier **A** for the annotation half and **B** for the builder half. Surfaced because the Async ```delivery row emptied when `temporal-cadence` and `vertx-eventbus` closed while §5.12 still carried this row uncatalogued — the definition's second clause, exactly as `smallrye-reactive-messaging` surfaced on Kafka at the B/C close. Costs a Quartz-scheduled module every scheduled entry point it has |
 | `akka-pekko-actors` | **named 2026-09-22 (Group D register close)**, same cause — `ref ! msg` / `ref.tell(msg)`, where the receiver comes from an `ActorRef` created elsewhere. COVERAGE §5.12 tiers it **C, possibly permanent** (§7): an actor reference is a value passed between methods and the address it carries is not named at the send site. **Costs an actor-based module every message boundary it has** — each `tell`/`!` send and each `receive` is invisible, so a module whose components talk through actors exports the HTTP or broker edges at its rim and nothing at all in between. It is on this row rather than scoped away because it is a Java/Kotlin library on the target list; if it is genuinely unreadable it belongs in ```out-of-scope``` with that measurement behind it, and nobody has made it. **Half of that measurement now exists (2026-10-17, `scripts/probes/cp33_binding_writes.md` row 7).** The value-resolution spec claimed its sixth edge — a binding written outside an initialiser — would close this row; `javap` says otherwise. An `ActorRef` from `system.actorOf(...)` is a field assigned a CALL'S RESULT, and the `ALOAD 0; xLOAD k; PUTFIELD` triple the `field_write` fact matches does not present for it, so a parameter-sourced capability leaves this row where it is. What is still unmeasured is the other half: whether the `tell`/`!` SEND sites could be read some other way. Until somebody measures that, the row stays in scope and tiered C (`OI-136`) |
 
-### Meridian integration — NOT DELIVERED, and asked for four times
+### Meridian integration — DELIVERED (2026-10-22, Group H: `FR-21`–`FR-24`; spec `docs/superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md`, plan `docs/superpowers/plans/2026-10-22-boundary-vocabulary-and-diff.md`)
 
-**Not a protocol, so it has no COVERAGE column** — the register's `—` says so. It is here
-because it is four committed requirements with no implementation, and because leaving it off
-this list is how it went unbuilt for a week.
+**Not a protocol, so it has no COVERAGE column** — the register's `—` says so. It was here
+because it was four committed requirements with no implementation, and because leaving it off
+this list is how it went unbuilt for a week. Built, it stays here as the record of what
+closed it.
 
 | # | requirement | state |
 |---|---|---|
-| `FR-21` | Boundary vocabulary — a closed, versioned set of kinds over the derived tables, so two analyses compare kind by kind rather than row by row | **unimplemented.** Its stated blocker is gone: the `dependency` kind derives from edges and dispatch, which did not exist when it was written and do now (F8) |
-| `FR-22` | Derivation diff — two analyses of one module, typed `added｜removed｜changed` per kind with evidence pointers | **unimplemented.** This is what the drift scenario waits on |
-| `FR-23` | Observability map — per boundary kind, `observable｜partial｜not-observable` | **unimplemented.** Every input already ships: `manifest.json` carries gaps and skipped catalogs, `coverage` carries uncovered files. An assembly, not a measurement |
-| `FR-24` | Library embedding — analyze, query, export, diff callable in-process | **partial.** `analyze` and `export` ship; `query` and `diff` are absent, and there is no configuration object |
+| `FR-21` | Boundary vocabulary — a closed, versioned set of kinds over the derived tables, so two analyses compare kind by kind rather than row by row | **implemented** — seven kinds, `boundary_vocabulary_version` 1, the wire as the identity and the handler as evidence (`application/boundary/vocabulary.py`; D01 §3). Pinned by `tests/application/boundary/test_vocabulary.py` (the seven kinds in order, `test_endpoint_identity_is_the_exposed_address_and_the_handler_is_evidence`, which catalog feeds which kind) and `tests/application/boundary/test_source.py` (a both-direction row is both kinds, several handlers behind one wire are one row, rows that disagree keep every value), with the guard `boundary.the-HANDLER-is-evidence-never-identity` in `scripts/guard_check.py` |
+| `FR-22` | Derivation diff — two analyses of one module, typed `added｜removed｜changed` per kind with evidence pointers | **implemented at module scope** — `sextant module diff` and `sextant.api.diff`, any mix of workspace and bundle (`application/boundary/diff.py`; M00). Pinned by `tests/application/boundary/test_diff.py` (the empty change-set with every kind at zero, a moved controller as no entry, each body change labelled `compatible` or `breaking`, a renamed DTO as no entry and `OrderView` to `List<OrderView>` as one breaking change, the refusal on each stamp, a masked bundle and its verbatim workspace diffing empty), `tests/api/test_facade.py` and `tests/cli/test_app.py`, and on real history by a second check on the `spring-petclinic-rest` field pin (`diff_against`): `f957c77` against the pinned `4cd8e1b` reads endpoint +2 and data-contract +2, everything else zero. `system diff` stays deferred |
+| `FR-23` | Observability map — per boundary kind, `observable｜partial｜not-observable` | **implemented** — computed at `analyze` from measurements the analysis recorded, written to `metadata.json`, copied into the manifest and answered by `sextant.api.observability` (`application/boundary/observability.py`; D05 §3). Pinned by `tests/application/boundary/test_observability.py`, `tests/egress/test_manifest.py` and `tests/egress/test_render.py`. The "unsupported language" input the proposal listed was dropped, because `analyze` refuses a module no scanner accepts, so no analysis exists for it to describe |
+| `FR-24` | Library embedding — analyze, query, export, diff callable in-process | **implemented, bar one clause never measured.** `sextant.api` ships all four operations plus `observability`, and `AnalyzeOptions` and `DiffOptions` are the configuration objects. `query` answers six module-scope questions in process (`application/query/questions.py`, pinned by `tests/application/query/test_questions.py` and `tests/api/test_facade.py`); the CLI form, the endpoint family, `path` and the plugin stay under the language gate |
 
-**Why it is on this list now.** The user asked for it at least four times — *"wrap this in
+**No end-to-end intention test exists yet, and `Meridian` stays in ```intention-test-missing.**
+The group is not a protocol with a fixture whose rows an `e2e` test can assert whole; what it
+produces is a comparison of two analyses, which the unit suites pin on hand-built sides and
+which only real history exercises. The measurement that stands in for the end-to-end test is
+the `diff_against` check on the `spring-petclinic-rest` field pin (`f957c77` against `4cd8e1b`,
+endpoint +2 and data-contract +2 and nothing else), and the name leaves the block when an `e2e`
+test asserts a diff across two fixture states.
+
+**What closed it, against what the row predicted.** It said it would close by "M09's query
+surface (FR-21, FR-22), an assembly over the manifest (FR-23), and two functions plus a config
+object on `sextant.api` (FR-24)". The vocabulary and the diff needed none of M09's query
+surface — they read the derived tables through named queries of their own — and the one
+piece of M09 that was built (six questions, in process) is FR-24's `query` clause and FR-10's
+partial state, not a dependency of FR-21 or FR-22. FR-23 was an assembly, as predicted, but
+over a manifest that did not yet carry what it needed: `analyze` had to start recording
+`catalog_hash`, `catalogs_run` and each skipped catalog's `feeds`.
+
+**Why it was on this list.** The user asked for it at least four times — *"wrap this in
 2P"*, *"check ... if not, add it to a roadmap item and have it covered"*, *"i want you to
 implement @docs/meridian-integration.md"*, *"this is a real FR ... Add this to your FR"*. Each
 time it was documented further and never built: FR-21–24 were written into `REQUIREMENTS.md`
 with traceability rows, scoped to a phase 2P that never ran. *"It is on the roadmap"* was the
-answer that made it disappear four times. It is on a list that a test enforces now.
-
-**Closes by** M09's query surface (FR-21, FR-22), an assembly over the manifest (FR-23), and
-two functions plus a config object on `sextant.api` (FR-24).
+answer that made it disappear four times. It was on a list that a test enforces, and the
+register's row is now empty.
 
 ### DELIVERED in this scope
 
@@ -801,7 +822,7 @@ with the spec already written first.
 | 4 | **D. New `Protocol` members and two naming words** — **DONE 2026-09-22** (spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`; CI run pending). Two members, `temporal` and `eventbus`; **four** naming words where this table predicted two — `declaring_type_simple_name`, `declaring_type_qualified_name`, `prefixed_capitalized_construct_name` and `declaring_type_scoped_name` — plus one `members` word and three catalog keys (*corrected at the branch review; this row said "one naming word, not two"*) | `temporal-cadence` `vertx-eventbus` (2) | **Async did NOT close.** Both ids closed and the row's blockers emptied — and §5.12 then showed two Java frameworks with no catalog at all, `quartz` and `akka-pekko-actors`, which are now the row's blockers. The `smallrye-reactive-messaging` shape: a row cannot close while its own COVERAGE section carries an uncatalogued library, and the two new ids are what that clause was hiding behind the two old ones |
 | 5 | **G. Kotlin routes with a NULL handler** — short spec — **DONE 2026-09-20** (spec `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`, which also closed `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-class-lambdas`, `kotlin-default-bridge-calls`, `ktor-route-with-verb` and the new `inbound-request-requirements`; CI run 35541934750) | `kotlin-null-handler` (1) | REST inbound −1 — and −4 more: the row now holds `conditional-controllers`, `dsl-media-route`, `gateway-properties-routes` |
 | 6 | **F. Conditional controllers** — the hardest design question — **DONE 2026-10-22** (spec `docs/superpowers/specs/2026-10-21-conditional-controllers-design.md`, two rulings: a structured `endpoint_conditions` table a machine reads, the document its one verbose rendering; matching never reads a condition, the link states it) | `conditional-controllers` (1) | **REST inbound closes** — closed |
-| 7 | **H. Meridian** | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty |
+| 7 | **H. Meridian** — **DONE 2026-10-22** (spec `docs/superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md`, plan `docs/superpowers/plans/2026-10-22-boundary-vocabulary-and-diff.md`; the user ruled to build the whole group, five decisions recorded in the spec's §7: the wire is the identity, seven kinds, a producer change refuses unless allowed, observability per kind from measured inputs, a minimal in-process `query`) | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty. The register is left with `apache-camel`, `smallrye-reactive-messaging`, `quartz` and `akka-pekko-actors` |
 
 Each group is one spec → one plan → one PR, on the per-item loop; a group starts only
 when its spec names the COVERAGE cell every item moves. Categories B and C above are the
@@ -846,5 +867,5 @@ same 22 items sorted by mechanism; this table is the same items sorted by what t
    *2026-09-21: implemented and pinned on `fluent`, not `config_join` (row 3 of §4's table);
    Pub/Sub's row is empty (CI run 35663682722, PR #34) and REST in waits on
    `conditional-controllers` alone.*
-6. **Meridian** (`FR-21`–`FR-24`) has no matrix cell and waits on nothing but being built.
+6. **Meridian** (`FR-21`–`FR-24`) has no matrix cell. *2026-10-22: built and pinned (row 7 of §4's table); its ```delivery row is empty.*
 7. **Section 2's cross-cutting defects** last, to make "no open Critical or Major" true.

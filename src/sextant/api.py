@@ -1,8 +1,13 @@
-"""Sextant as a library (2N Task 5, spec §5b): the four verbs the CLI's own
-`module analyze`/`render`/`enrich`/`export` commands are thin wrappers over —
-`analyze`, `render`, `enrich`/`enrich_async`, `export` — each a plain,
-synchronous function returning a small frozen result object, never printing
-anything and never raising `SystemExit`.
+"""Sextant as a library (2N Task 5, spec §5b): the verbs the CLI's own
+`module analyze`/`render`/`enrich`/`export`/`diff` commands are thin wrappers
+over — `analyze`, `render`, `enrich`/`enrich_async`, `export`, `diff` — each a
+plain, synchronous function returning a small frozen result object, never
+printing anything and never raising `SystemExit`. `system_analyze` wraps
+`system analyze`; `observability` (which boundary kinds an analysis could see)
+and `query` (six module-scope questions about a symbol) have no command of
+their own. Group H (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21–FR-24)
+added `diff`, `observability`, `query` and the two options objects,
+`AnalyzeOptions` and `DiffOptions`.
 
 **Built by extraction, not duplication.** Every composition that used to live
 inline inside a `click` command body in `cli/app.py` — the reactor loop
@@ -72,7 +77,7 @@ stated (review round 1): the real fix is a native async entry point on the
 future work, not this task's.
 
 **The `SextantError` family.** The spec asks for "a typed `SextantError`
-family", not naming the members — this module picks four, grouped by what a
+family", not naming the members — this module picks five, grouped by what a
 caller could sensibly want to catch and retry or report differently, not one
 subclass per refusal site:
 
@@ -80,18 +85,28 @@ subclass per refusal site:
   repository (a malformed `pom.xml`, a `<modules>` cycle), a multi-module
   root was asked for a single `--workspace`, or one module inside a reactor
   walk failed (named, the walk stopped).
-- `NotAnalyzedError` — `render`/`enrich`/`export`, pointed at a workspace
-  `analyze` never wrote to, at a multi-module root instead of one of its
-  modules, or at one whose recorded stamps say a different Sextant build
-  derived it (D01 §7's re-derivation rule, enforced at the read gate).
+- `NotAnalyzedError` — `render`/`enrich`/`export`/`query`, pointed at a
+  workspace `analyze` never wrote to, at a multi-module root instead of one of
+  its modules, or at one whose recorded stamps say a different Sextant build
+  derived it (D01 §7's re-derivation rule, enforced at the read gate); also
+  `diff` and `observability`, given a path that is neither a workspace nor a
+  bundle.
 - `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
   malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
   `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
-  claim's own schema when rendering.
+  claim's own schema when rendering. Also a call this module cannot honour as
+  asked: `query` naming a question that is not one of the six or a symbol the
+  workspace does not hold, and `analyze` given both its flag and an options
+  object.
 - `EnrichmentError` — everything specific to `enrich`'s own run: the
   mutually-exclusive doors, a workspace with no rendered document, the tool
   jail's own setup, an unknown `--agent` name, a missing model, the agent's
   own construction or run failing, or an answer that will not validate.
+- `DiffRefusedError` — `diff`'s own refusal to compare: a stamp absent on one
+  side, a schema or vocabulary version that differs, two different modules, or
+  a producer change (Sextant version, catalog hash, redaction rule set) the
+  caller did not allow with `DiffOptions(allow_producer_change=True)`. The
+  message names the stamps and both values.
 
 Every one of these carries the exact string the CLI already prints for the
 same refusal — this module raises it; `cli/app.py` is the only place that
@@ -115,6 +130,9 @@ from xml.etree.ElementTree import ParseError
 from pydantic import ValidationError
 
 from sextant.agents import AGENT_REGISTRY, DEFAULT_MAX_TURNS
+from sextant.application.boundary.diff import Diff, DiffRefused, diff_sources
+from sextant.application.boundary.observability import ObservabilityMap, observability_of
+from sextant.application.boundary.source import BoundarySource, NotABoundarySource
 from sextant.application.enrich.tools import ToolDefinition, ToolExecutor
 from sextant.application.enrich.validate import stale_claims
 from sextant.application.ports.detector import (
@@ -125,6 +143,8 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.query.questions import QUESTIONS as _QUESTIONS
+from sextant.application.query.questions import QuestionRefused, answer
 from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport, coverage_of
@@ -180,7 +200,11 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, extractor_jar, instructions_path
-from sextant.storage.duckdb.workspace import DuckDbWorkspace, StaleParticipantError
+from sextant.storage.duckdb.workspace import (
+    DuckDbWorkspace,
+    StaleParticipantError,
+    open_read_only,
+)
 
 # --------------------------------------------------------------------------
 # The SextantError family (module docstring above states the grouping).
@@ -188,7 +212,7 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace, StaleParticipantEr
 
 
 class SextantError(RuntimeError):
-    """Base of every refusal the four verbs below raise — never
+    """Base of every refusal the verbs below raise — never
     `SystemExit`, never a bare `ValueError`/`RuntimeError` from underneath.
     `str(error)` is always the exact message the CLI prints for the same
     refusal."""
@@ -211,7 +235,9 @@ class ConfigurationError(SextantError):
     """One of Sextant's own on-disk artifacts — `.sextant.yml`,
     `.sextant-enrichment.json` — is written in a way this module cannot
     read, or (renderer-side) a `redact:` rule collides with a claim's own
-    schema."""
+    schema; or a call's own arguments name nothing this module has (an
+    unknown `query` question or symbol) or contradict each other (`analyze`
+    given both `allow_resolve` and `options`)."""
 
 
 class EnrichmentError(SextantError):
@@ -221,9 +247,29 @@ class EnrichmentError(SextantError):
     validate."""
 
 
+class DiffRefusedError(SextantError):
+    """`diff` refused to compare the two sides: a stamp absent on one, a
+    schema or vocabulary version that differs, two different modules, or a
+    producer change the caller did not allow. The message is the refusal's own
+    text, which names the stamps."""
+
+
 # --------------------------------------------------------------------------
 # Result objects — frozen, no methods, nothing printed by any of them.
 # --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnalyzeOptions:
+    """How `analyze` runs — the three knobs the CLI has (spec 2026-10-22 §5), and no
+    fourth. `allow_resolve` lets detection ask the build tool online once
+    (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
+    `workspace_dir` puts a single module's workspace there instead of `<path>/.sextant`
+    (`--workspace`), and is refused for a multi-module root as the CLI refuses it."""
+
+    allow_resolve: bool = False
+    shadow: bool = False
+    workspace_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +360,25 @@ class ExportResult:
     files, the manifest, and either rendered document that already existed)."""
 
     bundle: Path
+
+
+@dataclass(frozen=True)
+class DiffOptions:
+    """What `diff` may do beyond comparing like with like. `allow_producer_change`
+    lets a diff proceed across a different Sextant version, catalog hash or
+    redaction rule set — refused by default because such a diff can report rows
+    that changed with no code change — and then labels it `producer_changed`."""
+
+    allow_producer_change: bool = False
+
+
+@dataclass(frozen=True)
+class DiffResult:
+    """`diff`'s own outcome: the diff itself, and the file it was written to
+    (`None` when no `out` was given)."""
+
+    diff: Diff
+    written: Path | None
 
 
 @dataclass(frozen=True)
@@ -679,6 +744,8 @@ def _run_analyze(
             descriptors_not_interpreted=result.descriptors_not_interpreted,
             libraries_not_scanned=result.libraries_not_scanned,
             detect_notes=result.notes,
+            # Recorded here, where the catalogs this run used are in hand; `export` copies it.
+            catalog_hash=_catalog_hash(catalogs_dir()),
         )
     finally:
         workspace.close()
@@ -860,12 +927,30 @@ def _analyze(
     ), False
 
 
-def analyze(path: Path, *, allow_resolve: bool = False) -> AnalyzeResult:
+def analyze(
+    path: Path, *, allow_resolve: bool = False, options: AnalyzeOptions | None = None
+) -> AnalyzeResult:
     """Analyzes `path` into its own `.sextant` workspace (or, for a
     multi-module root, every module it names into ITS own workspace) — the
     library equivalent of `sextant module analyze`. Silent: no progress is
-    printed anywhere. Raises `DetectionError` where the CLI would refuse."""
-    result, _multi_module = _analyze(path, workspace_dir=None, allow_resolve=allow_resolve)
+    printed anywhere. Raises `DetectionError` where the CLI would refuse.
+
+    `options` carries every knob; `allow_resolve` alone is the earlier form, kept for
+    compatibility. Given both, with the flag set, it raises `ConfigurationError` rather
+    than choose between them."""
+    if options is None:
+        options = AnalyzeOptions(allow_resolve=allow_resolve)
+    elif allow_resolve:
+        raise ConfigurationError(
+            "analyze was given allow_resolve=True and an AnalyzeOptions — set "
+            "allow_resolve on the options object alone"
+        )
+    result, _multi_module = _analyze(
+        path,
+        workspace_dir=options.workspace_dir,
+        allow_resolve=options.allow_resolve,
+        shadow=options.shadow,
+    )
     return result
 
 
@@ -924,7 +1009,15 @@ def _reconstructed_report(
         dependency_source_reason=module_info.get("dependency_source_reason"),
     )
     skipped_catalogs = [
-        SkippedCatalog(skipped["catalog_id"], tuple(skipped["missing_capabilities"]))
+        SkippedCatalog(
+            skipped["catalog_id"],
+            tuple(skipped["missing_capabilities"]),
+            # Absent from a `metadata.json` written before 2026-10-22; nothing was recorded.
+            tuple(skipped.get("feeds", ())),
+            # Absent before the final review of 2026-10-22: `None`, which the map counts
+            # as a gap and says so.
+            skipped.get("cause"),
+        )
         for skipped in metadata.get("skipped_catalogs", [])
     ]
     report = ResolveReport(
@@ -1530,7 +1623,9 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
         bundle / "manifest.json",
         metadata,
         source={"repo": _remote_of(path), "commit": commit},
-        catalog_hash=_catalog_hash(catalogs_dir()),
+        # Copied from what `analyze` recorded. Recomputed ONLY for a workspace analysed before
+        # `analyze` recorded it, whose metadata has no such key.
+        catalog_hash=metadata.get("catalog_hash") or _catalog_hash(catalogs_dir()),
         redaction_set_hash=redactor.rule_set_hash,
         module_commit=_module_commit_of(path),
         tables=tables,
@@ -1672,9 +1767,152 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     )
 
 
+# The questions `query` answers, in their order — re-exported so a caller reads the set
+# from the facade it calls rather than from the application layer behind it.
+QUESTIONS = _QUESTIONS
+
+
+def query(
+    path: Path, question: str, *, symbol: str
+) -> list[dict[str, object]] | dict[str, list[dict[str, object]]]:
+    """One of the six module-scope questions (`QUESTIONS`: source, callers, callees,
+    implementations, uses, impact) about `symbol`, answered from the workspace `analyze`
+    left at `path` — in process, with no CLI equivalent (spec 2026-10-22 §5).
+
+    A list of `{"symbol", "file", "line_start", "line_end"}` sorted by symbol, or for
+    `impact` the three partitions `{"definite", "possible", "unknown_regions"}`. Each
+    `unknown_regions` entry is `{"symbol", "reason"}`, whose `symbol` is a caller's full
+    symbol for a call whose callee body was not read, and an ancestor's bare descriptor for
+    an ancestor this workspace never scanned. Reads the workspace and never re-analyzes. Raises `NotAnalyzedError` where `render` would, and
+    `ConfigurationError` for a question that is not one of the six or a symbol the
+    workspace does not hold."""
+    workspace_dir = _workspace_dir_of(path, None)
+    _refuse_if_unanalyzed(path, workspace_dir)
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return answer(workspace, question, symbol=symbol)
+    except QuestionRefused as refused:
+        raise ConfigurationError(str(refused)) from refused
+    finally:
+        workspace.close()
+
+
 def export(path: Path) -> ExportResult:
     """Exports the workspace `analyze` left at `path` as a D06 bundle
     (Parquet plus a manifest) — the library equivalent of `sextant module
     export`. Raises `NotAnalyzedError` where the CLI would refuse for the
     same reason."""
     return _export(path, workspace_dir=None)
+
+
+_DEFAULT_DIFF_OPTIONS = DiffOptions()
+
+
+def _side_redactor(path: Path, side: BoundarySource) -> Redactor:
+    """The exit one diff side is masked through: the built-ins for a bundle (masked at
+    export; its recorded hash is what it is compared on), its module's own for a workspace.
+
+    A workspace is its module's only where it IS that module's `.sextant` — the layout
+    `analyze` writes by default. One placed by `--workspace DIR` has `DIR.parent` above it,
+    which is not known to be the module, and reading that directory's `.sextant.yml` (or
+    none) would mask the side by rules nobody declared for it: refused, by name."""
+    if side.is_bundle:
+        return Redactor.from_rules()
+    root = side.module_root
+    if root is None or _workspace_dir_of(root, None).resolve() not in (
+        path.resolve(),
+        (path / ".sextant").resolve(),
+    ):
+        raise DiffRefusedError(
+            f"cannot diff {path}: it is a workspace outside its module's `.sextant` "
+            "directory, so which `.sextant.yml` names its redaction rules is unknown — "
+            "diff `<module>` or `<module>/.sextant`"
+        )
+    return _redactor_for(root)
+
+
+def diff(
+    a: Path,
+    b: Path,
+    *,
+    options: DiffOptions = _DEFAULT_DIFF_OPTIONS,
+    out: Path | None = None,
+) -> DiffResult:
+    """What changed at the boundary from `a` to `b`, two analyses of one module
+    — the library equivalent of `sextant module diff`. Each side is a module,
+    its `.sextant` workspace, or an exported bundle directory.
+
+    Each side is masked under its OWN rules (spec §3d): a workspace side's module's
+    `.sextant.yml` (`_redactor_for` at its module root, exactly as `export` would mask it),
+    a bundle side's the rules its exporter recorded, the bundle being masked already. Two
+    sides whose rule sets differ are refused like the other producer stamps; allowed, both
+    are masked by the union of the two — except that a BUNDLE side's own extra `redact:`
+    rules cannot be applied to the other side, because only their hash travels in its
+    manifest. When `out` is given the diff's JSON is written there, parents created.
+
+    Raises `NotAnalyzedError` where a side is neither a workspace nor a bundle (naming what
+    was looked for — a bundle exported by an older Sextant lacks a table), and
+    `DiffRefusedError` where the two cannot be compared or a workspace side sits outside
+    its module's `.sextant` directory, so no `.sextant.yml` is known to mask it. Both sides
+    are opened read-only and closed before returning."""
+    sources: list[BoundarySource] = []
+    try:
+        for path in (a, b):
+            try:
+                sources.append(BoundarySource.open(path, open_read_only))
+            except NotABoundarySource as refused:
+                raise NotAnalyzedError(
+                    f"cannot diff {path}: {refused.looked_for} — analyze the module "
+                    f"(`sextant module analyze`), or export the bundle again with this Sextant."
+                ) from refused
+        redactors = [_side_redactor(path, side) for path, side in zip((a, b), sources)]
+        try:
+            found = diff_sources(
+                sources[0],
+                sources[1],
+                redactors[0],
+                redactors[1],
+                allow_producer_change=options.allow_producer_change,
+            )
+        except DiffRefused as refused:
+            raise DiffRefusedError(str(refused)) from refused
+    finally:
+        for source in sources:
+            source.close()
+
+    if out is None:
+        return DiffResult(diff=found, written=None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(found.to_json(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return DiffResult(diff=found, written=out)
+
+
+def observability(path: Path) -> ObservabilityMap:
+    """Which boundary kinds this analysis could see, per kind and with the reasons — the
+    library equivalent of reading `observability` out of `metadata.json` (FR-23). `path` is
+    a module, its `.sextant` workspace, or an exported bundle directory.
+
+    The map is the one the analysis RECORDED (a workspace's `metadata.json`, or a bundle's
+    `manifest.json`, which copied it), returned as written and never re-derived. Only a file
+    written before the map existed has none, and then it is computed from the measurements
+    that file carries — the labelled degraded map, never an error.
+
+    Raises `NotAnalyzedError` where `path` holds neither a bundle nor a workspace."""
+    if (path / "manifest.json").is_file():
+        document = path / "manifest.json"
+    else:
+        found = [one / "metadata.json" for one in (path, path / ".sextant")]
+        document = next((one for one in found if one.is_file()), found[0])
+    try:
+        recorded = json.loads(document.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as refused:
+        raise NotAnalyzedError(
+            f"no analysis found at {path} — run `sextant module analyze {path}` first."
+        ) from refused
+    if not isinstance(recorded, dict):
+        raise NotAnalyzedError(
+            f"{document} is not a JSON object — run `sextant module analyze {path}` again."
+        )
+    if isinstance(recorded.get("observability"), dict):
+        return ObservabilityMap.from_json(recorded["observability"])
+    return observability_of(recorded)

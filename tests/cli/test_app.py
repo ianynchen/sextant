@@ -1223,3 +1223,117 @@ def test_a_refused_detection_leaves_a_pre_existing_workspace_byte_untouched(tmp_
 
     assert (workspace / "metadata.json").read_bytes() == metadata_before
     assert (workspace / "workspace.duckdb").read_bytes() == db_before
+
+
+def _module_of(workspace: Path, where: Path, *, rules: bool = True) -> Path:
+    """The analysed workspace laid out as a module, `where/orders-service/.sextant`, beside
+    the fixture's own `.sextant.yml` — the layout `module diff` masks a workspace under,
+    because the rules live in the module above it. `rules=False` drops the `redact:` section
+    (the fixture's `dsn` pattern)."""
+    module = where / "orders-service"
+    shutil.copytree(workspace, module / ".sextant")
+    if rules:
+        shutil.copy(FIXTURE / ".sextant.yml", module / ".sextant.yml")
+    return module
+
+
+def test_cli_diff_prints_json_with_summary_and_entries(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    module = _module_of(analyzed_workspace_copy, tmp_path)
+    out = CliRunner().invoke(cli, ["module", "diff", str(module), str(module / ".sextant")])
+
+    assert out.exit_code == 0, out.output
+    document = json.loads(out.output)
+    assert document["summary"]["endpoint"] == {"added": 0, "removed": 0, "changed": 0}
+    assert document["entries"] == []
+
+
+def test_cli_diff_text_format_prints_the_summary_table(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    module = _module_of(analyzed_workspace_copy, tmp_path)
+    out = CliRunner().invoke(cli, ["module", "diff", str(module), str(module), "--format", "text"])
+
+    assert out.exit_code == 0, out.output
+    assert "| kind | added | removed | changed |" in out.output
+
+
+def test_cli_diff_out_writes_the_json_file_and_prints_the_summary_count(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    module = _module_of(analyzed_workspace_copy, tmp_path)
+    target = tmp_path / "diff.json"
+
+    out = CliRunner().invoke(
+        cli, ["module", "diff", str(module), str(module), "--out", str(target)]
+    )
+
+    assert out.exit_code == 0, out.output
+    assert json.loads(target.read_text(encoding="utf-8"))["entries"] == []
+    assert out.output.strip() == "0 added, 0 removed, 0 changed"
+
+
+def test_cli_diff_refusal_is_a_click_error_naming_the_stamp(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    module = _module_of(analyzed_workspace_copy, tmp_path / "a")
+    stale = _module_of(analyzed_workspace_copy, tmp_path / "b")
+    metadata = json.loads((stale / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
+    metadata["schema_version"] = "0.9.0"
+    (stale / ".sextant" / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    out = CliRunner().invoke(cli, ["module", "diff", str(module), str(stale)])
+
+    assert out.exit_code != 0 and "graph_schema_version" in out.output
+
+
+def test_cli_diff_of_a_workspace_against_its_own_bundle_is_empty(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    """The drift scenario through the CLI: the bundle `module export` writes is masked by
+    the module's `.sextant.yml`, the workspace is masked by the same file at diff time, and
+    the two agree on every stamp."""
+    module = _module_of(analyzed_workspace_copy, tmp_path)
+    exported = CliRunner().invoke(
+        cli, ["module", "export", str(FIXTURE), "--workspace", str(module / ".sextant")]
+    )
+    assert exported.exit_code == 0, exported.output
+    bundle = exported.output.strip()
+
+    out = CliRunner().invoke(cli, ["module", "diff", bundle, str(module)])
+
+    assert out.exit_code == 0, out.output
+    document = json.loads(out.output)
+    assert document["entries"] == [] and document["producer_changed"] is False
+    assert document["a"]["producer"]["redaction_recorded"] is True
+    assert document["b"]["producer"]["redaction_recorded"] is False
+
+
+def test_cli_diff_across_two_rule_sets_refuses_unless_the_producer_change_is_allowed(
+    analyzed_workspace_copy: Path, tmp_path: Path
+):
+    """Side a's module declares no `redact:` rule, side b's the fixture's `dsn`: refused,
+    naming `redaction_set_hash`; `--allow-producer-change` runs it, labelled, with the DSN
+    masked on both sides by the union of the two rule sets."""
+    a = _module_of(analyzed_workspace_copy, tmp_path / "a", rules=False)
+    b = _module_of(analyzed_workspace_copy, tmp_path / "b")
+
+    refused = CliRunner().invoke(cli, ["module", "diff", str(a), str(b)])
+    assert refused.exit_code != 0 and "redaction_set_hash" in refused.output
+
+    out = CliRunner().invoke(cli, ["module", "diff", str(a), str(b), "--allow-producer-change"])
+    assert out.exit_code == 0, out.output
+    document = json.loads(out.output)
+    assert document["producer_changed"] is True and document["entries"] == []
+    assert "hunter2" not in out.output
+
+
+def test_cli_diff_of_a_workspace_outside_its_module_is_refused_by_name(
+    analyzed_workspace_copy: Path,
+):
+    out = CliRunner().invoke(
+        cli, ["module", "diff", str(analyzed_workspace_copy), str(analyzed_workspace_copy)]
+    )
+
+    assert out.exit_code != 0 and "outside its module's `.sextant` directory" in out.output

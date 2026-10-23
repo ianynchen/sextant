@@ -978,6 +978,79 @@ did not move with it.
 the same value one table along, and a bundle that masked the two by different rules would
 spell one address two ways.
 
+### The boundary vocabulary — seven kinds, and which columns identify an entry
+
+Spec [2026-10-22](../superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md) §2
+(FR-21), built in `application/boundary/vocabulary.py`.
+
+The tables above say what Sextant derives. This is the closed, versioned list of the WORDS a
+diff and an observability map use for it: seven kinds, in this order, each naming the table
+its rows come from, the columns that IDENTIFY an entry (two analyses' entries with equal
+identity are the same entry), the columns that are its ATTRIBUTES (what a `changed` entry's
+`from` and `to` range over) and the columns that are EVIDENCE (carried on every entry,
+compared by nothing).
+
+| Kind | Derived from | Identity | Attributes | Evidence |
+|---|---|---|---|---|
+| `module` | `metadata.json`'s `module` | the module id | kind, languages, `dependency_source` | none |
+| `endpoint` | `endpoints`, inbound | protocol, method, path: the exposed address, which is a topic for a broker, the operation name for GraphQL, the operation's QName for SOAP | the request and response body as field sets by wire name, the same two bodies as descriptors with every type symbol erased, consumes, produces, format, the requirement set (`endpoint_metadata`), the condition set (`endpoint_conditions`), resolution | handler symbols, documents |
+| `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), resolution | caller symbols, documents |
+| `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
+| `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
+| `schedule` | `scheduled_work` | handler, trigger | expression, resolution | catalog |
+| `error-handler` | `error_handlers` | handler, exception | advice, scope, status, response shape | catalog |
+
+**The wire is the identity; the handler is evidence.** Measured on six months of
+`spring-petclinic-rest` (spec §1b): the architecture gained two routes and lost none, and
+keyed on the wire the diff reads `+2 −0`; keyed on the wire plus the handler it reads `+44
+−42`, because a refactor moved every controller into a `v1` package and renamed it. The user
+ruled it (decision 1, 2026-10-22): *implementation should never matter, only the exposed
+visible parts*. It holds for every protocol, not HTTP alone — a topic, an operation name, a
+QName — and four handlers behind `GET /**` are ONE endpoint with four pieces of evidence.
+`dependency` keeps `peer` in its identity because `POST /v1/orders` on `billing` and on
+`ledger` are two dependencies. A `schedule` or `error-handler` has no wire, so its handler
+symbol IS its identity and a renamed job reads removed-and-added: the one stated
+inconsistency (decision 2).
+
+**`data-contract` is identified by the shape symbol, never by `content_hash`.** The hash is
+what CHANGES when a field is added, which is the `changed` entry the drift scenario exists
+for; a bare-name shape (`AuditEntry`, a declared schema) is identified by that name, as
+`shapes` already does.
+
+**A body is an attribute twice.** Once as the field set by wire name, so a field added to a
+response reads `changed` with the field named and not gone-and-back; and once as the raw
+`request_shape`/`response_shape` descriptor compared structurally, with every type symbol
+erased. The field set alone cannot tell an `OrderView` from a list of them, so `OrderView`
+becoming `List<OrderView>` is one `breaking` change, and a DTO renamed with the same
+structure is no change at all.
+
+**A `both`-direction row belongs to both kinds** — it is one address on each side — and a
+catalog that declares no direction feeds both, because which one a row has is known only per
+row.
+
+**Rows grouped under one identity that DISAGREE on an attribute keep every value.** Where
+four handlers behind one wire carry different request shapes, or one method has two
+`@Scheduled(cron=...)`, the attribute is `{"several": [the distinct values, sorted]}` and
+never whichever row the query happened to order first — M06's no-silent-choice rule, applied
+to a reader instead of a stitcher. Sets (`requirements`, `conditions`, `headers`) are unions.
+
+**Enrichment never enters.** Components, prose and overlays are judgements, not facts
+(`meridian-integration.md` §0a), and `open_questions` and `roots` are Sextant's working state.
+
+**The vocabulary is DATA.** One registry is read by the diff, the observability map and
+`analyze` (which records the kinds each skipped catalog feeds, from the catalog's own `style`,
+`direction` and whether it declares a shape model), so no reader keeps its own list of kinds.
+A catalog that declares no `direction` — the `config_join` catalogs `spring-integration` and
+`spring-kafka-media`, whose rows are either direction, known only per row — feeds both
+`endpoint` and `dependency`. Each kind's rows come from ONE named
+query in `storage/duckdb/workspace.py`'s registry (`boundary_endpoint`, `boundary_dependency`,
+`boundary_contract`, `boundary_property`, `boundary_schedule`, `boundary_error_handler`;
+`module` is read off `metadata.json`), written as plain `SELECT`s over the exported tables'
+columns so the same query serves a workspace and a bundle's Parquet. `boundary_vocabulary_version`
+(currently `1`) moves with any edit that adds a kind or moves a column between the three
+sets, which changes what a comparison means without changing a table — §7 says where it is
+stamped and who compares it.
+
 ---
 
 ## 4. Search
@@ -994,21 +1067,28 @@ literals are already extracted for endpoint paths; storing all of them is nearly
 
 ## 5. Named queries
 
-> **SPECIFIED HERE, NOT YET USED — nine of the ten below do not exist.** `trace_of` does,
-> as of 2Q's `G4`/`I3`: `application/query/trace.py` is the walk, and it takes a ROOT rather
-> than an endpoint. It is a Python function over `call_edges`/`roots`/`return_flows` rather
-> than an entry in the registry named below, it answers at MODULE scope only, and no
-> rendered output reads it yet (`docs/open-issues.md`, OI-25) — so this section's own
-> vocabulary is one query less absent and still not a shipped surface. The other nine are
-> untouched. The registry that DOES exist is
-> `storage/duckdb/workspace.py:10`'s `_NAMED_QUERIES` — a different, resolver-internal set
-> (`documents`, `endpoints`, `shapes`, `annotations`, …) reached through `Workspace.query`,
-> serving M04 rather than M09 — and no consumer of this section's vocabulary has been
-> written. Recorded as entry #11 of
-> `open-issues.md` OI-83 by the 2O documentation
-> sweep, which found five documents citing `trace_of` as though it were built. §5.3's second
-> corollary: where a document deliberately describes something ahead of its implementation,
-> it must say so in words a reader cannot mistake for a shipped feature.
+> **PARTLY BUILT — six of the ten below have a reader, five of them new and under shorter
+> names; four do not.** `callers_of`, `callees_of`, `implementations_of`, `uses_of` and `impact_of` ship as
+> `question_callers`, `question_callees`, `question_implementations`, `question_uses` and
+> `question_impact_step` in `storage/duckdb/workspace.py`'s `_NAMED_QUERIES`, answered at MODULE
+> scope by `application/query/questions.py` and reached through `api.query` (spec
+> [2026-10-22](../superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md) §5,
+> FR-24). A sixth question that was never in the list, `source` (the file and line range
+> declaring a symbol), ships beside them — six questions in all. `trace_of` exists as
+> `application/query/trace.py`, a Python walk over `call_edges`/`roots`/`return_flows` that
+> takes a ROOT rather than an endpoint, at module scope only, with no rendered output reading
+> it yet (`docs/open-issues.md`, OI-25). `paths_between`, `endpoint_for_address`,
+> `who_uses_shape` and `who_reads_config` do NOT exist. There is no CLI noun and no plugin
+> over any of them: the agent query surface stays gated on language coverage (the 2026-09-18
+> ruling, reopened on 2026-10-22 for the in-process function alone).
+>
+> The same `_NAMED_QUERIES` registry also holds the resolver-internal set (`documents`,
+> `endpoints`, `shapes`, `annotations`, …) reached through `Workspace.query`, serving M04,
+> and the `boundary_*` reads the diff uses (§3, "The boundary vocabulary"). The 2O
+> documentation sweep recorded the original gap as entry #11 of `open-issues.md` OI-83,
+> having found five documents citing `trace_of` as though it were built. §5.3's second corollary: where a document deliberately describes something
+> ahead of its implementation, it must say so in words a reader cannot mistake for a shipped
+> feature.
 
 Shipped as part of the schema, not left to each consumer to write. [M09](M09-query.md) and
 [M07](M07-renderer.md) both use them, and neither should be writing its own reachability
@@ -1020,6 +1100,35 @@ query.
 `impact_of` returns three partitions — definite, possible, and the unknown regions reached
 — never one count. `paths_between` returns the union subgraph of all routes, never a list
 of routes.
+
+**As built for `impact`** (`application/query/questions.py`): the walk goes upstream over
+`callers` and `uses` and answers `{"definite", "possible", "unknown_regions"}`. A symbol is
+`definite` when some path to it crossed only `resolved` call edges and type references, and
+`possible` when every path crossed at least one `narrowed` dispatch; the strongest path
+wins, so a symbol met first through a narrowed call and later through a resolved chain is
+`definite`. `unknown_regions` is where the walk cannot see, listed and never walked: a
+`call_edges` row whose `target` names the walked symbol and whose `callee` is NULL (reason
+*callee body not read — dispatch unconfirmed*, `symbol` the caller), and a DIRECT ancestor
+in `type_hierarchy` with `scanned = false` (reason *ancestor not scanned*). The impact of a
+TYPE seeds its walk with the type's members, because a change to the type is a change to what
+its members' callers depend on.
+
+**`uses` reads type arguments at every nesting depth**, so `List<Money>` and `Map<String,
+Money>` both use `Money`; it also returns the type's direct subtypes, which `type_hierarchy`
+records. Measured on `mall-admin`, `PmsProduct` went from 13 uses to 21 once
+it did. The depth is walked in Python, not SQL: the dependency floor (`duckdb>=1.1`) has no
+`json_tree`, so `question_uses` selects every member whose signature TEXT contains the bare
+type, which a true match always does, and the parsed signature confirms each — the text test
+can only admit, the walk decides.
+
+**Cost (§8.7), decided in the spec:** one read places the subject, every other question is
+one read, and `impact` is one read per hop of the whole frontier — never one per symbol
+reached. A symbol rejoins the frontier only when its classification improves, which happens
+once, so the walk ends on any graph, cycles included. Measured on `mall-admin` (25,377 symbols, 24,511
+call edges): the impact of its most-called method reached 776 symbols in six reads and 76 ms
+(measured before the floor fix to the `uses` query, commit 225e4161), and the impact of
+`PmsProduct`, after it, gave 49 definite, no possible and 13 unknown regions over
+four hops in 35 ms.
 
 ---
 
@@ -1046,7 +1155,7 @@ records what produced it, and any change forces the affected work to be redone.
 | On | Fields |
 |---|---|
 | Each **document** | `sextant_version`, `fact_schema_version`, `scanner_id`, `content_hash`, `redaction_set_hash` |
-| Each **workspace** | The above, plus `graph_schema_version` and `catalog_hash` |
+| Each **workspace** | The above, plus `graph_schema_version`, `catalog_hash` (written by `analyze` since the diff, below, reads it long after the catalogs are gone) and `boundary_vocabulary_version` |
 | Each **bundle** | The workspace stamp, in its manifest |
 | Each **system workspace** | Its own stamp, plus the stamp of every bundle it used |
 
@@ -1074,6 +1183,7 @@ own cadence.
 | `scanner_id`, or a change to a scanner's declared libraries | That scanner's facts | Re-extraction, for those documents. The libraries live on the workspace (`metadata.json`'s `provenance.scanners`), not the document — every document one scanner wrote in a run shares them, so repeating the pair per document stored one fact many thousands of times |
 | `redaction_set_hash` | Facts | Re-extraction. A new pattern cannot clean values already written. |
 | `catalog_hash` | Endpoints and everything after | Re-derivation |
+| `boundary_vocabulary_version` | Nothing is rebuilt | **Comparison only.** No table changes; a diff across two values refuses, because the same words were not used on both sides. See below |
 | `sextant_version` | Derived tables | Re-derivation — **conservative by default** |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
@@ -1095,6 +1205,17 @@ a refusal naming the stamp that moved, not a silent re-analysis: a `render` that
 re-ran the pipeline would be the one verb that promises to read what `analyze` left behind
 ([M00](M00-cli.md)'s "no analysis" rule) doing the opposite. An **absent** stamp counts as a
 mismatch; `egress/render/metadata.py` has always written all three.
+
+**`boundary_vocabulary_version` is not one of the three.** It versions the WORDS
+(§3, "The boundary vocabulary") and not a table, so a workspace with an older value is still
+a perfectly good graph for `render`, `enrich` and `export`, and `_stale_stamps` does not
+compare it. The one comparison is `sextant module diff`'s, which refuses across two values
+and names both ([M00](M00-cli.md)); `export` copies the value into the manifest's `producer`
+rather than stamping its own, since the vocabulary the entries were named in is the one
+current when the workspace was built. **`catalog_hash` is the other change:** `analyze` now
+writes it into `metadata.json`, because the catalogs are in hand then and not when a diff
+reads the workspace, and the exporter COPIES it, recomputing from the catalogs installed
+only for a workspace analysed before `analyze` recorded one.
 
 *Recorded because it was documentation for four phases.* Until 2Q gave the walk a reader,
 every one of these versions was written and compared by nothing (`OI-24`) — harmless only

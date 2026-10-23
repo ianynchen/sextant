@@ -61,10 +61,10 @@ Measured on 2026-09-10, and every figure here is reproducible rather than rememb
 | What | Measured | How to check |
 |---|---|---|
 | Graph schema objects | **15 tables and 11 views** | `grep -c 'CREATE TABLE' src/sextant/storage/duckdb/schema.sql` |
-| D01's named queries | **1 of 10** — `trace_of` exists; `callers_of`, `callees_of`, `implementations_of`, `uses_of`, `impact_of`, `paths_between`, `endpoint_for_address`, `who_uses_shape`, `who_reads_config` do not | `src/sextant/application/query/` |
-| …but four of those nine questions ARE answerable | from the index bundle (W35/W36), as NDJSON rather than as a named query: `callers.ndjson` → `callers_of`, `implementors.ndjson` → `implementations_of`, `addresses.ndjson` → `endpoint_for_address`, `shape_carriers.ndjson` → `who_uses_shape` | `<bundle>/index/` |
-| …and `impact.ndjson` is NOT the fifth | it answers a narrower question than `impact_of`, which [D01](components/D01-graph-schema.md) designs, under `impact_of`, as three partitions — definite, possible, and the unknown regions reached. The file carries a shape, its fields and the endpoints that carry it, with no partitioning and no unknown regions at all | `src/sextant/egress/export/index.py:579` |
-| CLI verbs | **4** — `analyze`, `render`, `enrich`, `export` | `src/sextant/cli/app.py` |
+| D01's named queries | **6 of 10** — `trace_of` exists as a Python walk; `callers_of`, `callees_of`, `implementations_of`, `uses_of` and `impact_of` ship (2026-10-22, in process only, through `api.query`) as the `question_callers`, `question_callees`, `question_implementations`, `question_uses` and `question_impact_step` registry entries, beside a sixth question, `source`, that was never one of the ten; `paths_between`, `endpoint_for_address`, `who_uses_shape`, `who_reads_config` do not | `src/sextant/application/query/`, `src/sextant/storage/duckdb/workspace.py` |
+| …and two of those four ARE answerable | from the index bundle (W35/W36), as NDJSON rather than as a named query: `addresses.ndjson` → `endpoint_for_address`, `shape_carriers.ndjson` → `who_uses_shape`. (`callers.ndjson` and `implementors.ndjson` are the bundle's forms of two questions that now also ship in process) | `<bundle>/index/` |
+| …and `impact.ndjson` is NOT `impact_of` | it answers a narrower question than `impact_of`, which [D01](components/D01-graph-schema.md) designs, and `api.query` now answers, as three partitions — definite, possible, and the unknown regions reached. The file carries a shape, its fields and the endpoints that carry it, with no partitioning and no unknown regions at all | `src/sextant/egress/export/index.py:579` |
+| CLI verbs | **5** — `analyze`, `render`, `enrich`, `export`, `diff` | `src/sextant/cli/app.py` |
 | Catalogs | **64** | `ls src/sextant/catalogs/*.yml` |
 | Scanner capabilities | **23 of 26 designed implemented**; the 3 unshipped are `invokedynamic`, `constant_propagation`, `control_flow` | `Capabilities.ALL` in `extractor-jvm/src/main/java/dev/sextant/extractor/Capabilities.java` — 23 entries; [M03](components/M03-scanner.md):77 says the same |
 | Absent components | `overlay` (M01/D03), `sync` (M05), `state.json` (D05's second half) | — |
@@ -82,14 +82,14 @@ here is rounded in either direction; each names the specific distance left.
 | Component | What ships | What does not |
 |---|---|---|
 | D00 | the validated models — `src/sextant/domain/facts.py` | **freezing the schema**, which D00 §10 and [ARCHITECTURE.md](ARCHITECTURE.md)'s own open-decisions table both still carry as OPEN. The row's first three words are the half that has not landed |
-| D01 | 15 tables and 11 views | 9 of its 10 named queries |
+| D01 | 15 tables and 11 views | 4 of its 10 named queries — `paths_between`, `endpoint_for_address`, `who_uses_shape`, `who_reads_config` |
 | D02 | 64 catalogs and a conformance harness | whole-framework cover — and deliberately: Q4's declared-slice discipline says outright that a catalog need not have it |
 | D04 | redaction (`src/sextant/domain/redaction.py`) and the per-module `.sextant.yml` reader | **two of the three configuration files D04 §2 designs.** Neither `~/.sextant/config.yml` nor a repository-root `sextant.yml` has a reader anywhere in `src/`; the 2026-09-05 amendment calls the precedence chain and the merge rule "designed and never built" |
 | D05 | `manifest.json` | `state.json` — the second half of the component's own name |
-| M00 | four verbs: `analyze`, `render`, `enrich`, `export` | the noun-verb surface FR-20 describes |
+| M00 | five verbs: `analyze`, `render`, `enrich`, `export`, `diff` | the noun-verb surface FR-20 describes |
 | M03 | 23 capabilities | 3 — `invokedynamic`, `constant_propagation`, `control_flow` — which it names rather than hides |
 | M04 | every row this project publishes | FR-11 … FR-14, which is why W51 moved them out of the FR section: they were never Sextant's to answer |
-| M09 | `trace_of` | the other 9 named queries. Four of them are reachable from the index bundle as NDJSON, which is a different surface, not this one |
+| M09 | `trace_of`, and six module-scope questions through `api.query` — `source`, `callers`, `callees`, `implementations`, `uses`, `impact` | `path`, `find`, the endpoint family, the `symbol` and `endpoint` command-line nouns and the plugin (all gated). Two of the four named queries still absent are reachable from the index bundle as NDJSON, which is a different surface, not this one |
 
 ## Modules
 
@@ -114,9 +114,10 @@ here is rounded in either direction; each names the specific distance left.
 | WSDL reading | **delivered** | Phase 2I — a reader and a stdlib-XML interpreter branch; SOAP operations derive at their QName. Cross-service *matching* is the linking tier's, not this row's |
 | Avro schema reading | **delivered** | Phase 2G, both origins — `.avsc` and the `SCHEMA$` a generated class embeds — with its two limits recorded in [COVERAGE.md](COVERAGE.md) §4.2 |
 | Terraform, JSON Schema, docker-compose | deferred | Tier 3 artifacts. XSD delivered with WSDL (2I) and GraphQL SDL in 2H — both read as the same declared shapes |
-| `module diff`, `system diff` | deferred | Stable identity is designed in for it |
+| `module diff` | **delivered** | 2026-10-22, [FR-22](REQUIREMENTS.md#fr-22--derivation-diff) (spec `2026-10-22-boundary-vocabulary-and-diff-design.md`) — two analyses of one module, each a module, workspace or bundle, joined on the boundary vocabulary's identities; see [M00](components/M00-cli.md) |
+| `system diff` | deferred | `links` and `participants` would be two more kinds; the drift scenario is per module, and `module diff` is delivered |
 | VTA dispatch narrowing | deferred | **Expected to be needed.** The per-call-site candidate shape in D01 is already VTA-ready, so it lands as better `dispatch` rows with nothing downstream touched. |
 | Architecture-drift enforcement in CI | deferred | Needs measured false-positive rates first |
 | Runtime-trace overlay for real performance data | deferred | Would make FR-14 measurement rather than structure |
-| Agent query surface — the graph answers structural questions so an agent reads less source | deferred | **Gated on language coverage** (ruled 2026-09-18): built only after Java/Kotlin, Go, Rust, Python and TypeScript/JavaScript are fully supported. The idea is [M09](components/M09-query.md) delivered as a CLI verb plus a coding-agent plugin, in the shape Spotify's `shunt` plugin uses — see [research/spotify-portal-shunt.md](research/spotify-portal-shunt.md). |
+| Agent query surface — the graph answers structural questions so an agent reads less source | deferred | **Gated on language coverage** (ruled 2026-09-18): built only after Java/Kotlin, Go, Rust, Python and TypeScript/JavaScript are fully supported. **Partially reopened 2026-10-22, for one function alone:** `api.query` answers six module-scope questions in process (`source`, `callers`, `callees`, `implementations`, `uses`, `impact`; [FR-24](REQUIREMENTS.md#fr-24--library-embedding), [M09](components/M09-query.md)). The CLI verb, the endpoint family, `path` and the plugin stay gated. The idea is [M09](components/M09-query.md) delivered as a CLI verb plus a coding-agent plugin, in the shape Spotify's `shunt` plugin uses — see [research/spotify-portal-shunt.md](research/spotify-portal-shunt.md). |
 | Business-rule extraction — EARS rules at trace terminals, a `rules` overlay, a refutation pass | deferred | **Same gate.** Answers "what business logic applies at checkout" from rules anchored to the endpoint's trace. Design direction and what not to copy are in [research/codetospec-comparison.md](research/codetospec-comparison.md) §What Sextant should borrow; detailed decision logic (promotion stacking and the like) is the `decision` overlay shape in its §Beyond EARS. No design has been done; brainstorming starts when the gate opens. |

@@ -45,6 +45,10 @@ channel and into the same manifest section an unmet capability already uses
 
 import json
 
+from sextant.application.boundary.observability import (
+    SKIP_DEPENDENCIES_UNRECORDED,
+    SKIP_FRAMEWORK_ABSENT,
+)
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.symbols import type_descriptor
@@ -133,8 +137,20 @@ _NOT_RECORDED = (
 
 
 def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
+    """`dependency_gate`'s reason alone, for the callers that only ask whether the
+    gate holds."""
+    unmet = dependency_gate(workspace, catalog)
+    return None if unmet is None else unmet[1]
+
+
+def dependency_gate(workspace: Workspace, catalog: Catalog) -> tuple[str, str] | None:
     """What a dependency-gated catalog required of the module's build and did
-    not get, or `None` when the gate is satisfied or does not apply.
+    not get, as `(cause, reason)`, or `None` when the gate is satisfied or does
+    not apply. `cause` is the closed set `observability.SKIP_CAUSES` names —
+    `framework_absent` where a dependency set was recorded and holds none of the
+    coordinates (whichever set it was: `dependency_source` says which, and the
+    reason states it), `dependencies_unrecorded` where none was — so a reader
+    acts on data, never on the message.
 
     Returns a REASON rather than a boolean because the two failing cases are
     not the same fact and a reader must be able to tell them apart: the
@@ -176,10 +192,10 @@ def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
     if _carries_satisfying_annotation(workspace, catalog):
         return None
     if declared is None:
-        return _NOT_RECORDED.format(coordinates=wanted)
+        return SKIP_DEPENDENCIES_UNRECORDED, _NOT_RECORDED.format(coordinates=wanted)
     if _resolved_by_the_build_tool(workspace):
-        return _NOT_RESOLVED.format(coordinates=wanted)
-    return _NOT_DECLARED.format(coordinates=wanted)
+        return SKIP_FRAMEWORK_ABSENT, _NOT_RESOLVED.format(coordinates=wanted)
+    return SKIP_FRAMEWORK_ABSENT, _NOT_DECLARED.format(coordinates=wanted)
 
 
 def _carries_satisfying_annotation(workspace: Workspace, catalog: Catalog) -> bool:

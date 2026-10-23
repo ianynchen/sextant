@@ -14,6 +14,33 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Two analyses of one module can be compared, and an analysis says what it could not see**
+  (Group H, FR-21–FR-24; spec `2026-10-22-boundary-vocabulary-and-diff-design.md`, ruled
+  2026-10-22). `sextant module diff <a> <b>` — each side a module, its workspace or an exported
+  bundle, in any mix — reports what changed at the boundary, kind by kind, in a closed
+  vocabulary of seven (`module`, `endpoint`, `dependency`, `data-contract`, `boundary-property`,
+  `schedule`, `error-handler`). An endpoint is its exposed address and the handler is only
+  evidence, because the other choice was measured: six months of `spring-petclinic-rest` read
+  +2 −0 by the wire and +44 −42 with the handler, every controller having moved into `v1/` and
+  been renamed. A body change is labelled `compatible` or `breaking` by the stitcher's own
+  directional test read forwards in time, bodies are compared by wire name and with every type
+  symbol erased (a renamed DTO is no change; `OrderView` becoming `List<OrderView>` is one
+  breaking change), and rows grouped under one identity that disagree keep every value instead
+  of choosing one. It refuses, naming the stamp, across a different schema, vocabulary or
+  module, and across a different Sextant version, catalog hash or redaction rule set unless
+  `--allow-producer-change` says so, in which case the output says `producer_changed`. Both
+  sides pass through the module's redactor, so a masked CI bundle and the workspace it came
+  from diff empty. `analyze` now writes `catalog_hash`, `catalogs_run`, each skipped catalog's
+  `feeds` and an `observability` map into `metadata.json` — per kind, `observable`, `partial`
+  or `not-observable`, with the reasons — which the exporter copies into the manifest beside
+  `producer.boundary_vocabulary_version`. `sextant.api` gains `diff`, `observability`,
+  `AnalyzeOptions` and `DiffOptions`, and `query`: six module-scope questions (`source`,
+  `callers`, `callees`, `implementations`, `uses`, `impact`), in process only, `impact` as
+  three partitions and never one count; `uses` reads type arguments at every depth (`PmsProduct`
+  on `mall-admin` 13 → 21). The CLI form, `path`, the endpoint family and the agent plugin stay
+  behind the language gate, which was reopened for the function alone. Measured: petclinic's six months
+  read endpoint +2 and data-contract +2 and nothing else, pinned as a second check on the `spring-petclinic-rest` field pin.
+
 - **A controller that exists in one environment only says so** (COVERAGE `conditional-controllers`
   C → ✅; spec `2026-10-21-conditional-controllers-design.md`, ruled 2026-10-22). A controller under
   `@Profile(…)` or `@ConditionalOnProperty(…)` used to publish its endpoints as if they always
