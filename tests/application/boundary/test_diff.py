@@ -523,6 +523,22 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
+@pytest.mark.pins("redaction.a-PEER-loses-its-userinfo-at-every-exit")
+def test_the_diff_masks_a_split_peers_credential(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The peer a workspace analysed before 2026-10-23 holds: split out of
+    `https://svc:s3cret@billing.internal/…` with the scheme gone and the credential kept,
+    which a `scheme://` rule never sees. The diff is an exit and prints the service alone."""
+    a = sources(_built(tmp_path / "a", lambda w: None))
+    b = sources(_built(tmp_path / "b", lambda w: _endpoint(
+        w, direction="outbound", method="POST", path="/v1/charge",
+        peer="svc:s3cret@billing.internal", caller="C#charge().")))  # fmt: skip
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
+    assert entry.identity["peer"] == "billing.internal"
+    assert "s3cret" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
+
+
 def test_two_addresses_that_mask_alike_are_one_entry_as_in_the_bundle(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):

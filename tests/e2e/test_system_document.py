@@ -6,12 +6,15 @@ file exists to catch.
 """
 
 import shutil
+from pathlib import Path
 
+import duckdb
 import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.redaction import REDACTED
 
 REACTOR = FIXTURES / "reactor-twoservice"
 
@@ -116,6 +119,63 @@ def test_a_link_to_a_conditional_endpoint_states_where_the_endpoint_exists(syste
     )
     assert "`billing-api`" in row, row
     assert "exists in `prod`; not in `default`" in row, row
+
+
+def _analyzed_copy(tmp_path: Path) -> Path:
+    """The reactor, module-analysed in a private copy a test may then change."""
+    compile_fixture(REACTOR)
+    reactor = tmp_path / "reactor-twoservice"
+    shutil.copytree(REACTOR, reactor)
+    analyzed = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+    assert analyzed.exit_code == 0, analyzed.output
+    return reactor
+
+
+def _system_document(reactor: Path) -> str:
+    linked = CliRunner().invoke(cli, ["system", "analyze", str(reactor)])
+    assert linked.exit_code == 0, linked.output
+    return (reactor / ".sextant" / "render" / "system.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.pins("redaction.the-SYSTEM-tier-reads-a-peer-without-its-userinfo")
+def test_a_peer_an_older_analysis_kept_its_password_in_still_links_and_never_prints_it(
+    tmp_path,
+):
+    """A workspace analysed before 2026-10-23 holds the peer `split_url` used to write —
+    `svc:s3cret@billing`, the credential kept and the scheme gone. The system tier reads
+    workspaces as they are, and its document is an exit: the matcher saw a participant
+    nobody is called, and the refusal quoted the password. Read by the rule every peer
+    writer now applies, the call links to `billing-api` exactly as the clean peer does, and
+    the refusal for `payments` names the service alone."""
+    reactor = _analyzed_copy(tmp_path)
+    connection = duckdb.connect(str(reactor / "orders-api" / ".sextant" / "workspace.duckdb"))
+    connection.execute(
+        "UPDATE endpoints SET peer = 'svc:s3cret@' || peer WHERE peer IN ('billing', 'payments')"
+    )
+    assert connection.execute(
+        "SELECT count(*) FROM endpoints WHERE peer LIKE 'svc:s3cret@%'"
+    ).fetchone() == (2,)
+    connection.close()
+    document = _system_document(reactor)
+    assert "s3cret" not in document
+    row = next(line for line in document.splitlines() if "`orders-api` GET `/balances`" in line)
+    assert "`billing-api`" in row, row
+    assert "the client names 'payments', which is not a participant" in document
+
+
+@pytest.mark.pins("redaction.the-SYSTEM-document-masks-by-every-participants-rules")
+def test_the_system_document_masks_by_every_participants_own_rules(tmp_path):
+    """The system document is an exit like the module document, and it prints every
+    participant's rows in one place — so a rule ANY participant adds masks all of them. Until
+    2026-10-23 it masked nothing at all. Here `orders-api`'s rule hides a route `billing-api`
+    serves."""
+    reactor = _analyzed_copy(tmp_path)
+    (reactor / "orders-api" / ".sextant.yml").write_text(
+        "redact:\n  value_patterns: ['ledgers']\n", encoding="utf-8"
+    )
+    document = _system_document(reactor)
+    assert "ledgers" not in document
+    assert f"GET `/{REDACTED}`" in document
 
 
 def test_a_reactor_nobody_analyzed_is_refused_naming_the_command_to_run(tmp_path):

@@ -65,6 +65,38 @@ BUILTIN_KEY_PATTERNS = (
 # a REFERENCE to a value, never the value, and there is no secret inside it.
 _USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
 
+# A PEER's userinfo, which `_USERINFO` cannot see once a URL has been split: the peer is the
+# service a call reaches — RFC 3986 §3.2's `[userinfo "@"] host [":" port]` with the userinfo
+# dropped, or the whole address where an engine keeps one — and a credential is never part of
+# WHICH service that is. Before 2026-10-23 the split kept it, so `endpoints.peer` held
+# `svc:s3cret@billing.internal` with no `scheme://` in front, and every exit published the
+# password. Two shapes, each anchored on the WHOLE value:
+#
+# * a whole URL (`scheme://` or scheme-relative `//`): the userinfo up to the authority's last
+#   `@`, the scheme kept — RFC 3986 forbids a raw `@` in a host, and a password may itself
+#   carry an unencoded one;
+# * a value that IS an authority — userinfo, then a host (a name or a bracketed IPv6 literal),
+#   an optional numeric port and nothing after but a query or fragment the split left on it.
+#
+# Anchored on the whole value because this is a rule for an AUTHORITY, not for text: applied
+# to any string it read `jdbc:oracle:thin:@localhost:1521:XE` as a password and
+# `mailto:support@acme.com` as a user (both found by review before this shipped). Those two
+# never match the second shape — `:XE` is not a port, and nothing here reads a mail address
+# as a peer — and no other column takes this rule.
+_PEER_USERINFO = re.compile(
+    r"^(?:(?P<scheme>(?:[A-Za-z][A-Za-z0-9+.\-]*:)?//)[^/?#\s]*@"
+    r"|[^/?#\s]*@(?=(?:\[[^\]\s/?#@]*\]|[^\[\]\s/?#@:]+)(?::[0-9]*)?(?:[?#]\S*)?$))"
+)
+
+
+def peer_without_userinfo(peer: str) -> str:
+    """`peer` with any userinfo dropped: the one rule every writer of a peer and every exit
+    that prints one shares, so a credential written into a literal URL is never part of the
+    service a call reaches (see `_PEER_USERINFO`). A value with no userinfo — a host, a
+    `${...}` expression, a whole address without one — is returned unchanged."""
+    return _PEER_USERINFO.sub(lambda match: match.group("scheme") or "", peer, count=1)
+
+
 # What a NAME looks like, for the paired rule `Redactor._masked` applies. A header
 # name, a query-parameter name or a form-field name is one token — letters,
 # digits and the three separators a name may carry — and never prose.
@@ -541,3 +573,34 @@ class Redactor:
         for pattern in self._compiled:
             redacted = pattern.sub(REDACTED, redacted)
         return redacted
+
+    def redact_peer(self, peer: str) -> str:
+        """A PEER on its way out — `redact_text` after `peer_without_userinfo`. Every exit
+        that prints a peer calls this rather than `redact_text`, because a peer split out
+        of a URL has lost the `scheme://` that `redact_text`'s userinfo rule needs; the
+        workspace analysed before 2026-10-23 still holds `svc:s3cret@billing.internal`, and
+        this is what keeps it out of every document and bundle made from one."""
+        return self.redact_text(peer_without_userinfo(peer))
+
+    def redact_candidates(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """An open question's `candidates` on their way out, one rule per column that can
+        carry a value from the module rather than a name from its code: a `peer` (the
+        `self_exchange` question's called side) through `redact_peer`, and the per-environment
+        `values` of a `key` (`environment_divergence`) through `redact_value` under that key.
+        The document, the enrichment brief and the bundle all print these, and before
+        2026-10-23 all three printed them verbatim. Every other field — a symbol, a class, a
+        format, a binder — is a name read out of code and passes through unchanged."""
+        masked: list[dict[str, object]] = []
+        for candidate in candidates:
+            out = dict(candidate)
+            if isinstance(out.get("peer"), str):
+                out["peer"] = self.redact_peer(str(out["peer"]))
+            values = out.get("values")
+            if isinstance(out.get("key"), str) and isinstance(values, dict):
+                key = str(out["key"])
+                out["values"] = {
+                    env: self.redact_value(key, value) if isinstance(value, str) else value
+                    for env, value in values.items()
+                }
+            masked.append(out)
+        return masked

@@ -198,7 +198,7 @@ def _open_question_lines(workspace: Workspace, redactor: Redactor) -> list[str]:
         evidence = row.get("evidence")
         if evidence:
             lines.append(f"  - why this is open: {evidence}")
-        candidates = json.loads(str(row.get("candidates") or "[]"))
+        candidates = redactor.redact_candidates(json.loads(str(row.get("candidates") or "[]")))
         if candidates:
             lines.append(
                 f"  - candidates considered and not chosen: "

@@ -118,6 +118,25 @@ def test_an_open_questions_path_is_redacted_before_it_reaches_the_prompt():
     assert "https://billing.example.com/x" in brief.prompt
 
 
+def test_an_open_questions_candidates_are_redacted_before_they_reach_the_prompt():
+    """The brief dumps each question's candidates whole, and a `self_exchange` candidate
+    carries the called side's peer — printed verbatim until 2026-10-23, while the question's
+    own `path` beside it was masked."""
+    question = {
+        "protocol": "http",
+        "method": "POST",
+        "path": "/charges",
+        "question": "self_exchange",
+        "candidates": json.dumps(
+            [{"side": "called", "symbol": "BillingClient#charge", "peer": "svc:s3cret@billing"}]
+        ),
+        "evidence": None,
+    }
+    brief = _compose(_Workspace(open_questions=[question]))
+    assert "s3cret" not in brief.prompt
+    assert '"peer": "billing"' in brief.prompt
+
+
 def test_a_module_with_no_open_questions_says_so_rather_than_omitting_the_section():
     brief = _compose(_Workspace())
     assert "None open." in brief.prompt

@@ -649,8 +649,10 @@ conditional controller.
 **Closes** when the config layer publishes the module's environments as a fact of its own
 (the profile files it saw, `default` included) and both the pass and the document read it.
 
-### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim
-**Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
+### OI-169 — the exporter masks `endpoints.path` but ships `endpoint_metadata.path` and `endpoint_conditions.path` verbatim · **CLOSED 2026-10-23**
+**Re-rated Major and closed 2026-10-23** (branch `fix/peer-userinfo`): the entry understated it. `endpoint_metadata` carries OUTBOUND rows, and an outbound `path` may be a whole address, so an outbound call that sets a header shipped `https://svc:s3cret@…` in `endpoint_metadata.parquet` — a credential in the bundle, which by the standing ruling is never Minor. Both exports now mask `path` by `_REDACTED_ADDRESSES`, and both tables' paths join the map; pinned by `redaction.endpoint-METADATA-and-CONDITIONS-mask-the-endpoints-path`.
+
+**Originally Minor · logged 2026-10-22 (final review of spec 2026-10-22-boundary-vocabulary-and-diff) ·
 `src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES`, `src/sextant/application/boundary/source.py`**
 
 `export` passes `endpoints.path` (and `peer`) through the `_REDACTED_ADDRESSES` map, while

@@ -284,17 +284,18 @@ def _attribute_keys(kind: Kind) -> list[str]:
 
 def _masked(kind: Kind, row: dict[str, object], redactor: Redactor) -> dict[str, object]:
     """The row as the exporter would have shipped it, cut to identity, attributes and
-    evidence: `path`/`peer` through `redact_text`, a property's value through
-    `redact_value` — the calls `_EXPORT_QUERIES` makes on the same columns."""
+    evidence: `path` through `redact_text`, `peer` through `redact_peer`, a property's value
+    through `redact_value` — the calls `_EXPORT_QUERIES` makes on the same columns."""
     projected = {
         **{column: row[column] for column in kind.identity},
         **{key: row[key] for key in _attribute_keys(kind)},
         "evidence": row["evidence"],
         "origin": row["origin"],
     }
-    for column in ("path", "peer"):
-        if column in kind.identity and projected[column] is not None:
-            projected[column] = redactor.redact_text(str(projected[column]))
+    if "path" in kind.identity and projected["path"] is not None:
+        projected["path"] = redactor.redact_text(str(projected["path"]))
+    if "peer" in kind.identity and projected["peer"] is not None:
+        projected["peer"] = redactor.redact_peer(str(projected["peer"]))
     if kind.name == "boundary-property":
         key = str(row["key"])
         projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))

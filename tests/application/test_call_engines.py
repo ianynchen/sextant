@@ -18,7 +18,12 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
-from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
+from sextant.application.resolve.shapes.arguments import (
+    peer_of,
+    split_url,
+    url_of,
+    url_of_answer,
+)
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -1209,6 +1214,38 @@ def test_split_url_leaves_a_relative_url_path_only_with_no_peer():
 
 def test_split_url_reads_an_absolute_url_with_no_path_as_an_empty_path():
     assert split_url("https://billing.internal") == ("billing.internal", "")
+
+
+@pytest.mark.pins("redaction.a-PEER-never-carries-url-userinfo")
+def test_split_url_drops_userinfo_from_the_peer():
+    """RFC 3986 §3.2: an authority is `[userinfo "@"] host [":" port]`, and the peer is the
+    service the call reaches — the host and port. A credential written into the URL
+    (`https://svc:s3cret@billing.internal/…`) is never part of WHICH service is called, and
+    keeping it put the password into `endpoints.peer`, from where every exit published it:
+    the redactor strips userinfo only after a `scheme://`, and the split had removed the
+    scheme (found 2026-10-23). The path keeps nothing of the authority either way."""
+    assert split_url("https://svc:s3cret@billing.internal/invoices") == (
+        "billing.internal",
+        "/invoices",
+    )
+    assert split_url("http://token@billing.internal:8443") == ("billing.internal:8443", "")
+    assert split_url("//svc:s3cret@billing/x") == ("billing", "/x")
+
+
+@pytest.mark.pins("redaction.a-WHOLE-peer-never-carries-url-userinfo")
+def test_peer_of_keeps_the_address_whole_but_drops_its_userinfo():
+    """`peer_of` keeps the address WHOLE (the identity is read elsewhere for these
+    protocols), and whole is not verbatim: the credential is never part of WHICH deployment
+    answered, by the same rule `split_url` applies. A `${...}` expression is a reference and
+    passes through as written."""
+    assert peer_of({"kind": "string", "value": "https://svc:s3cret@billing/ws"}) == (
+        "https://billing/ws",
+        "resolved",
+    )
+    assert peer_of({"kind": "string", "value": "${billing.ws.uri}"}) == (
+        "${billing.ws.uri}",
+        "resolved",
+    )
 
 
 # --- Spec 2026-10-18: a partly-known address publishes at `partial` --------

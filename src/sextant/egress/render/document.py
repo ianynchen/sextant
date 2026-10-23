@@ -614,7 +614,7 @@ def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
     """
     peer = endpoint.get("peer")
     if peer is not None:
-        return redactor.redact_text(str(peer))
+        return redactor.redact_peer(str(peer))
     return "unresolved" if endpoint.get("path") is None else "none recorded"
 
 
@@ -1399,7 +1399,7 @@ def assemble_module_document(
         sections.append(MachineHeading(2, "Open questions"))
         for row in open_questions:
             question = str(row["question"])
-            candidates = json.loads(str(row["candidates"]))
+            candidates = redactor.redact_candidates(json.loads(str(row["candidates"])))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
             item = _runs(f"`{_question_identity(row, redactor)}` — {question}: {rendered}")
             # One question, one single-item `MachineList`: a `beside-open-

@@ -1166,10 +1166,13 @@ _NAMED_QUERIES = {
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
-# query below says why. THREE MAPS, one per rule, because the rule is the thing
-# that must not be duplicated — not the column:
+# query below says why. ONE MAP PER RULE, because the rule is the thing that
+# must not be duplicated — not the column:
 #
-#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`
+#   addresses    `endpoints.path`, `open_questions.path`, `roots.path`,
+#                `endpoint_metadata.path`, `endpoint_conditions.path`
+#   peers        `endpoints.peer` (`redact_peer`: an authority with no scheme)
+#   candidates   `open_questions.candidates` (`redact_candidates`)
 #   the grammar  `call_sites.arguments`, `annotations.args`,
 #                `return_flows.value`, `method_returns.value`
 #   config       `resolved_config.value`, `config_entries.value`, and
@@ -1195,6 +1198,13 @@ _NAMED_QUERIES = {
 # exactly as the table holds it, byte for byte.
 _REDACTED_CONFIG_VALUES = "redacted_config_values"
 _REDACTED_ADDRESSES = "redacted_addresses"
+# `endpoints.peer` is masked by its OWN map, through `redact_peer`: a peer split out of a URL
+# has lost the `scheme://` that `redact_text`'s userinfo rule needs, so the address map let
+# `svc:s3cret@billing.internal` through to every bundle until 2026-10-23.
+_REDACTED_PEERS = "redacted_peers"
+# `open_questions.candidates` — a `self_exchange` candidate carries a peer, and an
+# `environment_divergence` one per-environment config values — through `redact_candidates`.
+_REDACTED_CANDIDATES = "redacted_candidates"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
 # `config_entries` is the RAW half of what `resolved_config` holds resolved —
@@ -1249,26 +1259,29 @@ _CHANNEL_BINDINGS = "channel_bindings"
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     # `path` and `peer` are the columns that can carry a whole address (D01
-    # §3, 2I's unsplit-expression ruling), so they carry URL userinfo too.
-    # Ordered on the table's own columns — `e.path`, not the projected alias —
-    # so masking a row cannot reorder the file (NFR-1).
+    # §3, 2I's unsplit-expression ruling), so they carry URL userinfo too —
+    # and `peer` carries it without a scheme once a URL is split, so it joins
+    # its own map. Ordered on the table's own columns — `e.path`, not the
+    # projected alias — so masking a row cannot reorder the file (NFR-1).
     "endpoints": f"""
         SELECT e.* REPLACE (coalesce(p.masked, e.path) AS path,
                             coalesce(q.masked, e.peer) AS peer)
         FROM endpoints e
         LEFT JOIN {_REDACTED_ADDRESSES} p ON p.address = e.path
-        LEFT JOIN {_REDACTED_ADDRESSES} q ON q.address = e.peer
+        LEFT JOIN {_REDACTED_PEERS} q ON q.peer = e.peer
         ORDER BY e.protocol, e.method, e.path, e.handler, e.caller
     """,
     # The ledger carries the SAME `path` an endpoint row does — it is keyed on
     # a wire identity — so it masks by the same map. Render and export must
     # agree about one address: a question rendered against a stripped address
-    # and exported against a bare one names two different rows.
+    # and exported against a bare one names two different rows. Its
+    # `candidates` mask by the call the document and the brief make on them.
     "open_questions": f"""
         SELECT o.protocol, o.method, coalesce(a.masked, o.path) AS path, o.question,
-               o.candidates, o.evidence
+               coalesce(c.masked::JSON, o.candidates) AS candidates, o.evidence
         FROM open_questions o
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = o.path
+        LEFT JOIN {_REDACTED_CANDIDATES} c ON c.original = o.candidates::VARCHAR
         ORDER BY o.protocol, o.method, o.path, o.question, o.candidates::VARCHAR, o.evidence
     """,
     # The live exposure 2K closes: this table's `value` column exported
@@ -1287,8 +1300,8 @@ _EXPORT_QUERIES = {
     "shape_fields": _NAMED_QUERIES["shape_fields"],
     # The two non-wire tables export through their named query verbatim, and
     # the reason is that NEITHER carries a masked column. `_REDACTED_ADDRESSES`
-    # exists for the columns that can hold a whole URL — `endpoints.path`/
-    # `.peer` and the ledger's `path` — and neither of these tables has one: a
+    # and `_REDACTED_PEERS` exist for the columns that can hold a whole URL —
+    # `endpoints.path`/`.peer` and the ledger's `path` — and neither of these tables has one: a
     # trigger expression is a cron string or a delay, a scope attribute is a
     # package or a type, and a status is a status. `_REDACTED_CONFIG_VALUES`
     # keys on `resolved_config`'s own (key, value) pairs, which nothing here
@@ -1406,10 +1419,30 @@ _EXPORT_QUERIES = {
     # by the pass that wrote it — nothing in this system reads a metadata value, so there
     # is no analysis to break by masking early and no second chance to forget. A mask
     # applied here as well would be the redactor run twice over its own output.
-    "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
+    #
+    # Its `path` is NOT that value, though: it is the endpoint's own identity column,
+    # carried so the row joins its endpoint, and an outbound path may be a whole address
+    # (`https://svc:s3cret@billing.internal/invoices`). Until 2026-10-23 it shipped verbatim
+    # beside the masked `endpoints.path` (OI-169), which put the credential in the bundle
+    # and broke the join a bundle reader makes on `path`. It masks by the address map, as
+    # `roots.path` does for the same reason.
+    "endpoint_metadata": f"""
+        SELECT m.* REPLACE (coalesce(a.masked, m.path) AS path)
+        FROM ({_NAMED_QUERIES["endpoint_metadata"]}) m
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = m.path
+        ORDER BY m.protocol, m.direction, m.method, m.path, m.caller, m.kind, m.name, m.value,
+                 m.resolution, m.evidence, m.requirement
+    """,
     # Structured for a machine (ruling 1, 2026-10-22): the conditions rows go out as they
-    # are, the document being the one verbose rendering of them.
-    "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
+    # are, the document being the one verbose rendering of them — with the endpoint's
+    # `path` masked by the address map, for `endpoint_metadata`'s reason (OI-169).
+    "endpoint_conditions": f"""
+        SELECT c.* REPLACE (coalesce(a.masked, c.path) AS path)
+        FROM ({_NAMED_QUERIES["endpoint_conditions"]}) c
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = c.path
+        ORDER BY c.protocol, c.direction, c.method, c.path, c.handler, c.kind, c.expression,
+                 c.environment
+    """,
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
@@ -2243,11 +2276,13 @@ class DuckDbWorkspace:
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name NOT IN "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
                 _REDACTED_ADDRESSES,
+                _REDACTED_PEERS,
+                _REDACTED_CANDIDATES,
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
@@ -2316,6 +2351,8 @@ class DuckDbWorkspace:
         # `path` is CARRIED from the endpoint that named the handler, so the
         # values overlap today, but a map built from endpoints alone would
         # leave any future root address unmasked with nothing saying so.
+        # `endpoint_metadata` and `endpoint_conditions` join for `roots`'s reason:
+        # each carries its endpoint's `path` as the key it joins by (OI-169).
         # `value_resolutions.value` joins the same map (spec 2026-09-22 §7a): a
         # `would_resolve` row carries the string an engine WOULD publish as an
         # endpoint's `path`, so it is the same value by a different name and one
@@ -2324,7 +2361,8 @@ class DuckDbWorkspace:
         # scan of an empty table.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
-            "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM endpoint_metadata WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"
@@ -2338,6 +2376,29 @@ class DuckDbWorkspace:
                 if (masked := redactor.redact_text(str(address))) != str(address)
             ],
         )
+
+        peer_rows = self._connection.execute(
+            "SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_PEERS,
+            "peer VARCHAR, masked VARCHAR",
+            [
+                (str(peer), masked)
+                for (peer,) in peer_rows
+                if (masked := redactor.redact_peer(str(peer))) != str(peer)
+            ],
+        )
+
+        candidate_rows = self._connection.execute(
+            "SELECT DISTINCT candidates::VARCHAR FROM open_questions WHERE candidates IS NOT NULL"
+        ).fetchall()
+        staged: list[tuple[str, ...]] = []
+        for (original,) in candidate_rows:
+            candidates = json.loads(str(original))
+            if (masked_candidates := redactor.redact_candidates(candidates)) != candidates:
+                staged.append((str(original), json.dumps(masked_candidates, sort_keys=True)))
+        self._stage_map(_REDACTED_CANDIDATES, "original VARCHAR, masked VARCHAR", staged)
 
         # One map for one GRAMMAR: `call_sites.arguments`, `annotations.args`,
         # `return_flows.value`, `method_returns.value`, `constants.value` and

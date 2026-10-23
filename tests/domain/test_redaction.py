@@ -15,6 +15,7 @@ from sextant.domain.redaction import (
     RedactionRules,
     Redactor,
     _literal_prefix,
+    peer_without_userinfo,
 )
 
 
@@ -84,6 +85,94 @@ def test_userinfo_stripping_leaves_an_at_sign_that_is_not_userinfo():
     assert redactor.redact_text("https://h/users/@me") == "https://h/users/@me"
     assert redactor.redact_text("https://h/x?to=a@b.com") == "https://h/x?to=a@b.com"
     assert redactor.redact_text("sqs.us-east-1.amazonaws.com") == "sqs.us-east-1.amazonaws.com"
+
+
+@pytest.mark.parametrize(
+    ("peer", "expected"),
+    [
+        # The shape `split_url` wrote before 2026-10-23: the scheme gone, the credential
+        # kept, and nothing `redact_text`'s `scheme://` rule could see.
+        ("svc:s3cret@billing.internal", "billing.internal"),
+        ("svc:@billing.internal:8443", "billing.internal:8443"),
+        # A token alone is a credential in an authority too — a peer is never a mailbox.
+        ("ghp_tok@github.com", "github.com"),
+        # A password carrying a raw `@`: the host follows the LAST one (RFC 3986 forbids
+        # a raw `@` in a host).
+        ("u:p@ss@billing", "billing"),
+        ("svc:s3cret@[::1]:8080", "[::1]:8080"),
+        ("u:p@billing?x=1", "billing?x=1"),
+        # The whole address `peer_of` keeps: the scheme stays, the userinfo goes.
+        ("https://svc:s3cret@billing/ws", "https://billing/ws"),
+        ("//svc:s3cret@billing/ws", "//billing/ws"),
+        ("https://u:p@ss@billing:9/x", "https://billing:9/x"),
+    ],
+)
+def test_a_peer_loses_its_userinfo_in_every_shape_a_peer_takes(peer: str, expected: str):
+    """The peer is the service a call reaches, and a credential is never part of WHICH
+    service that is (`peer_without_userinfo`). `redact_peer` is the same rule at the exits,
+    for a workspace analysed before the writers applied it."""
+    assert peer_without_userinfo(peer) == expected
+    assert _plain().redact_peer(peer) == expected
+
+
+@pytest.mark.parametrize(
+    "peer",
+    [
+        "billing.internal",
+        "billing.internal:8443",
+        "[::1]:80",
+        "${billing.url}",
+        "lb://customers-service",
+        # An `@` after the authority is not userinfo.
+        "https://billing/a@b",
+        # Not an authority at all: `:XE` is no port, so nothing here is a password.
+        "jdbc:oracle:thin:@localhost:1521:XE",
+    ],
+)
+def test_a_peer_with_no_userinfo_is_returned_unchanged(peer: str):
+    assert peer_without_userinfo(peer) == peer
+    assert _plain().redact_peer(peer) == peer
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jdbc:oracle:thin:@localhost:1521:XE",
+        "mailto:support@acme.com",
+        "sip:alice@atlanta.com",
+        "svc:s3cret@billing.internal",
+    ],
+)
+def test_text_that_is_not_known_to_be_a_peer_keeps_its_at_sign(text: str):
+    """The peer rule is for a value KNOWN to be an authority, and nothing else takes it. A
+    first version applied it to every string `redact_text` sees — config values, call
+    arguments, constants, every fact payload — and read the Oracle SID form as a password
+    and a `mailto:` as a user (found by review on 2026-10-23, before it shipped). Even the
+    credential shape is left alone outside a peer: there, nothing says it is an authority."""
+    assert _plain().redact_text(text) == text
+    assert _plain().redact_value("spring.datasource.url", text) == text
+
+
+@pytest.mark.pins("redaction.open-question-CANDIDATES-are-masked-at-every-exit")
+def test_an_open_questions_candidates_mask_their_peer_and_their_config_values():
+    """`self_exchange` names the called side's peer and `environment_divergence` each
+    environment's value of one key — and the document, the enrichment brief and the bundle
+    all printed both verbatim until 2026-10-23. Names read out of code pass unchanged."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("tok-[a-z]+",)))
+    masked = redactor.redact_candidates(
+        [
+            {"side": "called", "symbol": "BillingClient#charge", "peer": "svc:s3cret@billing"},
+            {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+            {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": "tok-x"}},
+            {"key": "spring.datasource.password", "values": {"default": "hunter2"}},
+        ]
+    )
+    assert masked == [
+        {"side": "called", "symbol": "BillingClient#charge", "peer": "billing"},
+        {"side": "served", "symbol": "ChargeController#charge", "peer": None},
+        {"key": "spring.data.rest.base-path", "values": {"default": "/api", "prod": REDACTED}},
+        {"key": "spring.datasource.password", "values": {"default": REDACTED}},
+    ]
 
 
 def test_a_placeholder_expression_passes_through_whole():

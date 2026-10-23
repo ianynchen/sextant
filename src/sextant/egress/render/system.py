@@ -18,6 +18,7 @@ from collections.abc import Sequence
 
 from sextant.application.stitch import Link, Participant, Refusal, Uncalled, Unmatched
 from sextant.domain.closed_sets import Resolution
+from sextant.domain.redaction import Redactor
 
 
 def render_system_document(
@@ -28,8 +29,15 @@ def render_system_document(
     route_refusals: "Sequence[Refusal]",
     *,
     environment: str,
+    redactor: Redactor,
 ) -> str:
-    """`system.md` — the markdown document for one reactor's participant set."""
+    """`system.md` — the markdown document for one reactor's participant set.
+
+    **An exit like the module document**, so every address and reason it prints passes
+    `redactor` — the union of every participant's rule set (`system_analyze`). The tier reads
+    the participants' workspaces, which hold values verbatim, and until 2026-10-23 this
+    document printed them that way: a `https://user:pass@host` path, a peer quoted in a
+    refusal, a value a repo's own `redact:` rule hides."""
     absent = {p.name for p in participants if not p.present}
     lines: list[str] = [
         "# System",
@@ -41,10 +49,10 @@ def render_system_document(
         "",
     ]
     lines += _participants(participants)
-    lines += _links(links)
-    lines += _unmatched(unmatched, absent)
-    lines += _uncalled(uncalled_endpoints)
-    lines += _refusals(route_refusals)
+    lines += _links(links, redactor)
+    lines += _unmatched(unmatched, absent, redactor)
+    lines += _uncalled(uncalled_endpoints, redactor)
+    lines += _refusals(route_refusals, redactor)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -64,7 +72,7 @@ def _participants(participants: "Sequence[Participant]") -> list[str]:
     return lines
 
 
-def _links(links: "Sequence[Link]") -> list[str]:
+def _links(links: "Sequence[Link]", redactor: Redactor) -> list[str]:
     lines = ["## Links", ""]
     if not links:
         lines += [
@@ -79,13 +87,14 @@ def _links(links: "Sequence[Link]") -> list[str]:
     lines += ["| From | Calls | Endpoint | Resolution |", "|---|---|---|---|"]
     for link in sorted(links, key=_link_order):
         verb = link.from_method or ""
-        source = f"`{link.from_participant}` {verb} `{link.from_path}`".replace("  ", " ")
+        from_path = None if link.from_path is None else redactor.redact_text(link.from_path)
+        source = f"`{link.from_participant}` {verb} `{from_path}`".replace("  ", " ")
         # A participant-level link states WHO and no route, and the column says so in
         # words rather than by being empty — an empty cell reads as missing data.
         endpoint = (
             "*the participant, no route*"
             if link.to_path is None
-            else f"{link.to_method or ''} `{link.to_path}`".strip()
+            else f"{link.to_method or ''} `{redactor.redact_text(link.to_path)}`".strip()
         )
         if link.to_conditions:
             # The inbound endpoint exists in some environments only (spec 2026-10-21-
@@ -114,7 +123,9 @@ def _links(links: "Sequence[Link]") -> list[str]:
     return lines
 
 
-def _unmatched(unmatched: "Sequence[Unmatched]", absent: "set[str]") -> list[str]:
+def _unmatched(
+    unmatched: "Sequence[Unmatched]", absent: "set[str]", redactor: Redactor
+) -> list[str]:
     """Unmatched outbound endpoints, with the absent-participant ones kept APART.
 
     `M06`: "an unmatched call into a participant M05 marked absent is attributed to the gap,
@@ -139,8 +150,8 @@ def _unmatched(unmatched: "Sequence[Unmatched]", absent: "set[str]") -> list[str
             "|---|---|---|",
         ]
         for u in sorted(real, key=lambda u: (u.participant, u.path or "", u.method or "")):
-            call = f"{u.method or ''} `{u.path}`".strip() if u.path else "*address unread*"
-            lines.append(f"| `{u.participant}` | {call} | {u.reason} |")
+            call = _call(u, redactor)
+            lines.append(f"| `{u.participant}` | {call} | {redactor.redact_text(u.reason)} |")
         lines.append("")
     if gap:
         lines += [
@@ -156,13 +167,18 @@ def _unmatched(unmatched: "Sequence[Unmatched]", absent: "set[str]") -> list[str
             "|---|---|",
         ]
         for u in sorted(gap, key=lambda u: (u.participant, u.path or "")):
-            call = f"{u.method or ''} `{u.path}`".strip() if u.path else "*address unread*"
-            lines.append(f"| `{u.participant}` | {call} |")
+            lines.append(f"| `{u.participant}` | {_call(u, redactor)} |")
         lines.append("")
     return lines
 
 
-def _uncalled(uncalled_endpoints: "Sequence[Uncalled]") -> list[str]:
+def _call(u: "Unmatched", redactor: Redactor) -> str:
+    if not u.path:
+        return "*address unread*"
+    return f"{u.method or ''} `{redactor.redact_text(u.path)}`".strip()
+
+
+def _uncalled(uncalled_endpoints: "Sequence[Uncalled]", redactor: Redactor) -> list[str]:
     lines = ["## Inbound endpoints nothing in this system calls", ""]
     if not uncalled_endpoints:
         lines += ["None — every inbound endpoint is reached by a link above.", ""]
@@ -177,7 +193,8 @@ def _uncalled(uncalled_endpoints: "Sequence[Uncalled]") -> list[str]:
         "|---|---|",
     ]
     for u in uncalled_endpoints:
-        lines.append(f"| `{u.participant}` | {u.method or ''} `{u.path}` |".replace("|  ", "| "))
+        path = redactor.redact_text(u.path)
+        lines.append(f"| `{u.participant}` | {u.method or ''} `{path}` |".replace("|  ", "| "))
     lines.append("")
     return lines
 
@@ -193,7 +210,7 @@ def _link_order(link: "Link") -> tuple[str, str, str, str]:
     )
 
 
-def _refusals(route_refusals: "Sequence[Refusal]") -> list[str]:
+def _refusals(route_refusals: "Sequence[Refusal]", redactor: Redactor) -> list[str]:
     """Gateway routes whose prefix could not be composed with the service's paths.
 
     A SECTION rather than a silence, because the route still produced a participant-level
@@ -215,6 +232,8 @@ def _refusals(route_refusals: "Sequence[Refusal]") -> list[str]:
         "|---|---|---|",
     ]
     for refusal in sorted(route_refusals, key=lambda r: (r.participant, r.route)):
-        lines.append(f"| `{refusal.participant}` | `{refusal.route}` | {refusal.reason} |")
+        route = redactor.redact_text(refusal.route)
+        reason = redactor.redact_text(refusal.reason)
+        lines.append(f"| `{refusal.participant}` | `{route}` | {reason} |")
     lines.append("")
     return lines

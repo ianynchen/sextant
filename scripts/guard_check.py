@@ -455,7 +455,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SYSTEM_RENDER,
-                find='            lines.append(f"| `{u.participant}` | {call} | {u.reason} |")',
+                find='            lines.append(f"| `{u.participant}` | {call} | {redactor.redact_text(u.reason)} |")',
                 replace='            lines.append(f"| `{u.participant}` | {call} | |")',
             ),
         ),
@@ -839,6 +839,106 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/storage/duckdb/workspace.py",
                 find="            if missing:\n                raise StaleParticipantError(\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n                raise StaleParticipantError(\n",
+            ),
+        ),
+    ),
+    "redaction.a-PEER-never-carries-url-userinfo": Guard(
+        what="`split_url` drops `user:password@` from the authority it returns as the peer",
+        why="the peer is the service a call reaches; kept, a credential written into a literal "
+        "URL sat in `endpoints.peer` without its scheme, where the exits' `scheme://` "
+        "userinfo rule never matched it — the workspace, the document and the bundle all "
+        "carried the password (found 2026-10-23)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='    return peer_without_userinfo(match.group("authority")), '
+                'match.group("path") or ""\n',
+                replace='    return match.group("authority"), match.group("path") or ""  # guard disabled\n',
+            ),
+        ),
+    ),
+    "redaction.a-WHOLE-peer-never-carries-url-userinfo": Guard(
+        what="`peer_of` drops the userinfo from the whole address it keeps as the peer",
+        why="whole is not verbatim: the credential is never part of WHICH deployment "
+        "answered, and kept it reaches every exit that prints a peer",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='        return peer_without_userinfo(str(argument["value"])), "resolved"\n',
+                replace='        return str(argument["value"]), "resolved"  # guard disabled\n',
+            ),
+        ),
+    ),
+    "redaction.a-PEER-loses-its-userinfo-at-every-exit": Guard(
+        what="`redact_peer` applies the peer rule before `redact_text` — the export, the "
+        "document, the brief and the diff print a peer through it",
+        why="a workspace analysed before 2026-10-23 holds `svc:s3cret@billing.internal`, which "
+        "`redact_text`'s `scheme://` rule never sees; without it every bundle and document "
+        "made from one ships the password",
+        edits=(
+            Edit(
+                path="sextant/domain/redaction.py",
+                find="        return self.redact_text(peer_without_userinfo(peer))\n",
+                replace="        return self.redact_text(peer)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "redaction.open-question-CANDIDATES-are-masked-at-every-exit": Guard(
+        what="`redact_candidates` masks a candidate's `peer` (and a key's per-environment "
+        "values) before the document, the brief or the bundle prints it",
+        why="the ledger's `path` was masked and its candidates beside it were not, so a "
+        "`self_exchange` question printed the called side's peer verbatim",
+        edits=(
+            Edit(
+                path="sextant/domain/redaction.py",
+                find='                out["peer"] = self.redact_peer(str(out["peer"]))\n',
+                replace='                out["peer"] = str(out["peer"])  # guard disabled\n',
+            ),
+        ),
+    ),
+    "redaction.endpoint-METADATA-and-CONDITIONS-mask-the-endpoints-path": Guard(
+        what="the export masks `endpoint_metadata.path` and `endpoint_conditions.path` by the "
+        "address map `endpoints.path` takes",
+        why="both carry their endpoint's path as the key they join by, and an outbound path "
+        "may be a whole address: shipped verbatim, the bundle carried the credential and a "
+        "reader's join on `path` missed every row (OI-169)",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="        SELECT m.* REPLACE (coalesce(a.masked, m.path) AS path)\n",
+                replace="        SELECT m.*  -- guard disabled\n",
+            ),
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="        SELECT c.* REPLACE (coalesce(a.masked, c.path) AS path)\n",
+                replace="        SELECT c.*  -- guard disabled\n",
+            ),
+        ),
+    ),
+    "redaction.the-SYSTEM-tier-reads-a-peer-without-its-userinfo": Guard(
+        what="`system_analyze` applies the peer rule to every peer it reads from a "
+        "participant's workspace",
+        why="the system tier reads workspaces as they are; one analysed before 2026-10-23 "
+        "holds a peer with its credential, which then fails to match and is quoted in the "
+        "refusal the system document prints",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='            else {**row, "peer": peer_without_userinfo(str(row["peer"]))}\n',
+                replace="            else row  # guard disabled\n",
+            ),
+        ),
+    ),
+    "redaction.the-SYSTEM-document-masks-by-every-participants-rules": Guard(
+        what="the system document's redactor is the union of every present participant's rule set",
+        why="the document prints every participant's rows in one place, so a value one "
+        "participant's `redact:` rule hides must be hidden wherever it appears",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="            redactor = redactor.union("
+                "_redactor_for(participant.location.parent.parent))\n",
+                replace="            redactor = redactor  # guard disabled\n",
             ),
         ),
     ),
@@ -3325,8 +3425,13 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DIFF,
-                find="            projected[column] = redactor.redact_text(str(projected[column]))\n",
-                replace="            projected[column] = str(projected[column])  # guard disabled\n",
+                find='        projected["path"] = redactor.redact_text(str(projected["path"]))\n',
+                replace='        projected["path"] = str(projected["path"])  # guard disabled\n',
+            ),
+            Edit(
+                path=_DIFF,
+                find='        projected["peer"] = redactor.redact_peer(str(projected["peer"]))\n',
+                replace='        projected["peer"] = str(projected["peer"])  # guard disabled\n',
             ),
             Edit(
                 path=_DIFF,
