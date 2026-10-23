@@ -2300,8 +2300,9 @@ def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     secret = "https://u:hunter2@h/0 0 * * * *"
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', 'prod', ?, NULL), "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', 'default', '0 0 * * * *', NULL)",
+        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'prod', ?, NULL), "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'default', "
+        "'0 0 * * * *', NULL)",
         [secret],
     )
     bundle = tmp_path / "bundle"

@@ -233,9 +233,13 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
 -- through reset_resolved_schedules.sql + insert_resolved_schedules.sql, both run by
 -- its one writing pass (`resolve/resolved_schedules.py`), the `return_flows` pairing.
 CREATE TABLE IF NOT EXISTS resolved_schedules (
-    -- `scheduled_work.handler` and `.trigger`, verbatim, so a reader joins straight back.
+    -- `scheduled_work.handler`, `.trigger` and `.expression`, verbatim, so a reader joins
+    -- straight back. `expression` is part of the job's identity, not decoration: a method
+    -- carrying two schedules of one kind (`@Schedules`) is two `scheduled_work` rows that
+    -- share the other two, and only the expression says which job a value belongs to.
     handler           TEXT,
     trigger           TEXT,
+    expression        TEXT,
     -- One of `resolved_config`'s environments.
     environment       TEXT,
     -- The expression with every placeholder substituted from that environment's

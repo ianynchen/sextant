@@ -6,7 +6,7 @@
 verbatim: the schedule that runs is the deployment's. What the REPOSITORY configures for it
 is a value, environment by environment, and this pass writes it beside the job — one
 `resolved_schedules` row per (job whose expression holds the placeholder opener, environment
-of `resolved_config`).
+of `resolved_config`), carrying the job's own `handler`, `trigger` and `expression`.
 
 **One placeholder rule.** The expression is substituted by `resolve/config.py::substitute`,
 the walk `resolve_config` itself uses, with the config model's own delimiters and
@@ -33,8 +33,11 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
     `resolved_config` once, joined in memory (spec §5): rows written are
     jobs-with-placeholders × environments.
 
-    The model is the family's base catalog's — the first catalog declaring one, as
-    `resolve_config` collects them (D02 §2i: one per framework family). With none
+    Only the FIRST declared config model's delimiters and key matching are read — the
+    family's base catalog's (D02 §2i: one per framework family; only `spring-web.yml`
+    declares one today). `resolve_config` resolves every declaring catalog into the one
+    `resolved_config`, which carries no model column, so its rows cannot be split by
+    model and a second family's would be looked up under the first's rule. With no model
     declared there is no `resolved_config` either, and so nothing to read."""
     workspace.derive("resolved_schedules_reset")
     model = next((c.config_model for c in catalogs if c.config_model), None)
@@ -60,6 +63,7 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
                 {
                     "handler": job["handler"],
                     "trigger": job["trigger"],
+                    "expression": job["expression"],
                     "environment": environment,
                     "value": value,
                     "unresolved_reason": reason,
@@ -72,11 +76,14 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
 def _environment_lookup(
     config: list[dict[str, object]], key_matching: str
 ) -> Callable[[str], tuple[str | None, str | None]]:
-    """`substitute`'s lookup over ONE environment's resolved rows. A key relaxed matching
-    folds onto another resolves to the first row's, in `resolved_config`'s own key order —
-    `resolve/config.py::_normalized_index`'s first-inserted-wins. A row resolved to no value
-    answers its own reason; a key no row names is `missing_key`, as `resolve_config` answers
-    a reference to a key its layering never declared."""
+    """`substitute`'s lookup over ONE environment's resolved rows. Where relaxed matching
+    folds two configured spellings onto one key, the first row in the `resolved_config`
+    named query's order (`ORDER BY environment, key`) wins — the alphabetically first
+    spelling. That DIVERGES from `resolve/config.py::_normalized_index`, which takes the
+    first in merged-layering order; a known divergence, logged rather than matched here,
+    because `resolved_config` keeps no layering order to match it with. A row resolved to
+    no value answers its own reason; a key no row names is `missing_key`, as
+    `resolve_config` answers a reference to a key its layering never declared."""
 
     def keyed(key: str) -> str:
         return normalize_key(key) if key_matching == "relaxed" else key

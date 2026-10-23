@@ -940,7 +940,7 @@ same question asked twice and may appear in either order without changing a byte
 | Table | Holds |
 |---|---|
 | `scheduled_work` | The scheduled method, the trigger kind, the declared expression |
-| `resolved_schedules` | A scheduled job whose expression holds a placeholder: its value per environment, or unresolved with a reason |
+| `resolved_schedules` | A scheduled job whose expression holds a placeholder — its handler, trigger and expression — with its value per environment, or unresolved with a reason |
 | `error_handlers` | The handler, its container and scope, the exception, the status, the response shape |
 
 **Two tables rather than two more `endpoints` rows, and that is the whole design**
@@ -965,9 +965,12 @@ repository cannot know.
 **`resolved_schedules`** is what the repository's own configuration says instead, beside
 the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
 (`scheduled_work` row whose expression holds the config model's placeholder opener,
-environment of `resolved_config`), carrying `handler`, `trigger`, `environment`, `value`
-and `unresolved_reason` — the last one of the closed set `resolved_config` uses, `value`
-NULL exactly when it is set. The expression is substituted by the same placeholder rule
+environment of `resolved_config`), carrying `handler`, `trigger`, `expression`,
+`environment`, `value` and `unresolved_reason` — the last one of the closed set
+`resolved_config` uses, `value` NULL exactly when it is set. The first three are the job's
+`scheduled_work` columns verbatim and together are its identity: a method with two
+schedules of one kind (`@Schedules`) is two jobs sharing `handler` and `trigger`, and only
+`expression` attributes a value to its own. The expression is substituted by the same placeholder rule
 `resolved_config` itself is (`:default` included, relaxed or exact matching as the model
 says), looked up in that one environment's resolved rows. A literal or a SpEL `#{…}`
 expression gets no rows, and with no resolved environment the table is empty. A derived

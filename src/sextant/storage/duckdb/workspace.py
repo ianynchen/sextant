@@ -716,13 +716,14 @@ _NAMED_QUERIES = {
         ORDER BY handler, trigger, expression, resolution, evidence, catalog_id
     """,
     # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
-    # read as `scheduled_work` is — the handler leads — and then by environment, so one
-    # job's environments read as adjacent rows. `value` and `unresolved_reason` close the
-    # tie two schedules of one kind on one method (`@Schedules`) would leave open (NFR-1).
+    # read as `scheduled_work` is — the job's own (handler, trigger, expression) leads —
+    # and then by environment, so one job's environments read as adjacent rows. Total
+    # (NFR-1): a job has one row per environment, and two schedules of one kind on one
+    # method (`@Schedules`) differ in `expression`.
     "resolved_schedules": """
-        SELECT handler, trigger, environment, value, unresolved_reason
+        SELECT handler, trigger, expression, environment, value, unresolved_reason
         FROM resolved_schedules
-        ORDER BY handler, trigger, environment, value, unresolved_reason
+        ORDER BY handler, trigger, expression, environment
     """,
     # `scope` is cast to text in the ORDER BY for the reason `open_questions`
     # casts `candidates`: it is a JSON document, DuckDB has no ordering for
@@ -1402,13 +1403,14 @@ _EXPORT_QUERIES = {
     # — but by `redact_text`, the address map's rule, not the key-based one: a cron, rate or
     # delay is neither a credential nor keyed (the row carries the handler, not the key the
     # placeholder named), and `redact_text` applies the module's value patterns and URL
-    # userinfo stripping. One map per rule, so it joins `_REDACTED_ADDRESSES`.
+    # userinfo stripping. One map per rule, so it joins `_REDACTED_ADDRESSES`. `expression`
+    # is `scheduled_work.expression` verbatim, and travels as that column does.
     "resolved_schedules": f"""
-        SELECT s.handler, s.trigger, s.environment, coalesce(a.masked, s.value) AS value,
-               s.unresolved_reason
+        SELECT s.handler, s.trigger, s.expression, s.environment,
+               coalesce(a.masked, s.value) AS value, s.unresolved_reason
         FROM resolved_schedules s
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.value
-        ORDER BY s.handler, s.trigger, s.environment, s.value, s.unresolved_reason
+        ORDER BY s.handler, s.trigger, s.expression, s.environment
     """,
     # `arguments` and `args` carry JSON the analysis read out of code, and a
     # hardcoded `https://user:pass@host` literal lands in one whole. They pass

@@ -7,14 +7,16 @@
 -- Python-built derivation.
 --
 -- Parameters:
---   $rows -- {handler, trigger, environment, value, unresolved_reason} rows, one
---             per (placeholder job, environment of `resolved_config`). `value` is
+--   $rows -- {handler, trigger, expression, environment, value, unresolved_reason}
+--             rows, one per (placeholder job, environment of `resolved_config`); the
+--             first three are the job's `scheduled_work` columns verbatim. `value` is
 --             NULL exactly when `unresolved_reason` is set, one of D01's closed set.
-INSERT INTO resolved_schedules (handler, trigger, environment, value, unresolved_reason)
-SELECT r.handler, r.trigger, r.environment, r.value, r.unresolved_reason
+INSERT INTO resolved_schedules (handler, trigger, expression, environment, value,
+                                unresolved_reason)
+SELECT r.handler, r.trigger, r.expression, r.environment, r.value, r.unresolved_reason
 FROM (SELECT UNNEST(
     $rows::STRUCT(
-        handler VARCHAR, trigger VARCHAR, environment VARCHAR, value VARCHAR,
-        unresolved_reason VARCHAR
+        handler VARCHAR, trigger VARCHAR, expression VARCHAR, environment VARCHAR,
+        value VARCHAR, unresolved_reason VARCHAR
     )[]
 ) AS r);
