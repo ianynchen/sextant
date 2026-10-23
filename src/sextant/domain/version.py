@@ -92,7 +92,9 @@ SEXTANT_VERSION = version("sextant")
 #     4       `bean_conditions` (spec 2026-10-22-conditional-beans): the conditions every
 #             bean carries, a new derived table; `endpoint_conditions` stops being a table
 #             and becomes a VIEW joining endpoint rows to it, gaining `caller`, `via`, `bean_kind` and `bean`; the view
-#             `bean_presence` folds it into where each bean exists. A workspace
+#             `bean_presence` folds it into where each bean exists; the view `symbol_beans`
+#             is the one rule mapping code to its bean, and `candidate_presence` states
+#             which candidates of a narrowed call exist per environment. A workspace
 #             holding the old table is refused by name by `system analyze` and rebuilt by
 #             `module analyze`.
 FACT_SCHEMA_VERSION = 5

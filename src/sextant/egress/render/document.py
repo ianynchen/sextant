@@ -705,13 +705,15 @@ def _handler_identity(endpoint: dict[str, object]) -> tuple[Run, ...]:
 class _BeanConditions:
     """The ONE index every section reads its conditions from (spec 2026-10-22-conditional-
     beans §3): `bean_conditions` grouped by bean and registration route (`via`, None for the
-    scanned class), and `bean_presence` grouped by bean. Both are read once. An endpoint in
-    either direction, a scheduled job and an error handler each find their bean the way the
-    `endpoint_conditions` view does — their own code symbol first, then its owner class — and
-    state what is here, so no kind has a copy of the logic."""
+    scanned class), `bean_presence` grouped by bean, and the bean each code symbol belongs to.
+    All are read once. An endpoint in either direction, a scheduled job and an error handler
+    each find their bean in `symbol_beans` — the workspace's one rule, which the
+    `endpoint_conditions` view reads too (own symbol first, then owner class) — and state what
+    is here, so no kind, and not this renderer, has a copy of the logic."""
 
     routes: dict[str, dict[str | None, list[Mapping[str, object]]]]
     presence: dict[str, list[Mapping[str, object]]]
+    beans: dict[str, str]
 
 
 def _bean_conditions(report: ResolveReport) -> _BeanConditions:
@@ -721,20 +723,12 @@ def _bean_conditions(report: ResolveReport) -> _BeanConditions:
     presence: dict[str, list[Mapping[str, object]]] = {}
     for row in report.bean_presence:
         presence.setdefault(str(row["bean"]), []).append(row)
-    return _BeanConditions(routes, presence)
+    beans = {str(row["symbol"]): str(row["bean"]) for row in report.symbol_beans}
+    return _BeanConditions(routes, presence, beans)
 
 
 def _opt(value: object) -> str | None:
     return None if value is None else str(value)
-
-
-def _bean_of(symbol: str, index: _BeanConditions) -> str | None:
-    """The bean a row's code belongs to: that symbol itself where it is a bean (a lambda a
-    `@Bean` factory creates), else its owner class — the `endpoint_conditions` view's order."""
-    if symbol in index.routes:
-        return symbol
-    owner = owner_of(symbol)
-    return owner if owner is not None and owner in index.routes else None
 
 
 def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEntry]:
@@ -750,8 +744,8 @@ def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEnt
     """
     if symbol is None:
         return []
-    bean = _bean_of(str(symbol), index)
-    if bean is None:
+    bean = index.beans.get(str(symbol))
+    if bean is None or bean not in index.routes:
         return []
     routes = index.routes[bean]
     if not any(row["kind"] is not None for rows in routes.values() for row in rows):
@@ -863,7 +857,13 @@ def _presence_words(parsed: Mapping[str, Any], rows: Sequence[Mapping[str, objec
         else " — not decided from this module's beans (`unresolved`)"
     )
     competitors = _competitor_words(rows)
-    return f"{words}: {competitors}" if competitors else words
+    if not competitors:
+        return words
+    # The lead-in names what the list is: the competitors are the module's OTHER beans the
+    # condition's criteria match — of its type, where a type is all it names.
+    only_types = not parsed.get("names") and not parsed.get("annotations")
+    lead = "the other beans of that type" if only_types else "the other beans it matches"
+    return f"{words}; {lead}: {competitors}"
 
 
 def _competitor_words(rows: Sequence[Mapping[str, object]]) -> str:
@@ -1522,7 +1522,7 @@ def assemble_module_document(
     # module starts any work" is a finding; a section that disappears leaves a
     # reader unable to tell it from a Sextant that never walked (FR-17).
     sections.append(MachineHeading(2, "Traces"))
-    sections.extend(_trace_sections(traces, redactor))
+    sections.extend(_trace_sections(traces, redactor, _candidate_sites(report)))
 
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
@@ -1853,7 +1853,11 @@ def _traces_drawn_sentence(traces: Sequence[Trace]) -> str:
     )
 
 
-def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section]:
+def _trace_sections(
+    traces: Sequence[Trace],
+    redactor: Redactor,
+    candidates: Mapping[tuple[str, int], Sequence[Mapping[str, object]]] | None = None,
+) -> list[Section]:
     """`## Traces`' whole body: the preamble, one summary row per root, the
     sentence saying how much of it is drawn, then one detail block and one
     sequence diagram per root, in `roots`' own fixed order (NFR-1).
@@ -1889,7 +1893,7 @@ def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section
     sections.append(MachineTable(_TRACE_HEADERS, summary))
     sections.append(MachineParagraph(_runs(_traces_drawn_sentence(traces))))
     for trace in traces:
-        sections.append(_trace_detail(trace, redactor))
+        sections.append(_trace_detail(trace, redactor, candidates or {}))
         participants, messages = _sequence_view(trace)
         sections.append(
             MachineDiagram(
@@ -1928,9 +1932,14 @@ def _root_addresses(root: Root, redactor: Redactor) -> tuple[Run, ...]:
     )
 
 
-def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
-    """One root's block: its own header, the step table, and what the root
-    method returns.
+def _trace_detail(
+    trace: Trace,
+    redactor: Redactor,
+    candidates: Mapping[tuple[str, int], Sequence[Mapping[str, object]]],
+) -> MachineDetail:
+    """One root's block: its own header, the step table, which candidates of a
+    narrowed call exist in each environment (where any candidate is a
+    conditional bean), and what the root method returns.
 
     The header names the root by its HANDLER, its kind and every address that
     reaches it — the last so that a reader who knows only a URL can find the
@@ -1953,10 +1962,109 @@ def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
         # `/admin/refreshToken` on `mall-admin` is pure string work — so it
         # says so rather than showing an empty table.
         entries.append(DetailEntry(_text("Steps"), _text("None — this root calls nothing."), None))
+    entries.extend(_candidate_entries(trace, candidates))
     entries.append(
         DetailEntry(_text("Response"), _text(_returns_cell(trace.response, redactor)), None)
     )
     return MachineDetail(tuple(entries))
+
+
+def _candidate_sites(
+    report: ResolveReport,
+) -> dict[tuple[str, int], list[Mapping[str, object]]]:
+    """`candidate_presence` grouped by call site, `(caller, ordinal)` — read once."""
+    sites: dict[tuple[str, int], list[Mapping[str, object]]] = {}
+    for row in report.candidate_presence:
+        sites.setdefault((str(row["caller"]), cast(int, row["ordinal"])), []).append(row)
+    return sites
+
+
+# A candidate whose verdict rests on a bean-presence condition judged from the module's own
+# beans (spec §2c) says so beside its name.
+_PARTIAL_CANDIDATE = " (decided from this module's beans only)"
+
+
+def _candidate_entries(
+    trace: Trace, candidates: Mapping[tuple[str, int], Sequence[Mapping[str, object]]]
+) -> list[DetailEntry]:
+    """Which candidates of each NARROWED call site in this trace exist in each environment
+    (spec 2026-10-22-conditional-beans §3, second bullet): the site and every candidate it
+    may dispatch to, then one line per environment naming the candidates whose bean exists
+    there, then the candidates not evaluated there. Stated, not decided — the step table and
+    the diagram still show every candidate, and nothing is dropped from either.
+
+    Read from `candidate_presence` alone, which lists a site only where at least one
+    candidate is a conditional bean: a site with no such candidate gets no lines and renders
+    exactly as it did before. Environments whose lines would read the same share one."""
+    entries: list[DetailEntry] = []
+    stated: set[tuple[str, int]] = set()
+    for step in trace.steps:
+        site = (step.caller, step.ordinal)
+        if step.resolution != Resolution.NARROWED or site in stated or site not in candidates:
+            continue
+        stated.add(site)
+        entries.extend(_site_entries(step, candidates[site]))
+    return entries
+
+
+def _site_entries(step: Step, rows: Sequence[Mapping[str, object]]) -> list[DetailEntry]:
+    """One narrowed site's lines, from its `candidate_presence` rows."""
+    owners = {str(row["callee"]): _candidate_owner(str(row["callee"])) for row in rows}
+    # The diagram's own naming rule: a simple name, or the full type where two collide.
+    labels = _sequence_labels({owner: owner for owner in owners.values()})
+    named = {callee: labels[owner] for callee, owner in owners.items()}
+    present: dict[str, list[str]] = {}
+    unread: dict[str, list[str]] = {}
+    for row in rows:
+        environment, label = str(row["environment"]), named[str(row["callee"])]
+        present.setdefault(environment, [])
+        if str(row["holds"]) == "true":
+            hedge = _PARTIAL_CANDIDATE if str(row["resolution"]) == "partial" else ""
+            present[environment].append(f"`{label}`{hedge}")
+        elif str(row["holds"]) == "unresolved":
+            unread.setdefault(environment, []).append(f"`{label}`")
+    target = step.target or ""
+    entries = [
+        DetailEntry(
+            _runs(
+                f"`{_short_handler(bare_descriptor(step.caller))}` calls "
+                f"`{_short_handler(target)}`, answered by one of"
+            ),
+            _runs(", ".join(f"`{label}`" for label in sorted(set(named.values())))),
+            None,
+        )
+    ]
+    shown = {
+        environment: listed
+        for environment, listed in present.items()
+        if listed or environment not in unread
+    }
+    for environments, listed in _shared_lines(shown):
+        body = ", ".join(listed) if listed else "none of them"
+        entries.append(DetailEntry(_runs(f"in {environments}"), _runs(body), None))
+    for environments, listed in _shared_lines(unread):
+        body = ", ".join(listed)
+        entries.append(DetailEntry(_runs(f"not evaluated in {environments}"), _runs(body), None))
+    return entries
+
+
+def _candidate_owner(callee: str) -> str:
+    """The type a candidate body belongs to, as the diagram's lifeline names it."""
+    bare = bare_descriptor(callee)
+    owner = owner_of(bare)
+    return bare if owner is None else owner
+
+
+def _shared_lines(by_environment: Mapping[str, Sequence[str]]) -> list[tuple[str, list[str]]]:
+    """Environments grouped by the candidates listed for them — one line per distinct list,
+    in environment order, its environments spelled together."""
+    grouped: dict[tuple[str, ...], list[str]] = {}
+    for environment in sorted(by_environment):
+        grouped.setdefault(tuple(sorted(by_environment[environment])), []).append(environment)
+    return [
+        (", ".join(f"`{e}`" for e in environments), list(listed))
+        for listed, environments in grouped.items()
+    ]
 
 
 def _reaches_cell(step: Step) -> str:

@@ -983,6 +983,8 @@ def _reconstructed_report(
         error_handlers=workspace.query("error_handlers"),
         bean_conditions=workspace.query("bean_conditions"),
         bean_presence=workspace.query("bean_presence"),
+        symbol_beans=workspace.query("symbol_beans"),
+        candidate_presence=workspace.query("candidate_presence"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report

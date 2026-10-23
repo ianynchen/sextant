@@ -7,7 +7,10 @@ inbound endpoint got in PR #61, all read from ONE index over `bean_conditions` a
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.roots import Root, RootIdentity
+from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
 from sextant.egress.render.document import render_module_document
 
 MODULE = ModuleModel(
@@ -79,6 +82,13 @@ def _presence(
 PROD_ONLY = {"default": "false", "prod": "true", "staging": "false"}
 
 
+def _belongs(symbol: str, bean: str) -> dict[str, object]:
+    """One `symbol_beans` row: the bean a code symbol belongs to, as the workspace's one rule
+    (own symbol first, then owner class) decided it — the document reads it, never re-derives
+    it (Task 5, ruling 1)."""
+    return {"symbol": symbol, "bean": bean}
+
+
 def _document(**tables: list[dict[str, object]]) -> str:
     report = ResolveReport(facts_loaded=1, coverage={"documents": 1}, **tables)  # type: ignore[arg-type]
     return render_module_document(MODULE, report, "a3f91c")
@@ -134,6 +144,7 @@ def test_an_outbound_call_of_a_conditional_bean_states_where_it_exists():
         endpoints=[_outbound(caller)],
         bean_conditions=_condition(CLIENT, "profile", PROFILE_PROD, PROD_ONLY),
         bean_presence=_presence(CLIENT, PROD_ONLY),
+        symbol_beans=[_belongs(caller, CLIENT)],
     )
     block = _block(document, "BillingClient#balances")
     assert EXISTS_PROD in block + "\n"
@@ -155,6 +166,7 @@ def test_a_scheduled_job_of_a_conditional_bean_states_where_it_exists():
         ],
         bean_conditions=_condition(JOBS, "profile", PROFILE_PROD, PROD_ONLY),
         bean_presence=_presence(JOBS, PROD_ONLY),
+        symbol_beans=[_belongs(handler, JOBS)],
     )
     block = _block(document, "Jobs#nightly")
     assert EXISTS_PROD in block + "\n"
@@ -180,6 +192,7 @@ def test_an_error_handler_of_a_conditional_bean_states_where_it_exists():
         ],
         bean_conditions=_condition(ADVICE, "profile", PROFILE_PROD, PROD_ONLY),
         bean_presence=_presence(ADVICE, PROD_ONLY),
+        symbol_beans=[_belongs(handler, ADVICE)],
     )
     block = _block(document, "Advice#notFound")
     assert EXISTS_PROD in block + "\n"
@@ -193,6 +206,7 @@ def test_an_inbound_endpoint_is_found_the_same_way():
         endpoints=[_inbound(handler)],
         bean_conditions=_condition(CLIENT, "profile", PROFILE_PROD, PROD_ONLY),
         bean_presence=_presence(CLIENT, PROD_ONLY),
+        symbol_beans=[_belongs(handler, CLIENT)],
     )
     block = _block(document, "BillingClient#status")
     assert EXISTS_PROD in block + "\n"
@@ -218,6 +232,7 @@ def test_a_lambda_that_is_its_own_bean_is_found_before_its_owner_class():
             *_presence(lambda_body, {"default": "false", "prod": "false", "staging": "true"}),
             *_presence(CLIENT, PROD_ONLY),
         ],
+        symbol_beans=[_belongs(lambda_body, lambda_body)],
     )
     block = _block(document, "lambda$balances$0")
     assert "  - Exists only when: the active profile matches one of: `staging`\n" in block + "\n"
@@ -280,6 +295,7 @@ def test_two_exclusive_factories_state_each_route_and_the_presence_verdict():
         endpoints=[_inbound(handler)],
         bean_conditions=_two_exclusive_factories(),
         bean_presence=_presence(USERS, {"default": "false", "prod": "true", "staging": "true"}),
+        symbol_beans=[_belongs(handler, USERS)],
     )
     block = _block(document, "Users#all")
     assert "  - Exists when any of these registers it:\n" in block + "\n"
@@ -317,6 +333,7 @@ def test_an_unconditional_route_reads_always_and_a_constructed_one_says_it_is_no
             ),
         ],
         bean_presence=_presence(USERS, {"default": "true", "prod": "true", "staging": "true"}),
+        symbol_beans=[_belongs(handler, USERS)],
     )
     block = _block(document, "Users#all")
     assert "| `Users` | the active profile matches one of: `prod` |" in block
@@ -338,6 +355,7 @@ def test_a_bean_open_in_every_environment_is_not_evaluated_in_any():
             resolution="unresolved",
         ),
         bean_presence=_presence(USERS, unresolved, "unresolved"),
+        symbol_beans=[_belongs(handler, USERS)],
     )
     block = _block(document, "Users#all")
     assert "not evaluated by this analysis in any of the 3 environments" in block
@@ -379,12 +397,13 @@ def test_a_missing_bean_condition_names_its_competitors_and_the_profile_nobody_a
             evidence=_competitors(listed),
         ),
         bean_presence=_presence(USERS, holds, "partial"),
+        symbol_beans=[_belongs(handler, USERS)],
     )
     block = _block(document, "Users#all")
     assert (
         "  - Exists only when: no other bean of type `UserService` is registered — decided from "
-        "this module's beans only (`partial`): `LdapUserService` (not in any environment; "
-        f"{LDAP_NOTE})\n"
+        "this module's beans only (`partial`); the other beans of that type: `LdapUserService` "
+        f"(not in any environment; {LDAP_NOTE})\n"
     ) in block + "\n"
     assert "competitors" not in block
     assert "[{" not in block
@@ -412,9 +431,267 @@ def test_a_bean_condition_names_a_competitor_by_where_it_exists():
             evidence={e: _competitors(v) for e, v in entries.items()},
         ),
         bean_presence=_presence(USERS, holds, "partial"),
+        symbol_beans=[_belongs(handler, USERS)],
     )
     block = _block(document, "Users#all")
     assert (
         "a bean of type `UserService` is registered — decided from this module's beans only "
-        "(`partial`): `Other` (in `prod`; not in `default`, `staging`)"
+        "(`partial`); the other beans of that type: `Other` (in `prod`; not in `default`, "
+        "`staging`)"
     ) in block
+
+
+def test_a_missing_bean_condition_names_every_competitor_in_order():
+    """Apollo portal's shape: `DefaultUserService` stands back for three other `UserService`
+    beans, each under a profile no environment of the module activates. Every one is named,
+    sorted, after the lead-in — none dropped, none merged."""
+    handler = USERS + "all()."
+    holds = {"default": "true", "prod": "true", "staging": "true"}
+    listed = (
+        "["
+        + ", ".join(
+            '{"bean": "' + COORDS + f'com/acme/{name}#", "holds": "false", "note": '
+            f'"profile `{profile}` is named but this module has no `{profile}` environment", '
+            '"via": null}'
+            for name, profile in (
+                ("LdapUserService", "ldap"),
+                ("OidcLocalUserServiceImpl", "oidc"),
+                ("SpringSecurityUserService", "auth"),
+            )
+        )
+        + "]"
+    )
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=_condition(
+            USERS, "presence", MISSING, holds, resolution="partial", evidence=_competitors(listed)
+        ),
+        bean_presence=_presence(USERS, holds, "partial"),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "no other bean of type `UserService` is registered — decided from this module's beans "
+        "only (`partial`); the other beans of that type: "
+        "`LdapUserService` (not in any environment; profile `ldap` is named but this module "
+        "has no `ldap` environment), "
+        "`OidcLocalUserServiceImpl` (not in any environment; profile `oidc` is named but this "
+        "module has no `oidc` environment), "
+        "`SpringSecurityUserService` (not in any environment; profile `auth` is named but this "
+        "module has no `auth` environment)\n"
+    ) in block + "\n"
+
+
+def test_one_route_with_two_conditions_joins_them_with_and():
+    """A bean registered ONE way under two conditions exists where both hold, so its line
+    joins them with "and" — one sentence about the bean, not PR #61's one pair per
+    condition (presence is per bean)."""
+    handler = USERS + "all()."
+    property_expression = (
+        '{"having_value": "on", "keys": ["users.enabled"], "match_if_missing": false}'
+    )
+    document = _document(
+        endpoints=[_inbound(handler)],
+        bean_conditions=[
+            *_condition(USERS, "profile", PROFILE_PROD, PROD_ONLY),
+            *_condition(
+                USERS,
+                "property",
+                property_expression,
+                {"default": "true", "prod": "true", "staging": "false"},
+            ),
+        ],
+        bean_presence=_presence(USERS, PROD_ONLY),
+        symbol_beans=[_belongs(handler, USERS)],
+    )
+    block = _block(document, "Users#all")
+    assert (
+        "  - Exists only when: the active profile matches one of: `prod` and the configuration "
+        "key `users.enabled` is `on`\n"
+    ) in block + "\n"
+    assert block.count("Exists only when") == 1
+
+
+# --- Narrowed call sites (spec §3, second bullet; Task 5) --------------------------------
+
+API = COORDS + "com/acme/Api#"
+SENDER_SEND = "com/acme/Sender#send()."
+KAFKA = COORDS + "com/acme/KafkaSender#"
+REDIS = COORDS + "com/acme/RedisSender#"
+DEFAULT_USERS = COORDS + "com/acme/DefaultUserService#"
+LDAP_USERS = COORDS + "com/acme/LdapUserService#"
+
+
+def _narrowed_trace(*callees: str, target: str = SENDER_SEND) -> Trace:
+    """`Api#handle` (an inbound root) calls `Api#send`, whose one call site dispatches to
+    each of `callees` with none picked."""
+    send = API + "send()."
+    steps = [
+        Step(
+            depth=1,
+            caller=API + "handle().",
+            ordinal=0,
+            invoke_kind="virtual",
+            target="com/acme/Api#send().",
+            callee=send,
+            result=None,
+            resolution=Resolution.RESOLVED,
+            stop=None,
+        ),
+        *(
+            Step(
+                depth=2,
+                caller=send,
+                ordinal=0,
+                invoke_kind="interface",
+                target=target,
+                callee=callee,
+                result=None,
+                resolution=Resolution.NARROWED,
+                stop=TraceStop.BOUNDARY,
+            )
+            for callee in callees
+        ),
+    ]
+    return Trace(
+        root=Root(
+            handler=API + "handle().",
+            kind=RootKind.INBOUND_ENDPOINT,
+            identities=(RootIdentity(protocol="http", method="POST", path="/send"),),
+        ),
+        steps=tuple(steps),
+        response=(),
+    )
+
+
+def _candidate(
+    callee: str, bean: str | None, holds: dict[str, str], resolution: str = "resolved"
+) -> list[dict[str, object]]:
+    """`candidate_presence` rows for one candidate of `Api#send`'s site."""
+    return [
+        {
+            "caller": API + "send().",
+            "ordinal": 0,
+            "callee": callee,
+            "bean": bean,
+            "environment": environment,
+            "holds": verdict,
+            "resolution": resolution,
+        }
+        for environment, verdict in holds.items()
+    ]
+
+
+def _traced(trace: Trace, **tables: list[dict[str, object]]) -> str:
+    report = ResolveReport(facts_loaded=1, coverage={"documents": 1}, **tables)  # type: ignore[arg-type]
+    return render_module_document(MODULE, report, "a3f91c", traces=[trace])
+
+
+def test_a_narrowed_site_states_which_candidates_exist_in_each_environment():
+    """Two `@ConditionalOnProperty` senders behind one interface call — `sender-type=kafka`
+    in `application-kafka.yml`, `redis` in `application.yml`. The trace still lists both; the
+    block then says which one exists in each environment. Nothing is dropped."""
+    kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
+    trace = _narrowed_trace(kafka_send, redis_send)
+    document = _traced(
+        trace,
+        candidate_presence=[
+            *_candidate(kafka_send, KAFKA, {"default": "false", "kafka": "true"}),
+            *_candidate(redis_send, REDIS, {"default": "true", "kafka": "false"}),
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert (
+        "  - `Api#send` calls `Sender#send`, answered by one of: `KafkaSender`, `RedisSender`\n"
+        "  - in `default`: `RedisSender`\n"
+        "  - in `kafka`: `KafkaSender`\n"
+    ) in block + "\n"
+    # Both candidates stay in the step table and in the diagram's `alt` block.
+    assert block.count("narrowed") == 2
+    assert "alt KafkaSender" in document and "else RedisSender" in document
+
+
+def test_a_partial_candidate_says_it_was_decided_from_this_modules_beans_only():
+    """A `@ConditionalOnMissingBean` default beside a `@Profile("ldap")` override: where the
+    default exists it exists by a verdict from the module's own beans (`partial`), and its
+    line says so; an unconditional candidate is listed everywhere; an open one is not
+    evaluated."""
+    default_find, ldap_find, plain_find = (
+        DEFAULT_USERS + "find().",
+        LDAP_USERS + "find().",
+        COORDS + "com/acme/CachedUserService#find().",
+    )
+    open_find = COORDS + "com/acme/RemoteUserService#find()."
+    trace = _narrowed_trace(
+        default_find, ldap_find, plain_find, open_find, target="com/acme/UserService#find()."
+    )
+    document = _traced(
+        trace,
+        candidate_presence=[
+            *_candidate(
+                default_find, DEFAULT_USERS, {"default": "true", "ldap": "false"}, "partial"
+            ),
+            *_candidate(ldap_find, LDAP_USERS, {"default": "false", "ldap": "true"}),
+            *_candidate(plain_find, None, {"default": "true", "ldap": "true"}),
+            *_candidate(
+                open_find,
+                COORDS + "com/acme/RemoteUserService#",
+                {"default": "unresolved", "ldap": "unresolved"},
+                "unresolved",
+            ),
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert (
+        "  - in `default`: `CachedUserService`, `DefaultUserService` (decided from this module's "
+        "beans only)\n"
+        "  - in `ldap`: `CachedUserService`, `LdapUserService`\n"
+        "  - not evaluated in `default`, `ldap`: `RemoteUserService`\n"
+    ) in block + "\n"
+
+
+def test_environments_with_the_same_candidates_share_one_line():
+    kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
+    holds_redis = {"default": "true", "kafka": "false", "test": "true"}
+    document = _traced(
+        _narrowed_trace(kafka_send, redis_send),
+        candidate_presence=[
+            *_candidate(kafka_send, KAFKA, {"default": "false", "kafka": "true", "test": "false"}),
+            *_candidate(redis_send, REDIS, holds_redis),
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert "  - in `default`, `test`: `RedisSender`\n" in block + "\n"
+    assert "  - in `kafka`: `KafkaSender`\n" in block + "\n"
+
+
+def test_an_unconditional_narrowed_site_renders_unchanged():
+    """A narrowed site none of whose candidates is a conditional bean has no
+    `candidate_presence` rows, and its trace renders byte for byte as it did before — no
+    empty per-environment block. Rows for a site this trace never reaches change nothing."""
+    trace = _narrowed_trace(
+        COORDS + "com/acme/JdbcRepo#send().", COORDS + "com/acme/JpaRepo#send()."
+    )
+    elsewhere = [
+        {**row, "caller": COORDS + "com/acme/Elsewhere#run()."}
+        for row in _candidate(KAFKA + "send().", KAFKA, {"default": "true"})
+    ]
+    before = _traced(trace)
+    after = _traced(trace, candidate_presence=elsewhere)
+    assert after == before
+    assert "answered by one of" not in after
+
+
+def test_an_environment_where_no_candidate_exists_says_so():
+    """Every candidate conditional and none holding in `default` (the ruoyi module that sets
+    no `sender-type`): the line says none of them, rather than leaving the environment out."""
+    kafka_send, redis_send = KAFKA + "send().", REDIS + "send()."
+    document = _traced(
+        _narrowed_trace(kafka_send, redis_send),
+        candidate_presence=[
+            *_candidate(kafka_send, KAFKA, {"default": "false", "kafka": "true"}),
+            *_candidate(redis_send, REDIS, {"default": "false", "kafka": "false"}),
+        ],
+    )
+    block = _block(document, "Api#handle")
+    assert "  - in `default`: none of them\n  - in `kafka`: `KafkaSender`\n" in block + "\n"

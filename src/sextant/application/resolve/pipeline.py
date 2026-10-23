@@ -74,6 +74,12 @@ class ResolveReport:
     # Where each conditional bean EXISTS, per environment — the one answer to "does this exist
     # here" (OR across a bean's routes, AND within one), which "holds in N of M" is read from.
     bean_presence: list[dict[str, object]] = field(default_factory=list)
+    # The bean each code symbol belongs to (own symbol, then owner class), from the workspace's
+    # one rule — the documents read it rather than re-deriving it (Task 5, ruling 1).
+    symbol_beans: list[dict[str, object]] = field(default_factory=list)
+    # Which candidates of each narrowed call site exist in each environment (spec §3), which a
+    # trace block states under the site.
+    candidate_presence: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -360,6 +366,8 @@ def resolve(
         error_handlers=workspace.query("error_handlers"),
         bean_conditions=workspace.query("bean_conditions"),
         bean_presence=workspace.query("bean_presence"),
+        symbol_beans=workspace.query("symbol_beans"),
+        candidate_presence=workspace.query("candidate_presence"),
         # Both passes root payload types and both expand what they root, so
         # both can meet a type nothing opens. Reported as one list, deduped:
         # the gap is in the type, not in how many passes walked into it —

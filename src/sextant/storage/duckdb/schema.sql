@@ -1201,43 +1201,46 @@ SELECT * FROM call_edges ORDER BY callee, caller, ordinal, target;
 CREATE OR REPLACE VIEW roots_by_address AS
 SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;
 
+-- Which conditional bean a piece of code belongs to — the ONE rule for it (spec
+-- 2026-10-22-conditional-beans, decision 3; Task 5 ruling 1), read by `endpoint_conditions`,
+-- by `candidate_presence` and by the documents, so no reader carries a copy of it. A symbol's
+-- bean is that symbol itself where the conditions pass wrote rows for it (a lambda body a
+-- factory method creates), and otherwise its owner class (`enclosing`). Only symbols whose
+-- bean has rows in `bean_conditions` are here: a symbol absent from this view belongs to no
+-- conditional bean. A view, so it is never stale against the two it reads.
+--
+-- **Two equi-joins, never one `OR` join** (GUIDELINES §8.7): a join on `bean = symbol OR
+-- (bean = enclosing AND NOT EXISTS …)` cannot be hashed and plans a nested loop — measured
+-- at review, 11 s for 20,000 endpoint rows against 12,000 condition rows, against 5 ms for
+-- the same rows this way. Each symbol is matched once: to itself where it is a bean, else
+-- (an anti-join on the beans) to its owner class.
+CREATE OR REPLACE VIEW symbol_beans AS
+WITH beans AS (SELECT DISTINCT bean FROM bean_conditions)
+SELECT DISTINCT s.symbol, own.bean
+FROM symbols s JOIN beans own ON own.bean = s.symbol
+UNION ALL
+SELECT DISTINCT s.symbol, owner.bean
+FROM symbols s
+JOIN beans owner ON owner.bean = s.enclosing
+LEFT JOIN beans own ON own.bean = s.symbol
+WHERE own.bean IS NULL;
+
 -- The conditions an endpoint row carries, read through the bean its code lives in (spec
 -- 2026-10-22-conditional-beans, decision 3): a VIEW, so no row copies them, and kept under
 -- PR #61's name and columns — `caller`, `via`, `bean_kind` and `bean` appended, in that order — so
 -- the documents, the system tier (which federates it by name) and the bundle read what they
 -- read before, now for rows of every direction. A row's code is its handler, or its caller
--- where it has no handler (an outbound call); its bean is that symbol itself where the
--- conditions pass wrote one for it (a lambda body a factory method creates), and otherwise
--- the symbol's owner class (`enclosing`). `via` tells two routes of one bean apart: two
+-- where it has no handler (an outbound call); its bean is `symbol_beans`' answer for that
+-- symbol. `via` tells two routes of one bean apart: two
 -- mutually exclusive factories are two routes, each holding somewhere, and whether the row
 -- EXISTS in an environment is `bean_presence`'s answer (OR across routes), never "every row
 -- here holds". Condition-less route rows (`kind` NULL) are no condition and are left out.
 -- Last in this file because a view binds at creation, and `symbols` is defined above.
---
--- **Two equi-joins, never one `OR` join** (GUIDELINES §8.7): a join on `bean = symbol OR
--- (bean = enclosing AND NOT EXISTS …)` cannot be hashed and plans a nested loop — measured
--- at review, 11 s for 20,000 endpoint rows against 12,000 condition rows, against 5 ms for
--- the same rows this way. Each row is matched once: to its own symbol where that is a bean,
--- else (an anti-join on the beans) to its owner class.
 CREATE OR REPLACE VIEW endpoint_conditions AS
-WITH located AS (
-    SELECT e.protocol, e.direction, e.method, e.path, e.handler, e.caller,
-           s.symbol, s.enclosing
-    FROM endpoints e
-    JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
-),
-beans AS (SELECT DISTINCT bean FROM bean_conditions),
-matched AS (
-    SELECT l.*, l.symbol AS bean
-    FROM located l JOIN beans own ON own.bean = l.symbol
-    UNION ALL
-    SELECT l.*, l.enclosing AS bean
-    FROM located l LEFT JOIN beans own ON own.bean = l.symbol
-    WHERE own.bean IS NULL
-)
-SELECT DISTINCT m.protocol, m.direction, m.method, m.path, m.handler, b.kind, b.expression,
-       b.environment, b.holds, b.resolution, b.evidence, m.caller, b.via, b.bean_kind, m.bean
-FROM matched m
+SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
+       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind, m.bean
+FROM endpoints e
+JOIN symbol_beans m ON m.symbol = coalesce(e.handler, e.caller)
 JOIN bean_conditions b ON b.bean = m.bean
 WHERE b.kind IS NOT NULL;
 
@@ -1311,3 +1314,36 @@ SELECT bean, environment,
             END AS evidence
 FROM routes
 GROUP BY bean, environment;
+
+-- Which candidates of a NARROWED call site exist in each environment (spec 2026-10-22-
+-- conditional-beans §3, second bullet; Task 5 ruling 3): the per-site, per-environment answer
+-- as rows, so a machine reads it without re-implementing the join. Read, never written:
+-- `call_edges` and its `narrowed` resolution are unchanged (spec §4), and every candidate is
+-- here — none dropped in any environment. A site is listed only where at least one candidate's
+-- bean is conditional (`symbol_beans`); then every candidate of it is listed, a conditional
+-- one with its bean's `bean_presence` verdict and resolution, an unconditional one with `bean`
+-- NULL holding `true` (`resolved`) in every environment the module resolves. A site none of
+-- whose candidates is conditional has no rows, and its trace renders as it always did.
+--
+-- Equi-joins only, for the reason `symbol_beans` gives (§8.7): one hash join per step, and
+-- the unconditional arm a cross join against the handful of environments.
+CREATE OR REPLACE VIEW candidate_presence AS
+WITH candidates AS (
+    SELECT DISTINCT c.caller, c.ordinal, c.callee, m.bean
+    FROM call_edges c
+    LEFT JOIN symbol_beans m ON m.symbol = c.callee
+    WHERE c.resolution = 'narrowed' AND c.callee IS NOT NULL
+),
+sites AS (SELECT DISTINCT caller, ordinal FROM candidates WHERE bean IS NOT NULL),
+listed AS (
+    SELECT c.* FROM candidates c
+    JOIN sites s ON s.caller = c.caller AND s.ordinal = c.ordinal
+),
+environments AS (SELECT DISTINCT environment FROM bean_conditions)
+SELECT l.caller, l.ordinal, l.callee, l.bean, p.environment, p.holds, p.resolution
+FROM listed l JOIN bean_presence p ON p.bean = l.bean
+UNION ALL
+SELECT l.caller, l.ordinal, l.callee, NULL AS bean, e.environment, 'true' AS holds,
+       'resolved' AS resolution
+FROM listed l CROSS JOIN environments e
+WHERE l.bean IS NULL;

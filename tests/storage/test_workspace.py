@@ -3290,3 +3290,147 @@ def test_the_endpoint_conditions_view_is_planned_as_hash_joins(tmp_path: Path):
         workspace.close()
     assert len(rows) == 1 + 9999 * len(ENVIRONMENTS)
     assert elapsed < 2.0, f"endpoint_conditions took {elapsed:.2f}s on 10,000 rows"
+
+
+def test_symbol_beans_maps_a_symbol_to_its_own_bean_else_its_owner_class(tmp_path: Path):
+    """The ONE rule for which bean a piece of code is (Task 5, ruling 1): the symbol itself
+    where the conditions pass wrote rows for it (a lambda a factory creates), else its owner
+    class (`symbols.enclosing`) — and only where that is a conditional bean. The
+    `endpoint_conditions` view, the call-candidate view and the document all read it."""
+    workspace = DuckDbWorkspace(_workspace_for_the_view(tmp_path, 10))
+    try:
+        rows = workspace.query("symbol_beans")
+    finally:
+        workspace.close()
+    prefix = "s maven p 1 com/acme/"
+    assert [(r["symbol"], r["bean"]) for r in rows] == [
+        (f"{prefix}C0#m0().", f"{prefix}C0#m0()."),
+        *[(f"{prefix}C{i // 5}#m{i}().", f"{prefix}C{i // 5}#") for i in range(1, 10)],
+    ]
+
+
+CANDIDATES = "s maven p 1 com/acme/"
+API_SEND = CANDIDATES + "Api#send()."
+KAFKA_SEND = CANDIDATES + "KafkaSender#send()."
+REDIS_SEND = CANDIDATES + "RedisSender#send()."
+PLAIN_SEND = CANDIDATES + "PlainSender#send()."
+
+
+def _workspace_with_a_narrowed_site(tmp_path: Path) -> Path:
+    """`Api#send` dispatches at ordinal 0 to three bodies: two `@ConditionalOnProperty`
+    senders (`kafka` in the `kafka` environment, `redis` in `default`) and one with no
+    condition; `Api#other` dispatches to two unconditional bodies only."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/All.java",
+        module_id="com.acme:senders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    methods = (API_SEND, CANDIDATES + "Api#other().", KAFKA_SEND, REDIS_SEND, PLAIN_SEND)
+    write_fact_file(
+        tmp_path / "facts" / "all.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=method.split("#")[0] + "#",
+            )
+            for method in methods
+        ],
+    )
+    path = tmp_path / "ws.duckdb"
+    workspace = DuckDbWorkspace(path)
+    workspace.load_facts(tmp_path / "facts")
+
+    def row(bean: str, value: str, environment: str, holds: str) -> dict[str, object]:
+        return {
+            "bean": bean,
+            "bean_kind": "factory",
+            "via": bean + "make().",
+            "kind": "property",
+            "expression": '{"having_value": "' + value + '", "keys": ["sender-type"]}',
+            "environment": environment,
+            "holds": holds,
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+
+    workspace.derive(
+        "bean_conditions_insert",
+        rows=[
+            row(CANDIDATES + "KafkaSender#", "kafka", "default", "false"),
+            row(CANDIDATES + "KafkaSender#", "kafka", "kafka", "true"),
+            row(CANDIDATES + "RedisSender#", "redis", "default", "true"),
+            row(CANDIDATES + "RedisSender#", "redis", "kafka", "false"),
+        ],
+    )
+    workspace.close()
+    with duckdb.connect(str(path)) as connection:
+        for caller, callee in (
+            (API_SEND, KAFKA_SEND),
+            (API_SEND, PLAIN_SEND),
+            (API_SEND, REDIS_SEND),
+            (CANDIDATES + "Api#other().", PLAIN_SEND),
+            (CANDIDATES + "Api#other().", CANDIDATES + "OtherSender#send()."),
+        ):
+            connection.execute(
+                "INSERT INTO call_edges (caller, ordinal, invoke_kind, target, callee, "
+                "resolution, evidence) VALUES (?, 0, 'interface', ?, ?, 'narrowed', 'compiler')",
+                [caller, CANDIDATES + "Sender#send().", callee],
+            )
+    return path
+
+
+def test_candidate_presence_states_each_candidate_of_a_narrowed_site_per_environment(
+    tmp_path: Path,
+):
+    """Spec 2026-10-22-conditional-beans §3, Task 5 ruling 3: the per-site, per-environment
+    answer as rows a machine reads without re-implementing the join — every candidate of a
+    narrowed site one of whose candidates is a conditional bean, the conditional ones from
+    `bean_presence`, the unconditional one (no bean) holding everywhere. A site with no
+    conditional candidate has no rows; `call_edges` is read, never changed."""
+    workspace = DuckDbWorkspace(_workspace_with_a_narrowed_site(tmp_path))
+    try:
+        rows = workspace.query("candidate_presence")
+        edges = workspace.query("call_edges")
+    finally:
+        workspace.close()
+    kafka, redis = CANDIDATES + "KafkaSender#", CANDIDATES + "RedisSender#"
+    assert [
+        (r["caller"], r["ordinal"], r["callee"], r["bean"], r["environment"], r["holds"])
+        for r in rows
+    ] == [
+        (API_SEND, 0, KAFKA_SEND, kafka, "default", "false"),
+        (API_SEND, 0, KAFKA_SEND, kafka, "kafka", "true"),
+        (API_SEND, 0, PLAIN_SEND, None, "default", "true"),
+        (API_SEND, 0, PLAIN_SEND, None, "kafka", "true"),
+        (API_SEND, 0, REDIS_SEND, redis, "default", "true"),
+        (API_SEND, 0, REDIS_SEND, redis, "kafka", "false"),
+    ]
+    assert {r["resolution"] for r in rows} == {"resolved"}
+    assert len(edges) == 5
+    assert {e["resolution"] for e in edges} == {"narrowed"}
+
+
+def test_the_bundle_exports_candidate_presence_and_symbol_beans(tmp_path: Path):
+    workspace = DuckDbWorkspace(_workspace_with_a_narrowed_site(tmp_path))
+    try:
+        written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
+        expected = len(workspace.query("candidate_presence"))
+    finally:
+        workspace.close()
+    assert "candidate_presence" in written and "symbol_beans" in written
+    graph = tmp_path / "bundle" / "graph"
+    back = duckdb.sql(
+        f"SELECT * FROM read_parquet('{graph / 'candidate_presence.parquet'}')"
+    ).fetchall()
+    assert len(back) == expected == 6

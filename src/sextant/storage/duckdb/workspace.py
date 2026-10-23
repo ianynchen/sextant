@@ -874,6 +874,18 @@ _NAMED_QUERIES = {
         FROM bean_presence
         ORDER BY bean, environment
     """,
+    # The bean each code symbol belongs to — the one rule (own symbol, then owner class) the
+    # `endpoint_conditions` view and the documents both read (Task 5, ruling 1). One row per
+    # symbol whose bean is conditional.
+    "symbol_beans": "SELECT symbol, bean FROM symbol_beans ORDER BY symbol, bean",
+    # Which candidates of each narrowed call site exist in each environment (spec §3; Task 5,
+    # ruling 3): every candidate of a site with a conditional one, per environment. Ordered on
+    # the site, then the candidate, then the environment — the order a trace block reads it.
+    "candidate_presence": """
+        SELECT caller, ordinal, callee, bean, environment, holds, resolution
+        FROM candidate_presence
+        ORDER BY caller, ordinal, callee, environment
+    """,
     # The lambda bodies each method's `dynamic` call sites create (spec 2026-10-22-conditional-
     # beans §2a): a body a factory method creates is that factory's code. `invoke_kind` is the
     # site's own dispatch form; the reader keeps the synthetic bodies (lambdas) among them.
@@ -1239,10 +1251,15 @@ _EXPORT_QUERIES = {
     "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     # Structured for a machine (ruling 1, 2026-10-22): the conditions rows go out as they
     # are, the document being the one verbose rendering of them — the bean's own rows and the
-    # view every endpoint row reads them through (spec 2026-10-22-conditional-beans).
+    # view every endpoint row reads them through (spec 2026-10-22-conditional-beans), the
+    # symbol-to-bean rule both views use, and the per-environment candidates of every narrowed
+    # call site a trace block states. Symbols, closed-set values and environment names only:
+    # nothing here for redaction to reach.
     "endpoint_conditions": _NAMED_QUERIES["endpoint_conditions"],
     "bean_conditions": _NAMED_QUERIES["bean_conditions"],
     "bean_presence": _NAMED_QUERIES["bean_presence"],
+    "symbol_beans": _NAMED_QUERIES["symbol_beans"],
+    "candidate_presence": _NAMED_QUERIES["candidate_presence"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     # `value` is an entry of the ARGUMENT grammar — the constant a field was written from —
     # so it takes the same `redact_json` pass `constants.value` and `call_sites.arguments`
