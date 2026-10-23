@@ -1257,7 +1257,8 @@ _NAMED_QUERIES = {
 # must not be duplicated — not the column:
 #
 #   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
-#                `endpoint_metadata.path`, `endpoint_conditions.path`
+#                `endpoint_metadata.path`, `endpoint_conditions.path`,
+#                `scheduled_work.expression`, `resolved_schedules.expression`
 #   schedules    `resolved_schedules.value` (`redact_schedule_value`: whole by the
 #                keys it was read through, else `redact_text`)
 #   candidates   `open_questions.candidates` (`redact_candidates`)
@@ -1393,16 +1394,24 @@ _EXPORT_QUERIES = {
     """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
-    # The two non-wire tables export through their named query verbatim, and
-    # the reason is that NEITHER carries a masked column. `_REDACTED_ADDRESSES`
-    # exists for the columns that can hold a whole URL — `endpoints.path`/
-    # `.peer` and the ledger's `path` — and neither of these tables has one: a
-    # trigger expression is a cron string or a delay, a scope attribute is a
-    # package or a type, and a status is a status. `_REDACTED_CONFIG_VALUES`
-    # keys on `resolved_config`'s own (key, value) pairs, which nothing here
-    # holds either. Stated rather than left to inference, because "this table
-    # is exported unmasked" is the claim a reviewer has to be able to check.
-    "scheduled_work": _NAMED_QUERIES["scheduled_work"],
+    # A schedule's `expression` is the annotation's own literal, which `annotations.args`
+    # carries and masks on the way out (the grammar map) — so it masks here too, or the
+    # bundle hides a literal in one file and ships it in this one. Through the address map,
+    # `redact_text`'s rule, since the column is one string rather than a JSON document;
+    # `resolved_schedules.expression` takes the same map, being this column carried. Ordered
+    # on the table's own columns, the `endpoints` reasoning, so masking cannot reorder rows.
+    "scheduled_work": f"""
+        SELECT w.handler, w.trigger, coalesce(a.masked, w.expression) AS expression,
+               w.resolution, w.evidence, w.catalog_id
+        FROM scheduled_work w
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = w.expression
+        ORDER BY w.handler, w.trigger, w.expression, w.resolution, w.evidence, w.catalog_id
+    """,
+    # `error_handlers` exports through its named query verbatim, and the reason is that it
+    # carries no masked column: a scope attribute is a package or a type, an exception and
+    # a response shape are types, and a status is a status. Stated rather than left to
+    # inference, because "this table is exported unmasked" is the claim a reviewer has to
+    # be able to check.
     "error_handlers": _NAMED_QUERIES["error_handlers"],
     # Spec 2026-10-23-configured-schedules §3b: a job's schedule as each environment's
     # configuration resolves it. `value` IS configuration read into the bundle, so it masks
@@ -1411,11 +1420,13 @@ _EXPORT_QUERIES = {
     # masks by the key — and otherwise by `redact_text`, the value patterns and URL userinfo
     # stripping (`redact_schedule_value`, the one decision the document makes too). `keys`
     # are configuration key NAMES, exported as `resolved_config.key` is. `expression` is
-    # `scheduled_work.expression` verbatim, and travels as that column does.
+    # `scheduled_work.expression` carried, and masks by that column's map.
     "resolved_schedules": f"""
-        SELECT s.handler, s.trigger, s.expression, s.environment, s.keys,
-               coalesce(v.masked, s.value) AS value, s.unresolved_reason
+        SELECT s.handler, s.trigger, coalesce(a.masked, s.expression) AS expression,
+               s.environment, s.keys, coalesce(v.masked, s.value) AS value,
+               s.unresolved_reason
         FROM resolved_schedules s
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.expression
         LEFT JOIN {_REDACTED_SCHEDULE_VALUES} v ON v.keys = s.keys AND v.value = s.value
         ORDER BY s.handler, s.trigger, s.expression, s.environment
     """,
@@ -2543,6 +2554,9 @@ class DuckDbWorkspace:
         # map is what keeps a shadow row and the row it anticipates spelled alike.
         # Empty on every analysis but a `--shadow` one, which costs this UNION a
         # scan of an empty table.
+        # A schedule's `expression` joins because it is the annotation literal
+        # `annotations.args` masks (spec 2026-10-23-configured-schedules, final review):
+        # one string, so `redact_text`'s map rather than the grammar's.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
@@ -2550,7 +2564,10 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
-            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL"
+            "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM resolved_schedules "
+            "WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,

@@ -1736,7 +1736,10 @@ def _scheduled_work_sections(
     paragraph the endpoint sections use.
 
     The expression is rendered as CODE and never reformatted: a cron string
-    re-spaced for the page names a different schedule from the one that runs.
+    re-spaced for the page names a different schedule from the one that runs. It passes
+    the render redactor (`redact_text`) in the table and in a detail header alike: it is
+    the annotation literal the bundle masks in `annotations.args` and in both schedule
+    tables.
     `resolution` rides along because an `unresolved` expression is a
     placeholder this analysis did not substitute, and a reader who cannot see
     that would read `${orders.cron}` as the schedule itself.
@@ -1757,7 +1760,7 @@ def _scheduled_work_sections(
         (
             _code(bare_descriptor(str(row["handler"]))),
             _text(str(row["trigger"])),
-            _code(str(row["expression"])),
+            _code(redactor.redact_text(str(row["expression"]))),
             _text(str(row["resolution"])),
         )
         for row in rows
@@ -1772,7 +1775,9 @@ def _scheduled_work_sections(
         values = by_job.get((str(row["handler"]), str(row["trigger"]), str(row["expression"])))
         entries = _condition_entries(row["handler"], beans)
         if values:
-            handler += _text(f" — {row['trigger']} ") + _code(str(row["expression"]))
+            handler += _text(f" — {row['trigger']} ") + _code(
+                redactor.redact_text(str(row["expression"]))
+            )
             body = _runs(_configured_values(values, redactor))
             entries = [DetailEntry(_text("as configured in this repository"), body, None)] + entries
         if entries:

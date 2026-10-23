@@ -646,6 +646,32 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
+_SECRET_SCHEDULE = "${orders.sweep.cron:https://ops:hunter2@billing.internal}"
+
+
+def _secret_schedule(workspace: DuckDbWorkspace) -> None:
+    _insert(workspace, "scheduled_work", handler="A#sweep().", trigger="cron",
+            expression=_SECRET_SCHEDULE, resolution="unresolved", evidence="compiler",
+            catalog_id="spring-scheduling")  # fmt: skip
+
+
+@pytest.mark.pins("schedules.an-EXPRESSION-is-masked-in-the-DIFF")
+def test_a_schedule_expression_masked_by_the_bundle_diffs_empty_and_prints_masked(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The bundle masks `scheduled_work.expression` through `redact_text` (the annotation
+    literal `annotations.args` masks), so the diff makes the same call on a workspace's: the
+    bundle and its workspace diff empty, and a schedule the diff prints is masked."""
+    workspace = _built(tmp_path / "w", _secret_schedule)
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    assert [r["expression"] for r in verbatim.rows(KINDS["schedule"])] == [_SECRET_SCHEDULE]
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "empty", lambda w: None))
+    (entry,) = diff_sources(empty, verbatim, REDACTOR, REDACTOR).entries
+    assert entry.to["expression"] == "${orders.sweep.cron:https://billing.internal}"
+
+
 def _credential_condition(workspace: DuckDbWorkspace, root: Path) -> None:
     """A calling class under `@ConditionalOnProperty(havingValue = <a URL with a password>)`:
     the expression quotes it verbatim and the exporter strips the userinfo (`redact_json`).

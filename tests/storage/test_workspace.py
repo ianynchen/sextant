@@ -2320,6 +2320,44 @@ def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     assert secret in kept
 
 
+@pytest.mark.pins("schedules.an-EXPRESSION-is-masked-on-export")
+def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
+    """A schedule's `expression` is the annotation literal `annotations.args` carries, and
+    that column masks it on the way out; so `scheduled_work.expression` and
+    `resolved_schedules.expression` leave through `redact_text` — the address map's rule —
+    or the bundle masks a literal in one file and ships it in two others. The workspace keeps
+    every expression verbatim."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    expression = "${orders.sweep.cron:ACME_A1B2}"
+    workspace._connection.execute(
+        "INSERT INTO scheduled_work VALUES "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'unresolved', 'compiler', 'spring-scheduling')",
+        [expression],
+    )
+    workspace._connection.execute(
+        "INSERT INTO resolved_schedules VALUES "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'prod', '[\"orders.sweep.cron\"]', "
+        "'0 0 * * * *', NULL)",
+        [expression],
+    )
+    bundle = tmp_path / "bundle"
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    workspace.export_tables(bundle, redactor)
+    exported = {
+        table: duckdb.sql(
+            f"SELECT expression FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        for table in ("scheduled_work", "resolved_schedules")
+    }
+    kept = [row["expression"] for row in workspace.query("scheduled_work")]
+    kept += [row["expression"] for row in workspace.query("resolved_schedules")]
+    workspace.close()
+
+    masked = [(f"${{orders.sweep.cron:{REDACTED}}}",)]
+    assert exported == {"scheduled_work": masked, "resolved_schedules": masked}
+    assert kept == [expression, expression]
+
+
 def test_the_alternate_orderings_carry_the_same_rows_in_a_different_order(tmp_path: Path):
     """F8 §9.4 (W37). DuckDB over Parquet has no B-trees; the levers are sort order and
     the zone maps that come with it, so a second FILE in a second order is the index.

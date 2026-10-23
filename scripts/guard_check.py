@@ -3149,8 +3149,56 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_WORKSPACE,
-                find="               coalesce(v.masked, s.value) AS value, s.unresolved_reason\n",
-                replace="               s.value AS value, s.unresolved_reason  -- guard disabled\n",
+                find="               s.environment, s.keys, coalesce(v.masked, s.value) AS value,\n",
+                replace="               s.environment, s.keys, s.value AS value,  -- guard disabled\n",
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-on-export": Guard(
+        what="`scheduled_work.expression` and `resolved_schedules.expression` leave the "
+        "bundle through `redact_text`, staged into the address map",
+        why="the expression is the annotation literal `annotations.args` masks on the way "
+        "out; unstaged, the same literal ships in the clear in two files beside the one "
+        "that hides it",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "\n'
+                '            "UNION SELECT DISTINCT expression FROM resolved_schedules "\n'
+                '            "WHERE expression IS NOT NULL"\n',
+                replace='            ""  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-in-the-document": Guard(
+        what="the document prints a schedule's expression through the render redactor, in "
+        "the scheduled-work table and in a placeholder job's detail header",
+        why="the bundle masks the expression in three files; a document printing it raw "
+        "hands a reader the literal the bundle withheld",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='            _code(redactor.redact_text(str(row["expression"]))),\n',
+                replace='            _code(str(row["expression"])),  # guard disabled\n',
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='                redactor.redact_text(str(row["expression"]))\n            )\n',
+                replace='                str(row["expression"])  # guard disabled\n            )\n',
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-in-the-DIFF": Guard(
+        what="the boundary diff passes a schedule's `expression` through `redact_text`, the "
+        "call the bundle export makes on `scheduled_work.expression`",
+        why="the bundle masks the expression; a diff reading a workspace verbatim reports "
+        "every masked schedule as changed between a bundle and the workspace it came from, "
+        "and prints the literal the bundle withheld",
+        edits=(
+            Edit(
+                path="sextant/application/boundary/diff.py",
+                find='    if kind.name == "schedule":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

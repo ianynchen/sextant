@@ -1536,3 +1536,20 @@ def test_a_schedule_under_a_sextant_yml_key_pattern_is_masked_whole_in_the_docum
 def test_a_schedule_under_an_ordinary_key_shows_its_value_in_the_document():
     text = _schedules_document([_job(SWEEP, SWEEP_CRON)], [_configured("prod", "0 */5 * * * *")])
     assert "  - as configured in this repository: `0 */5 * * * *` in `prod`\n" in text
+
+
+@pytest.mark.pins("schedules.an-EXPRESSION-is-masked-in-the-document")
+def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_detail():
+    """The expression is the annotation literal; the table cell and the detail block's header
+    both print it, and both pass the render redactor, as the bundle's copies do."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    expression = "${orders.sweep.cron:ACME_A1B2}"
+    shown = f"${{orders.sweep.cron:{REDACTED}}}"
+    text = _schedules_document(
+        [_job(SWEEP, expression)],
+        [_configured("prod", "0 */5 * * * *", expression=expression)],
+        redactor,
+    )
+    assert "ACME_A1B2" not in text
+    assert f"| `com/acme/OrderSweeper#sweep().` | cron | `{shown}` | unresolved |" in text
+    assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text
