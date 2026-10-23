@@ -984,6 +984,22 @@ a key spelled with the separator in it reads the key before the separator instea
 **Closes** when a probe reads the escape character the two callers construct the parser with,
 and `substitute` honours it and the whole-inside lookup, each pinned.
 
+### OI-185 — a `${…}` naming the activation key resolves inside `resolve_config` but reads `missing_key` in `resolved_schedules`
+**Minor · logged 2026-10-23 (final review of configured schedules) · `src/sextant/application/resolve/config.py::_resolve_model`, `src/sextant/application/resolve/resolved_schedules.py::_environment_lookup`**
+
+`resolve_config` keeps the activation key (the model's `from_document_key`,
+`spring.config.activate.on-profile`) in its layered map, so a configuration value
+referencing it resolves, but writes no `resolved_config` row for it (M-c, fix round 1: a
+directive, not configuration a module reads). `resolved_schedules` looks keys up in
+`resolved_config`'s rows, so a scheduled expression referencing the same key reads
+`missing_key` — the one placeholder rule answering one reference two ways, by its lookup.
+
+**What happens today:** no real input known; not measured on the fixtures or the corpus.
+**Real triggering input:** `@Scheduled(cron = "${spring.config.activate.on-profile}")`, or a
+cron whose default names the key — a profile name is not a schedule, so no ordinary job does.
+**Closes** when the two lookups answer the activation key alike: `resolve_config` writes its
+row, or the schedules lookup is handed the layered map's answer for it.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 
