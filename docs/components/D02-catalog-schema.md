@@ -2952,19 +2952,29 @@ matches:
       quote: { containing: ".", with: "\"" }
       connector_attribute: connector
       connector_names: ignoring_case          # or `exact`, the default
-      disabled_when: { attribute: enabled, value: "false" }
+      booleans:
+        true_values: ["TRUE", "1", "YES", "Y", "ON", "JA", "J", "SI", "SIM", "OUI"]
+        ignoring_case: true
+        trimmed: true
+      disabled_when: { attribute: enabled, is: false }
       orphans:
         attach: sole_connector
-        unless: { key: quarkus.messaging.auto-connector-attachment, value: "false" }
+        unless: { key: quarkus.messaging.auto-connector-attachment, is: false }
       connectors:
-        - name: smallrye-kafka
+        - name: smallrye-kafka                # a READ entry
+          by: scripts/probes/cp51_smallrye_connectors.md
           protocol: kafka
           coordinates: [io.quarkus:quarkus-messaging-kafka,
                         io.smallrye.reactive:smallrye-reactive-messaging-kafka]
           destination: { inbound: topic, outbound: topic }
           default: "{binding}"
           unread_when:
-            inbound: [{ attribute: topics }, { attribute: pattern, value: "true" }]
+            inbound: [{ attribute: topics }, { attribute: pattern, is: true }]
+        - name: smallrye-mqtt                 # a COUNTED entry
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.quarkus:quarkus-messaging-mqtt,
+                        io.smallrye.reactive:smallrye-reactive-messaging-mqtt]
+          directions: [inbound, outbound]
 ```
 
 | Word | Meaning |
@@ -2973,22 +2983,26 @@ matches:
 | `quote` | A channel name containing `containing` is wrapped in `with` inside a key, unless it starts with it already. |
 | `connector_attribute` | The attribute naming a channel's connector. A channel with it configured is CONNECTOR-MANAGED. |
 | `connector_names` | How a configured name matches a connector's: `exact` or `ignoring_case`. |
-| `disabled_when` | `{attribute, value}`: a connector-managed channel whose attribute is that value produces no channel at all — no row, and it is not in the orphan sets. |
-| `orphans` | Optional. `attach: sole_connector` (the one rule) attaches to every ORPHAN of a direction the one connector of that direction in the module's dependency set; `unless: {key, value}` switches it off where that key is configured to that value in every environment. Absent, only configured channels are wired. |
-| `connectors` | The connector table: `name`, `protocol` (D00's closed set), the `coordinates` that put it in the dependency set, `destination` — the attribute naming its destination per direction it serves — `default`, a template (`{binding}` = the channel name) for an unconfigured destination, and optional `unread_when` per direction: `{attribute, value?}` rules under which the destination is unread (configured at all, or configured to `value`). Names are distinct under `connector_names`. |
+| `booleans` | How the configuration system converts a boolean: `true_values` (strings — quoted, since YAML reads `ON` as a boolean), compared `ignoring_case`, after the value is `trimmed`. An EMPTY value is no value (the setting's default applies), and every value not in `true_values` is `false` — the converter's own rule, never "anything but `false` is true". Required by any `is` below. |
+| `disabled_when` | `{attribute, is}`: a connector-managed channel whose attribute converts to `is` produces no channel at all — no row, and it is not in the orphan sets. |
+| `orphans` | Optional. `attach: sole_connector` (the one rule) attaches to every ORPHAN of a direction the one connector of that direction in the module's dependency set; `unless: {key, is}` switches it off where that key, configured alike in every environment, converts to `is`. Absent, only configured channels are wired. |
+| `connectors` | The connector table, every entry carrying `name`, `by` (the probe record that read it) and the `coordinates` that put it in the dependency set, in one of two shapes. A READ entry adds `protocol` (D00's closed set), `destination` — the attribute naming its destination per direction it serves — `default`, a template (`{binding}` = the channel name) for an unconfigured destination, and optional `unread_when` per direction: `{attribute, is?}` rules under which the destination is unread (configured at all, or converting to `is`). A COUNTED entry adds only `directions`: a connector the framework counts and this catalog reads no wire for. Names are distinct under `connector_names`. |
 
 **The rule `_wired` applies**, which is Quarkus's `WiringProcessor` (CP-50) read as data:
 
 1. A connector-managed channel is wired to its configured connector whatever the dependency
    set holds — a configured connector wins over attachment and is never an orphan. A name
-   the table does not know, a connector with no side for the channel's direction, or a
-   connector attribute the spellings or the environments disagree on: no row, a
-   `binder_protocol` question.
+   the table does not know, a COUNTED connector, a connector with no side for the channel's
+   direction, an empty value, or a connector attribute the spellings or the environments
+   disagree on: no row, a `binder_protocol` question.
 2. An unmanaged channel whose NAME the other direction also carries is an in-memory pipe and
    gives nothing.
 3. Every other unmanaged channel is an ORPHAN: under `orphans`, it takes the one connector
    in the dependency set serving its direction; two or more is no row and a
    `binder_protocol` question carrying each; none attaches nothing and gives nothing.
+   EVERY entry in the dependency set counts, a counted one included — the framework counts
+   every connector it finds, not the ones a catalog can read — so Kafka beside MQTT is two,
+   and a sole COUNTED connector is attached and is a question naming it.
 4. A wired channel's row takes its connector's `protocol`, never the catalog's own
    `protocol:` line — which a row-minting catalog must declare and nothing in this mode
    reads. Its `path` is the destination attribute's agreed value, or `default` where the

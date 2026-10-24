@@ -1,14 +1,17 @@
 # CP-51 — what each SmallRye connector is called, what it speaks, and which attribute names its destination
 
 **Version scope.** Everything below is measured against `smallrye-reactive-messaging-kafka`,
-`-amqp`, `-rabbitmq`, `-pulsar`, `-jms`, `-aws-sqs` and `-api` **as their own manifests state
-them** (`Implementation-Version` — `4.25.0` when this record was made), read by `probe.py`
+`-amqp`, `-rabbitmq`, `-pulsar`, `-jms`, `-aws-sqs`, `-mqtt`, `-camel`, `-in-memory`,
+`-gcp-pubsub` and `-api` **as their own manifests state them** (`Implementation-Version` — `4.25.0` when this record was made), read by `probe.py`
 out of the local Maven repository, with the `io.quarkus:quarkus-messaging-*` `3.17.5` poms
 beside them — never the directory name this harness found the jars under, which is the CP-5
 failure the convention exists to prevent. Each connector's declarations are the connector's,
 and a later release is free to add, rename or re-default any of them, so the verdicts here
 bound to `4.25.0` and to nothing wider. All six connectors the design names were fetched; none
-is NOT MEASURED.
+is NOT MEASURED. The other four (rows 32-51) were added in Task 2's fix round, fetched with
+`mvn -q dependency:get -Dtransitive=false` under the same permission; the 4.25.0 family's
+`-rabbitmq-og`, `-amqp-og`, `-mqtt-server` and `-aws-sns` were also asked for and do not
+resolve at 4.25.0, so they are not connectors this record can speak for.
 
 **Why it was measured.** Ruling 1 of the Quarkus messaging design (spec 2026-10-24, §1) reads
 every connector with a Protocol member as one catalog table: connector name → protocol,
@@ -16,6 +19,12 @@ destination attribute(s) per direction, and the destination's default (§3a). A 
 name, its attributes and their defaults are annotation data on the connector class itself
 (`@Connector`, `@ConnectorAttribute`), and which attribute falls back to the channel name is
 the connector's code — so all of it is read off the jars before the catalog states it.
+
+**Why the connectors without a Protocol member are here too.** Quarkus's single-connector test
+counts EVERY bean carrying `@Connector` (CP-50 rows 6, 16), so a connector the catalog cannot
+read a wire for still decides whether the one it can is the sole one: Kafka beside MQTT is two
+connectors, and Quarkus attaches neither. Their names and the coordinates that bring them in
+are what the catalog needs of them, and both are read here.
 
 ## Observations
 
@@ -28,7 +37,7 @@ declaration order.
 
 | what the run read | 4.25.0 |
 |---|---|
-| artifacts reporting this version | io.smallrye.reactive:smallrye-reactive-messaging-kafka, io.smallrye.reactive:smallrye-reactive-messaging-amqp, io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq, io.smallrye.reactive:smallrye-reactive-messaging-pulsar, io.smallrye.reactive:smallrye-reactive-messaging-jms, io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs, io.smallrye.reactive:smallrye-reactive-messaging-api |
+| artifacts reporting this version | io.smallrye.reactive:smallrye-reactive-messaging-kafka, io.smallrye.reactive:smallrye-reactive-messaging-amqp, io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq, io.smallrye.reactive:smallrye-reactive-messaging-pulsar, io.smallrye.reactive:smallrye-reactive-messaging-jms, io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs, io.smallrye.reactive:smallrye-reactive-messaging-mqtt, io.smallrye.reactive:smallrye-reactive-messaging-camel, io.smallrye.reactive:smallrye-reactive-messaging-in-memory, io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub, io.smallrye.reactive:smallrye-reactive-messaging-api |
 | where the jar states that version | MANIFEST.MF `Implementation-Version` |
 
 | # | question | artifact | version | observed |
@@ -64,6 +73,26 @@ declaration order.
 | 29 | which attributes say the channel name is their fallback (their own `description`) | `io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs` | 4.25.0 | `queue` (INCOMING_AND_OUTGOING): "The name of the SQS queue, defaults to channel name if not provided"; `receive.request.customizer` (INCOMING): "The identifier for the bean implementing a customizer to receive requests, defaults to channel name if not provided" |
 | 30 | which attributes fall back to the channel name in the bytecode (`get<X>().orElse/orElseGet(<the channel>)`) | `io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs` | 4.25.0 | `queue` (SqsClientConfig.<init> via `getChannel()`); `receive.request.customizer` (SqsConnector.getPublisher via `getChannel()`) |
 | 31 | which Quarkus extension declares this artifact | `io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs` | 4.25.0 | no `io.quarkus:quarkus-messaging-*:3.17.5` pom in the local repository declares it |
+| 32 | what the connector is | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 | `io.smallrye.reactive.messaging.mqtt.MqttConnector`: `@Connector("smallrye-mqtt")`; implements `InboundConnector`, `OutboundConnector`, `HealthReporter`; declares 36 `@ConnectorAttribute`s (INCOMING 3, INCOMING_AND_OUTGOING 31, OUTGOING 2) |
+| 33 | what it speaks (packages it uses beyond the framework's own) | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 | `io.vertx.codegen.annotations`, `io.vertx.mqtt`, `io.vertx.mqtt.messages`, `io.vertx.mutiny.mqtt.messages` |
+| 34 | which attributes say the channel name is their fallback (their own `description`) | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 | `topic` (INCOMING_AND_OUTGOING): "Set the MQTT topic. If not set, the channel name is used" |
+| 35 | which attributes fall back to the channel name in the bytecode (`get<X>().orElse/orElseGet(<the channel>)`) | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 | `topic` (MqttSink.<init> via field `channel`; MqttSource.<init> via field `channel`) |
+| 36 | which Quarkus extension declares this artifact | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 | `io.quarkus:quarkus-messaging-mqtt:3.17.5` |
+| 37 | what the connector is | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 | `io.smallrye.reactive.messaging.camel.CamelConnector`: `@Connector("smallrye-camel")`; implements `InboundConnector`, `OutboundConnector`; declares 3 `@ConnectorAttribute`s (INCOMING 1, INCOMING_AND_OUTGOING 1, OUTGOING 1) |
+| 38 | what it speaks (packages it uses beyond the framework's own) | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 | `mutiny.zero.flow.adapters`, `org.apache.camel`, `org.apache.camel.component.reactive.streams.api`, `org.apache.camel.component.reactive.streams.engine`, `org.apache.camel.spi`, `org.apache.camel.support`, `org.reactivestreams` |
+| 39 | which attributes say the channel name is their fallback (their own `description`) | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 | none |
+| 40 | which attributes fall back to the channel name in the bytecode (`get<X>().orElse/orElseGet(<the channel>)`) | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 | none found |
+| 41 | which Quarkus extension declares this artifact | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 | no `io.quarkus:quarkus-messaging-*:3.17.5` pom in the local repository declares it |
+| 42 | what the connector is | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 | `io.smallrye.reactive.messaging.memory.InMemoryConnector`: `@Connector("smallrye-in-memory")`; implements `InboundConnector`, `OutboundConnector`; declares 2 `@ConnectorAttribute`s (INCOMING 2) |
+| 43 | what it speaks (packages it uses beyond the framework's own) | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 | `` |
+| 44 | which attributes say the channel name is their fallback (their own `description`) | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 | none |
+| 45 | which attributes fall back to the channel name in the bytecode (`get<X>().orElse/orElseGet(<the channel>)`) | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 | none found |
+| 46 | which Quarkus extension declares this artifact | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 | no `io.quarkus:quarkus-messaging-*:3.17.5` pom in the local repository declares it |
+| 47 | what the connector is | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 | `io.smallrye.reactive.messaging.gcp.pubsub.PubSubConnector`: `@Connector("smallrye-gcp-pubsub")`; implements `InboundConnector`, `OutboundConnector`; declares 0 `@ConnectorAttribute`s () |
+| 48 | what it speaks (packages it uses beyond the framework's own) | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 | `io.grpc` |
+| 49 | which attributes say the channel name is their fallback (their own `description`) | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 | none |
+| 50 | which attributes fall back to the channel name in the bytecode (`get<X>().orElse/orElseGet(<the channel>)`) | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 | none found |
+| 51 | which Quarkus extension declares this artifact | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 | no `io.quarkus:quarkus-messaging-*:3.17.5` pom in the local repository declares it |
 
 | connector | direction | attribute | type | `defaultValue` (— = not declared) | mandatory | alias (— = not declared) | deprecated |
 |---|---|---|---|---|---|---|---|
@@ -318,6 +347,47 @@ declaration order.
 | `smallrye-sqs` | INCOMING | `receive.request.retries` | long | `2147483647` | false | — | false |
 | `smallrye-sqs` | INCOMING | `receive.request.pause.resume` | boolean | `true` | false | — | false |
 | `smallrye-sqs` | INCOMING | `ack.delete` | boolean | `true` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `client-id` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `auto-generated-client-id` | boolean | `true` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `auto-keep-alive` | boolean | `true` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `health-enabled` | boolean | `true` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.hostname-verification-algorithm` | string | `NONE` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.keystore.type` | string | `pkcs12` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.keystore.location` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.keystore.password` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.truststore.type` | string | `pkcs12` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.truststore.location` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `ssl.truststore.password` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `keep-alive-seconds` | int | `30` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `max-inflight-queue` | int | `10` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `auto-clean-session` | boolean | `true` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `will-flag` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `will-retain` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `will-qos` | int | `0` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `max-message-size` | int | `8092` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `reconnect-interval-seconds` | int | `1` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `username` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `password` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `connect-timeout-seconds` | int | `60` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `trust-all` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `host` | string | — | true | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `port` | int | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `server-name` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `topic` | string | — | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `qos` | int | `0` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `client-options-name` | string | — | false | `mqtt-client-options-name` | false |
+| `smallrye-mqtt` | INCOMING | `broadcast` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING | `failure-strategy` | string | `fail` | false | — | false |
+| `smallrye-mqtt` | OUTGOING | `merge` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | INCOMING | `buffer-size` | int | `128` | false | — | false |
+| `smallrye-mqtt` | INCOMING_AND_OUTGOING | `unsubscribe-on-disconnection` | boolean | `false` | false | — | false |
+| `smallrye-mqtt` | OUTGOING | `retain` | boolean | `false` | false | — | false |
+| `smallrye-camel` | INCOMING_AND_OUTGOING | `endpoint-uri` | string | — | true | — | false |
+| `smallrye-camel` | INCOMING | `failure-strategy` | string | `fail` | false | — | false |
+| `smallrye-camel` | OUTGOING | `merge` | boolean | `false` | false | — | false |
+| `smallrye-in-memory` | INCOMING | `run-on-vertx-context` | boolean | `false` | false | — | false |
+| `smallrye-in-memory` | INCOMING | `broadcast` | boolean | `false` | false | — | false |
 
 ## What the rows say
 
@@ -364,6 +434,16 @@ RabbitMQ and Pulsar connectors are each declared by `io.quarkus:quarkus-messagin
 JMS and SQS have no `quarkus-messaging-*` extension in `3.17.5` (a module declares the
 SmallRye artifact itself — the SQS quickstart does).
 
+**Rows 32-51 — the four other connectors of the family.** `smallrye-mqtt` (row 32, Vert.x MQTT,
+row 33; `topic` both directions, the channel name when unset, rows 34-35; declared by
+`io.quarkus:quarkus-messaging-mqtt:3.17.5`, row 36), `smallrye-camel` (row 37, Apache Camel,
+row 38; no Quarkus messaging extension, row 41), `smallrye-in-memory` (row 42, no client at
+all, row 43 — the in-process test connector; no extension, row 46) and `smallrye-gcp-pubsub`
+(row 47, gRPC to Google Pub/Sub, row 48; it declares no `@ConnectorAttribute` at all, so no
+destination attribute is readable here; no extension, row 51). Each implements both
+`InboundConnector` and `OutboundConnector`, so each counts in both directions of CP-50's
+test.
+
 ## What this does NOT measure
 
 * **The Kafka incoming `topics` → `topic` → channel chain in the bytecode.**
@@ -374,8 +454,10 @@ SmallRye artifact itself — the SQS quickstart does).
 * **What a destination value means beyond its name.** A Kafka `pattern=true` topic is a regex,
   RabbitMQ routing keys and exchange types shape delivery, JMS `destination-type` picks queue or
   topic: the rows list these attributes and their defaults, not their effect on the wire.
-* **Connectors this run did not read** — MQTT, Camel, and any third-party connector. They have
-  no Protocol member (MQTT) or are out of the design's scope; ruling 1 gives them an
-  `unresolved` row naming the connector.
+* **Connectors this run did not read** — any third-party connector, and the Camel Quarkus
+  extension that brings `smallrye-camel` in (`camel-quarkus-smallrye-reactive-messaging`,
+  outside `io.quarkus`). MQTT, Camel and in-memory have no Protocol member; Google Pub/Sub has
+  one and declares no attribute this run can read a destination from. Ruling 1 gives a channel
+  wired to any of them a `binder_protocol` question naming the connector.
 * **Quarkus extension poms other than `3.17.5`**, and any extension outside
   `io.quarkus:quarkus-messaging-*` (Quarkiverse's, for one) that may declare a connector.

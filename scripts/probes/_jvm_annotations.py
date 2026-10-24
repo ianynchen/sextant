@@ -304,13 +304,16 @@ class Instruction:
     comment: str
 
 
-def body(cls: ClassFile, member: str) -> list[Instruction]:
-    """The instructions of the first method named `member` (`<clinit>` for `static {}`)."""
+def body(cls: ClassFile, member: str, parameters: str | None = None) -> list[Instruction]:
+    """The instructions of the first method named `member` (`<clinit>` for `static {}`), or,
+    where `parameters` is given, of the overload whose parameter list `javap` prints exactly
+    so (`"org.eclipse.microprofile.config.spi.Converter<T>"`)."""
     lines = cls.text.splitlines()
+    listed = r".*" if parameters is None else re.escape(parameters)
     pattern = (
         re.compile(r"^  static \{\};$")
         if member == "<clinit>"
-        else re.compile(rf"^  \S.*[\s.]{re.escape(member)}\(.*\)(?: throws [\w.,\s$]+)?;$")
+        else re.compile(rf"^  \S.*[\s.]{re.escape(member)}\({listed}\)(?: throws [\w.,\s$]+)?;$")
     )
     start = next((i for i, line in enumerate(lines) if pattern.match(line)), None)
     if start is None:

@@ -36,6 +36,10 @@ detect:
     - io.smallrye.reactive:smallrye-reactive-messaging-pulsar
     - io.smallrye.reactive:smallrye-reactive-messaging-jms
     - io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs
+    - io.quarkus:quarkus-messaging-mqtt
+    - io.smallrye.reactive:smallrye-reactive-messaging-mqtt
+    - io.smallrye.reactive:smallrye-reactive-messaging-camel
+    - io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub
 
 # §5.4. Every artifact a fact below was read out of. The MicroProfile API jar states
 # its version in `Bundle-Version` only and every other one in `Implementation-Version`
@@ -65,6 +69,16 @@ measured:
       identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
   - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs, versions: ["4.25.0"],
       identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-mqtt, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-camel, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-in-memory, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.config:smallrye-config-core, versions: ["3.10.2"],
+      identity: reported, by: scripts/probes/cp50_quarkus_channel_wiring.md }
 
 # `annotation_args` for the channel names, `nested_annotation_args` for the repeatable
 # containers' members (a method carrying two `@Incoming`s carries ONE `@Incomings`,
@@ -131,9 +145,19 @@ matches:
       # the connectors by name with `equalsIgnoreCase` (rows 8, 18).
       connector_attribute: connector
       connector_names: ignoring_case
+      # HOW A CONFIGURED BOOLEAN READS. `enabled`, Kafka's `pattern` and the attachment
+      # flag are each converted by SmallRye Config's `BOOLEAN_CONVERTER` (CP-50 row 21,
+      # `smallrye-config-core` 3.10.2, the version the Quarkus 3.17.5 BOM pins): the value
+      # is trimmed, an empty one is no value at all, and it is `true` exactly when it is one
+      # of these, ignoring case — every OTHER value is `false`, so `enabled=FALSE` and
+      # `enabled=nope` both disable. Quoted: unquoted, YAML reads `ON` and `YES` as booleans.
+      booleans:
+        true_values: ["TRUE", "1", "YES", "Y", "ON", "JA", "J", "SI", "SIM", "OUI"]
+        ignoring_case: true
+        trimmed: true
       # A connector-configured channel whose `enabled` is false produces no channel at
       # all — default `true` (CP-50 rows 3-4, 13-14).
-      disabled_when: { attribute: enabled, value: "false" }
+      disabled_when: { attribute: enabled, is: false }
       # THE ORPHAN RULE. An orphan is a channel name only ONE direction carries in the
       # module and no connector manages (CP-50 rows 1, 11): an in-memory pair — a name
       # produced and consumed here — is never one, and gives no row. Every orphan of a
@@ -145,7 +169,7 @@ matches:
       # framework attaches, not what an unwired orphan then does).
       orphans:
         attach: sole_connector
-        unless: { key: quarkus.messaging.auto-connector-attachment, value: "false" }
+        unless: { key: quarkus.messaging.auto-connector-attachment, is: false }
       # THE CONNECTOR TABLE (ruling 1). One entry per connector with a Protocol member:
       # its `@Connector` name, the protocol (the design's ruling — CP-51 says what each
       # connector's client is, rows 3, 8, 13, 18, 23, 28), the coordinates that put it
@@ -153,7 +177,13 @@ matches:
       # defaulting to the channel name. Every connector implements both
       # `InboundConnector` and `OutboundConnector` (rows 2, 7, 12, 17, 22, 27), so each
       # declares both directions. A configured connector absent from this table is a
-      # question naming it (§4: MQTT, Camel, a third-party connector).
+      # question naming it (§4: a third-party connector).
+      #
+      # COUNTED ENTRIES — no `protocol`, no `destination` — are the connectors of the
+      # family that Quarkus COUNTS and this catalog reads no wire for. They are here
+      # because the sole-connector test counts every `@Connector` bean on the classpath
+      # (CP-50 rows 6, 16): Kafka beside MQTT is two connectors and Quarkus attaches
+      # neither. A channel attached or configured to one is a question naming it.
       connectors:
         # Kafka. `topic` both directions, the channel name when unset (CP-51 rows 4-5;
         # the attribute table's `topic`, no `defaultValue`). INCOMING also declares
@@ -168,7 +198,7 @@ matches:
           destination: { inbound: topic, outbound: topic }
           default: "{binding}"
           unread_when:
-            inbound: [{ attribute: topics }, { attribute: pattern, value: "true" }]
+            inbound: [{ attribute: topics }, { attribute: pattern, is: true }]
         # AMQP 1.0 (Vert.x AMQP over Proton, row 8). `address` both directions, the
         # channel name when unset (rows 9-10).
         - name: smallrye-amqp
@@ -220,3 +250,33 @@ matches:
           unread_when:
             inbound: [{ attribute: queue.url }]
             outbound: [{ attribute: queue.url }]
+        # MQTT (Vert.x MQTT, CP-51 row 33): no Protocol member (spec §4). `@Connector
+        # ("smallrye-mqtt")`, both directions (row 32); declared by
+        # `quarkus-messaging-mqtt` 3.17.5 (row 36).
+        - name: smallrye-mqtt
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.quarkus:quarkus-messaging-mqtt,
+                        io.smallrye.reactive:smallrye-reactive-messaging-mqtt]
+          directions: [inbound, outbound]
+        # Apache Camel (row 38): no Protocol member — a Camel route names its own
+        # endpoint. `@Connector("smallrye-camel")`, both directions (row 37); no Quarkus
+        # messaging extension declares it (row 41).
+        - name: smallrye-camel
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.smallrye.reactive:smallrye-reactive-messaging-camel]
+          directions: [inbound, outbound]
+        # The in-process test connector (row 43: no client at all), `@Connector
+        # ("smallrye-in-memory")`, both directions (row 42). On a classpath it is a
+        # connector like any other, so it is counted; it carries no wire.
+        - name: smallrye-in-memory
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.smallrye.reactive:smallrye-reactive-messaging-in-memory]
+          directions: [inbound, outbound]
+        # Google Pub/Sub (gRPC, row 48), `@Connector("smallrye-gcp-pubsub")`, both
+        # directions (row 47). D00 has a `pubsub` member, but the connector declares no
+        # `@ConnectorAttribute` (row 47), so no destination attribute was read and the
+        # design ruled no protocol for it: counted, not read.
+        - name: smallrye-gcp-pubsub
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub]
+          directions: [inbound, outbound]

@@ -40,6 +40,14 @@ CONFIG_ROOT = "io.quarkus.runtime.annotations.ConfigRoot"
 
 VERSIONS = ["3.17.5", "3.40.1.1"]
 CORE = ("io.quarkus", "quarkus-core", "3.17.5")
+# The configuration library every attribute above is read through, at the version the
+# `io.quarkus:quarkus-bom:3.17.5` pom pins (`smallrye-config-core` 3.10.2). Read for ONE fact
+# (Task 2 fix round): how a configured `boolean` — `enabled`, Kafka's `pattern`, the
+# attachment flag — is converted, so the catalog compares the way the framework does.
+CONFIG = ("io.smallrye.config", "smallrye-config-core", "3.10.2")
+CONVERTERS = "io.smallrye.config.Converters"
+EMPTY = f"{CONVERTERS}$EmptyValueConverter"
+TRIMMING = f"{CONVERTERS}$TrimmingConverter"
 
 
 class Version:
@@ -189,9 +197,13 @@ def main() -> int:
         return 1
     core = jar_at(*CORE)
     core_stated = identity(core, CORE[2])[0] if core else None
+    config_jar = jar_at(*CONFIG)
+    config_stated = identity(config_jar, CONFIG[2])[0] if config_jar else None
 
     columns = sorted(
-        {v.stated for v in loaded.values()} | ({core_stated} if core_stated else set())
+        {v.stated for v in loaded.values()}
+        | ({core_stated} if core_stated else set())
+        | ({config_stated} if config_stated else set())
     )
     print("| what the run read | " + " | ".join(columns) + " |")
     print("|---" * (len(columns) + 1) + "|")
@@ -205,6 +217,7 @@ def main() -> int:
                     else []
                 )
                 + (["io.quarkus:quarkus-core"] if column == core_stated else [])
+                + ([f"{CONFIG[0]}:{CONFIG[1]}"] if column == config_stated else [])
             )
             for column in columns
         )
@@ -456,7 +469,77 @@ def main() -> int:
             version,
             f"`{prefix}.{name}` = `{default}`, phase `{phase}`; {how}",
         )
+    if config_jar is None or config_stated is None:
+        emit(
+            "how a configured boolean is converted",
+            f"{CONFIG[0]}:{CONFIG[1]}",
+            CONFIG[2],
+            "NOT MEASURED — not in the local repository",
+        )
+        return 0
+    emit(
+        "how a configured boolean is converted",
+        f"{CONFIG[0]}:{CONFIG[1]}",
+        config_stated,
+        boolean_conversion(config_jar),
+    )
     return 0
+
+
+def boolean_conversion(jar: Path) -> str:
+    """`Converters.BOOLEAN_CONVERTER`, as its static initializer builds it: the lambda it wraps,
+    the wrappers around it in the order they are applied (the LAST wrapper written is the
+    first to see the value), what each wrapper does, and what the lambda compares."""
+    parsed = classes(jar, [CONVERTERS, EMPTY, TRIMMING])
+    converters = parsed[CONVERTERS]
+    init = body(converters, "<clinit>")
+    end = next(
+        (
+            i
+            for i, s in enumerate(init)
+            if s.opcode == "putstatic" and "BOOLEAN_CONVERTER" in s.comment
+        ),
+        None,
+    )
+    if end is None:
+        return "NOT FOUND (`BOOLEAN_CONVERTER` is not assigned in `<clinit>`)"
+    start = max((i for i, s in enumerate(init[:end]) if s.opcode == "putstatic"), default=-1) + 1
+    window = init[start:end]
+    lambdas = [t for t in lambda_targets(converters, window) if t.startswith("Converters.")]
+    wrappers = [
+        name
+        for owner, name in targets(window)
+        if name in ("newEmptyValueConverter", "newTrimmingConverter")
+    ]
+    if len(lambdas) != 1:
+        return f"NOT FOUND (lambdas in the window: {lambdas})"
+    compare = body(converters, lambdas[0].split(".", 1)[1])
+    words = strings(compare)
+    ignoring = all(
+        name == "equalsIgnoreCase" for _o, name in targets(compare) if _o == "java.lang.String"
+    )
+    otherwise_false = any(s.opcode == "iconst_0" for s in compare)
+    empty = body(parsed[EMPTY], "convert")
+    empty_reads = [name for _o, name in targets(empty)]
+    empty_null = any(
+        s.opcode == "aconst_null"
+        for s in body(
+            converters,
+            "newEmptyValueConverter",
+            "org.eclipse.microprofile.config.spi.Converter<T>",
+        )
+    )
+    trimming = [name for _o, name in targets(body(parsed[TRIMMING], "convert"))]
+    order = " -> ".join(reversed(wrappers))
+    return (
+        f"applied in the order `{order}` -> `{lambdas[0]}`; `TrimmingConverter.convert` calls "
+        f"{', '.join(f'`{n}`' for n in trimming)}; `EmptyValueConverter.convert` calls "
+        f"{', '.join(f'`{n}`' for n in empty_reads)} and an empty value converts to "
+        f"{'`null` (no value)' if empty_null else 'the declared empty value'}; the lambda is "
+        f"`true` when the value equals{' ignoring case' if ignoring else ''} any of "
+        + ", ".join(f"`{w}`" for w in words)
+        + (", and `false` for every other value" if otherwise_false else "")
+    )
 
 
 if __name__ == "__main__":

@@ -830,11 +830,16 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `smallrye-reactive-messaging` | `io.quarkus:quarkus-messaging` | 3.17.5, 3.40.1.1 |
 |  | `io.quarkus:quarkus-messaging-deployment` | 3.17.5, 3.40.1.1 |
+|  | `io.smallrye.config:smallrye-config-core` | 3.10.2 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-amqp` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-api` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-camel` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-gcp-pubsub` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-in-memory` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-jms` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-kafka` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-mqtt` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-provider` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-pulsar` | 4.25.0 |
 |  | `io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq` | 4.25.0 |

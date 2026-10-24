@@ -3,7 +3,9 @@
 **Version scope.** Everything below is measured against `quarkus-messaging-deployment` and
 `quarkus-messaging` **as their own manifests state them** (`Implementation-Version` — `3.17.5`,
 the fixture's Quarkus, and `3.40.1.1`, the `examples/quarkus-quickstarts` field corpus's, when
-this record was made), and `quarkus-core` `3.17.5` for one annotation default, read by
+this record was made), `quarkus-core` `3.17.5` for one annotation default, and
+`smallrye-config-core` `3.10.2` — the version the `quarkus-bom` `3.17.5` pom pins — for how a
+configured boolean is converted (row 21, added in Task 2's fix round), read by
 `probe.py` out of the local Maven repository — never the directory name this harness found
 them under, which is the CP-5 failure the convention exists to prevent. These are platform
 behaviour of those releases and a later one is free to change any of them, so the verdicts
@@ -26,10 +28,10 @@ own manifest reports**, read by `probe.py` before it measures anything, and **no
 of the directory this harness found the jars under** — the CP-5 failure this convention exists
 to prevent.
 
-| what the run read | 3.17.5 | 3.40.1.1 |
-|---|---|---|
-| artifacts reporting this version | io.quarkus:quarkus-messaging-deployment, io.quarkus:quarkus-messaging, io.quarkus:quarkus-core | io.quarkus:quarkus-messaging-deployment, io.quarkus:quarkus-messaging |
-| where the jar states that version | MANIFEST.MF `Implementation-Version` | MANIFEST.MF `Implementation-Version` |
+| what the run read | 3.10.2 | 3.17.5 | 3.40.1.1 |
+|---|---|---|---|
+| artifacts reporting this version | io.smallrye.config:smallrye-config-core | io.quarkus:quarkus-messaging-deployment, io.quarkus:quarkus-messaging, io.quarkus:quarkus-core | io.quarkus:quarkus-messaging-deployment, io.quarkus:quarkus-messaging |
+| where the jar states that version | MANIFEST.MF `Implementation-Version` | MANIFEST.MF `Implementation-Version` | MANIFEST.MF `Implementation-Version` |
 
 | # | question | artifact | version | observed |
 |---|---|---|---|---|
@@ -53,6 +55,7 @@ to prevent.
 | 18 | what happens to a channel whose connector is configured | `io.quarkus:quarkus-messaging-deployment` | 3.40.1.1 | for every channel that `isManagedByAConnector`, calls `isManagedByAConnector` -> `hasConnector` -> `WiringException."<init>"` -> `ValidationPhaseBuildItem$ValidationErrorBuildItem."<init>"` -> `ConnectorManagedChannelBuildItem."<init>"`: a `ConnectorManagedChannelBuildItem` when `WiringHelper.hasConnector` (`stream`, `anyMatch` over the connectors, testing `getName`, `equalsIgnoreCase`, `getDirection`) finds the configured name, otherwise a `WiringException` `The channel '<>' is configured with an unknown connector (<>)`; it is never an orphan (row on `detectOrphanChannels`) |
 | 19 | which spellings of a channel's configuration key Quarkus accepts | `io.quarkus:quarkus-messaging` | 3.40.1.1 | `ReactiveMessagingConfigBuilderCustomizer` registered; `FallbackConfigSourceInterceptor` (`Fallback`): `quarkus.messaging.incoming.<channel>.<attribute>` -> `mp.messaging.incoming.<channel>.<attribute>`, `quarkus.messaging.outgoing.<channel>.<attribute>` -> `mp.messaging.outgoing.<channel>.<attribute>`; `RelocateConfigSourceInterceptor` (`Relocate`): `mp.messaging.incoming.<channel>.<attribute>` -> `quarkus.messaging.incoming.<channel>.<attribute>`, `mp.messaging.outgoing.<channel>.<attribute>` -> `quarkus.messaging.outgoing.<channel>.<attribute>` |
 | 20 | the build-time flag's key and default | `io.quarkus:quarkus-messaging-deployment` | 3.40.1.1 | `quarkus.messaging.auto-connector-attachment` = `true`, phase `BUILD_TIME`; `@ConfigMapping(prefix="quarkus.messaging")` + `@WithName("auto-connector-attachment")`, `@WithDefault("true")` |
+| 21 | how a configured boolean is converted | `io.smallrye.config:smallrye-config-core` | 3.10.2 | applied in the order `newTrimmingConverter -> newEmptyValueConverter` -> `Converters.lambda$static$c2201d0f$1`; `TrimmingConverter.convert` calls `converterNullValue`, `getDelegate`, `trim`, `convert`; `EmptyValueConverter.convert` calls `isEmpty`, `getDelegate`, `convert` and an empty value converts to `null` (no value); the lambda is `true` when the value equals ignoring case any of `TRUE`, `1`, `YES`, `Y`, `ON`, `JA`, `J`, `SI`, `SIM`, `OUI`, and `false` for every other value |
 
 ## What the rows say
 
@@ -93,6 +96,14 @@ a channel's attribute names the same value.
 **Rows 10 and 20 — the flag.** `quarkus.messaging.auto-connector-attachment`, build time,
 default `true`, at both versions (3.17.5 spells it `@ConfigRoot(name="messaging")` with
 `quarkus-core`'s `prefix()` default `quarkus`; 3.40.1.1 `@ConfigMapping(prefix="quarkus.messaging")`).
+
+**Row 21 — how a configured boolean is read.** `enabled` (rows 3, 13), Kafka's `pattern`
+(CP-51) and the attachment flag (rows 10, 20) are booleans, and every one goes through SmallRye
+Config's `BOOLEAN_CONVERTER`. Its static initializer wraps one lambda in two converters, so a
+value is first TRIMMED, then an EMPTY value is no value at all (the setting's default applies),
+and otherwise the lambda answers: `true` when the value equals, ignoring case, any of `TRUE`,
+`1`, `YES`, `Y`, `ON`, `JA`, `J`, `SI`, `SIM`, `OUI`, and `false` for EVERY other value. So
+`enabled=FALSE` disables a channel, and so does `enabled=nope`; nothing is refused.
 
 ## What this does NOT measure
 

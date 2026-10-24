@@ -3617,9 +3617,28 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/config_join.py",
-                find="        if len(serving) == 1:\n            wired.append(",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
-                "            wired.append(",
+                find="        elif len(serving) == 1:\n            wired.append(_destined(",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n"
+                "            wired.append(_destined(",
+            ),
+        ),
+    ),
+    "messaging.every-CONNECTOR-counts-toward-the-sole-one": Guard(
+        what="every connector in the module's dependency set counts toward the sole-connector "
+        "test — a COUNTED entry (no protocol: MQTT, Camel, in-memory) as much as a read one",
+        why="CP-50 rows 6, 16: Quarkus's `discoverConnectors` collects every bean carrying "
+        "`@Connector`, whatever it speaks. Counting only the connectors the table reads a "
+        "wire for makes Kafka the 'sole' connector of a module that also carries MQTT, so "
+        "every unconfigured orphan is published as a Kafka topic Quarkus never attaches — a "
+        "fabricated boundary DR-5 then links into Kafka consumers' graphs — and leaves a "
+        "module whose only connector is MQTT silent where Quarkus does attach it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        for connector in wiring[_CONNECTORS]\n"
+                "        if not declared.isdisjoint(",
+                replace="        for connector in wiring[_CONNECTORS]\n"
+                "        if _READ_BY_PROTOCOL in connector and not declared.isdisjoint(",
             ),
         ),
     ),

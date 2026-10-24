@@ -27,12 +27,31 @@ from _spring_jar import HOME
 
 GROUP = "io.smallrye.reactive"
 VERSION = "4.25.0"
-CONNECTORS = ["kafka", "amqp", "rabbitmq", "pulsar", "jms", "aws-sqs"]
+# The six the design names, then every other connector of the 4.25.0 family the local
+# repository could fetch (fix round 1 of Task 2): Quarkus counts EVERY `@Connector` bean on
+# the classpath when it decides whether one connector is the sole one (CP-50 rows 6, 16),
+# so a connector with no Protocol member still decides attachment and must be read too.
+CONNECTORS = [
+    "kafka",
+    "amqp",
+    "rabbitmq",
+    "pulsar",
+    "jms",
+    "aws-sqs",
+    "mqtt",
+    "camel",
+    "in-memory",
+    "gcp-pubsub",
+]
 CONNECTOR = "org.eclipse.microprofile.reactive.messaging.spi.Connector"
 ATTRIBUTES = "io.smallrye.reactive.messaging.annotations.ConnectorAttributes"
 ATTRIBUTE = "io.smallrye.reactive.messaging.annotations.ConnectorAttribute"
 # The Quarkus extensions whose poms are read for the coordinate that brings a connector in.
-QUARKUS = ("io.quarkus", "3.17.5", ["kafka", "amqp", "rabbitmq", "pulsar", "jms", "aws-sqs"])
+QUARKUS = (
+    "io.quarkus",
+    "3.17.5",
+    ["kafka", "amqp", "rabbitmq", "pulsar", "jms", "aws-sqs", "mqtt", "camel", "in-memory"],
+)
 # Packages every connector uses whatever it speaks — the JDK, CDI and its annotations, the
 # SmallRye/MicroProfile/Mutiny/Vert.x-core framework itself, logging, tracing, Netty, JSON and
 # Guava — left out so what remains is the messaging client the connector drives.

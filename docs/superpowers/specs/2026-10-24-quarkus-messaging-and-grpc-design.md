@@ -12,7 +12,7 @@ Quarkus's AMQP, JMS, Pulsar and SQS rows (§3a).
 
 | # | Question | Ruling |
 |---|---|---|
-| 1 | Which SmallRye connectors are read | **B — every connector with a Protocol member**, as one catalog table (connector name → protocol, destination key, its default). A connector not in the table gives an `unresolved` row naming it. Rejected: A (Kafka only, a special case of one framework feature) and C (a new `mqtt` Protocol member, a separate design). |
+| 1 | Which SmallRye connectors are read | **B — every connector with a Protocol member**, as one catalog table (connector name → protocol, destination key, its default). A connector not in the table gives an `unresolved` row naming it (*as built: a `binder_protocol` question, no row — §3c*). Rejected: A (Kafka only, a special case of one framework feature) and C (a new `mqtt` Protocol member, a separate design). |
 | 2 | Which channels are boundaries, through which connector | **A — mirror Quarkus's wiring rule.** A channel is a boundary when its connector is configured (`mp.messaging.<dir>.<channel>.connector`), or when it is an ORPHAN and exactly one connector of that direction is on the module's resolved classpath. An in-memory channel (produced and consumed in the module) gives no row. Rejected: B (configured connectors only, which finds 2 of 15 measured modules) and C (every channel, which fabricates brokers). |
 | 3 | Quarkus gRPC | **A** — `io.quarkus.grpc.GrpcService` joins `grpc-spring.yml`'s corroboration list (one rule, a third spelling); `io.quarkus.grpc.GrpcClient` gets its own `injected_client` catalog because its naming rule differs (an empty value names the client by the field). **C — a client's configured address as its peer, for net.devh and Quarkus together — is logged as its own item**, not built here. |
 
@@ -95,6 +95,18 @@ amqp      outbound   —       quote-requests   QuoteResource.emitter (Emitter) 
 
 - Two connectors on the classpath and none configured: `unresolved`, the reason naming both.
 - A configured connector the table does not know (`smallrye-mqtt`): `unresolved`, naming it.
+
+*As built (Task 2, corrected in its fix round):* "`unresolved`" in the two lines above and in
+§1 ruling 1 and §4 is a `binder_protocol` OPEN QUESTION, not an `endpoints` row. The protocol
+is the thing nobody read, and a row must carry one, so the channel gets no row and the
+question names the connector(s) in its candidates, each with the reason. That is the
+`spring-cloud-stream` precedent for an unmapped binder (F2 §3.4). It covers: two or more
+connectors in the dependency set; a connector the table does not know; and a connector the
+table COUNTS but reads no wire for. MQTT, Camel, in-memory and Google Pub/Sub are counted
+entries (CP-51 rows 32-51). The framework's sole-connector test counts them too (CP-50 rows
+6, 16), so Kafka beside MQTT is two connectors. A wired channel whose ADDRESS is unread
+(spellings that disagree, Kafka `topics`) does keep its row, with `path` NULL, plus a
+`channel_destination` question.
 - An in-memory channel gives no row.
 
 A message channel's identity is its destination, as for Spring Cloud Stream. The connector is
@@ -123,7 +135,8 @@ stated as evidence.
 ## 4. What it does NOT do
 
 - **MQTT, Camel and other connectors without a Protocol member:** an `unresolved` row naming the
-  connector. A Protocol member for MQTT is its own design.
+  connector — *as built, a `binder_protocol` question naming it and no row (§3c's note)*. A
+  Protocol member for MQTT is its own design.
 - **The gRPC client's address as its peer** (ruling 3C): logged as its own item, for net.devh and
   Quarkus together.
 - **Message payload shapes and serializer formats:** a later rung of the format ladder, as for
