@@ -1053,6 +1053,49 @@ call. Not measured on the fixtures or the corpus (the field-corpus pins carry no
 **Closes** when a probe reads how net.devh populates a method-targeted `@GrpcClient`, and
 `injected_client` joins a method-position annotation to its parameter's declared type, pinned.
 
+### OI-189 — an empty `connector=` on a SmallRye channel is a question where Quarkus likely sees an orphan
+**Minor · logged 2026-10-24 (task review of spec `2026-10-24-quarkus-messaging-and-grpc`, Task 2) · `src/sextant/application/resolve/engines/config_join.py` (`_EMPTY_CONNECTOR`), `src/sextant/catalogs/smallrye-reactive-messaging.yml`**
+
+`mp.messaging.incoming.requests.connector=` (configured, empty) files a `binder_protocol` question
+with the reason "configured empty, which names no connector"
+(`test_an_empty_connector_value_asks_saying_it_is_empty`). SmallRye Config reads a `String`
+property through its string converter, built by `newEmptyValueConverter`, which very likely turns
+an empty value into NO value. If so, Quarkus sees no configured connector, the channel is an
+ORPHAN, and the sole connector of its direction is attached (CP-50 rows 7, 17). That would be a
+row where we file a question. Nobody has measured it: CP-50 row 21 read the BOOLEAN converter's
+empty-value rule, not the string converter's.
+
+**What happens today:** a question rather than the row Quarkus would wire. It is never a
+fabricated row. Not measured on the fixtures or the corpus: no quickstart writes an empty
+`connector=`.
+**Real triggering input:** `mp.messaging.incoming.requests.connector=` (often a
+`${CONNECTOR:}` placeholder resolving empty) beside `quarkus-messaging-kafka`.
+**Closes** with a probe row reading how `smallrye-config-core` 3.10.2 converts an empty `String`
+value. If empty means unset, the wiring treats an empty `connector` as absent, pinned by
+changing that test's expectation.
+
+### OI-190 — under the POM-reading fallback, a test-scoped in-memory connector counts toward the sole one
+**Minor · logged 2026-10-24 (task review of spec `2026-10-24-quarkus-messaging-and-grpc`, Task 2) · `src/sextant/ingress/detect/maven.py::_declared_versions`, `src/sextant/catalogs/smallrye-reactive-messaging.yml` (`wiring.orphans`)**
+
+The sole-connector test counts every connector in the module's dependency set (CP-50 rows 6, 16;
+guard `messaging.every-CONNECTOR-counts-toward-the-sole-one`). The Maven classpath that
+`dependency:build-classpath` reports is compile scope only (`-Dmdep.includeScope=compile`, OI-167).
+The POM-reading FALLBACK does not read scope (`_declared_versions` states this cost). So a module
+analysed through the fallback that declares `smallrye-reactive-messaging-in-memory` at `test`
+scope, the SmallRye testing idiom, counts two connectors where Quarkus's production build sees
+one. Every orphan then becomes a `binder_protocol` question instead of a row.
+
+**What happens today:** questions in place of rows, only on fallback modules. It is never a
+fabricated row. Measured on `quarkus-quickstarts` @ `81a5844`: no messaging module declares the
+in-memory connector (only `optaplanner-quickstart`, which has no channel), and every one resolved
+through the Maven classpath.
+**Real triggering input:** `quarkus-messaging-kafka` plus a `<scope>test</scope>`
+`io.smallrye.reactive:smallrye-reactive-messaging-in-memory`, analysed where Maven cannot be asked
+(offline with nothing cached, or no `mvn`).
+**Closes** when the fallback reads `<scope>` and leaves `test` (and `provided`, if measured)
+out of the set the dependency gate and the connector count read. That is a decision about every
+catalog's gate, so it needs its own evidence, pinned on a fallback-path fixture.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

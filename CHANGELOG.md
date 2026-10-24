@@ -15,6 +15,21 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **Quarkus messaging: SmallRye Reactive Messaging channels become boundaries, wired as Quarkus
+  wires them** (spec 2026-10-24-quarkus-messaging-and-grpc, rulings 1-2; probes CP-49–CP-51).
+  `@Incoming`/`@Outgoing` (and their repeatable containers) and `@Channel` on an injected
+  `Emitter`/`MutinyEmitter` or `Multi`/`Publisher` name a channel. The channel's destination
+  comes from `mp.messaging.` or `quarkus.messaging.` configuration, and the connector that
+  wires it decides its protocol: Kafka, AMQP, RabbitMQ (`amqp`), Pulsar, JMS or SQS. A channel
+  is a boundary when its connector is configured, or when it is an orphan and exactly one
+  connector of its direction is on the classpath. An in-memory channel gives no row. MQTT,
+  Camel, in-memory and Google Pub/Sub connectors are counted but not read, and an unknown
+  connector or two unconfigured ones give a `binder_protocol` question naming them. Measured on
+  `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of 15 messaging modules.
+  COVERAGE §2c's Quarkus Kafka cell reads ✅.
+
 ## [0.2.0] — 2026-10-23
 
 **The Java + Spring Boot milestone.** A Java or Kotlin Spring Boot module is analysed,

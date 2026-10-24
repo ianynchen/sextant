@@ -26,6 +26,12 @@ user's permission on 2026-10-24.
 | modules using `@Incoming` / `@Outgoing` / `@Channel` | 15 |
 | … that configure no `connector=` key (Quarkus attaches it) | 13 |
 | … whose connector has a Protocol member (Kafka, AMQP, RabbitMQ, Pulsar, SQS) | 14 (MQTT is the 15th) |
+
+*As built (Task 4): the 14 counted connectors, not modules that derive rows. Measured after the
+build (below): **13 modules derive rows**. `mqtt-quickstart` gives two `binder_protocol`
+questions naming `smallrye-mqtt`. `context-propagation-quickstart` gives none, and that is
+correct: its one channel, `prices`, is an in-memory pair (a `MutinyEmitter` and a `Multi` in
+the same module), and Quarkus attaches no connector to one (CP-50 rows 1, 11).*
 | destination keys (`topic`, `address`, `queue`, `exchange…`) per module | 0–3; most channels use the channel name |
 | `@GrpcService` / `@GrpcClient` uses | 2 / 4 (client `hello`, `quarkus.grpc.clients.hello.{host,port}`) |
 
@@ -158,3 +164,32 @@ stated as evidence.
   for any library its COVERAGE section still carries uncatalogued.
 - Field: the 15 measured quickstart modules are re-measured after building, and their derived
   messaging rows are counted against §2's table.
+
+## As built — measured on quarkus-quickstarts
+
+`quarkusio/quarkus-quickstarts` @ `81a5844` (Quarkus 3.40.1.1). Each module was built with
+`JAVA_HOME=/opt/homebrew/opt/openjdk@21 mvn -q -DskipTests package`; all 15 built, and none
+needed a newer JDK or a container. Each was then analysed with `sextant module analyze`.
+Every row is `resolved`.
+
+| module | rows | questions |
+|---|---|---|
+| amazon-sqs-connector-quickstart | 4 sqs: in/out `quote-requests`, in/out `quotes` | 2 `self_exchange` |
+| amqp-quickstart-processor | 2 amqp: in `quote-requests`, out `quotes` | — |
+| amqp-quickstart-producer | 2 amqp: out `quote-requests`, in `quotes` | — |
+| context-propagation-quickstart | 0 (in-memory pair `prices`) | — |
+| kafka-avro-schema-quickstart | 2 kafka: in/out `movies` | 1 `self_exchange` |
+| kafka-panache-quickstart | 2 kafka: in/out `prices` | 1 `self_exchange` |
+| kafka-panache-reactive-quickstart | 2 kafka: in/out `prices` | 1 `self_exchange` |
+| kafka-quickstart/processor | 2 kafka: in `quote-requests`, out `quotes` | — |
+| kafka-quickstart/producer | 2 kafka: out `quote-requests`, in `quotes` | — |
+| kafka-streams-quickstart/producer | 2 kafka: out `temperature-values`, `weather-stations` | — |
+| mqtt-quickstart | 0 | 2 `binder_protocol` naming `smallrye-mqtt` (`prices`, `topic-price`) |
+| pulsar-quickstart-processor | 2 pulsar: in `persistent://public/default/quote-requests`, out `…/quotes` | — |
+| pulsar-quickstart-producer | 2 pulsar: out `…/quote-requests`, in `…/quotes` | — |
+| rabbitmq-quickstart-processor | 2 amqp: in `quote-requests`, out `quotes` | — |
+| rabbitmq-quickstart-producer | 2 amqp: out `quote-requests`, in `quotes` | — |
+
+That is 28 rows in 13 modules. The `self_exchange` questions are the existing serve-and-call
+rule (COVERAGE 3a-v), filed for a module that produces and consumes one destination.
+`mqtt-quickstart`'s in-memory `my-data-stream` pair gives nothing, as it should.

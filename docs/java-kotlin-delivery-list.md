@@ -50,7 +50,7 @@ GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
 SSE                | SSE        |
 gRPC               | gRPC       |
-Kafka              | Kafka      | smallrye-reactive-messaging
+Kafka              | Kafka      |
 JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
 Google Pub/Sub     | Pub/Sub    |
@@ -510,13 +510,19 @@ run 34669970510; the cell reads `✅`.
 |---|---|
 | `jaxrs-sse` | **closed** — implemented, pinned by `test_a_jaxrs_sse_endpoint_is_classified_as_sse` and `test_quarkus_element_type_alone_makes_a_stream_sse` (`tests/e2e/test_rest_inbound_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `jakarta-jaxrs.yml`/`javax-jaxrs.yml` carry `protocol_hint.hint_media` on `@Produces(SERVER_SENT_EVENTS)`; `quarkus-rest.yml` adds a second, presence-only evidence kind, `protocol_hint.hint_annotations`, for `@RestStreamElementType`/`@RestSseElementType` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §3c). Was: JAX-RS `@Produces(SERVER_SENT_EVENTS)` — an attribute on a sibling annotation of the verb's method, the same engine form as `quarkus-jaxrs` (§0, "Moved to engine work") |
 
-### Kafka — NOT DELIVERED
+### Kafka — DELIVERED (`smallrye-reactive-messaging`, the last open id, closed 2026-10-24; matrix `✅`)
+
+`smallrye-reactive-messaging` closed with spec
+`docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md`. Re-checked at its
+close, as the definition's second clause asks: every Java/Kotlin line §5.8 carries is now
+catalogued and shipped (its rollup reads `✅ full` on every framework), so no library surfaces
+in its place. The row awaits this branch's CI run for its ```closed entry.
 
 | # | issue |
 |---|---|
 | `G-31` | **closed** on CI run 34703991222 — **Kafka Streams — three catalogs ship** (`kafka-streams.yml`, `kafka-streams-sink.yml`, `kafka-streams-topology.yml`, w60, split by owner per D02 §3.1): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
 | `kafka-batch-generics` | **closed** — implemented, pinned by `test_a_batch_true_listener_publishes_the_element_not_the_list` (`tests/application/test_pipeline.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `spring-kafka.yml` declares a conditional wrapper, `wrappers[].when: { annotation_arg: { annotation: …KafkaListener, name: batch, parses_true: true } }` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §5a); `batch = "true"`/`"TRUE"` unwraps `List<T>` to `T` at rooting, and an ordinary `List<T>` request body with no `batch` attribute still publishes the array (`test_a_batch_listeners_request_shape_is_an_array`, unchanged). Was: batch listener generics: `@KafkaListener(batch = true)` takes `List<Foo>`; the payload publishes as the list, not the element. Engine work (§0, "Moved to engine work") — a wrapper conditional on an annotation attribute |
-| `smallrye-reactive-messaging` | **named 2026-09-18 (B/C register close)** — SmallRye Reactive Messaging (`@Incoming("orders")` / `@Outgoing`, Quarkus's Kafka binding; the channel is named in code and the topic sits in `application.properties` under `mp.messaging.incoming.<channel>.topic`) has no catalog — COVERAGE §5.8 line 3107, tier **B**, a `config_join` read in the shape `spring-cloud-stream.yml` already does. Surfaced because Kafka's ```delivery row emptied when `kafka-batch-generics` closed while §5.8 still carried this row uncatalogued — the definition's second clause, exactly as `mp-rest-client` surfaced on REST outbound at the A2 close. Costs a Quarkus/SmallRye module its whole Kafka surface — a module using `@Incoming`/`@Outgoing` publishes no Kafka endpoint |
+| `smallrye-reactive-messaging` | **closed 2026-10-24** (spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md`; pinned by `tests/e2e/test_messaging_quarkus_delivered.py::test_unconfigured_channels_take_the_sole_connector` and `::test_a_configured_topic_is_the_channels_destination`; not yet in ```closed — awaiting this branch's CI) — `smallrye-reactive-messaging.yml` on `config_join`'s new `wiring` mode: a channel is a boundary as Quarkus wires it, through every connector with a Protocol member (Kafka, AMQP, RabbitMQ, Pulsar, JMS, SQS); measured on `quarkus-quickstarts` @ `81a5844`, 28 resolved rows across 13 of the 15 messaging modules, the other two correctly none (an in-memory pair) and `binder_protocol` questions (MQTT). Was: **named 2026-09-18 (B/C register close)** — SmallRye Reactive Messaging (`@Incoming("orders")` / `@Outgoing`, Quarkus's Kafka binding; the channel is named in code and the topic sits in `application.properties` under `mp.messaging.incoming.<channel>.topic`) has no catalog — COVERAGE §5.8 line 3107, tier **B**, a `config_join` read in the shape `spring-cloud-stream.yml` already does. Surfaced because Kafka's ```delivery row emptied when `kafka-batch-generics` closed while §5.8 still carried this row uncatalogued — the definition's second clause, exactly as `mp-rest-client` surfaced on REST outbound at the A2 close. Costs a Quarkus/SmallRye module its whole Kafka surface — a module using `@Incoming`/`@Outgoing` publishes no Kafka endpoint |
 | `alpakka-pekko` | **closed** on CI run 34703991222 — **shipped** (`15deca9`, w62): Pekko Connectors consumer sources derive one inbound row per subscribed topic, pinned by `tests/e2e/test_kafka_delivered.py::test_pekko_consumer_sources_derive_one_inbound_row_per_subscribed_topic`. Still on the register because that test has not yet passed in CI |
 
 ### JMS / AMQP — DELIVERED (`G-44` closed on run 34703991222; matrix `✅`)
