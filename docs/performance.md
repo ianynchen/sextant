@@ -269,7 +269,7 @@ a root filter. `derive_endpoint_shapes` (39s) was not profiled to the query here
 
 ## P-2 — the CI test job takes ~20 minutes
 
-**Status:** open; the biggest single lever is P-1.
+**Status:** open, tracked in Plane as [SEXTANT-185](https://app.plane.so/portolan/browse/SEXTANT-185/); the biggest single lever is P-1.
 
 **Measured** (PR #20 run 34669970510, 2026-09-12, `--durations=20`): pytest 20:19 of a
 23:10 job on a 4-vCPU `ubuntu-latest` runner, against 4:10 locally on a 10-core laptop. One
