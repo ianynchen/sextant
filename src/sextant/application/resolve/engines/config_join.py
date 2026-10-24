@@ -205,6 +205,14 @@ _UNREAD_CONNECTOR = (
     "connector `{connector}` ({how}) is one this catalog counts and does not read — its "
     "connector-table entry carries no protocol — so the wire it carries was not read"
 )
+# What this pass can see is zero TABLED connectors, never zero connectors: a connector
+# whose coordinates no entry lists (a Quarkiverse one — NATS JetStream, Solace) is still
+# the sole one Quarkus attaches (CP-50 row 7), so the orphan is a question, not silence.
+_NO_TABLED_CONNECTOR = (
+    "no {direction} connector in this catalog's connector table is in the module's "
+    "dependency set, so whether a connector the table does not list is attached to this "
+    "orphan, and the wire it carries, were not read"
+)
 _CONFIGURED_BY = "configured by `{key}`"
 _SOLE_IN_THE_SET = "the only {direction} connector in the dependency set"
 
@@ -1677,14 +1685,17 @@ def _wired(workspace: Workspace, catalog: Catalog) -> list[_Wired]:
        whose `disabled_when` holds as well produces no channel at all, so it is dropped
        before anything else reads the set (CP-50 rows 3-4).
     2. A managed channel is wired to its configured connector, whatever the dependency set
-       holds — a configured connector wins (rows 1, 8). One the table does not know is a
-       question naming it.
+       holds — a configured connector wins (rows 1, 8). One the table does not know, and a
+       COUNTED one (no `protocol`), is a question naming it.
     3. An unmanaged channel whose NAME the other direction also carries is an in-memory
        pipe — never an orphan (row 1) — and gives nothing.
     4. Every other unmanaged channel is an ORPHAN. Under `orphans.attach:
        sole_connector`, and unless `orphans.unless` holds, it takes its direction's
        connector when exactly one connector in the dependency set serves that direction
-       (row 7); two or more is a question naming each; none attaches nothing.
+       (row 7) — a sole COUNTED one is a question naming it; two or more is a question
+       naming each; none is a question naming none. "None" is none the TABLE lists: a
+       connector whose coordinates no entry carries is still one Quarkus attaches, so
+       silence would drop a boundary nobody can see was dropped.
 
     Read once per call over `_channels`, `resolved_config` and the module's dependency
     set (GUIDELINES §8.7) — `run` and `gaps` each call it once."""
@@ -1730,6 +1741,9 @@ def _wired(workspace: Workspace, catalog: Catalog) -> list[_Wired]:
             wired.append(_destined(config, wiring, channel, serving[0]))
         elif serving:
             wired.append(_Wired(channel, question=_unchosen(channel, serving)))
+        else:
+            reason = _NO_TABLED_CONNECTOR.format(direction=channel.direction)
+            wired.append(_Wired(channel, question=_binder_question(channel, None, reason)))
     return wired
 
 

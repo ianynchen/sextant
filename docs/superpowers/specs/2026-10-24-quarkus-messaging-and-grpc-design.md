@@ -156,7 +156,12 @@ stated as evidence.
 
 ## 5. Cost (§8.7)
 
-- One read of the annotation facts and one of `resolved_config` per resolve.
+- One read of the annotation facts and one of `resolved_config` per resolve. *As built (final
+  review): two. `_wired` runs from `run` (the rows) and again from `gaps` (the questions), and each
+  call reads the channel annotations, the declaration signatures, `resolved_config` and the
+  dependency set once. Sharing one read would mean carrying state from the endpoint loop to the
+  `service_identity` seam, past the ledger reset between them (`config_join.gaps`' docstring), so
+  it was not done. Each read is linear in the module's channel annotations and config keys.*
 - The orphan rule is a set difference over the module's own channel names.
 - The connector-on-classpath test reads the resolved classpath the Maven detector already
   publishes (OI-167).

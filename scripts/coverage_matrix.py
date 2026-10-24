@@ -166,12 +166,14 @@ FRAMEWORKS: dict[str, list[str]] = {
         "Jakarta / javax JMS API (direct)",
         "Spring for Apache Pulsar",
         "Micronaut JMS",
+        "SmallRye Reactive Messaging (Quarkus)",
     ],
     "AWS SQS": [
         "Spring Cloud AWS SQS 3.x / 4.x",
         "Spring Cloud AWS 1.x / 2.x (legacy)",
         "AWS SDK v2 (raw)",
         "Micronaut (raw AWS SDK; JMS over SQS)",
+        "SmallRye Reactive Messaging (Quarkus)",
     ],
     "Google Cloud Pub/Sub": [
         "Spring Cloud GCP Pub/Sub (PubSubTemplate)",

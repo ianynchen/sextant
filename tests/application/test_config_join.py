@@ -3978,6 +3978,37 @@ def test_an_orphan_whose_only_connector_is_mqtt_asks_naming_it(tmp_path: Path):
     assert "the only inbound connector in the dependency set" in candidate["reason"]
 
 
+@pytest.mark.pins("messaging.an-ORPHAN-with-no-TABLED-connector-asks")
+def test_an_orphan_with_no_tabled_connector_in_the_set_asks_naming_none(tmp_path: Path):
+    """Final review, finding 1. `quarkus-messaging` alone puts the framework on the build
+    and no connector the table lists. What this pass sees is zero TABLED connectors, not
+    zero connectors: a Quarkiverse connector (NATS JetStream, Solace) as the module's only
+    one is the sole connector Quarkus attaches (CP-50 row 7), and its coordinates are in no
+    entry here. A `binder_protocol` question with no binder, saying no tabled connector is
+    in the set — where the orphan was dropped silently."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        coordinates=("io.quarkus:quarkus-messaging", "io.quarkiverse.reactivemessaging:x"),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["protocol"], question["path"], question["question"]) == (
+        None,
+        "prices",
+        "binder_protocol",
+    )
+    [candidate] = question["candidates"]
+    assert (candidate["binding"], candidate["binder"]) == ("prices", None)
+    assert (
+        "no inbound connector in this catalog's connector table is in the module's "
+        "dependency set" in candidate["reason"]
+    )
+
+
 @pytest.mark.parametrize(
     ("enabled", "rows_expected"),
     [("FALSE", 0), (" false ", 0), ("nope", 0), ("false", 0), ("TRUE", 1), ("", 1)],
@@ -4139,6 +4170,35 @@ def test_rabbitmq_publishes_to_an_exchange_and_consumes_from_a_queue(tmp_path: P
             ("amqp", "inbound", "prices-queue", _quote_method("consume"), "resolved"),
             ("amqp", "inbound", "unset-in", _quote_method("defaults"), "resolved"),
             ("amqp", "outbound", "unset-out", _quote_method("defaults"), "resolved"),
+        ],
+        key=str,
+    )
+
+
+@pytest.mark.pins("messaging.the-CONNECTOR-table-names-the-protocol")
+def test_the_jms_connector_reads_destination_and_defaults_to_the_channel_name(
+    tmp_path: Path,
+):
+    """CP-51 rows 23, 25-26: `smallrye-jms` speaks `jms`, names its destination by
+    `destination` in both directions, the channel name when unset, and reaches a Quarkus
+    3.17.5 module through its own SmallRye artifact (no extension declares it). No
+    quickstart carries it, so this is the JMS connector's only pin (COVERAGE §5.9)."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("consume", _incoming("orders-in")),
+            *_channel_method("publish", _outgoing("orders-out")),
+        ],
+        {"mp.messaging.incoming.orders-in.destination": "ORDERS.Q"},
+        coordinates=("io.smallrye.reactive:smallrye-reactive-messaging-jms",),
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("jms", "inbound", "ORDERS.Q", _quote_method("consume"), "resolved"),
+            ("jms", "outbound", "orders-out", _quote_method("publish"), "resolved"),
         ],
         key=str,
     )

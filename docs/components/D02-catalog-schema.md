@@ -2999,10 +2999,16 @@ matches:
    gives nothing.
 3. Every other unmanaged channel is an ORPHAN: under `orphans`, it takes the one connector
    in the dependency set serving its direction; two or more is no row and a
-   `binder_protocol` question carrying each; none attaches nothing and gives nothing.
+   `binder_protocol` question carrying each; none is no row and a `binder_protocol`
+   question with `binder` NULL saying no connector in the table is in the dependency set.
    EVERY entry in the dependency set counts, a counted one included — the framework counts
    every connector it finds, not the ones a catalog can read — so Kafka beside MQTT is two,
-   and a sole COUNTED connector is attached and is a question naming it.
+   and a sole COUNTED connector is attached and is a question naming it. "None" is never
+   silence because the engine can only see zero TABLED connectors, not zero connectors: a
+   connector whose coordinates no entry lists is still the sole one the framework attaches.
+   The converse is a boundary coordinates cannot cross: an UNTABLED connector beside a
+   tabled one makes the tabled one look sole, so it is attached here where the framework
+   attaches neither.
 4. A wired channel's row takes its connector's `protocol`, never the catalog's own
    `protocol:` line — which a row-minting catalog must declare and nothing in this mode
    reads. Its `path` is the destination attribute's agreed value, or `default` where the

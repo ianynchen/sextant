@@ -132,6 +132,9 @@ matches:
       # Both are read. Where both set one attribute to DIFFERENT values the attribute
       # is unread and the question names both keys: which spelling wins is
       # `smallrye-config`'s precedence, which CP-50 did not measure.
+      # Both are read at EVERY version, not gated on the module's Quarkus: a 3.17.5
+      # module that writes only `quarkus.messaging.` reads as configured here, although
+      # 3.17.5 reads `mp.messaging.` alone (CP-50 row 9) and never sees that key.
       keys:
         inbound: ["mp.messaging.incoming.{binding}.{attribute}",
                   "quarkus.messaging.incoming.{binding}.{attribute}"]
@@ -184,6 +187,13 @@ matches:
       # because the sole-connector test counts every `@Connector` bean on the classpath
       # (CP-50 rows 6, 16): Kafka beside MQTT is two connectors and Quarkus attaches
       # neither. A channel attached or configured to one is a question naming it.
+      #
+      # WHAT THE TABLE CANNOT SEE. A connector is counted by its `coordinates`, so a
+      # connector no entry lists (a Quarkiverse one: NATS JetStream, Solace) is invisible.
+      # Alone, an orphan finds no tabled connector of its direction and is a question with
+      # no binder, never silence (D02 `wiring` rule 3). BESIDE a tabled one it is a stated
+      # boundary: the tabled one looks sole and is attached here, where Quarkus counts two
+      # and attaches neither. Coordinates cannot reveal the extra connector (OI-194).
       connectors:
         # Kafka. `topic` both directions, the channel name when unset (CP-51 rows 4-5;
         # the attribute table's `topic`, no `defaultValue`). INCOMING also declares

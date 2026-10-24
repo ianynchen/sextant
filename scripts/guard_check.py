@@ -3642,6 +3642,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "messaging.an-ORPHAN-with-no-TABLED-connector-asks": Guard(
+        what="a SmallRye orphan with no connector of its direction from the connector table "
+        "in the dependency set is a `binder_protocol` question with no binder, never silence",
+        why="final review finding 1: the engine sees zero TABLED connectors, not zero "
+        "connectors. A Quarkiverse connector (NATS JetStream, Solace) as a module's only one "
+        "is the sole connector Quarkus attaches (CP-50 row 7) and its coordinates are in no "
+        "entry, so dropping the orphan removes a broker boundary from the document with no "
+        "row, gap or question saying one was there",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        else:\n            reason = _NO_TABLED_CONNECTOR",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n"
+                "            reason = _NO_TABLED_CONNECTOR",
+            ),
+        ),
+    ),
     "messaging.an-IN-MEMORY-channel-is-no-boundary": Guard(
         what="a SmallRye channel name the module both produces and consumes is never an "
         "orphan, takes no connector and gives no row",

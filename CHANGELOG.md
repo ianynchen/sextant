@@ -26,16 +26,21 @@ here would restate those documents rather than add anything.
   is a boundary when its connector is configured, or when it is an orphan and exactly one
   connector of its direction is on the classpath. An in-memory channel gives no row. MQTT,
   Camel, in-memory and Google Pub/Sub connectors are counted but not read, and an unknown
-  connector or two unconfigured ones give a `binder_protocol` question naming them. Measured on
-  `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of 15 messaging modules.
-  COVERAGE §2c's Quarkus Kafka cell reads ✅.
+  connector or two unconfigured ones give a `binder_protocol` question naming them. An orphan
+  with no connector from the table in the dependency set is a `binder_protocol` question with no
+  binder, because a connector the table does not list (a Quarkiverse one) may be the one Quarkus
+  attaches. Measured on `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of
+  15 messaging modules. COVERAGE §2c's Quarkus Kafka, JMS / AMQP and SQS cells read ✅ (JMS is
+  pinned by a unit test only; no quickstart carries it).
 - **Quarkus gRPC on grpc-java's generated classes** (spec 2026-10-24-quarkus-messaging-and-grpc,
   ruling 3; probe CP-52). `io.quarkus.grpc.GrpcService` is a third corroboration spelling for a
   service extending `<Service>ImplBase`. `@GrpcClient` on a field or a constructor/method
   parameter typed by a generated `…Stub` derives the service-level outbound row, whether its
   value is named or omitted (`grpc-quarkus-client.yml`). Quarkus's Mutiny forms (a service
-  `implements <Service>`, a client typed `<Service>`) are not read yet (`quarkus-grpc-mutiny`,
-  OI-192), so COVERAGE §2c's Quarkus gRPC cell stays ◐.
+  `implements <Service>`, a client typed `<Service>`, and a client typed by the generated
+  `Mutiny<Service>Grpc.Mutiny<Service>Stub`, which the generated `<Service>Bean` fences and
+  leaves silent) are not read yet (`quarkus-grpc-mutiny`, OI-192), so COVERAGE §2c's Quarkus
+  gRPC cell stays ◐.
 
 ### Fixed
 

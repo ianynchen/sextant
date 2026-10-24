@@ -1041,8 +1041,8 @@ field — one rule for every `injected_client` catalog, with no per-catalog swit
 ### OI-188 — an `@GrpcClient` on a METHOD (net.devh setter injection) joins no stub type and derives nothing
 **Minor · logged 2026-10-24 (fixing OI-187) · `src/sextant/application/resolve/engines/injected_client.py::_matches`, `src/sextant/catalogs/grpc-net-devh.yml`**
 
-net.devh's `@GrpcClient` is `@Target` {ANNOTATION_TYPE, FIELD, METHOD, PARAMETER} (`javap` on
-3.1.0.RELEASE). An annotation placed on a method itself has the method as its `annotations` target,
+net.devh's `@GrpcClient` is `@Target` {ANNOTATION_TYPE, FIELD, METHOD, PARAMETER} (W53 row 1,
+`scripts/probes/w53_grpc_annotation_identities.md`, 3.1.0.RELEASE). An annotation placed on a method itself has the method as its `annotations` target,
 which is in no declared-field table, so it hits the `stub_type is None` branch and derives no row, no
 gap and no question. The stub type would be the method's single parameter, and net.devh's setter
 semantics for it are not measured.
@@ -1177,13 +1177,63 @@ The same modules' `GreeterGrpc.GreeterBlockingStub` client resolves (`OI-191`).
   The stub then gets no row and no question. Neither quickstart declares such a field. The real
   triggering input is any Quarkus module injecting the Mutiny stub type, because the bean is
   generated for every service it compiles.
+
 **Real triggering input:** both quickstarts, as above. This is the form the Quarkus gRPC guide
 documents.
-**Closes** when both Mutiny forms resolve to `<protoPackage>.<Service>`, by a structural rule
-that reads the generated classes' own edges and calls, not one that names Quarkus's generated
-class suffixes. The client must resolve, and the service must be named as the handler of its
-RPC. Pinned on a fixture whose stand-ins carry the generated Mutiny classes, and re-measured on
-both quickstarts.
+**Closes** when all three Mutiny forms resolve to `<protoPackage>.<Service>`, by a structural
+rule that reads the generated classes' own edges and calls, not one that names Quarkus's
+generated class suffixes: the client typed `<Service>` must resolve, the client typed
+`Mutiny<Service>Grpc.Mutiny<Service>Stub` must stop being fenced by the generated
+`<Service>Bean` and resolve, and the service must be named as the handler of its RPC. Pinned
+on a fixture whose stand-ins carry the generated Mutiny classes, and re-measured on both
+quickstarts.
+
+### OI-194 — an UNTABLED SmallRye connector beside a tabled one leaves the tabled one looking sole
+**Minor · logged 2026-10-24 (final review of spec `2026-10-24-quarkus-messaging-and-grpc`, finding 1) · `src/sextant/application/resolve/engines/config_join.py::_wired`, `src/sextant/catalogs/smallrye-reactive-messaging.yml` (`wiring.connectors`)**
+
+The sole-connector test counts the connectors of the table whose `coordinates` meet the module's
+dependency set. Quarkus counts every `@Connector` bean (CP-50 rows 6, 16). A connector no entry
+lists (a Quarkiverse one: NATS JetStream, Solace) is therefore invisible here. Alone, it now
+gives a `binder_protocol` question with `binder` NULL (`_NO_TABLED_CONNECTOR`, guard
+`messaging.an-ORPHAN-with-no-TABLED-connector-asks`). Beside a tabled one, say
+`quarkus-messaging-kafka`, Quarkus sees two connectors and attaches neither, while this pass sees
+one and attaches Kafka to every orphan.
+
+**What happens today:** a resolved Kafka row for each orphan that Quarkus leaves unwired: a
+fabricated boundary, which DR-5 can link. Coordinates cannot reveal it: the extra connector's
+artifact is just another coordinate. Not measured on the fixtures or the corpus: none of the 15
+`quarkus-quickstarts` messaging modules carries a connector outside the table. A COVERAGE §5.8
+stated boundary.
+**Real triggering input:** `quarkus-messaging-kafka` plus
+`io.quarkiverse.reactivemessaging.nats-jetstream:quarkus-messaging-nats-jetstream`, with an
+unconfigured `@Incoming("prices")`.
+**Closes** when a connector is counted by what makes Quarkus count it, not by a coordinate list.
+A module-local class carrying `@Connector` (CP-50 row 6's qualifier, stated as catalog data) can
+be counted structurally from the module's own annotation facts. A connector class in a
+dependency jar needs the dependency's annotations read, which this analysis does not do. Pinned
+by a test where a module-local `@Connector` class beside the Kafka extension attaches nothing.
+
+### OI-195 — a Quarkus `%profile.`-prefixed key is read as a literal key, not as that profile's value
+**Minor · logged 2026-10-24 (final review of spec `2026-10-24-quarkus-messaging-and-grpc`, finding 5) · `src/sextant/catalogs/spring-web.yml` (`config_model`), `src/sextant/application/resolve/config.py`, `src/sextant/catalogs/smallrye-reactive-messaging.yml`**
+
+Quarkus writes a profile's override in the same file, prefixed: `%prod.mp.messaging.incoming.prices.topic`.
+The shipped config model (the Spring one, the only one that ships) knows profiles only by file
+name (`application{-profile}.properties`) and `spring.config.activate.on-profile`. So
+`%prod.mp.messaging.incoming.prices.topic` is a key of its own in the `default` environment,
+and no channel attribute reads it.
+
+**What happens today**, measured with `tests/application/test_config_join.py`'s `_messaging` helper:
+`mp.messaging.incoming.prices.topic=prices-dev` beside `%prod.mp.messaging.incoming.prices.topic=prices-prod`
+gives one resolved row at `prices-dev`, no question, and `resolved_config` holds
+`%prod.mp.messaging.incoming.prices.topic` as a literal key in `default`. The production
+destination is missed and the base value is reported as if it held everywhere. Not measured on
+the corpus.
+**Real triggering input:** any Quarkus module overriding a destination per profile in
+`application.properties`, the documented Quarkus idiom.
+**Closes** when the config model can declare a key-prefix profile spelling (`%{profile}.`) as
+data and `resolve/config.py` reads such a key as that profile's environment, pinned by a test
+where the two values above are read as two environments' values (today's wiring then leaves the
+destination unread, `_NO_AGREED_VALUE`) and no longer as one resolved row at `prices-dev`.
 
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
