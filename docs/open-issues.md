@@ -2677,7 +2677,7 @@ Minor; the work is understood and the probe is done.
 **Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a step 3, §5b**
 
 **The gap, measured.** A catalog carrying an invented `invented_hop_via` block loads clean:
-all 101 catalogs parse, the key is silently ignored, and nothing refuses a key no style
+all 101 catalogs shipping then parse, the key is silently ignored, and nothing refuses a key no style
 declares. So §2a step 3's "one way, enforced by the loader" is not enforced by anything
 today — and the old plan of refusing the four known keys BY NAME would not have enforced it
 either, since it says nothing about an eighth word. §2a and §5b were corrected on 2026-10-17

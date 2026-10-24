@@ -1474,9 +1474,12 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # not see, so the catalog was skipped for a framework that was in fact present. The
     # gate reading the resolved set is the point; the catalog runs and derives nothing
     # here, which is the right answer for a module that configures no channel.
+    # `smallrye-reactive-messaging` (spec 2026-10-24 §3a) joins them: this fixture's
+    # resolved classpath carries no SmallRye artifact, so the gate skips it as absent.
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
         "spring-rsocket",
         "spring-cloud-gateway-properties",
+        "smallrye-reactive-messaging",
     ]
 
     workspace = DuckDbWorkspace(full_run / "workspace.duckdb")

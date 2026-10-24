@@ -3604,6 +3604,77 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "messaging.an-ORPHAN-channel-takes-the-sole-connector": Guard(
+        what="a SmallRye channel no connector manages and only one direction carries takes "
+        "its direction's connector when exactly ONE is on the classpath",
+        why="spec 2026-10-24 ruling 2, Quarkus's own rule (CP-50 rows 7, 17): "
+        "`autoConfigureConnectorForOrphansAndProduceManagedChannels` attaches the sole "
+        "connector of a direction to every orphan as a run-time configuration default. 13 of "
+        "the 15 measured quickstart modules configure no connector at all and rely on it, so "
+        'without the attachment the kafka quickstart\'s own processor — `@Incoming("requests") '
+        '@Outgoing("quotes")` beside `quarkus-messaging-kafka` — is two real Kafka '
+        "boundaries the document does not show",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if len(serving) == 1:\n            wired.append(",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            wired.append(",
+            ),
+        ),
+    ),
+    "messaging.an-IN-MEMORY-channel-is-no-boundary": Guard(
+        what="a SmallRye channel name the module both produces and consumes is never an "
+        "orphan, takes no connector and gives no row",
+        why="CP-50 rows 1, 11: `detectOrphanChannels` keys each direction's channels by name "
+        "and `removeAll`s the other direction's, so a name both directions carry is an "
+        "in-process pipe. Without the check the sole connector is attached to both halves "
+        "and the document publishes a broker topic, inbound and outbound, for a hand-off "
+        "that never leaves the process — two fabricated boundaries that DR-5 then links "
+        "into any other service using the same topic name",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if channel.name in carried[other]:\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            continue",
+            ),
+        ),
+    ),
+    "messaging.the-CONNECTOR-table-names-the-protocol": Guard(
+        what="a wired SmallRye channel speaks the protocol of the connector that wires it — "
+        "the connector table's entry, never one fixed value",
+        why="spec 2026-10-24 ruling 1: one catalog reads six connectors, and `protocol` is "
+        "identity — DR-5 links on it. A fixed protocol publishes every AMQP, RabbitMQ, "
+        "Pulsar, JMS and SQS channel as Kafka, linking each into Kafka consumers' graphs it "
+        "never speaks to; the catalog's own `protocol:` line exists only because "
+        "`resolve/endpoints.py` requires one of a row-minting file",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find='    protocol = str(connector["protocol"])',
+                replace='    protocol = "kafka"  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
+    "messaging.wired-questions-ride-the-dependency-gate": Guard(
+        what="the wiring's questions are filed only for a module whose build names a "
+        "SmallRye artifact — the gate `run` passed through",
+        why="the `service_identity` seam re-checks neither `requires` nor the dependency gate, "
+        "and the wiring reads `resolved_config`, which a module without SmallRye still has. "
+        "Ungated, a module whose build declares no messaging at all files a question "
+        "asserting a channel wired to `smallrye-mqtt` exists, for a catalog the run "
+        "declined — `_bean_name_questions`' own defect, one mode over",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="    if unmet_dependency(workspace, catalog) is not None:\n        return []\n"
+                "    rows: list[dict[str, Any]] = []\n    for wired in _wired(",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return []\n"
+                "    rows: list[dict[str, Any]] = []\n    for wired in _wired(",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

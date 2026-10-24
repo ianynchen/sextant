@@ -1,0 +1,222 @@
+id: smallrye-reactive-messaging
+displayName: SmallRye Reactive Messaging (channels, wired as Quarkus wires them)
+style: config_join
+
+# THE WIRE IDENTITY IS PER CONNECTOR, NOT PER FILE (spec 2026-10-24 §3a, ruling 1).
+# Every row this catalog mints takes its `protocol` from the connector that wires its
+# channel (`wiring.connectors` below), never from this line: a channel wired to
+# `smallrye-amqp` speaks `amqp` whatever is written here. `resolve/endpoints.py`
+# requires the pair of any catalog that mints endpoint rows, so the pair is declared,
+# and nothing in the `wiring` mode reads `protocol` — a mode that fell back to it
+# would publish a Kafka row for a channel nobody read a Kafka connector for, which is
+# the wrong-protocol fabrication F2 §3.4 removed from `spring-cloud-stream`.
+# `direction: both` for the same reason: each rule carries its own direction, and the
+# file's rows are of either one, so the kinds it feeds are both `endpoint` and
+# `dependency` (`boundary/vocabulary.py`'s `kinds_fed_by`).
+protocol: kafka
+direction: both
+
+# The module reaches SmallRye through a Quarkus extension (CP-51 rows 6, 11, 16, 21)
+# or, where there is no extension, through the SmallRye connector artifact itself (JMS
+# and SQS at 3.17.5: CP-51 rows 26, 31). `quarkus-messaging` is the extension without
+# a connector (CP-49/CP-50 version tables) and the SmallRye provider the runtime every
+# connector sits on (CP-49 row 14). Any one of them means the framework is here; which
+# connectors are is `wiring.connectors`' own `coordinates`, read per channel.
+detect:
+  coordinates:
+    - io.quarkus:quarkus-messaging
+    - io.smallrye.reactive:smallrye-reactive-messaging-provider
+    - io.quarkus:quarkus-messaging-kafka
+    - io.smallrye.reactive:smallrye-reactive-messaging-kafka
+    - io.quarkus:quarkus-messaging-amqp
+    - io.smallrye.reactive:smallrye-reactive-messaging-amqp
+    - io.quarkus:quarkus-messaging-rabbitmq
+    - io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq
+    - io.quarkus:quarkus-messaging-pulsar
+    - io.smallrye.reactive:smallrye-reactive-messaging-pulsar
+    - io.smallrye.reactive:smallrye-reactive-messaging-jms
+    - io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs
+
+# §5.4. Every artifact a fact below was read out of. The MicroProfile API jar states
+# its version in `Bundle-Version` only and every other one in `Implementation-Version`
+# (CP-49's version table); each probe aborts when the self-report disagrees with the
+# coordinate it resolved — `identity: reported` throughout.
+measured:
+  - { artifact: org.eclipse.microprofile.reactive.messaging:microprofile-reactive-messaging-api,
+      versions: ["3.0.1"], identity: reported,
+      by: scripts/probes/cp49_reactive_messaging_annotations.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-api, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp49_reactive_messaging_annotations.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-provider, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp49_reactive_messaging_annotations.md }
+  - { artifact: io.quarkus:quarkus-messaging-deployment, versions: ["3.17.5", "3.40.1.1"],
+      identity: reported, by: scripts/probes/cp50_quarkus_channel_wiring.md }
+  - { artifact: io.quarkus:quarkus-messaging, versions: ["3.17.5", "3.40.1.1"],
+      identity: reported, by: scripts/probes/cp50_quarkus_channel_wiring.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-kafka, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-amqp, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-pulsar, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-jms, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+  - { artifact: io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs, versions: ["4.25.0"],
+      identity: reported, by: scripts/probes/cp51_smallrye_connectors.md }
+
+# `annotation_args` for the channel names, `nested_annotation_args` for the repeatable
+# containers' members (a method carrying two `@Incoming`s carries ONE `@Incomings`,
+# CP-49 rows 5-6, 9-10), and `typed_signatures` for the injected type that decides an
+# injected `@Channel`'s direction (CP-49 rows 21, 26).
+requires: [resolved_config, annotation_args, nested_annotation_args, typed_signatures]
+
+matches:
+  address_from_config:
+    binding:
+      from: annotation_value
+      # THE METHOD ANNOTATIONS. `@Incoming`/`@Outgoing` sit on a METHOD only and carry
+      # one `String value()` with no default (CP-49 rows 1-2, 5-6); Quarkus gives the
+      # first an INCOMING channel and the second an OUTGOING one (rows 20, 25). The
+      # SmallRye-shaded copies are `@Repeatable` through the containers named here
+      # (rows 5-6, 9-10), and Quarkus reads both containers (rows 18-19, 23-24).
+      channels:
+        - { annotation: org.eclipse.microprofile.reactive.messaging.Incoming, arg: value,
+            direction: inbound,
+            container: io.smallrye.reactive.messaging.annotations.Incomings }
+        - { annotation: org.eclipse.microprofile.reactive.messaging.Outgoing, arg: value,
+            direction: outbound,
+            container: io.smallrye.reactive.messaging.annotations.Outgoings }
+      # THE INJECTION POINTS. `@Channel` is a CDI qualifier on a FIELD or PARAMETER
+      # (CP-49 rows 3, 7; the deprecated twin row 11, which Quarkus still reads as
+      # `LEGACY_CHANNEL`, rows 18, 23). Its direction is the injected TYPE's: one an
+      # `@EmitterFactoryFor` names is OUTGOING, anything else (a `Multi`, a
+      # `Publisher`) INCOMING (rows 21, 26). The emitter set is every type a bean's
+      # `@EmitterFactoryFor` names: the provider's three (row 14), the Kafka
+      # connector's two (row 15) and Quarkus 3.40.1.1's one (row 17; 3.17.5 adds none,
+      # row 16). A factory in a jar no probe read is outside this list and its type
+      # reads inbound — stated in CP-49's own NOT-measured list.
+      injected:
+        - annotation: [org.eclipse.microprofile.reactive.messaging.Channel,
+                       io.smallrye.reactive.messaging.annotations.Channel]
+          arg: value
+          direction: inbound
+          direction_by_type:
+            outbound:
+              - org.eclipse.microprofile.reactive.messaging.Emitter
+              - io.smallrye.reactive.messaging.MutinyEmitter
+              - io.smallrye.reactive.messaging.annotations.Emitter
+              - io.smallrye.reactive.messaging.kafka.transactions.KafkaTransactions
+              - io.smallrye.reactive.messaging.kafka.reply.KafkaRequestReply
+              - io.quarkus.smallrye.reactivemessaging.runtime.ContextualEmitter
+    # HOW QUARKUS WIRES A CHANNEL TO A BROKER (ruling 2; D02 `wiring`).
+    wiring:
+      # A channel's attribute is `<prefix>.<incoming|outgoing>.<channel>.<attribute>`.
+      # 3.17.5 reads `mp.messaging.` alone (CP-50 rows 3, 9); 3.40.1.1 reads
+      # `quarkus.messaging.` and aliases the two spellings both ways (rows 13, 19).
+      # Both are read. Where both set one attribute to DIFFERENT values the attribute
+      # is unread and the question names both keys: which spelling wins is
+      # `smallrye-config`'s precedence, which CP-50 did not measure.
+      keys:
+        inbound: ["mp.messaging.incoming.{binding}.{attribute}",
+                  "quarkus.messaging.incoming.{binding}.{attribute}"]
+        outbound: ["mp.messaging.outgoing.{binding}.{attribute}",
+                   "quarkus.messaging.outgoing.{binding}.{attribute}"]
+      # A channel name containing `.` is written into the key quoted, unless it is
+      # quoted already (CP-50 rows 5, 15).
+      quote: { containing: ".", with: "\"" }
+      # The configured connector (CP-50 rows 3, 13). A channel that has one is
+      # connector-managed and never an orphan (rows 1-2, 11-12); it is matched against
+      # the connectors by name with `equalsIgnoreCase` (rows 8, 18).
+      connector_attribute: connector
+      connector_names: ignoring_case
+      # A connector-configured channel whose `enabled` is false produces no channel at
+      # all — default `true` (CP-50 rows 3-4, 13-14).
+      disabled_when: { attribute: enabled, value: "false" }
+      # THE ORPHAN RULE. An orphan is a channel name only ONE direction carries in the
+      # module and no connector manages (CP-50 rows 1, 11): an in-memory pair — a name
+      # produced and consumed here — is never one, and gives no row. Every orphan of a
+      # direction takes that direction's connector when exactly ONE connector of it is
+      # on the classpath (rows 7, 17), behind the build-time flag
+      # `quarkus.messaging.auto-connector-attachment`, default `true` (rows 10, 20).
+      # With two connectors of a direction nothing is attached and the channel is a
+      # question naming them (ruling 2, the design's answer: CP-50 says what the
+      # framework attaches, not what an unwired orphan then does).
+      orphans:
+        attach: sole_connector
+        unless: { key: quarkus.messaging.auto-connector-attachment, value: "false" }
+      # THE CONNECTOR TABLE (ruling 1). One entry per connector with a Protocol member:
+      # its `@Connector` name, the protocol (the design's ruling — CP-51 says what each
+      # connector's client is, rows 3, 8, 13, 18, 23, 28), the coordinates that put it
+      # on the classpath, and the attribute that names its destination per direction,
+      # defaulting to the channel name. Every connector implements both
+      # `InboundConnector` and `OutboundConnector` (rows 2, 7, 12, 17, 22, 27), so each
+      # declares both directions. A configured connector absent from this table is a
+      # question naming it (§4: MQTT, Camel, a third-party connector).
+      connectors:
+        # Kafka. `topic` both directions, the channel name when unset (CP-51 rows 4-5;
+        # the attribute table's `topic`, no `defaultValue`). INCOMING also declares
+        # `topics` (a list) and `pattern` (`topic` read as a regex) — the attribute
+        # table — so either one configured leaves the destination unread rather than
+        # reported as the one `topic` this table reads.
+        - name: smallrye-kafka
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: kafka
+          coordinates: [io.quarkus:quarkus-messaging-kafka,
+                        io.smallrye.reactive:smallrye-reactive-messaging-kafka]
+          destination: { inbound: topic, outbound: topic }
+          default: "{binding}"
+          unread_when:
+            inbound: [{ attribute: topics }, { attribute: pattern, value: "true" }]
+        # AMQP 1.0 (Vert.x AMQP over Proton, row 8). `address` both directions, the
+        # channel name when unset (rows 9-10).
+        - name: smallrye-amqp
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: amqp
+          coordinates: [io.quarkus:quarkus-messaging-amqp,
+                        io.smallrye.reactive:smallrye-reactive-messaging-amqp]
+          destination: { inbound: address, outbound: address }
+          default: "{binding}"
+        # RabbitMQ (the RabbitMQ client, row 13). A message is published to an
+        # EXCHANGE and consumed from a QUEUE: outgoing `exchange.name`, incoming
+        # `queue.name`, each the channel name when unset (rows 14-15). `exchange.name`
+        # set to `""` is the default exchange (row 14's description); an empty
+        # destination is never read as a name (D02 `wiring`).
+        - name: smallrye-rabbitmq
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: amqp
+          coordinates: [io.quarkus:quarkus-messaging-rabbitmq,
+                        io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq]
+          destination: { inbound: queue.name, outbound: exchange.name }
+          default: "{binding}"
+        # Pulsar. `topic` both directions, the channel name when unset (rows 19-20).
+        - name: smallrye-pulsar
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: pulsar
+          coordinates: [io.quarkus:quarkus-messaging-pulsar,
+                        io.smallrye.reactive:smallrye-reactive-messaging-pulsar]
+          destination: { inbound: topic, outbound: topic }
+          default: "{binding}"
+        # JMS (`jakarta.jms`, row 23). `destination` both directions, the channel name
+        # when unset — the bytecode's reading (row 25); its description is silent
+        # (row 24). No Quarkus extension declares it at 3.17.5 (row 26).
+        - name: smallrye-jms
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: jms
+          coordinates: [io.smallrye.reactive:smallrye-reactive-messaging-jms]
+          destination: { inbound: destination, outbound: destination }
+          default: "{binding}"
+        # SQS (the AWS SDK's SQS service, row 28). `queue` both directions, the
+        # channel name when unset (rows 29-30); `queue.url` (the attribute table)
+        # names the queue another way, so configured it leaves the destination unread.
+        # No Quarkus extension declares it at 3.17.5 (row 31).
+        - name: smallrye-sqs
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: sqs
+          coordinates: [io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs]
+          destination: { inbound: queue, outbound: queue }
+          default: "{binding}"
+          unread_when:
+            inbound: [{ attribute: queue.url }]
+            outbound: [{ attribute: queue.url }]

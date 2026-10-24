@@ -1149,11 +1149,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the fourth: a
     # `config_join` file gated by its style, on a fixture that declares no Gateway —
     # sorted among the runs-last group by filename, ahead of `spring-data-rest`.
+    # `smallrye-reactive-messaging` (spec 2026-10-24 §3a) is the fifth, on a fixture whose
+    # build names no SmallRye artifact. It trails the list because it declares `direction:
+    # both` — its rows are of either direction — and the ordering's direction tiebreak puts
+    # every non-inbound catalog after the inbound ones of its rank.
     assert [entry.catalog_id for entry in report.skipped_catalogs] == [
         "spring-integration",
         "spring-rsocket",
         "spring-cloud-gateway-properties",
         "spring-data-rest",
+        "smallrye-reactive-messaging",
     ]
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec

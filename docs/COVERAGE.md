@@ -776,7 +776,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**86 of 101 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**87 of 102 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -828,6 +828,17 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
 | `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
+| `smallrye-reactive-messaging` | `io.quarkus:quarkus-messaging` | 3.17.5, 3.40.1.1 |
+|  | `io.quarkus:quarkus-messaging-deployment` | 3.17.5, 3.40.1.1 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-amqp` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-api` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-aws-sqs` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-jms` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-kafka` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-provider` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-pulsar` | 4.25.0 |
+|  | `io.smallrye.reactive:smallrye-reactive-messaging-rabbitmq` | 4.25.0 |
+|  | `org.eclipse.microprofile.reactive.messaging:microprofile-reactive-messaging-api` | 3.0.1 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
 | `spring-cloud-gateway-outbound` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |
 | `spring-cloud-gateway-properties` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |

@@ -689,6 +689,43 @@ def test_a_binder_protocol_question_renders_the_binding_and_the_binder():
     assert "(unresolved)" not in text
 
 
+def test_a_wired_channels_questions_render_their_own_reason():
+    """Spec 2026-10-24 §3c. A SmallRye channel's candidates carry `reason`, and the
+    rendered line is where a reader meets it — the trail (`evidence`) is not printed. Two
+    connectors on the classpath each MAP to a protocol, so the `binder_protocol` arm's
+    "maps to no protocol" would be false for them; and a wired row whose address is
+    unread says why beside the channel and handler."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    unchosen = "`smallrye-amqp` is one of 2 inbound connectors in the dependency set"
+    disagreeing = "`mp.messaging.incoming.requests.topic` = `one` and `quarkus…` = `two`"
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "requests",
+            "question": "binder_protocol",
+            "candidates": json.dumps(
+                [{"binding": "requests", "binder": "smallrye-amqp", "reason": unchosen}]
+            ),
+            "evidence": unchosen,
+        },
+        {
+            "protocol": "kafka",
+            "method": None,
+            "path": "quotes",
+            "question": "channel_destination",
+            "candidates": json.dumps(
+                [{"channel": "quotes", "handler": "Quotes#process().", "reason": disagreeing}]
+            ),
+            "evidence": disagreeing,
+        },
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert f"binder_protocol: requests: {unchosen}" in text
+    assert "maps to no protocol" not in text
+    assert f"channel_destination: quotes → Quotes#process(). ({disagreeing})" in text
+
+
 def test_an_unselected_binding_question_renders_the_candidate_and_the_key():
     """The other kind F2 §3.4 added. It exists because the cardinality count taken
     in the engine is over declared METHODS while the framework counts registered
