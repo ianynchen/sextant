@@ -4,12 +4,13 @@
 Quarkus gRPC ships for grpc-java's generated `ImplBase`/`…Stub` forms, but its cell stays `◐`:
 both real Quarkus gRPC modules use Quarkus's Mutiny forms, which nothing reads yet
 (`quarkus-grpc-mutiny`, OI-192; "As built — measured" below). Quarkus is therefore not yet the
-second family at ✅. Closes the two Quarkus cells of
-COVERAGE §2c that are not ✅:
+second family at ✅.
+
+The design closes the two Quarkus cells of COVERAGE §2c that are not ✅:
 - **Kafka**, `◐ (1 open, 1 not shipped)`: the register item `smallrye-reactive-messaging`;
 - **gRPC**, `◐ (1 not shipped)`: Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}`.
 
-Closing both makes Quarkus the second framework family at ✅. The general rule also moves
+Closing both was meant to make Quarkus the second framework family at ✅. *As built, Kafka closed and gRPC did not: the Mutiny forms keep it `◐` (Status above, `quarkus-grpc-mutiny`).* The general rule also moves
 Quarkus's AMQP, JMS, Pulsar and SQS rows (§3a).
 
 ## 1. The rulings (2026-10-24)
@@ -30,14 +31,14 @@ user's permission on 2026-10-24.
 | modules using `@Incoming` / `@Outgoing` / `@Channel` | 15 |
 | … that configure no `connector=` key (Quarkus attaches it) | 13 |
 | … whose connector has a Protocol member (Kafka, AMQP, RabbitMQ, Pulsar, SQS) | 14 (MQTT is the 15th) |
+| destination keys (`topic`, `address`, `queue`, `exchange…`) per module | 0–3; most channels use the channel name |
+| `@GrpcService` / `@GrpcClient` uses | 2 / 4 (client `hello`, `quarkus.grpc.clients.hello.{host,port}`) |
 
 *As built (Task 4): the 14 counted connectors, not modules that derive rows. Measured after the
 build (below): **13 modules derive rows**. `mqtt-quickstart` gives two `binder_protocol`
 questions naming `smallrye-mqtt`. `context-propagation-quickstart` gives none, and that is
 correct: its one channel, `prices`, is an in-memory pair (a `MutinyEmitter` and a `Multi` in
 the same module), and Quarkus attaches no connector to one (CP-50 rows 1, 11).*
-| destination keys (`topic`, `address`, `queue`, `exchange…`) per module | 0–3; most channels use the channel name |
-| `@GrpcService` / `@GrpcClient` uses | 2 / 4 (client `hello`, `quarkus.grpc.clients.hello.{host,port}`) |
 
 Framework rule, read informally from `quarkus-messaging-deployment` 3.17.5's
 `WiringProcessor` (to be recorded as probe rows, §3b):
@@ -210,6 +211,9 @@ same way, and both read alike:
 | `@GrpcService HelloWorldService implements Greeter` | inbound `helloworld.Greeter/SayHello` from the `.proto` only (handler NULL), plus a `service_identity` question on the class | unchanged (OI-192) |
 
 Spec §1 ruling 3 assumed "server side rides `supertype_derived` already". That holds for a
-service extending `<Service>ImplBase`, which is what the fixture pins. It does not hold for the
+service extending `<Service>ImplBase`, which is what the fixture pins, but only since OI-193's
+fix. Before it, the engine looked for the handler on the base class, while protoc puts it as a
+default method of `<Service>Grpc$AsyncService`. So on real generated code no ImplBase service
+was named as its handler (measured on `fixtures/grpc-probe`). It does not hold for the
 Mutiny form both quickstarts use. That form is register item `quarkus-grpc-mutiny`, and it
 holds the gRPC row open.

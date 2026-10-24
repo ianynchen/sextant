@@ -1170,6 +1170,13 @@ and `grpc-tls-quickstart` (both of the corpus's Quarkus gRPC modules use these f
 - a module without its `.proto` in source would have no inbound row.
 
 The same modules' `GreeterGrpc.GreeterBlockingStub` client resolves (`OI-191`).
+- **A third client form is silent:** `@GrpcClient MutinyGreeterGrpc.MutinyGreeterStub`, the
+  generated Mutiny stub. Quarkus's generated top-level `GreeterBean extends
+  MutinyGreeterGrpc$GreeterImplBase`, and that edge crosses two outer classes, so it fences
+  `MutinyGreeterGrpc` (measured: `examples/MutinyGreeterGrpc#` is in both quickstarts' fenced set).
+  The stub then gets no row and no question. Neither quickstart declares such a field. The real
+  triggering input is any Quarkus module injecting the Mutiny stub type, because the bean is
+  generated for every service it compiles.
 **Real triggering input:** both quickstarts, as above. This is the form the Quarkus gRPC guide
 documents.
 **Closes** when both Mutiny forms resolve to `<protoPackage>.<Service>`, by a structural rule
