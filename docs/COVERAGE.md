@@ -776,7 +776,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**87 of 102 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**88 of 103 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -785,7 +785,9 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
-| `grpc-spring` | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
+| `grpc-quarkus-client` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
+| `grpc-spring` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
+|  | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
 |  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
 | `jakarta-jaxrs` | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0, 4.0.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |

@@ -24,21 +24,26 @@ direction: inbound
 # `annotation_driven.gaps` through `resolve/service_identity.py` — visible
 # degradation instead of nothing.
 #
-# Both spellings live in this one file because they are one shape of evidence
-# at one identity ("a style is a shape of evidence, not a framework", D02):
-# Spring gRPC's own `@GrpcService` and net.devh's, differing only in package.
-# A second catalog would differ from this one by a single string and would
-# have to be kept in step with it by hand.
+# All three spellings live in this one file because they are one shape of
+# evidence at one identity ("a style is a shape of evidence, not a framework",
+# D02): Spring gRPC's own `@GrpcService`, net.devh's and Quarkus's, differing
+# only in package. A second catalog would differ from this one by a single
+# string and would have to be kept in step with it by hand.
 #
 # Spring gRPC's `@GrpcService` is OPTIONAL — it exposes any `BindableService`
 # bean, and the annotation only adds interceptors — so the supertype match is
 # the reliable one for a module that compiles its own stubs, and this
-# corroboration is the fallback rather than the primary read.
+# corroboration is the fallback rather than the primary read. That is true of
+# Spring ONLY: Quarkus REQUIRES `io.quarkus.grpc.GrpcService` on every
+# service bean and fails the build without it (CP-52 row 7), so there the
+# annotation is present on every served class, and a class it flags that no
+# endpoint names is a stubs-jar service as certainly as in Spring's case.
 
 detect:
   coordinates:
     - "org.springframework.grpc:spring-grpc-spring-boot-starter"
     - "net.devh:grpc-server-spring-boot-starter"
+    - "io.quarkus:quarkus-grpc"
 
 # W53 (`G-91`). Both `@GrpcService` spellings were predictions until this probe:
 # neither `org.springframework.grpc:*` nor `net.devh:*` resolved when A2 audited
@@ -52,6 +57,10 @@ measured:
       identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
   - { artifact: net.devh:grpc-server-spring-boot-starter, versions: ["3.1.0.RELEASE"],
       identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
+  # `io.quarkus.grpc.GrpcService` lives in `quarkus-grpc-api`, which a module
+  # declaring `quarkus-grpc` reaches transitively (CP-52 rows 1, 3).
+  - { artifact: io.quarkus:quarkus-grpc-api, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp52_quarkus_grpc_annotations.md }
 
 bean_model: spring
 
@@ -71,6 +80,7 @@ matches:
     class_annotations:
       - org.springframework.grpc.server.service.GrpcService
       - net.devh.boot.grpc.server.service.GrpcService
+      - io.quarkus.grpc.GrpcService
 
 # No `format_fixed`: `grpc-schema.yml` already declares `{grpc: protobuf}`
 # and `resolve/format.py` unions the block across every LOADED catalog, so a

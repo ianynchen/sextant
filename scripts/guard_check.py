@@ -3694,6 +3694,40 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.the-QUARKUS-service-annotation-corroborates": Guard(
+        what="`io.quarkus.grpc.GrpcService` is on `grpc-spring.yml`'s corroboration list, "
+        "beside the Spring and net.devh spellings",
+        why="spec 2026-10-24 ruling 3, CP-52 rows 1, 7: Quarkus REQUIRES the annotation on "
+        "every service bean, so it flags every served class. For a service built against "
+        "a PUBLISHED stubs jar the supertype match derives nothing and the annotation is "
+        "the only evidence a gRPC service is served at all; without the entry that class "
+        "is silence, which 2O design §1b rules out",
+        edits=(
+            Edit(
+                path="sextant/catalogs/grpc-spring.yml",
+                find="      - io.quarkus.grpc.GrpcService\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.a-QUARKUS-client-field-is-an-outbound-service": Guard(
+        what="a field annotated `io.quarkus.grpc.GrpcClient` derives the outbound service-"
+        "level row of the stub it is declared as, and net.devh's annotation of the same "
+        "simple name does not",
+        why="spec 2026-10-24 ruling 3, CP-52 rows 2, 4: a wrong FQN in an `injected_client` "
+        "catalog is SILENT (W53) — the annotation never matches, nothing is derived and "
+        "no skip or gap says a name was wrong, so every Quarkus gRPC client is missing "
+        "from the document. The weakening is the other framework's FQN, the mistake a "
+        "copy of `grpc-net-devh.yml` makes: the Quarkus fields stop deriving and "
+        "net.devh's start deriving under a catalog that claims Quarkus",
+        edits=(
+            Edit(
+                path="sextant/catalogs/grpc-quarkus-client.yml",
+                find="  field_annotation: io.quarkus.grpc.GrpcClient",
+                replace="  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

@@ -1000,6 +1000,27 @@ cron whose default names the key — a profile name is not a schedule, so no ord
 **Closes** when the two lookups answer the activation key alike: `resolve_config` writes its
 row, or the schedules lookup is handed the layered map's answer for it.
 
+### OI-186 — a gRPC client's configured address is not read as its peer, for net.devh and Quarkus
+**Minor · logged 2026-10-24 (spec `2026-10-24-quarkus-messaging-and-grpc` §1 ruling 3C, not built) · `src/sextant/catalogs/grpc-net-devh.yml`, `src/sextant/catalogs/grpc-quarkus-client.yml`**
+
+Both `injected_client` catalogs derive one service-level outbound row per injected stub, whose
+identity is the stub's own `SERVICE_NAME`; neither row carries a `peer`. The client's address is
+configured by NAME: net.devh's `grpc.client.<name>.address`, Quarkus's
+`quarkus.grpc.clients.<name>.host` and `.port`. The name is the `@GrpcClient` value, or for
+Quarkus a value left out names the client by the field (CP-52 rows 2, 5; net.devh's own
+omitted-value rule is not measured). So the row has the name to look the address up by and
+nothing reads it. The user ruled this one item for both frameworks together, not one at a time.
+
+**What happens today:** a gRPC client row names the service it calls and not the service it
+reaches; the stitcher matches it by path alone. Not measured on the fixtures or the corpus.
+**Real triggering input:** `@GrpcClient("hello") HelloGrpc.HelloBlockingStub hello;` beside
+`grpc.client.hello.address=static://hello:9000` (net.devh) or
+`quarkus.grpc.clients.hello.host=hello` and `.port=9000` (Quarkus), two services in one
+system that implement the same generated service.
+**Closes** when the injected stub's client name reaches the row, the address keys of both
+frameworks are measured by a probe (net.devh's key and its `static://` / `dns:///` forms are
+not yet), and the value goes through the one placeholder rule, `config.substitute`, as a peer.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 
