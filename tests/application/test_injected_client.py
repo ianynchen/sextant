@@ -364,6 +364,24 @@ def test_a_genuine_implementer_beside_the_generated_suppliers_is_still_fenced(tm
     assert rows == []
 
 
+def test_an_implementer_nested_in_its_own_outer_class_still_fences(tmp_path: Path):
+    """The rule compares the two ends' OUTER classes, not whether the subclass is
+    nested at all: `com/acme/Server$Impl extends …ImplBase` is nested, in the module's
+    own `Server`, not in the generated `BillingServiceGrpc`, so it is the module
+    implementing the service and still fences."""
+    facts = [
+        *_injected_field(),
+        _service_name_site(),
+        *_generated_descriptor_suppliers(),
+        *_implementor_facts(symbol="com/acme/Server$Impl#"),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 # --- (c) unreadable identity: unresolved fallback and a filed question -----
 
 

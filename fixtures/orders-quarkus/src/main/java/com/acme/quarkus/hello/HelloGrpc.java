@@ -12,11 +12,15 @@ import io.grpc.stub.ServerCalls;
 import io.grpc.stub.StreamObserver;
 
 // A hand-written stand-in for what protoc-gen-grpc-java generates from
-// `service Hello { rpc SayHello (…) returns (…); }` in package `acme.hello`: the same
-// identity-building calls on the outer class — `ServiceDescriptor.newBuilder(SERVICE_NAME)`
-// and `MethodDescriptor.generateFullMethodName(SERVICE_NAME, "SayHello")` — and the same
-// nested `HelloImplBase` / `HelloBlockingStub`. Strings stand in for protobuf messages so
-// the fixture needs no protoc step; nothing here ever runs.
+// `service Hello { rpc SayHello (…) returns (…); }` in package `acme.hello`, in the shape
+// `fixtures/grpc-probe`'s real generated `OrderServiceGrpc` has (1.62.2, `javap`):
+// - the identity-building calls on the outer class, `ServiceDescriptor.newBuilder(SERVICE_NAME)`
+//   and `MethodDescriptor.generateFullMethodName(SERVICE_NAME, "SayHello")`;
+// - the handler as a DEFAULT method of the nested `AsyncService` interface, with
+//   `HelloImplBase` implementing it and declaring only `bindService`;
+// - the nested `HelloBlockingStub`, and the descriptor-supplier classes at the bottom.
+// Strings stand in for protobuf messages so the fixture needs no protoc step; nothing here
+// ever runs.
 public final class HelloGrpc {
     private HelloGrpc() {}
 
@@ -54,17 +58,26 @@ public final class HelloGrpc {
         return new HelloBlockingStub(channel, CallOptions.DEFAULT);
     }
 
-    public abstract static class HelloImplBase implements BindableService {
-        public void sayHello(String request, StreamObserver<String> responseObserver) {
+    // The handlers are DEFAULT methods of this nested interface, and the base class only
+    // implements it: protoc-gen-grpc-java's shape since it introduced `AsyncService`
+    // (`fixtures/grpc-probe`, 1.62.2, `javap`).
+    public interface AsyncService {
+        default void sayHello(String request, StreamObserver<String> responseObserver) {
             ServerCalls.asyncUnimplementedUnaryCall(getSayHelloMethod(), responseObserver);
         }
+    }
 
+    public abstract static class HelloImplBase implements BindableService, AsyncService {
         @Override
         public final ServerServiceDefinition bindService() {
-            return ServerServiceDefinition.builder(getServiceDescriptor())
-                    .addMethod(getSayHelloMethod(), ServerCalls.asyncUnaryCall(this::sayHello))
-                    .build();
+            return HelloGrpc.bindService(this);
         }
+    }
+
+    public static ServerServiceDefinition bindService(AsyncService service) {
+        return ServerServiceDefinition.builder(getServiceDescriptor())
+                .addMethod(getSayHelloMethod(), ServerCalls.asyncUnaryCall(service::sayHello))
+                .build();
     }
 
     public static final class HelloBlockingStub extends AbstractBlockingStub<HelloBlockingStub> {

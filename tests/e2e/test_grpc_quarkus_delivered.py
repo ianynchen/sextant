@@ -64,8 +64,10 @@ def test_a_quarkus_grpc_client_field_is_an_outbound_service(quarkus_tables):
     assert grpc_out == {("acme.pricing.Pricing", None, "resolved")}, sorted(grpc_out, key=str)
 
 
+@pytest.mark.pins("supertype_derived.a-supertypes-members-are-what-it-INHERITS")
 def test_a_quarkus_grpc_service_derives_and_is_corroborated(quarkus_tables):
-    """`HelloService` carries `@GrpcService` and extends the generated `HelloImplBase`, so
+    """`HelloService` carries `@GrpcService` and extends the generated `HelloImplBase`, whose
+    `sayHello` it inherits from `HelloGrpc$AsyncService` as protoc emits it, so
     `grpc-java.yml`'s supertype read derives its RPC and the corroboration
     (`grpc-spring.yml`, CP-52 rows 1, 7) finds it named as a handler: no
     `service_identity` question."""

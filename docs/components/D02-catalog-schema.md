@@ -3389,9 +3389,15 @@ unresolved-is-an-answer; it is its converse failing: **no evidence means NO ROW,
 unresolved one** (fix round 2, C-1).
 
 **`members: overridden_public_methods`** is this style's one vocabulary word: a method the
-implementing class declares under the SAME NAME as one the supertype itself declares,
-PUBLIC on the implementer's own copy (an override may only widen visibility, never narrow
-it, so the supertype's own copy need not be checked). "The registration is the evidence"
+implementing class declares under the SAME NAME as one the supertype INHERITS OR DECLARES,
+PUBLIC on the implementer's own copy. "Inherits" is structural: the supertype's own methods
+plus those of every type above it, its superclasses and the interfaces it implements,
+transitively and default methods included, as far as this workspace's facts reach. It has to be,
+because protoc-gen-grpc-java puts every handler as a default method on the nested
+`<Service>Grpc$AsyncService` interface, and `<Service>ImplBase` implements it while declaring
+only its constructor and `bindService`. Read on the base class alone, no real generated service
+ever matched. The visibility is checked on the implementer's copy (an override may only
+widen visibility, never narrow it, so the supertype's own copy need not be checked). "The registration is the evidence"
 restated one level over: a class merely extending the generated base, overriding none of
 its methods, derives nothing at all.
 

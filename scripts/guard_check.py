@@ -3744,6 +3744,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "supertype_derived.a-supertypes-members-are-what-it-INHERITS": Guard(
+        what="the methods an implementer can override are those its supertype declares plus "
+        "those of every type above it, interfaces and their default methods included",
+        why="protoc-gen-grpc-java puts every handler as a DEFAULT method on the nested "
+        "`<Service>Grpc$AsyncService` interface; `<Service>ImplBase` implements it and declares "
+        "only `<init>` and `bindService` (`fixtures/grpc-probe`, 1.62.2). Read on the base class "
+        "alone, no override of real generated code matches: every grpc-java, Spring gRPC, "
+        "net.devh and Quarkus service loses its handler, and an annotated one gets a false "
+        "`service_identity` question",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        pending.extend(parents.get(current, []))\n",
+                replace="",
+            ),
+        ),
+    ),
     "injected_client.a-GENERATED-class-own-nesting-does-not-fence": Guard(
         what="an `extends` edge whose both ends are nested in one outer class does not fence "
         "that outer class's injected stubs",
@@ -4412,6 +4429,9 @@ def copy_tree(destination: Path) -> Path:
         # and the gRPC fence off protoc's nesting in its compiled classes, so their pins
         # are e2e and need the module.
         "orders-quarkus",
+        # protoc's own generated gRPC classes, which the inherited-member read is pinned on:
+        # only real generated code puts the handlers on `<Service>Grpc$AsyncService`.
+        "grpc-probe",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
@@ -4419,7 +4439,13 @@ def copy_tree(destination: Path) -> Path:
         # which exists only in real facts — so the test that pins it is an e2e one, and an
         # e2e test needs its fixture. 90 KB of sources and classes, and the stamp's mtime
         # survives `copy2`, so no `mvn` runs here either.
-        shutil.copytree(REPO / "fixtures" / named, destination / "fixtures" / named, ignore=ignore)
+        # `grpc-probe`'s `target/protobuf-maven-plugin` is 16MB of downloaded protoc binaries,
+        # a build cache the stamped `target/classes` no longer needs.
+        shutil.copytree(
+            REPO / "fixtures" / named,
+            destination / "fixtures" / named,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "protobuf-maven-plugin"),
+        )
     return destination
 
 

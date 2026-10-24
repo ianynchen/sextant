@@ -39,6 +39,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A grpc-java service's handler is read from real generated code** (Task 4 fix round of spec
+  2026-10-24-quarkus-messaging-and-grpc). `supertype_derived` matched an override only against
+  methods the generated `<Service>ImplBase` DECLARES. protoc-gen-grpc-java puts every handler as
+  a default method on the nested `<Service>Grpc$AsyncService` interface, which the base only
+  implements. So no real ImplBase service (grpc-java, Spring gRPC, net.devh, Quarkus) was named as
+  its RPC's handler, and an annotated one got a false `service_identity` question. Only a
+  `.proto` in the module still gave the RPC a row, with handler NULL. A supertype's members are
+  now what a subclass inherits: its own methods plus those of its superclasses and the interfaces
+  it implements, transitively, default methods included. Pinned on `fixtures/grpc-probe`'s
+  protoc output.
 - **A gRPC client stub a module compiles itself is no longer fenced away** (Task 4 of spec
   2026-10-24-quarkus-messaging-and-grpc, measured on `quarkus-quickstarts`). `injected_client`
   withholds the outbound row for a service the module implements, judged by the module's

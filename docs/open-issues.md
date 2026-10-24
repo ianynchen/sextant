@@ -1122,6 +1122,31 @@ Pinned by `test_the_generated_classs_own_nested_extends_edges_do_not_fence` and
 (`tests/application/test_grpc_quarkus.py`). Guard:
 `injected_client.a-GENERATED-class-own-nesting-does-not-fence`.
 
+### OI-193 — `supertype_derived` read a generated base's own declarations only, so no real gRPC handler matched · **CLOSED 2026-10-24**
+**Major by effect · logged and closed 2026-10-24 (Task 4 task review of spec `2026-10-24-quarkus-messaging-and-grpc`) · `src/sextant/application/resolve/engines/supertype_derived.py::_matches`**
+
+`overridden_public_methods` compared an implementer's methods with those its supertype DECLARES.
+protoc-gen-grpc-java emits every handler as a default method on the nested
+`<Service>Grpc$AsyncService` interface; `<Service>ImplBase implements BindableService,
+AsyncService` and declares only `<init>` and `bindService`.
+- Measured on `fixtures/grpc-probe` (1.62.2): the module derived only `grpc-schema`'s row for
+  `sextant.grpcprobe.OrderService/GetOrder`, with handler NULL, and no `supertype_derived` row.
+- Every real ImplBase service lost its handler (grpc-java, Spring gRPC, net.devh, Quarkus).
+  Where `@GrpcService` was present, the corroboration also filed a false `service_identity`
+  question.
+- The unit tests and `fixtures/orders-quarkus`'s first stand-in both declared the handler on the
+  base class, a shape protoc no longer emits, so they passed.
+
+**Closed** the same day. A supertype's members are now what a subclass inherits: the methods it
+declares plus those of every type above it, its superclasses and implemented interfaces,
+transitively, default methods included (`_inherited_names`, D02 `overridden_public_methods`). It
+is pinned on real protoc output by
+`tests/e2e/test_grpc_java_inherited_handlers.py::test_an_rpc_inherited_from_the_generated_interface_names_its_handler`,
+and on the rebuilt Quarkus stand-in by
+`tests/e2e/test_grpc_quarkus_delivered.py::test_a_quarkus_grpc_service_derives_and_is_corroborated`.
+Guard: `supertype_derived.a-supertypes-members-are-what-it-INHERITS`. `grpc-java.yml` is the only
+`supertype_derived` catalog, so no other catalog's rows can move.
+
 ### OI-192 — Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined
 **Major · logged 2026-10-24 (Task 4 field measurement of spec `2026-10-24-quarkus-messaging-and-grpc`; register `quarkus-grpc-mutiny`) · `src/sextant/application/resolve/engines/injected_client.py`, `src/sextant/application/resolve/engines/supertype_derived.py`, `src/sextant/catalogs/grpc-quarkus-client.yml`, `src/sextant/catalogs/grpc-java.yml`**
 

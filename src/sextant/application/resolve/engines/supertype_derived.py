@@ -54,9 +54,15 @@ an unreadable marker argument is the unresolved row plus the question.
 
 **`overridden_public_methods`** (D02 §2's catalog word for this style's
 `members` block) is evidence-shaped, not name-shaped: a method the
-implementing class declares under the SAME NAME as one the supertype itself
-declares (module-local, `superclasses`/`method_visibility`'s own join), with
-the implementer's OWN declared visibility `public` — never the supertype's,
+implementing class declares under the SAME NAME as one the supertype
+INHERITS-OR-DECLARES — its own methods plus those of every type above it, its
+superclasses and the interfaces it implements, transitively, default methods
+included (module-local facts, `superclasses`/`implementations`/
+`method_visibility`; `_inherited_names`). Not the supertype's own declarations
+alone: protoc's gRPC plugin puts every handler as a default method on
+`<Service>Grpc$AsyncService`, which `<Service>ImplBase` implements while
+declaring only its constructor and `bindService`. With the implementer's OWN
+declared visibility `public` — never the supertype's,
 since an overriding method may only be at least as visible as the one it
 overrides (never narrower), so checking the implementer's own copy is both
 sufficient and the only fact this style needs to read once.
@@ -306,6 +312,9 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     hosts = nest_hosts(workspace)
 
     methods_by_class = _methods_by_class(workspace)
+    # The inherited-member walk compares bare names (`_parents`), read once per run.
+    methods_by_bare = {bare_descriptor(owner): m for owner, m in methods_by_class.items()}
+    parents = _parents(workspace)
     known_symbols = {str(row["symbol"]) for row in workspace.query("declared_symbols")}
 
     matches: list[_ClassMatch] = []
@@ -325,7 +334,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             # Ordinary class inheritance. No evidence means NO ROW, never an
             # unresolved one (the gate above).
             continue
-        supertype_names = set(methods_by_class.get(supertype, {}))
+        supertype_names = _inherited_names(supertype, methods_by_bare, parents)
         implementer_methods = methods_by_class.get(implementer, {})
         overridden_public = {
             name: symbol
@@ -424,6 +433,53 @@ def _methods_by_class(workspace: Workspace) -> dict[str, dict[str, tuple[str, st
         name = method_name(bare_descriptor(symbol))
         result.setdefault(str(enclosing), {})[name] = (symbol, str(row["visibility"]))
     return result
+
+
+def _parents(workspace: Workspace) -> dict[str, list[str]]:
+    """Every type's direct supertypes, BARE: its superclass and the interfaces it
+    declares, as `superclasses` and `implementations` carry them (an interface's own
+    `interfaces` are its superinterfaces). Bare because the two carriers do not agree
+    on the module prefix for every writer, and the walk below only compares names."""
+    parents: dict[str, list[str]] = {}
+    for row in workspace.query("superclasses"):
+        parents.setdefault(bare_descriptor(str(row["symbol"])), []).append(
+            bare_descriptor(str(row["superclass"]))
+        )
+    for row in workspace.query("implementations"):
+        raw = row["interfaces"]
+        declared = raw if isinstance(raw, list) else json.loads(str(raw))
+        parents.setdefault(bare_descriptor(str(row["symbol"])), []).extend(
+            bare_descriptor(str(entry)) for entry in declared
+        )
+    return parents
+
+
+def _inherited_names(
+    supertype: str,
+    methods_by_bare: dict[str, dict[str, tuple[str, str]]],
+    parents: dict[str, list[str]],
+) -> set[str]:
+    """The method names a subclass of `supertype` INHERITS: those `supertype`
+    declares, plus those declared on every type above it — its superclasses and the
+    interfaces it implements, transitively, default methods included.
+
+    This is what an override overrides, and it is not optional for gRPC: protoc's gRPC
+    plugin puts every handler as a DEFAULT method on the nested
+    `<Service>Grpc$AsyncService` interface, and `<Service>ImplBase` implements it and
+    declares only its constructor and `bindService` (`fixtures/grpc-probe`, 1.62.2).
+    Read on the base class alone, no override of a real generated service ever
+    matched. A type whose methods this workspace never saw contributes nothing."""
+    names: set[str] = set()
+    seen: set[str] = set()
+    pending = [bare_descriptor(supertype)]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        names.update(methods_by_bare.get(current, {}))
+        pending.extend(parents.get(current, []))
+    return names
 
 
 def _decapitalized(name: str) -> str:
