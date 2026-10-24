@@ -1000,6 +1000,241 @@ cron whose default names the key — a profile name is not a schedule, so no ord
 **Closes** when the two lookups answer the activation key alike: `resolve_config` writes its
 row, or the schedules lookup is handed the layered map's answer for it.
 
+### OI-186 — a gRPC client's configured address is not read as its peer, for net.devh and Quarkus
+**Minor · logged 2026-10-24 (spec `2026-10-24-quarkus-messaging-and-grpc` §1 ruling 3C, not built) · `src/sextant/catalogs/grpc-net-devh.yml`, `src/sextant/catalogs/grpc-quarkus-client.yml`**
+
+Both `injected_client` catalogs derive one service-level outbound row per injected stub, whose
+identity is the stub's own `SERVICE_NAME`; neither row carries a `peer`. The client's address is
+configured by NAME: net.devh's `grpc.client.<name>.address`, Quarkus's
+`quarkus.grpc.clients.<name>.host` and `.port`. The name is the `@GrpcClient` value, or for
+Quarkus a value left out names the client by the field (CP-52 rows 2, 5; net.devh's own
+omitted-value rule is not measured). So the row has the name to look the address up by and
+nothing reads it. The user ruled this one item for both frameworks together, not one at a time.
+
+**What happens today:** a gRPC client row names the service it calls and not the service it
+reaches; the stitcher matches it by path alone. Not measured on the fixtures or the corpus.
+**Real triggering input:** `@GrpcClient("hello") HelloGrpc.HelloBlockingStub hello;` beside
+`grpc.client.hello.address=static://hello:9000` (net.devh) or
+`quarkus.grpc.clients.hello.host=hello` and `.port=9000` (Quarkus), two services in one
+system that implement the same generated service.
+**Closes** when the injected stub's client name reaches the row, the address keys of both
+frameworks are measured by a probe (net.devh's key and its `static://` / `dns:///` forms are
+not yet), and the value goes through the one placeholder rule, `config.substitute`, as a peer.
+
+### OI-187 — an `@GrpcClient` on a constructor or method PARAMETER derived nothing · **CLOSED 2026-10-24**
+**Major · logged and closed 2026-10-24 (task review of Quarkus gRPC) · `src/sextant/application/resolve/engines/injected_client.py::_matches`**
+
+`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER (CP-52 row 2); `injected_client` joined an
+annotation to a declared FIELD's type only, so a parameter-position client hit the
+`stub_type is None` branch and was skipped: no row, no gap, no question. Measured at the time: 0 of
+the 4 `@GrpcClient` uses in `examples/quarkus-quickstarts` were parameters.
+
+**Closed** the same day, once the entry's own check found the parameter annotations were already
+recorded: the extractor writes them on the method signature's `parameters[].annotations` (D00 §5a),
+beside the declared type. `injected_client` now reads an annotated parameter of a method or
+constructor, joined to that parameter's declared type, through the same fence and identity read as a
+field — one rule for every `injected_client` catalog, with no per-catalog switch. net.devh's
+`@GrpcClient` targets PARAMETER too (`javap` on 3.1.0.RELEASE), so it gains the same read. Pinned by
+`tests/application/test_grpc_quarkus.py` and `tests/application/test_injected_client.py`, guard
+`injected_client.a-PARAMETER-is-an-injection-point`.
+
+### OI-188 — an `@GrpcClient` on a METHOD (net.devh setter injection) joins no stub type and derives nothing
+**Minor · logged 2026-10-24 (fixing OI-187) · `src/sextant/application/resolve/engines/injected_client.py::_matches`, `src/sextant/catalogs/grpc-net-devh.yml`**
+
+net.devh's `@GrpcClient` is `@Target` {ANNOTATION_TYPE, FIELD, METHOD, PARAMETER} (W53 row 1,
+`scripts/probes/w53_grpc_annotation_identities.md`, 3.1.0.RELEASE). An annotation placed on a method itself has the method as its `annotations` target,
+which is in no declared-field table, so it hits the `stub_type is None` branch and derives no row, no
+gap and no question. The stub type would be the method's single parameter, and net.devh's setter
+semantics for it are not measured.
+
+**What happens today:** a net.devh client injected through an annotated setter shows no outbound gRPC
+call. Not measured on the fixtures or the corpus (the field-corpus pins carry no outbound calls).
+**Real triggering input:** `@GrpcClient("hello") public void setStub(HelloBlockingStub stub)`.
+**Closes** when a probe reads how net.devh populates a method-targeted `@GrpcClient`, and
+`injected_client` joins a method-position annotation to its parameter's declared type, pinned.
+
+### OI-189 — an empty `connector=` on a SmallRye channel is a question where Quarkus likely sees an orphan
+**Minor · logged 2026-10-24 (task review of spec `2026-10-24-quarkus-messaging-and-grpc`, Task 2) · `src/sextant/application/resolve/engines/config_join.py` (`_EMPTY_CONNECTOR`), `src/sextant/catalogs/smallrye-reactive-messaging.yml`**
+
+`mp.messaging.incoming.requests.connector=` (configured, empty) files a `binder_protocol` question
+with the reason "configured empty, which names no connector"
+(`test_an_empty_connector_value_asks_saying_it_is_empty`). SmallRye Config reads a `String`
+property through its string converter, built by `newEmptyValueConverter`, which very likely turns
+an empty value into NO value. If so, Quarkus sees no configured connector, the channel is an
+ORPHAN, and the sole connector of its direction is attached (CP-50 rows 7, 17). That would be a
+row where we file a question. Nobody has measured it: CP-50 row 21 read the BOOLEAN converter's
+empty-value rule, not the string converter's.
+
+**What happens today:** a question rather than the row Quarkus would wire. It is never a
+fabricated row. Not measured on the fixtures or the corpus: no quickstart writes an empty
+`connector=`.
+**Real triggering input:** `mp.messaging.incoming.requests.connector=` (often a
+`${CONNECTOR:}` placeholder resolving empty) beside `quarkus-messaging-kafka`.
+**Closes** with a probe row reading how `smallrye-config-core` 3.10.2 converts an empty `String`
+value. If empty means unset, the wiring treats an empty `connector` as absent, pinned by
+changing that test's expectation.
+
+### OI-190 — under the POM-reading fallback, a test-scoped in-memory connector counts toward the sole one
+**Minor · logged 2026-10-24 (task review of spec `2026-10-24-quarkus-messaging-and-grpc`, Task 2) · `src/sextant/ingress/detect/maven.py::_declared_versions`, `src/sextant/catalogs/smallrye-reactive-messaging.yml` (`wiring.orphans`)**
+
+The sole-connector test counts every connector in the module's dependency set (CP-50 rows 6, 16;
+guard `messaging.every-CONNECTOR-counts-toward-the-sole-one`). The Maven classpath that
+`dependency:build-classpath` reports is compile scope only (`-Dmdep.includeScope=compile`, OI-167).
+The POM-reading FALLBACK does not read scope (`_declared_versions` states this cost). So a module
+analysed through the fallback that declares `smallrye-reactive-messaging-in-memory` at `test`
+scope, the SmallRye testing idiom, counts two connectors where Quarkus's production build sees
+one. Every orphan then becomes a `binder_protocol` question instead of a row.
+
+**What happens today:** questions in place of rows, only on fallback modules. It is never a
+fabricated row. Measured on `quarkus-quickstarts` @ `81a5844`: no messaging module declares the
+in-memory connector (only `optaplanner-quickstart`, which has no channel), and every one resolved
+through the Maven classpath.
+**Real triggering input:** `quarkus-messaging-kafka` plus a `<scope>test</scope>`
+`io.smallrye.reactive:smallrye-reactive-messaging-in-memory`, analysed where Maven cannot be asked
+(offline with nothing cached, or no `mvn`).
+**Closes** when the fallback reads `<scope>` and leaves `test` (and `provided`, if measured)
+out of the set the dependency gate and the connector count read. That is a decision about every
+catalog's gate, so it needs its own evidence, pinned on a fallback-path fixture.
+
+### OI-191 — `injected_client`'s fence was tripped by protoc's own nested classes · **CLOSED 2026-10-24**
+**Critical by effect · logged and closed 2026-10-24 (Task 4 field measurement of spec `2026-10-24-quarkus-messaging-and-grpc`) · `src/sextant/application/resolve/engines/injected_client.py::_fenced_outer_classes`**
+
+The fence withholds an injected stub's outbound row when the module implements the service,
+judged by any `extends` edge into the stub's outer class. protoc-gen-grpc-java emits
+`<Service>FileDescriptorSupplier` and `<Service>MethodDescriptorSupplier`, each extending
+`<Service>BaseDescriptorSupplier`, inside every full-protobuf `<Service>Grpc`. Those edges fenced
+the outer class by themselves.
+- On `grpc-plain-text-quickstart`, `examples/GreeterGrpc#` was in the fenced set, and only those
+  two edges reached it.
+- On a copy of `fixtures/orders-quarkus`, giving its stand-in stub that pair made the
+  `acme.pricing.Pricing` client row vanish, and no question was filed.
+
+So every module that compiles its own `.proto` lost every resolved gRPC client row, net.devh and
+Quarkus alike. A published stubs jar gave an unresolved row, so on real code no client row was
+ever resolved.
+
+**Closed** the same day. An edge whose subclass is nested in the same outer class as its target
+fences nothing, and a module class extending `<Service>ImplBase` from outside it still fences.
+Pinned by `test_the_generated_classs_own_nested_extends_edges_do_not_fence` and
+`test_a_genuine_implementer_beside_the_generated_suppliers_is_still_fenced`
+(`tests/application/test_injected_client.py`), and by
+`test_a_quarkus_client_beside_protocs_own_generated_nesting_derives_its_row`
+(`tests/application/test_grpc_quarkus.py`). Guard:
+`injected_client.a-GENERATED-class-own-nesting-does-not-fence`.
+
+### OI-193 — `supertype_derived` read a generated base's own declarations only, so no real gRPC handler matched · **CLOSED 2026-10-24**
+**Major by effect · logged and closed 2026-10-24 (Task 4 task review of spec `2026-10-24-quarkus-messaging-and-grpc`) · `src/sextant/application/resolve/engines/supertype_derived.py::_matches`**
+
+`overridden_public_methods` compared an implementer's methods with those its supertype DECLARES.
+protoc-gen-grpc-java emits every handler as a default method on the nested
+`<Service>Grpc$AsyncService` interface; `<Service>ImplBase implements BindableService,
+AsyncService` and declares only `<init>` and `bindService`.
+- Measured on `fixtures/grpc-probe` (1.62.2): the module derived only `grpc-schema`'s row for
+  `sextant.grpcprobe.OrderService/GetOrder`, with handler NULL, and no `supertype_derived` row.
+- Every real ImplBase service lost its handler (grpc-java, Spring gRPC, net.devh, Quarkus).
+  Where `@GrpcService` was present, the corroboration also filed a false `service_identity`
+  question.
+- The unit tests and `fixtures/orders-quarkus`'s first stand-in both declared the handler on the
+  base class, a shape protoc no longer emits, so they passed.
+
+**Closed** the same day. A supertype's members are now what a subclass inherits: the methods it
+declares plus those of every type above it, its superclasses and implemented interfaces,
+transitively, default methods included (`_inherited_names`, D02 `overridden_public_methods`). It
+is pinned on real protoc output by
+`tests/e2e/test_grpc_java_inherited_handlers.py::test_an_rpc_inherited_from_the_generated_interface_names_its_handler`,
+and on the rebuilt Quarkus stand-in by
+`tests/e2e/test_grpc_quarkus_delivered.py::test_a_quarkus_grpc_service_derives_and_is_corroborated`.
+Guard: `supertype_derived.a-supertypes-members-are-what-it-INHERITS`. `grpc-java.yml` is the only
+`supertype_derived` catalog, so no other catalog's rows can move.
+
+### OI-192 — Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined
+**Major · logged 2026-10-24 (Task 4 field measurement of spec `2026-10-24-quarkus-messaging-and-grpc`; register `quarkus-grpc-mutiny`) · `src/sextant/application/resolve/engines/injected_client.py`, `src/sextant/application/resolve/engines/supertype_derived.py`, `src/sextant/catalogs/grpc-quarkus-client.yml`, `src/sextant/catalogs/grpc-java.yml`**
+
+`quarkus-grpc` generates, per service, a `MutinyService` interface (`examples.Greeter`), a client
+implementing it (`GreeterClient`, holding a `MutinyGreeterGrpc$MutinyGreeterStub`), a bean
+(`GreeterBean extends MutinyGreeterGrpc$GreeterImplBase`), and `MutinyGreeterGrpc`, whose
+`bindService` calls `GreeterGrpc.getServiceDescriptor()`. Only `GreeterGrpc` makes the
+`ServiceDescriptor.newBuilder("helloworld.Greeter")` call that both styles read the identity from.
+- **Client:** `@GrpcClient("hello") Greeter helloService` is typed by the interface. Its outer
+  class is itself and makes no marker call, so `injected_client` derives an `unresolved` row at
+  `examples/Greeter#` and a `service_identity` question.
+- **Service:** `@GrpcService public class HelloWorldService implements Greeter` extends no
+  `ImplBase`, so `supertype_derived` does not match it. The inbound row
+  `helloworld.Greeter/SayHello` comes from the module's `.proto` alone (`grpc-schema`, handler
+  NULL), and the corroboration files a `service_identity` question on the class.
+
+**What happens today**, measured on `quarkus-quickstarts` @ `81a5844`, on `grpc-plain-text-quickstart`
+and `grpc-tls-quickstart` (both of the corpus's Quarkus gRPC modules use these forms):
+- the Mutiny client is unresolved and cannot link;
+- the service's handler is not linked;
+- a module without its `.proto` in source would have no inbound row.
+
+The same modules' `GreeterGrpc.GreeterBlockingStub` client resolves (`OI-191`).
+- **A third client form is silent:** `@GrpcClient MutinyGreeterGrpc.MutinyGreeterStub`, the
+  generated Mutiny stub. Quarkus's generated top-level `GreeterBean extends
+  MutinyGreeterGrpc$GreeterImplBase`, and that edge crosses two outer classes, so it fences
+  `MutinyGreeterGrpc` (measured: `examples/MutinyGreeterGrpc#` is in both quickstarts' fenced set).
+  The stub then gets no row and no question. Neither quickstart declares such a field. The real
+  triggering input is any Quarkus module injecting the Mutiny stub type, because the bean is
+  generated for every service it compiles.
+
+**Real triggering input:** both quickstarts, as above. This is the form the Quarkus gRPC guide
+documents.
+**Closes** when all three Mutiny forms resolve to `<protoPackage>.<Service>`, by a structural
+rule that reads the generated classes' own edges and calls, not one that names Quarkus's
+generated class suffixes: the client typed `<Service>` must resolve, the client typed
+`Mutiny<Service>Grpc.Mutiny<Service>Stub` must stop being fenced by the generated
+`<Service>Bean` and resolve, and the service must be named as the handler of its RPC. Pinned
+on a fixture whose stand-ins carry the generated Mutiny classes, and re-measured on both
+quickstarts.
+
+### OI-194 — an UNTABLED SmallRye connector beside a tabled one leaves the tabled one looking sole
+**Minor · logged 2026-10-24 (final review of spec `2026-10-24-quarkus-messaging-and-grpc`, finding 1) · `src/sextant/application/resolve/engines/config_join.py::_wired`, `src/sextant/catalogs/smallrye-reactive-messaging.yml` (`wiring.connectors`)**
+
+The sole-connector test counts the connectors of the table whose `coordinates` meet the module's
+dependency set. Quarkus counts every `@Connector` bean (CP-50 rows 6, 16). A connector no entry
+lists (a Quarkiverse one: NATS JetStream, Solace) is therefore invisible here. Alone, it now
+gives a `binder_protocol` question with `binder` NULL (`_NO_TABLED_CONNECTOR`, guard
+`messaging.an-ORPHAN-with-no-TABLED-connector-asks`). Beside a tabled one, say
+`quarkus-messaging-kafka`, Quarkus sees two connectors and attaches neither, while this pass sees
+one and attaches Kafka to every orphan.
+
+**What happens today:** a resolved Kafka row for each orphan that Quarkus leaves unwired: a
+fabricated boundary, which DR-5 can link. Coordinates cannot reveal it: the extra connector's
+artifact is just another coordinate. Not measured on the fixtures or the corpus: none of the 15
+`quarkus-quickstarts` messaging modules carries a connector outside the table. A COVERAGE §5.8
+stated boundary.
+**Real triggering input:** `quarkus-messaging-kafka` plus
+`io.quarkiverse.reactivemessaging.nats-jetstream:quarkus-messaging-nats-jetstream`, with an
+unconfigured `@Incoming("prices")`.
+**Closes** when a connector is counted by what makes Quarkus count it, not by a coordinate list.
+A module-local class carrying `@Connector` (CP-50 row 6's qualifier, stated as catalog data) can
+be counted structurally from the module's own annotation facts. A connector class in a
+dependency jar needs the dependency's annotations read, which this analysis does not do. Pinned
+by a test where a module-local `@Connector` class beside the Kafka extension attaches nothing.
+
+### OI-195 — a Quarkus `%profile.`-prefixed key is read as a literal key, not as that profile's value
+**Minor · logged 2026-10-24 (final review of spec `2026-10-24-quarkus-messaging-and-grpc`, finding 5) · `src/sextant/catalogs/spring-web.yml` (`config_model`), `src/sextant/application/resolve/config.py`, `src/sextant/catalogs/smallrye-reactive-messaging.yml`**
+
+Quarkus writes a profile's override in the same file, prefixed: `%prod.mp.messaging.incoming.prices.topic`.
+The shipped config model (the Spring one, the only one that ships) knows profiles only by file
+name (`application{-profile}.properties`) and `spring.config.activate.on-profile`. So
+`%prod.mp.messaging.incoming.prices.topic` is a key of its own in the `default` environment,
+and no channel attribute reads it.
+
+**What happens today**, measured with `tests/application/test_config_join.py`'s `_messaging` helper:
+`mp.messaging.incoming.prices.topic=prices-dev` beside `%prod.mp.messaging.incoming.prices.topic=prices-prod`
+gives one resolved row at `prices-dev`, no question, and `resolved_config` holds
+`%prod.mp.messaging.incoming.prices.topic` as a literal key in `default`. The production
+destination is missed and the base value is reported as if it held everywhere. Not measured on
+the corpus.
+**Real triggering input:** any Quarkus module overriding a destination per profile in
+`application.properties`, the documented Quarkus idiom.
+**Closes** when the config model can declare a key-prefix profile spelling (`%{profile}.`) as
+data and `resolve/config.py` reads such a key as that profile's environment, pinned by a test
+where the two values above are read as two environments' values (today's wiring then leaves the
+destination unread, `_NO_AGREED_VALUE`) and no longer as one resolved row at `prices-dev`.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 
@@ -2677,7 +2912,7 @@ Minor; the work is understood and the probe is done.
 **Minor · entered 2026-10-17 · spec `2026-09-22-value-resolution-design.md` §2a step 3, §5b**
 
 **The gap, measured.** A catalog carrying an invented `invented_hop_via` block loads clean:
-all 101 catalogs parse, the key is silently ignored, and nothing refuses a key no style
+all 101 catalogs shipping then parse, the key is silently ignored, and nothing refuses a key no style
 declares. So §2a step 3's "one way, enforced by the loader" is not enforced by anything
 today — and the old plan of refusing the four known keys BY NAME would not have enforced it
 either, since it says nothing about an eighth word. §2a and §5b were corrected on 2026-10-17

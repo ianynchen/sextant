@@ -66,5 +66,49 @@
       <artifactId>microprofile-rest-client-api</artifactId>
       <version>4.0</version>
     </dependency>
+    <!-- Quarkus messaging (spec 2026-10-24 §3e): the Kafka extension is the module's ONE
+         connector, which is what attaches every orphan channel to Kafka. The extension
+         alone, all-exclusions; the annotations and `Emitter` come from the SmallRye API
+         jar that shades the MicroProfile one (CP-49). -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-messaging-kafka</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId>
+      <artifactId>smallrye-reactive-messaging-api</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- `QuoteRequester`'s `@Inject`. -->
+    <dependency>
+      <groupId>jakarta.inject</groupId>
+      <artifactId>jakarta.inject-api</artifactId>
+    </dependency>
+    <!-- Quarkus gRPC (spec §3d/§3e): `@GrpcService`/`@GrpcClient` live in
+         `quarkus-grpc-api` (CP-52 rows 1, 3), which `quarkus-grpc` brings in a real build;
+         with all-exclusions it is declared here too. `grpc-api`/`grpc-stub` are what the
+         hand-written generated stand-ins (`HelloGrpc`, `PricingGrpc`) compile against, and
+         what a real Quarkus gRPC module carries transitively. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-grpc</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-grpc-api</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-api</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
   </dependencies>
 </project>

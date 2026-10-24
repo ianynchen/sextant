@@ -48,6 +48,14 @@ reported** — out of its own `pom.properties` or its manifest's
 | `org.springframework.grpc:spring-grpc-core:0.10.0` | `org.springframework.grpc.server.service.GrpcService` (grpc-spring.yml) | **yes** | 99 | corroborates.class_annotations |
 | `org.springframework.grpc:spring-grpc-spring-boot-starter:0.10.0` | `org.springframework.grpc.server.service.GrpcService` (grpc-spring.yml) | no | 0 | detect.coordinates |
 
+### Where may each annotation sit?
+
+| # | annotation | read from | `@Target` | `@Retention` |
+|---|---|---|---|---|
+| 1 | `net.devh.boot.grpc.client.inject.GrpcClient` | `net.devh:grpc-client-spring-boot-starter:3.1.0.RELEASE` | {ANNOTATION_TYPE, FIELD, METHOD, PARAMETER} | RUNTIME |
+| 2 | `net.devh.boot.grpc.server.service.GrpcService` | `net.devh:grpc-server-spring-boot-starter:3.1.0.RELEASE` | {TYPE, METHOD} | RUNTIME |
+| 3 | `org.springframework.grpc.server.service.GrpcService` | `org.springframework.grpc:spring-grpc-core:0.10.0` | {TYPE, METHOD} | RUNTIME |
+
 **Verdict: all three spellings CONFIRMED.** `net.devh.boot.grpc.client.inject.GrpcClient`,
 `net.devh.boot.grpc.server.service.GrpcService` and
 `org.springframework.grpc.server.service.GrpcService` each exist in the artifact
@@ -64,6 +72,12 @@ matter the day this catalog became gated: a Maven module declaring only the star
 records only the starter, since F1 reads inheritance and not mediation, and the
 class that satisfies the annotation would be on a classpath no recorded coordinate
 names. Recorded here rather than acted on.
+
+**Where each may sit (rows 1–3, added 2026-10-24).** net.devh's `@GrpcClient` targets a
+PARAMETER as well as a FIELD and a METHOD (row 1), so a constructor- or method-parameter client
+is a real net.devh shape and `grpc-net-devh.yml` reads it as it reads a field; a METHOD use
+(a setter) is OI-188. Both `@GrpcService` spellings sit on a TYPE or a METHOD (rows 2–3). All
+three are RUNTIME-retained, so each reaches the class file the scanner reads.
 
 ## What this probe does NOT establish
 

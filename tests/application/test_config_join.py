@@ -18,12 +18,15 @@ its type ARGUMENT — `{"symbol": "…/Sink#", "arguments": [{"symbol":
 rootable at all. The facts below mirror that shape exactly.
 """
 
+import copy
+import dataclasses
 import json
 from pathlib import Path
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import config_join
 from sextant.application.resolve.open_questions import reset_open_questions
@@ -36,8 +39,10 @@ from sextant.domain.facts import (
     CallArgument,
     CallSiteFact,
     CallTarget,
+    ConfigEntryFact,
     Document,
     ModuleFact,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -3490,3 +3495,959 @@ def test_the_shipped_edge_catalog_derives_property_routes_through_derive_endpoin
         (None, None, "GET", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),
         (None, None, "POST", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),
     ]
+
+
+# --- SmallRye Reactive Messaging: channels wired as Quarkus wires them -------
+#
+# Spec 2026-10-24 §3a/§3c, rulings 1-2, against the SHIPPED
+# `smallrye-reactive-messaging.yml`: every value these tests turn on — the connector
+# names, the protocol each speaks, the destination attribute per direction, the two key
+# spellings, the orphan rule — is that file's, cited there to CP-49/50/51. Each test
+# runs the real passes in order: configuration (`resolve_config`, through the shipped
+# `spring-web` model, so a `${…}` is substituted by `config.substitute` exactly as in a
+# real resolve), then `derive_endpoints` (the dependency gate included), then the
+# `service_identity` seam that files the questions.
+
+_SMALLRYE_ID = "smallrye-reactive-messaging"
+_QUOTES = "com/acme/quotes/QuoteProcessor#"
+_RESOURCE = "com/acme/quotes/QuoteResource#"
+_MP = "org/eclipse/microprofile/reactive/messaging/"
+_INCOMING = _MP + "Incoming#"
+_OUTGOING = _MP + "Outgoing#"
+_INCOMINGS = "io/smallrye/reactive/messaging/annotations/Incomings#"
+_CHANNEL = _MP + "Channel#"
+_EMITTER = _MP + "Emitter#"
+_MULTI = "io/smallrye/mutiny/Multi#"
+_KAFKA_EXTENSION = "io.quarkus:quarkus-messaging-kafka"
+_AMQP_EXTENSION = "io.quarkus:quarkus-messaging-amqp"
+_RABBIT_EXTENSION = "io.quarkus:quarkus-messaging-rabbitmq"
+_MQTT_EXTENSION = "io.quarkus:quarkus-messaging-mqtt"
+_MESSAGING_CAPABILITIES = {
+    "resolved_config",
+    "annotation_args",
+    "nested_annotation_args",
+    "typed_signatures",
+}
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+
+
+def _quote_method(name: str, owner: str = _QUOTES) -> str:
+    return f"{_MODULE}{owner}{name}(sig_{name})."
+
+
+def _channel_method(
+    name: str, *uses: AnnotationUse, owner: str = _QUOTES
+) -> list[SymbolFact | AnnotationFact]:
+    """`<owner>#<name>()` — `QuoteProcessor` unless named — carrying `uses`, each an
+    annotation on the METHOD."""
+    symbol = _quote_method(name, owner)
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+        ),
+        *(
+            AnnotationFact(document_id="doc_1", target=symbol, use=use, retention="RUNTIME")
+            for use in uses
+        ),
+    ]
+
+
+def _incoming(channel: str) -> AnnotationUse:
+    return AnnotationUse(annotation=_INCOMING, args={"value": channel})
+
+
+def _outgoing(channel: str) -> AnnotationUse:
+    return AnnotationUse(annotation=_OUTGOING, args={"value": channel})
+
+
+def _injected_field(name: str, field_type: str, channel: str) -> list[SymbolFact | AnnotationFact]:
+    """`@Inject @Channel("<channel>") <field_type><String> <name>;` on `QuoteResource`."""
+    symbol = f"{_MODULE}{_RESOURCE}{name}."
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=symbol,
+            construct_kind=ConstructKind.FIELD,
+            enclosing=_MODULE + _RESOURCE,
+            signature=Signature(
+                returns=TypeRef(symbol=field_type, arguments=[_payload("java/lang/String#")])
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=symbol,
+            use=AnnotationUse(annotation=_CHANNEL, args={"value": channel}),
+            retention="RUNTIME",
+        ),
+    ]
+
+
+def _messaging(
+    tmp_path: Path,
+    facts: list[SymbolFact | AnnotationFact],
+    properties: dict[str, str] | None = None,
+    coordinates: tuple[str, ...] = (_KAFKA_EXTENSION,),
+    *,
+    gated: bool = False,
+) -> DuckDbWorkspace:
+    """The module through configuration, the endpoint loop and the questions seam.
+
+    `properties` is `application.properties`, read by the shipped Spring config model —
+    the only `config_model` that ships, and the one a Quarkus module's file is resolved
+    through in a real run. `coordinates` is the module's dependency set: the classpath
+    the connector table is checked against. The catalog must RUN unless `gated` says the
+    dependency gate is what the test is about — a skipped catalog derives nothing, and a
+    test asserting nothing was derived would otherwise pass for that reason alone."""
+    root = tmp_path / "facts"
+    write_fact_file(root / "Quotes.jsonl", _document(), list(facts))
+    write_fact_file(
+        root / "module.jsonl",
+        _module_document(),
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:orders-service",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+                dependency_coordinates=list(coordinates),
+            )
+        ],
+    )
+    if properties:
+        document = _document().model_copy(
+            update={
+                "document_id": "application.properties",
+                "relative_path": "application.properties",
+                "language": "properties",
+                "scanner_id": "sextant-config-reader",
+                "origin_entry": "src/main/resources",
+            }
+        )
+        write_fact_file(
+            root / "application.properties.jsonl",
+            document,
+            [
+                ConfigEntryFact(
+                    document_id="application.properties", key_raw=key, key_path=key, value=value
+                )
+                for key, value in properties.items()
+            ],
+        )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    smallrye = _shipped(_SMALLRYE_ID)
+    resolve_config(workspace, [_shipped("spring-web"), smallrye])
+    skipped = derive_endpoints(workspace, [smallrye], capabilities=_MESSAGING_CAPABILITIES)
+    assert [entry.catalog_id for entry in skipped] == ([_SMALLRYE_ID] if gated else [])
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, [smallrye])
+    return workspace
+
+
+def _messaging_rows(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
+    return sorted(
+        (
+            (r["protocol"], r["direction"], r["path"], r["handler"] or r["caller"], r["resolution"])
+            for r in workspace.query("endpoints")
+        ),
+        key=str,
+    )
+
+
+def _messaging_questions(workspace: DuckDbWorkspace) -> list[dict]:
+    return [
+        {**row, "candidates": json.loads(str(row["candidates"]))}
+        for row in workspace.query("open_questions")
+    ]
+
+
+@pytest.mark.pins("messaging.an-ORPHAN-channel-takes-the-sole-connector")
+def test_the_kafka_quickstart_processor_takes_the_one_connector_on_the_classpath(
+    tmp_path: Path,
+):
+    """Review focus 1, the quickstart's processor exactly: `@Incoming("requests")
+    @Outgoing("quotes")`, `quarkus-messaging-kafka` the only connector on the classpath and
+    no `mp.messaging.*` key at all. Both names are orphans — each is carried by one
+    direction only (CP-50 row 1) — and Quarkus attaches the one connector of each
+    direction to them (row 7), whose destination defaults to the channel name (CP-51
+    rows 4-5). So two Kafka rows, each at its channel's name, and nothing to ask."""
+    workspace = _messaging(
+        tmp_path, _channel_method("process", _incoming("requests"), _outgoing("quotes"))
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("kafka", "inbound", "requests", _quote_method("process"), "resolved"),
+        ("kafka", "outbound", "quotes", _quote_method("process"), "resolved"),
+    ]
+    assert questions == []
+
+
+def test_an_emitter_on_a_channel_is_an_outbound_row_naming_the_field(tmp_path: Path):
+    """`@Channel` on an injected `Emitter` is OUTGOING (CP-49 rows 21, 26 — the type is one
+    an `@EmitterFactoryFor` names, row 14), and the field it sits on is the row's caller,
+    as spec §3c's `QuoteResource.emitter (Emitter)`."""
+    workspace = _messaging(tmp_path, _injected_field("emitter", _EMITTER, "quote-requests"))
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("kafka", "outbound", "quote-requests", f"{_MODULE}{_RESOURCE}emitter.", "resolved")
+    ]
+
+
+def test_a_stream_on_a_channel_is_an_inbound_row(tmp_path: Path):
+    """Any other injected type — a `Multi` — makes `@Channel` INCOMING (CP-49 rows 21, 26:
+    `handleChannelInjection` → `produceIncomingChannel`)."""
+    workspace = _messaging(tmp_path, _injected_field("prices", _MULTI, "prices"))
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "inbound", "prices", f"{_MODULE}{_RESOURCE}prices.", "resolved")]
+
+
+def test_a_channel_injected_through_a_constructor_parameter_is_read_too(tmp_path: Path):
+    """`@Channel`'s `@Target` includes PARAMETER (CP-49 rows 3, 7), and a constructor
+    parameter is an injection point exactly as a field is. The parameter's annotations
+    live inside its declaration's signature, never as an `annotation` fact, so this is a
+    second read; the constructor is the row's caller."""
+    constructor = f"{_MODULE}{_RESOURCE}`<init>`(sig_init)."
+    parameter = Parameter(
+        name="emitter",
+        type=TypeRef(symbol=_EMITTER, arguments=[_payload("java/lang/String#")]),
+        erased_symbol=_EMITTER,
+        annotations=[AnnotationUse(annotation=_CHANNEL, args={"value": "quote-requests"})],
+    )
+    workspace = _messaging(
+        tmp_path,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=constructor,
+                construct_kind=ConstructKind.CONSTRUCTOR,
+                enclosing=_MODULE + _RESOURCE,
+                signature=Signature(parameters=[parameter], returns=TypeRef(symbol="void#")),
+            )
+        ],
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "outbound", "quote-requests", constructor, "resolved")]
+
+
+@pytest.mark.declines("smallrye-reactive-messaging")
+@pytest.mark.pins("messaging.an-IN-MEMORY-channel-is-no-boundary")
+def test_an_in_memory_pair_is_no_boundary_even_beside_a_connector(tmp_path: Path):
+    """Review focus 2. A name one method produces and another consumes is carried by both
+    directions, so `detectOrphanChannels`' `removeAll` takes it out of both (CP-50 rows 1,
+    11): it is never an orphan, nothing attaches to it, and it is an in-process pipe. No
+    row and no question — even with the Kafka connector on the classpath, which would
+    otherwise wire each half."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("produce", _outgoing("in-memory")),
+            *_channel_method("consume", _incoming("in-memory")),
+        ],
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+def test_a_configured_topic_is_the_destination(tmp_path: Path):
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {"mp.messaging.incoming.requests.topic": "quote-requests-v2"},
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "inbound", "quote-requests-v2", _quote_method("process"), "resolved")]
+
+
+def test_a_placeholder_topic_resolves_through_the_one_placeholder_rule(tmp_path: Path):
+    """Review focus 4. `${REQ_TOPIC:requests}` is substituted by `resolve_config`
+    (`config.substitute`): its default where nothing sets `REQ_TOPIC`, and the set value
+    where something does — the destination is configuration's answer, never the
+    expression and never a second substitution here."""
+    unset = _messaging(
+        tmp_path / "unset",
+        _channel_method("process", _incoming("requests")),
+        {"mp.messaging.incoming.requests.topic": "${REQ_TOPIC:requests}"},
+    )
+    unset_rows = _messaging_rows(unset)
+    unset.close()
+    set_ = _messaging(
+        tmp_path / "set",
+        _channel_method("process", _incoming("requests")),
+        {
+            "mp.messaging.incoming.requests.topic": "${REQ_TOPIC:requests}",
+            "REQ_TOPIC": "live-requests",
+        },
+    )
+    set_rows = _messaging_rows(set_)
+    set_.close()
+
+    assert unset_rows == [("kafka", "inbound", "requests", _quote_method("process"), "resolved")]
+    assert set_rows == [("kafka", "inbound", "live-requests", _quote_method("process"), "resolved")]
+
+
+def test_the_quarkus_spelling_of_a_key_is_read_as_the_mp_one(tmp_path: Path):
+    """CP-50 row 19: at 3.40.1.1 `quarkus.messaging.<dir>.<channel>.<attr>` and
+    `mp.messaging.…` name the same attribute, so either spelling configures the channel —
+    and where both give ONE value, that value."""
+    quarkus = _messaging(
+        tmp_path / "quarkus",
+        _channel_method("process", _incoming("requests")),
+        {"quarkus.messaging.incoming.requests.topic": "spelled-quarkus"},
+    )
+    quarkus_rows = _messaging_rows(quarkus)
+    quarkus.close()
+    both = _messaging(
+        tmp_path / "both",
+        _channel_method("process", _incoming("requests")),
+        {
+            "quarkus.messaging.incoming.requests.topic": "agreed",
+            "mp.messaging.incoming.requests.topic": "agreed",
+        },
+    )
+    both_rows = _messaging_rows(both)
+    both.close()
+
+    assert quarkus_rows == [
+        ("kafka", "inbound", "spelled-quarkus", _quote_method("process"), "resolved")
+    ]
+    assert both_rows == [("kafka", "inbound", "agreed", _quote_method("process"), "resolved")]
+
+
+def test_two_spellings_disagreeing_leave_the_destination_unread_naming_both_keys(
+    tmp_path: Path,
+):
+    """Which spelling wins when both are set is `smallrye-config`'s precedence, which
+    CP-50 did not measure (its NOT-measured list). So the row is `unresolved`, its `path`
+    unread, and the question says why in words naming BOTH keys — in the candidate,
+    because the candidate is what the rendered document prints."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {
+            "mp.messaging.incoming.requests.topic": "one",
+            "quarkus.messaging.incoming.requests.topic": "two",
+        },
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "inbound", None, _quote_method("process"), "unresolved")]
+    assert (question["protocol"], question["path"], question["question"]) == (
+        "kafka",
+        "requests",
+        "channel_destination",
+    )
+    [candidate] = question["candidates"]
+    assert candidate["channel"] == "requests"
+    assert "mp.messaging.incoming.requests.topic" in candidate["reason"]
+    assert "quarkus.messaging.incoming.requests.topic" in candidate["reason"]
+
+
+def test_two_connectors_and_none_configured_ask_which_naming_both(tmp_path: Path):
+    """Ruling 2: with two connectors of a direction on the classpath Quarkus attaches
+    neither (CP-50 row 7, `Set.size() == 1`), so the wire is unread — no row, which
+    would name a protocol nobody chose, and a `binder_protocol` question carrying each
+    connector."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        coordinates=(_KAFKA_EXTENSION, _AMQP_EXTENSION),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["protocol"], question["path"], question["question"]) == (
+        None,
+        "requests",
+        "binder_protocol",
+    )
+    assert sorted(c["binder"] for c in question["candidates"]) == [
+        "smallrye-amqp",
+        "smallrye-kafka",
+    ]
+    assert all(c["binding"] == "requests" for c in question["candidates"])
+
+
+def test_a_configured_connector_the_table_does_not_know_asks_naming_it(tmp_path: Path):
+    """Ruling 1: a connector with no entry in the table at all — a third-party connector
+    (spec §4) — leaves the wire unread. Named, never defaulted to the catalog's own
+    `protocol:`, never silent."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        {"mp.messaging.incoming.prices.connector": "acme-carrier-pigeon"},
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert question["question"] == "binder_protocol"
+    [candidate] = question["candidates"]
+    assert (candidate["binding"], candidate["binder"]) == ("prices", "acme-carrier-pigeon")
+    assert "not in this catalog's connector table" in candidate["reason"]
+
+
+def test_a_configured_mqtt_connector_is_counted_and_asks_naming_it(tmp_path: Path):
+    """MQTT is in the table as a COUNTED entry (CP-51 row 32: `smallrye-mqtt`) with no
+    Protocol member (spec §4). Configured, it wires the channel — Quarkus would — and the
+    wire is the unread part: a question naming it, never a row."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        {"mp.messaging.incoming.prices.connector": "smallrye-mqtt"},
+        coordinates=(_MQTT_EXTENSION,),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    [candidate] = question["candidates"]
+    assert (question["question"], candidate["binder"]) == ("binder_protocol", "smallrye-mqtt")
+    assert "configured by `mp.messaging.incoming.prices.connector`" in candidate["reason"]
+
+
+@pytest.mark.declines("smallrye-reactive-messaging")
+@pytest.mark.pins("messaging.every-CONNECTOR-counts-toward-the-sole-one")
+def test_kafka_beside_mqtt_is_two_connectors_and_attaches_neither(tmp_path: Path):
+    """Fix round 1, finding 1. Quarkus's sole-connector test counts EVERY `@Connector`
+    bean on the classpath (CP-50 rows 6, 16), MQTT's included, so Kafka and MQTT together
+    are two connectors and an unconfigured orphan takes neither (row 7). Counting only the
+    connectors the table can READ published a Kafka row the framework never wires."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        coordinates=(_KAFKA_EXTENSION, _MQTT_EXTENSION),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert question["question"] == "binder_protocol"
+    assert sorted(c["binder"] for c in question["candidates"]) == [
+        "smallrye-kafka",
+        "smallrye-mqtt",
+    ]
+
+
+def test_an_orphan_whose_only_connector_is_mqtt_asks_naming_it(tmp_path: Path):
+    """The other half of finding 1: MQTT alone IS the sole connector, so Quarkus attaches
+    it to the orphan — and this catalog reads no wire for it. A question naming it, where
+    reading only the table's protocol entries left the channel silent."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        coordinates=(_MQTT_EXTENSION,),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    [candidate] = question["candidates"]
+    assert (candidate["binding"], candidate["binder"]) == ("prices", "smallrye-mqtt")
+    assert "the only inbound connector in the dependency set" in candidate["reason"]
+
+
+@pytest.mark.pins("messaging.an-ORPHAN-with-no-TABLED-connector-asks")
+def test_an_orphan_with_no_tabled_connector_in_the_set_asks_naming_none(tmp_path: Path):
+    """Final review, finding 1. `quarkus-messaging` alone puts the framework on the build
+    and no connector the table lists. What this pass sees is zero TABLED connectors, not
+    zero connectors: a Quarkiverse connector (NATS JetStream, Solace) as the module's only
+    one is the sole connector Quarkus attaches (CP-50 row 7), and its coordinates are in no
+    entry here. A `binder_protocol` question with no binder, saying no tabled connector is
+    in the set — where the orphan was dropped silently."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        coordinates=("io.quarkus:quarkus-messaging", "io.quarkiverse.reactivemessaging:x"),
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["protocol"], question["path"], question["question"]) == (
+        None,
+        "prices",
+        "binder_protocol",
+    )
+    [candidate] = question["candidates"]
+    assert (candidate["binding"], candidate["binder"]) == ("prices", None)
+    assert (
+        "no inbound connector in this catalog's connector table is in the module's "
+        "dependency set" in candidate["reason"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("enabled", "rows_expected"),
+    [("FALSE", 0), (" false ", 0), ("nope", 0), ("false", 0), ("TRUE", 1), ("", 1)],
+)
+def test_enabled_reads_as_the_configuration_system_converts_a_boolean(
+    tmp_path: Path, enabled: str, rows_expected: int
+):
+    """CP-50 row 21: SmallRye Config trims a boolean, takes an EMPTY value as no value (the
+    default, `true`, applies), and reads `true` only for its listed words, ignoring case —
+    so `FALSE`, ` false ` and even `nope` disable the channel, where an exact match on
+    `"false"` left all three wired."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {
+            "mp.messaging.incoming.requests.connector": "smallrye-kafka",
+            "mp.messaging.incoming.requests.enabled": enabled,
+        },
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert len(rows) == rows_expected
+
+
+def test_a_pattern_flag_and_the_attachment_flag_read_as_booleans_too(tmp_path: Path):
+    """The same conversion for Kafka's `pattern` (`TRUE` leaves the topic unread — it is a
+    regex) and for the attachment flag (`OFF` is false, so nothing attaches)."""
+    patterned = _messaging(
+        tmp_path / "pattern",
+        _channel_method("process", _incoming("requests")),
+        {"mp.messaging.incoming.requests.pattern": "TRUE"},
+    )
+    patterned_rows = _messaging_rows(patterned)
+    patterned.close()
+    switched = _messaging(
+        tmp_path / "flag",
+        _channel_method("process", _incoming("requests")),
+        {"quarkus.messaging.auto-connector-attachment": "OFF"},
+    )
+    switched_rows = _messaging_rows(switched)
+    switched.close()
+
+    assert patterned_rows == [("kafka", "inbound", None, _quote_method("process"), "unresolved")]
+    assert switched_rows == []
+
+
+def test_an_empty_connector_value_asks_saying_it_is_empty(tmp_path: Path):
+    """`connector=` names no connector; the question says so, rather than reporting a
+    connector called `` absent from the table."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {"mp.messaging.incoming.requests.connector": ""},
+    )
+    rows = _messaging_rows(workspace)
+    [question] = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    [candidate] = question["candidates"]
+    assert candidate["binder"] is None
+    assert candidate["reason"] == (
+        "`mp.messaging.incoming.requests.connector` is configured empty, which names no connector"
+    )
+
+
+@pytest.mark.declines("smallrye-reactive-messaging")
+@pytest.mark.pins("messaging.an-IN-MEMORY-channel-is-no-boundary")
+def test_an_in_memory_pair_across_two_classes_is_no_boundary(tmp_path: Path):
+    """The orphan test is over the MODULE's channel names (CP-50 row 1), not a class's: a
+    producer in one class and a consumer in another are still one in-process pipe."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("produce", _outgoing("handoff"), owner="com/acme/quotes/Producer#"),
+            *_channel_method("consume", _incoming("handoff"), owner="com/acme/quotes/Consumer#"),
+        ],
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+@pytest.mark.declines("smallrye-reactive-messaging")
+@pytest.mark.pins("messaging.an-IN-MEMORY-channel-is-no-boundary")
+def test_an_emitter_feeding_an_incoming_processor_is_no_boundary(tmp_path: Path):
+    """A REST resource's `@Channel("x") Emitter` feeding an `@Incoming("x")` processor — the
+    quickstarts' commonest in-process shape: the emitter is OUTGOING `x` (CP-49 row 21), the
+    processor INCOMING `x`, so both directions carry the name and neither is an orphan."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_injected_field("emitter", _EMITTER, "x"),
+            *_channel_method("consume", _incoming("x")),
+        ],
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+@pytest.mark.pins("messaging.the-CONNECTOR-table-names-the-protocol")
+def test_a_configured_connector_wins_over_the_sole_connector_on_the_classpath(
+    tmp_path: Path,
+):
+    """Review focus 3. A channel whose connector key is set is connector-managed, and a
+    connector-managed channel is never an orphan (CP-50 rows 1, 8), so the sole Kafka
+    connector is NOT attached to it: the row is `amqp`, the configured connector's own
+    protocol, at its `address` default — the channel name (CP-51 rows 9-10).
+
+    What the framework does with exactly this module is a BUILD FAILURE: CP-50 row 8
+    matches the configured name against the connector beans and throws "configured with
+    an unknown connector" when none answers. So no module that was built is in this
+    state; a classpath lacking the configured connector is this analysis's reading of
+    the dependency set falling short (a declared-only set, a coordinate the table does
+    not list), and the configured connector is what the running application wires."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {"mp.messaging.incoming.requests.connector": "smallrye-amqp"},
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("amqp", "inbound", "requests", _quote_method("process"), "resolved")]
+
+
+@pytest.mark.pins("messaging.the-CONNECTOR-table-names-the-protocol")
+def test_rabbitmq_publishes_to_an_exchange_and_consumes_from_a_queue(tmp_path: Path):
+    """CP-51 rows 14-15: RabbitMQ's outgoing destination is `exchange.name`, its incoming
+    one `queue.name` — an incoming `exchange.name` is the exchange the queue is bound to,
+    not where the message is read from. Each defaults to the channel name."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("publish", _outgoing("prices-out")),
+            *_channel_method("consume", _incoming("prices-in")),
+            *_channel_method("defaults", _incoming("unset-in"), _outgoing("unset-out")),
+        ],
+        {
+            "mp.messaging.outgoing.prices-out.exchange.name": "prices-exchange",
+            "mp.messaging.outgoing.prices-out.queue.name": "not-an-outgoing-destination",
+            "mp.messaging.incoming.prices-in.exchange.name": "prices-exchange",
+            "mp.messaging.incoming.prices-in.queue.name": "prices-queue",
+        },
+        coordinates=(_RABBIT_EXTENSION,),
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("amqp", "outbound", "prices-exchange", _quote_method("publish"), "resolved"),
+            ("amqp", "inbound", "prices-queue", _quote_method("consume"), "resolved"),
+            ("amqp", "inbound", "unset-in", _quote_method("defaults"), "resolved"),
+            ("amqp", "outbound", "unset-out", _quote_method("defaults"), "resolved"),
+        ],
+        key=str,
+    )
+
+
+@pytest.mark.pins("messaging.the-CONNECTOR-table-names-the-protocol")
+def test_the_jms_connector_reads_destination_and_defaults_to_the_channel_name(
+    tmp_path: Path,
+):
+    """CP-51 rows 23, 25-26: `smallrye-jms` speaks `jms`, names its destination by
+    `destination` in both directions, the channel name when unset, and reaches a Quarkus
+    3.17.5 module through its own SmallRye artifact (no extension declares it). No
+    quickstart carries it, so this is the JMS connector's only pin (COVERAGE §5.9)."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("consume", _incoming("orders-in")),
+            *_channel_method("publish", _outgoing("orders-out")),
+        ],
+        {"mp.messaging.incoming.orders-in.destination": "ORDERS.Q"},
+        coordinates=("io.smallrye.reactive:smallrye-reactive-messaging-jms",),
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("jms", "inbound", "ORDERS.Q", _quote_method("consume"), "resolved"),
+            ("jms", "outbound", "orders-out", _quote_method("publish"), "resolved"),
+        ],
+        key=str,
+    )
+
+
+def test_an_incomings_container_is_one_row_per_nested_incoming(tmp_path: Path):
+    """Two `@Incoming`s on one method reach the class file as ONE `@Incomings` whose
+    `value` holds both (CP-49 rows 5, 9 — the SmallRye copies are `@Repeatable`), and
+    Quarkus reads the container (rows 19-20). Reading only `@Incoming` would lose both."""
+    container = AnnotationUse(
+        annotation=_INCOMINGS,
+        args={"value": [_incoming("orders"), _incoming("refunds")]},
+    )
+    workspace = _messaging(tmp_path, _channel_method("consume", container))
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("kafka", "inbound", "orders", _quote_method("consume"), "resolved"),
+        ("kafka", "inbound", "refunds", _quote_method("consume"), "resolved"),
+    ]
+
+
+def test_a_kafka_topics_list_leaves_the_incoming_destination_unread(tmp_path: Path):
+    """CP-51's attribute table: an incoming Kafka channel may name its topics as a LIST
+    (`topics`) or as a regex (`pattern=true`). This table reads `topic` alone, so either
+    one configured leaves the destination unread — a row at the channel name would name
+    a topic the consumer does not read."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("listed", _incoming("listed")),
+            *_channel_method("patterned", _incoming("patterned")),
+        ],
+        {
+            "mp.messaging.incoming.listed.topics": "a,b",
+            "mp.messaging.incoming.patterned.topic": "orders-.*",
+            "mp.messaging.incoming.patterned.pattern": "true",
+        },
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("kafka", "inbound", None, _quote_method("listed"), "unresolved"),
+        ("kafka", "inbound", None, _quote_method("patterned"), "unresolved"),
+    ]
+    assert sorted(q["path"] for q in questions) == ["listed", "patterned"]
+    assert {q["question"] for q in questions} == {"channel_destination"}
+
+
+def test_a_disabled_connector_channel_produces_no_channel_at_all(tmp_path: Path):
+    """CP-50 rows 3-4: a connector-configured channel whose `enabled` is `false` produces
+    no channel item — no row, and it does not stand in the orphan maps either."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("requests")),
+        {
+            "mp.messaging.incoming.requests.connector": "smallrye-kafka",
+            "mp.messaging.incoming.requests.enabled": "false",
+        },
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+def test_attachment_switched_off_wires_no_orphan(tmp_path: Path):
+    """CP-50 rows 7, 10: the attachment sits behind
+    `quarkus.messaging.auto-connector-attachment` (default `true`). Off, an orphan takes
+    no connector, and only a configured one is a boundary."""
+    workspace = _messaging(
+        tmp_path,
+        [
+            *_channel_method("orphan", _incoming("orphan")),
+            *_channel_method("configured", _incoming("configured")),
+        ],
+        {
+            "quarkus.messaging.auto-connector-attachment": "false",
+            "mp.messaging.incoming.configured.connector": "smallrye-kafka",
+        },
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "inbound", "configured", _quote_method("configured"), "resolved")]
+
+
+def test_a_dotted_channel_name_is_quoted_in_its_key(tmp_path: Path):
+    """CP-50 rows 5, 15: a channel name containing `.` is written into the key quoted."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("quotes.v2")),
+        {'mp.messaging.incoming."quotes.v2".topic': "quotes-v2"},
+    )
+    rows = _messaging_rows(workspace)
+    workspace.close()
+
+    assert rows == [("kafka", "inbound", "quotes-v2", _quote_method("process"), "resolved")]
+
+
+@pytest.mark.declines("smallrye-reactive-messaging")
+@pytest.mark.pins("messaging.wired-questions-ride-the-dependency-gate")
+def test_a_module_whose_build_names_no_messaging_artifact_derives_and_asks_nothing(
+    tmp_path: Path,
+):
+    """The dependency gate (`config_join` is gated, `resolve/dependencies.py`) — and the
+    questions seam re-checks no gate, so the catalog's `gaps` must: a module with the
+    annotations and no SmallRye on its build files no question either."""
+    workspace = _messaging(
+        tmp_path,
+        _channel_method("process", _incoming("prices")),
+        {"mp.messaging.incoming.prices.connector": "smallrye-mqtt"},
+        coordinates=("io.quarkus:quarkus-rest",),
+        gated=True,
+    )
+    rows = _messaging_rows(workspace)
+    questions = _messaging_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+def _rewired(edit: object) -> Catalog:
+    """The shipped SmallRye catalog with `edit(address)` applied to a deep copy of its
+    `address_from_config` block."""
+    catalog = _shipped(_SMALLRYE_ID)
+    matches = copy.deepcopy(dict(catalog.matches))
+    edit(matches["address_from_config"])  # type: ignore[operator]
+    return dataclasses.replace(catalog, matches=matches)
+
+
+def _first_connector(address: dict) -> dict:
+    return address["wiring"]["connectors"][0]
+
+
+@pytest.mark.parametrize(
+    ("edit", "expected"),
+    [
+        (
+            lambda a: a.update(key="mp.messaging.incoming.{binding}.topic"),
+            "both `key` and `wiring`",
+        ),
+        (lambda a: a["wiring"].update(keys={}), "keys must map a direction"),
+        (
+            lambda a: a["wiring"]["keys"].update(inbound=["mp.messaging.incoming.{binding}"]),
+            "carrying `{binding}` and `{attribute}`",
+        ),
+        (lambda a: a["wiring"]["keys"].pop("outbound"), "declares no templates for outbound"),
+        (lambda a: a["wiring"]["keys"].update(sideways=["{binding}.{attribute}"]), "closed"),
+        (lambda a: a["wiring"].pop("connector_attribute"), "connector_attribute must name"),
+        (lambda a: a["wiring"].update(connector_names="loosely"), "is not one of exact"),
+        (lambda a: a["wiring"].update(quote={"containing": "."}), "quote must be"),
+        (lambda a: a["wiring"].update(disabled_when={"attribute": "enabled"}), "disabled_when"),
+        (
+            lambda a: a["wiring"].update(disabled_when={"attribute": "enabled", "is": "false"}),
+            "disabled_when must be `{attribute, is: <bool>}`",
+        ),
+        (lambda a: a["wiring"]["orphans"].update(attach="every_connector"), "is not one of"),
+        (lambda a: a["wiring"]["orphans"].update(unless={"key": "x"}), "orphans.unless"),
+        (lambda a: a["wiring"].pop("booleans"), "`wiring.booleans` must say how"),
+        (
+            # YAML 1.1 reads an unquoted `ON` as the boolean `True`, not the string.
+            lambda a: a["wiring"]["booleans"].update(true_values=["TRUE", True]),
+            "quote every value",
+        ),
+        (lambda a: _first_connector(a).pop("by"), "carry `name`, `by`"),
+        (
+            lambda a: _first_connector(a)["unread_when"]["inbound"].append(
+                {"attribute": "x", "is": "true"}
+            ),
+            "unread_when.inbound must be a list",
+        ),
+        (
+            lambda a: a["wiring"]["connectors"].append(
+                {"name": "acme", "by": "x.md", "coordinates": ["a:b"]}
+            ),
+            "is a COUNTED entry",
+        ),
+        (
+            lambda a: a["wiring"]["connectors"].append(
+                {
+                    "name": "acme",
+                    "by": "x.md",
+                    "coordinates": ["a:b"],
+                    "directions": ["inbound"],
+                    "destination": {"inbound": "topic"},
+                }
+            ),
+            "is a COUNTED entry",
+        ),
+        (
+            lambda a: a["wiring"]["connectors"].append(
+                {"name": "acme", "by": "x.md", "coordinates": ["a:b"], "directions": ["upward"]}
+            ),
+            "closed sets are closed",
+        ),
+        (lambda a: a["wiring"].update(connectors=[]), "connectors must be a non-empty list"),
+        (lambda a: _first_connector(a).update(protocol="mqtt"), "closed sets are closed"),
+        (lambda a: _first_connector(a).update(coordinates=[]), "non-empty `coordinates`"),
+        (lambda a: _first_connector(a).update(destination={}), "entries with a `protocol`"),
+        (lambda a: _first_connector(a).pop("default"), "entries with a `protocol`"),
+        (
+            lambda a: _first_connector(a).update(destination={"both": "topic"}),
+            "for which `keys` declares no templates",
+        ),
+        (
+            lambda a: _first_connector(a).update(unread_when={"inbound": [{"is": True}]}),
+            "unread_when.inbound must be a list",
+        ),
+        (
+            lambda a: a["wiring"]["connectors"].append(
+                {**_first_connector(a), "name": "SmallRye-Kafka"}
+            ),
+            "names `SmallRye-Kafka` twice",
+        ),
+        (
+            lambda a: a["binding"]["channels"][0].update(
+                annotation=[
+                    "org.eclipse.microprofile.reactive.messaging.Incoming",
+                    "io.smallrye.reactive.messaging.annotations.Incoming",
+                ]
+            ),
+            "ONE container type beside ONE annotation",
+        ),
+        (lambda a: a["binding"].update(injected={"annotation": "x"}), "must be a list of rules"),
+        (lambda a: a["binding"]["injected"][0].pop("arg"), "entries must be"),
+        (
+            lambda a: a["binding"]["injected"][0].update(direction_by_type={"upward": ["a.B"]}),
+            "closed sets are closed",
+        ),
+        (
+            lambda a: a["binding"].update(**{"from": "bean_name", "suffix": _suffix_rules()}),
+            "needs `binding.from: annotation_value`",
+        ),
+    ],
+)
+def test_a_broken_wiring_block_is_refused_by_name(edit: object, expected: str):
+    """Every `wiring`, `injected` and `container` word is refused at load when it is the
+    wrong shape — before any fact is read (`_UnusedWorkspace`), because each one reaches a
+    configuration key looked up verbatim, a row's protocol or the classpath test, where a
+    typo reads as an observation."""
+    with pytest.raises(CatalogError) as raised:
+        config_join.run(_UnusedWorkspace(), _rewired(edit))
+
+    assert expected in str(raised.value)
+    assert "smallrye-reactive-messaging.yml" in str(raised.value)

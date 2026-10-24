@@ -2901,6 +2901,133 @@ AFTER the engine loop ([M04](M04-resolver.md)); it rides the same seam
 catalog — whose unresolved bindings already answer for themselves with a row — and for a
 `media_from_config`-only one.
 
+**Two more words on this source**, both optional and both read by `_channels` whatever
+else the catalog declares (spec 2026-10-24 §3a):
+
+- **`container`** on a `channels` rule names the repeatable CONTAINER of the rule's
+  annotation. Two uses of a repeatable annotation on one method reach the class file as
+  the container alone (JLS 9.7.5), so a rule naming only the member reads neither; each
+  use the container holds is read as a use of the member on the same method, through the
+  same `folded_rows` `annotation_driven`'s `mapping.annotations[].container` uses. One
+  container beside ONE annotation — a rule whose `annotation` is a list and declares a
+  container is refused, since a container folds into a single member.
+- **`injected`** is a second rule list, for a channel named on an INJECTION POINT rather
+  than on a method: a field carrying the annotation, or a method or constructor parameter
+  carrying it (read from its declaration's signature, where a parameter's annotations
+  live). Each entry is `{annotation, arg, direction, direction_by_type}`:
+  `direction_by_type` maps a direction to the injected TYPES that take it — the field's
+  declared type, the parameter's erased one — and `direction` is every other type's. The
+  field, or the declaration whose parameter it is, is the channel's handler or caller.
+
+```yaml
+      injected:
+        - annotation: [org.eclipse.microprofile.reactive.messaging.Channel,
+                       io.smallrye.reactive.messaging.annotations.Channel]
+          arg: value
+          direction: inbound
+          direction_by_type:
+            outbound: [org.eclipse.microprofile.reactive.messaging.Emitter, …]
+```
+
+#### `wiring` — channels a connector carries to a broker
+
+`spring-integration.yml`'s channels are in-process pipes whose destinations no configuration
+key states. A SmallRye Reactive Messaging channel is the other case: a CONNECTOR carries it
+to a broker, the connector is chosen by configuration or by the classpath, and the
+connector's own attribute names the destination (spec 2026-10-24, rulings 1-2). `wiring`,
+beside an `annotation_value` binding, states that whole rule as data; a catalog declaring
+it may not also declare `key` (one catalog-wide key would answer for every connector), and
+`wiring` under `bean_name` is refused.
+
+```yaml
+matches:
+  address_from_config:
+    binding: { from: annotation_value, channels: [...], injected: [...] }
+    wiring:
+      keys:
+        inbound: ["mp.messaging.incoming.{binding}.{attribute}",
+                  "quarkus.messaging.incoming.{binding}.{attribute}"]
+        outbound: ["mp.messaging.outgoing.{binding}.{attribute}",
+                   "quarkus.messaging.outgoing.{binding}.{attribute}"]
+      quote: { containing: ".", with: "\"" }
+      connector_attribute: connector
+      connector_names: ignoring_case          # or `exact`, the default
+      booleans:
+        true_values: ["TRUE", "1", "YES", "Y", "ON", "JA", "J", "SI", "SIM", "OUI"]
+        ignoring_case: true
+        trimmed: true
+      disabled_when: { attribute: enabled, is: false }
+      orphans:
+        attach: sole_connector
+        unless: { key: quarkus.messaging.auto-connector-attachment, is: false }
+      connectors:
+        - name: smallrye-kafka                # a READ entry
+          by: scripts/probes/cp51_smallrye_connectors.md
+          protocol: kafka
+          coordinates: [io.quarkus:quarkus-messaging-kafka,
+                        io.smallrye.reactive:smallrye-reactive-messaging-kafka]
+          destination: { inbound: topic, outbound: topic }
+          default: "{binding}"
+          unread_when:
+            inbound: [{ attribute: topics }, { attribute: pattern, is: true }]
+        - name: smallrye-mqtt                 # a COUNTED entry
+          by: scripts/probes/cp51_smallrye_connectors.md
+          coordinates: [io.quarkus:quarkus-messaging-mqtt,
+                        io.smallrye.reactive:smallrye-reactive-messaging-mqtt]
+          directions: [inbound, outbound]
+```
+
+| Word | Meaning |
+|---|---|
+| `keys` | Per direction, every SPELLING of a channel attribute's key: templates carrying `{binding}` (the channel name) and `{attribute}`. Every spelling is read; where two give one value it is that value, where they give different values the attribute is unread and the reason names both keys. Every direction a channel rule names must have templates. |
+| `quote` | A channel name containing `containing` is wrapped in `with` inside a key, unless it starts with it already. |
+| `connector_attribute` | The attribute naming a channel's connector. A channel with it configured is CONNECTOR-MANAGED. |
+| `connector_names` | How a configured name matches a connector's: `exact` or `ignoring_case`. |
+| `booleans` | How the configuration system converts a boolean: `true_values` (strings — quoted, since YAML reads `ON` as a boolean), compared `ignoring_case`, after the value is `trimmed`. An EMPTY value is no value (the setting's default applies), and every value not in `true_values` is `false` — the converter's own rule, never "anything but `false` is true". Required by any `is` below. |
+| `disabled_when` | `{attribute, is}`: a connector-managed channel whose attribute converts to `is` produces no channel at all — no row, and it is not in the orphan sets. |
+| `orphans` | Optional. `attach: sole_connector` (the one rule) attaches to every ORPHAN of a direction the one connector of that direction in the module's dependency set; `unless: {key, is}` switches it off where that key, configured alike in every environment, converts to `is`. Absent, only configured channels are wired. |
+| `connectors` | The connector table, every entry carrying `name`, `by` (the probe record that read it) and the `coordinates` that put it in the dependency set, in one of two shapes. A READ entry adds `protocol` (D00's closed set), `destination` — the attribute naming its destination per direction it serves — `default`, a template (`{binding}` = the channel name) for an unconfigured destination, and optional `unread_when` per direction: `{attribute, is?}` rules under which the destination is unread (configured at all, or converting to `is`). A COUNTED entry adds only `directions`: a connector the framework counts and this catalog reads no wire for. Names are distinct under `connector_names`. |
+
+**The rule `_wired` applies**, which is Quarkus's `WiringProcessor` (CP-50) read as data:
+
+1. A connector-managed channel is wired to its configured connector whatever the dependency
+   set holds — a configured connector wins over attachment and is never an orphan. A name
+   the table does not know, a COUNTED connector, a connector with no side for the channel's
+   direction, an empty value, or a connector attribute the spellings or the environments
+   disagree on: no row, a `binder_protocol` question.
+2. An unmanaged channel whose NAME the other direction also carries is an in-memory pipe and
+   gives nothing.
+3. Every other unmanaged channel is an ORPHAN: under `orphans`, it takes the one connector
+   in the dependency set serving its direction; two or more is no row and a
+   `binder_protocol` question carrying each; none is no row and a `binder_protocol`
+   question with `binder` NULL saying no connector in the table is in the dependency set.
+   EVERY entry in the dependency set counts, a counted one included — the framework counts
+   every connector it finds, not the ones a catalog can read — so Kafka beside MQTT is two,
+   and a sole COUNTED connector is attached and is a question naming it. "None" is never
+   silence because the engine can only see zero TABLED connectors, not zero connectors: a
+   connector whose coordinates no entry lists is still the sole one the framework attaches.
+   The converse is a boundary coordinates cannot cross: an UNTABLED connector beside a
+   tabled one makes the tabled one look sole, so it is attached here where the framework
+   attaches neither.
+4. A wired channel's row takes its connector's `protocol`, never the catalog's own
+   `protocol:` line — which a row-minting catalog must declare and nothing in this mode
+   reads. Its `path` is the destination attribute's agreed value, or `default` where the
+   attribute is configured under no spelling. An `unread_when` rule holding, a disagreement,
+   or an EMPTY configured value leaves the row with `path` NULL, `unresolved`, and a
+   `channel_destination` question.
+
+**Unlike the key-template mode, a wired channel whose address is unread still derives a
+row**: the connector is the declaration that the channel reaches a broker, so the boundary
+exists and only its address is unread — `bean_name`'s rule, not the channel index's. No
+`read_by` edge is written; that edge lets a feeder's engine join an in-process channel to
+its handler, and a wired channel's feeder is the connector this pass already read.
+
+**Questions carry `reason` in their candidates**, because the candidate is what the rendered
+document prints: a `binder_protocol` candidate is `{binding, binder, reason}` (`binder`
+NULL where no single name was read), a `channel_destination` one `{channel, handler,
+reason}`. Filed only where the module's build passes the dependency gate, as
+`bean_name`'s are.
+
 #### `binding.from: bean_name`
 
 **A candidate is a declared method whose RETURN type matches a suffix rule**, tried two
@@ -3124,8 +3251,10 @@ no `key` (so it mints no row), no media block (so it stamps nothing) — has not
 order after the observing engines and one thing to order before them: the channel names
 the bean fold's name rung reads, in the same loop (`writes_only_the_channel_edge`, read by
 `resolve/endpoints.py`). `spring-integration.yml` is exactly this shape. A channels catalog
-that ALSO declares a `key` keeps the style's last turn — its rows must — and its names reach
-no engine that ran before it: a stated boundary with no shipped instance.
+that ALSO declares a `key` or a `wiring` keeps the style's last turn — its rows must — and its
+names reach no engine that ran before it. `smallrye-reactive-messaging.yml` is the shipped
+instance, and it costs nothing: a wired channel writes no `read_by` edge, so no engine reads
+its names.
 
 **Every join this style makes is RECORDED with its full trail, and verified later.** The
 trail is `resolved_config` (the key, its value, the file that won it, per environment)
@@ -3266,9 +3395,15 @@ unresolved-is-an-answer; it is its converse failing: **no evidence means NO ROW,
 unresolved one** (fix round 2, C-1).
 
 **`members: overridden_public_methods`** is this style's one vocabulary word: a method the
-implementing class declares under the SAME NAME as one the supertype itself declares,
-PUBLIC on the implementer's own copy (an override may only widen visibility, never narrow
-it, so the supertype's own copy need not be checked). "The registration is the evidence"
+implementing class declares under the SAME NAME as one the supertype INHERITS OR DECLARES,
+PUBLIC on the implementer's own copy. "Inherits" is structural: the supertype's own methods
+plus those of every type above it, its superclasses and the interfaces it implements,
+transitively and default methods included, as far as this workspace's facts reach. It has to be,
+because protoc-gen-grpc-java puts every handler as a default method on the nested
+`<Service>Grpc$AsyncService` interface, and `<Service>ImplBase` implements it while declaring
+only its constructor and `bindService`. Read on the base class alone, no real generated service
+ever matched. The visibility is checked on the implementer's copy (an override may only
+widen visibility, never narrow it, so the supertype's own copy need not be checked). "The registration is the evidence"
 restated one level over: a class merely extending the generated base, overriding none of
 its methods, derives nothing at all.
 
@@ -3317,8 +3452,8 @@ row alone would have, which inverted the whole redundancy the two halves exist f
 ### `injected_client`
 
 A second, separate style from `supertype_derived` — injection is a different SHAPE of
-evidence (a field the module declares and a framework populates, never a class the module
-itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
+evidence (a field, or a method or constructor parameter, the module declares and a framework
+populates, never a class the module itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
 fusing the two into one engine, even though both read the same kind of identity-building
 call site.
 
@@ -3332,6 +3467,11 @@ matches:
   identity_marker:
     service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
 ```
+
+**An injection point is a field or a parameter, one rule.** `field_annotation` is joined to the
+type its own injection point declares: a field's, or the annotated parameter's of a method or
+constructor, read off the method's `signature.parameters[].annotations` (D00 §5a). Both go through
+the same fence and identity read, and a field and a parameter of one stub type are one row.
 
 **One row per injected stub, at the SERVICE level.** `method` stays NULL and `path` is
 `<protoPackage>.<Service>` — the stub type's own outer class marker call, read exactly as
@@ -3351,6 +3491,11 @@ module's own classes carry an `extends` edge whose OUTER class matches the injec
 type's own outer class? The extends RELATIONSHIP is a fact of the module's own class even
 when its target lives in an unscanned jar — what the jar withholds is the identity, not the
 edge — so this test survives the published-stubs-jar case an identity-based fence could not.
+An edge whose subclass is nested in that SAME outer class fences nothing: it is the generated
+class's own structure, not the module implementing it. protoc emits two in every
+full-protobuf `<Service>Grpc` (`<Service>FileDescriptorSupplier` and
+`<Service>MethodDescriptorSupplier` extend `<Service>BaseDescriptorSupplier`). Counted, they
+fenced every stub a module compiles itself, and its client rows vanished with no question.
 
 `direction` is always the catalog's own `outbound`; `handler`/`caller`/`peer` are all
 NULL — the injection names no calling method of its own (a field declaration, not a call

@@ -1189,7 +1189,12 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # said "Task 9, not yet shipped" until the 2O documentation sweep
         # (`A-Mi23`); Task 9 shipped the writer and left the arm's comment
         # describing the day before.*
-        return f"{candidate['channel']} → {candidate['handler']}"
+        #
+        # A wired channel's question (spec 2026-10-24 §3c) also carries `reason`: its
+        # connector is known and its address was not read, and why — two spellings
+        # disagreeing, a list-valued attribute — is the part a reader acts on.
+        line = f"{candidate['channel']} → {candidate['handler']}"
+        return f"{line} ({candidate['reason']})" if candidate.get("reason") else line
     if question == "environment_divergence":
         # 2O §2b: the config key and its per-environment values, filed by
         # `resolve/engines/derived_resource.py:224` where
@@ -1208,6 +1213,12 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # `spring-cloud-stream.yml` could not map to a protocol, filed by
         # `resolve/engines/config_join.py`'s `gaps` and verified against that
         # writer's own `candidates` line.
+        #
+        # A wired channel's candidate (spec 2026-10-24 §3c) carries its own `reason`,
+        # because "maps to no protocol" is false for one of its cases: two connectors on
+        # the classpath each map to one, and neither was chosen.
+        if candidate.get("reason"):
+            return f"{candidate['binding']}: {candidate['reason']}"
         return f"{candidate['binding']}: binder `{candidate['binder']}` maps to no protocol"
     if question == "unselected_binding":
         # F2 §3.4: one candidate the cardinality rule declined to choose between,

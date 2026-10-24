@@ -11,6 +11,8 @@ states in full."""
 import json
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.pipeline import resolve
@@ -23,6 +25,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -188,6 +191,76 @@ def test_two_fields_injecting_the_same_service_derive_one_row(tmp_path: Path):
     assert len(rows) == 1
 
 
+def _injected_parameter(stub_type: str = BLOCKING_STUB) -> list[object]:
+    """`OrderService(@GrpcClient("billing") BillingServiceBlockingStub stub)`:
+    net.devh's annotation targets PARAMETER too (`grpc-net-devh.yml`), and the
+    extractor records a parameter's annotations on its method's signature
+    (D00 §5a)."""
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + "com/acme/billing/OrderService#`<init>`(sig_init).",
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            signature=Signature(
+                parameters=[
+                    Parameter(
+                        name="stub",
+                        type=TypeRef(symbol=stub_type),
+                        annotations=[AnnotationUse(annotation=GRPC_CLIENT_SYMBOL)],
+                    )
+                ]
+            ),
+        )
+    ]
+
+
+@pytest.mark.pins("injected_client.a-PARAMETER-is-an-injection-point")
+def test_an_injected_constructor_parameter_derives_one_service_level_outbound_row(
+    tmp_path: Path,
+):
+    workspace = _resolve(tmp_path, [*_injected_parameter(), _service_name_site()])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["direction"], r["method"], r["resolution"]) for r in rows] == [
+        (SERVICE_NAME, "outbound", None, "resolved")
+    ]
+
+
+def test_a_field_and_a_parameter_of_one_stub_type_derive_one_row(tmp_path: Path):
+    facts = [*_injected_field(), *_injected_parameter(), _service_name_site()]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [r["path"] for r in rows] == [SERVICE_NAME]
+
+
+def test_the_fence_refuses_an_injected_parameter_of_a_service_this_module_implements(
+    tmp_path: Path,
+):
+    facts = [*_injected_parameter(), _service_name_site(), *_implementor_facts()]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_unreadable_identity_on_a_parameter_files_a_question_naming_the_method(
+    tmp_path: Path,
+):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), _injected_parameter())
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_catalog()]), CAPABILITIES)
+    [question] = workspace.query("open_questions")
+    workspace.close()
+
+    assert question["path"] == BLOCKING_STUB
+    candidates = json.loads(str(question["candidates"]))
+    assert candidates[0]["class"].startswith(_MODULE + "com/acme/billing/OrderService#")
+
+
 # --- (b) the fence: no outbound row for a service this module implements ---
 
 
@@ -230,6 +303,83 @@ def test_a_different_services_implementer_does_not_fence(tmp_path: Path):
     workspace.close()
 
     assert [row["path"] for row in rows] == [SERVICE_NAME]
+
+
+def _generated_descriptor_suppliers(outer: str = OUTER) -> list[SymbolFact]:
+    """What protoc-gen-grpc-java ALWAYS emits inside `<Service>Grpc` beside the stubs
+    when the messages are full protobuf: a `<Service>BaseDescriptorSupplier` and two
+    classes extending it, `<Service>FileDescriptorSupplier` and
+    `<Service>MethodDescriptorSupplier` — measured on `quarkus-quickstarts`
+    (`grpc-plain-text-quickstart`'s `examples.GreeterGrpc`, `javap`). Two `extends`
+    edges whose both ends are nested in the stub's own outer class."""
+    base = outer.removesuffix("#") + "$BillingServiceBaseDescriptorSupplier#"
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + base,
+            construct_kind=ConstructKind.CLASS,
+        ),
+        *(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE
+                + outer.removesuffix("#")
+                + f"$BillingService{kind}DescriptorSupplier#",
+                construct_kind=ConstructKind.CLASS,
+                superclass=_MODULE + base,
+            )
+            for kind in ("File", "Method")
+        ),
+    ]
+
+
+@pytest.mark.pins("injected_client.a-GENERATED-class-own-nesting-does-not-fence")
+def test_the_generated_classs_own_nested_extends_edges_do_not_fence(tmp_path: Path):
+    """A client-only module compiling its own `.proto`: the generated outer class
+    carries `FileDescriptorSupplier extends BaseDescriptorSupplier`, an edge INSIDE
+    that class, not this module implementing the service. Fenced on it, every
+    resolved client row of such a module vanished with no question — measured on a
+    copy of `fixtures/orders-quarkus` whose stand-in stub was given the pair."""
+    facts = [*_injected_field(), _service_name_site(), *_generated_descriptor_suppliers()]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(SERVICE_NAME, "resolved")]
+
+
+def test_a_genuine_implementer_beside_the_generated_suppliers_is_still_fenced(tmp_path: Path):
+    """The bound on the rule above: a module class OUTSIDE the generated outer class
+    extending its `ImplBase` still fences, with the generated nesting present."""
+    facts = [
+        *_injected_field(),
+        _service_name_site(),
+        *_generated_descriptor_suppliers(),
+        *_implementor_facts(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_implementer_nested_in_its_own_outer_class_still_fences(tmp_path: Path):
+    """The rule compares the two ends' OUTER classes, not whether the subclass is
+    nested at all: `com/acme/Server$Impl extends …ImplBase` is nested, in the module's
+    own `Server`, not in the generated `BillingServiceGrpc`, so it is the module
+    implementing the service and still fences."""
+    facts = [
+        *_injected_field(),
+        _service_name_site(),
+        *_generated_descriptor_suppliers(),
+        *_implementor_facts(symbol="com/acme/Server$Impl#"),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 # --- (c) unreadable identity: unresolved fallback and a filed question -----

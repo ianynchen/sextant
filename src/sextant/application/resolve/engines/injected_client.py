@@ -2,8 +2,9 @@
 `injected_client` style, 2O design §1c).
 
 A second, separate style from `supertype_derived` — injection is a different
-SHAPE of evidence than supertype-plus-members (a field the module declares
-and a framework populates, never a class the module itself extends), and
+SHAPE of evidence than supertype-plus-members (a field or a method or
+constructor parameter the module declares and a framework populates, never a
+class the module itself extends), and
 D02's "a style is a shape of evidence, not a framework" rule forbids fusing
 the two into one engine, even though both end up reading the same kind of
 identity-building call site (`shapes/identity_calls.py`).
@@ -33,7 +34,20 @@ matches the injected stub type's own outer class
 `…OrderServiceGrpc#`)? The extends RELATIONSHIP is a fact of the module's own
 class even when its target lives in an unscanned jar — what the jar withholds
 is the identity, not the edge — so this test survives the published-stubs-jar
-case the identity-based version could not.
+case the identity-based version could not. An edge whose subclass is nested in
+that SAME outer class is not one: it is the generated class's own structure
+(protoc's `<Service>FileDescriptorSupplier extends
+<Service>BaseDescriptorSupplier`, in every full-protobuf `<Service>Grpc`), and
+it does not fence (`_fenced_outer_classes`).
+
+**An injection point is a FIELD or a PARAMETER, one rule.** The annotation is
+joined to the type its own injection point declares: a field's, through the
+`fields` table, or a method's or constructor's parameter, through the
+`parameters[].annotations` its signature carries (D00 §5a — where the extractor
+records parameter annotations; they are not annotation facts). Both then go
+through the same fence and the same identity read. A framework whose annotation
+cannot target a parameter simply never has one to match, so there is no
+per-catalog switch.
 
 **Bare `newBlockingStub(channel)` without `@GrpcClient`** is a stated
 boundary this task does not derive from: no engine here reads from a type
@@ -67,12 +81,13 @@ _UNREADABLE = (
 
 @dataclass(frozen=True)
 class _FieldMatch:
-    """One `@GrpcClient`-annotated field this workspace's own facts describe
-    — `field`'s own FULL symbol is what a `service_identity` gap flags, and
-    `stub_type` (bare) is what a row's own fallback `path` carries verbatim
-    when the identity cannot be read."""
+    """One `@GrpcClient`-annotated injection point this workspace's own facts
+    describe — a field, or a method or constructor with an annotated parameter.
+    `site`'s own FULL symbol (the field's, or the declaring method's) is what a
+    `service_identity` gap flags, and `stub_type` (bare) is what a row's own
+    fallback `path` carries verbatim when the identity cannot be read."""
 
-    field: str
+    site: str
     stub_type: str
     service_name: str | None
 
@@ -117,7 +132,7 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
                 "path": match.stub_type,
                 "question": "service_identity",
                 "candidates": json.dumps(
-                    [{"class": match.field, "reason": _UNREADABLE}],
+                    [{"class": match.site, "reason": _UNREADABLE}],
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
@@ -141,7 +156,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
     hosts = nest_hosts(workspace)
     fenced = _fenced_outer_classes(workspace)
 
-    matches: list[_FieldMatch] = []
+    injected: list[tuple[str, str]] = []
     for annotation in workspace.query("annotations"):
         if str(annotation["annotation"]) not in field_annotations:
             continue
@@ -149,17 +164,57 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
         stub_type = field_types.get(field)
         if stub_type is None:
             # No declared type for this field reached the workspace — a
-            # capture failure, never a fabricated stub type.
+            # capture failure, never a fabricated stub type. (A parameter
+            # has no `annotations` row of its own: it is read below.)
             continue
+        injected.append((field, stub_type))
+    injected.extend(_annotated_parameters(workspace, field_annotations))
+
+    matches: list[_FieldMatch] = []
+    for site, stub_type in injected:
         outer = outer_of(stub_type, hosts)
         if outer in fenced:
             # The fence: this module implements the very service the stub
             # would otherwise appear to call.
             continue
         matches.append(
-            _FieldMatch(field=field, stub_type=stub_type, service_name=service_names.get(outer))
+            _FieldMatch(site=site, stub_type=stub_type, service_name=service_names.get(outer))
         )
     return matches
+
+
+def _annotated_parameters(
+    workspace: Workspace, field_annotations: tuple[str, ...]
+) -> list[tuple[str, str]]:
+    """`(declaring method's symbol, parameter's declared type, BARE)` for every
+    method or constructor parameter carrying one of the catalog's annotations.
+
+    The extractor records a parameter's annotations on the method's own
+    signature (`parameters[].annotations`, D00 §5a), not as `annotations` rows,
+    and the declared type is on the same parameter entry — so the join a field
+    makes between two tables is here one entry read. The parameter's own
+    `type.symbol` is read, as a field's `returns.symbol` is: both are the type
+    the author declared."""
+    found: list[tuple[str, str]] = []
+    # Two queries because the storage keeps them apart: a constructor is no
+    # `method_declarations` row, and its signature arrives as text.
+    declared = [
+        *workspace.query("method_declarations"),
+        *workspace.query("constructor_declarations"),
+    ]
+    for row in declared:
+        raw = row["signature"]
+        if raw is None:
+            continue
+        signature = raw if isinstance(raw, dict) else json.loads(str(raw))
+        for parameter in signature.get("parameters") or []:
+            uses = parameter.get("annotations") or []
+            if not any(use.get("annotation") in field_annotations for use in uses):
+                continue
+            stub_type = (parameter.get("type") or {}).get("symbol")
+            if stub_type:
+                found.append((str(row["symbol"]), str(stub_type)))
+    return found
 
 
 def _field_types(workspace: Workspace) -> dict[str, str]:
@@ -185,12 +240,23 @@ def _fenced_outer_classes(workspace: Workspace) -> set[str]:
     (capability 9.13's `superclass`), regardless of whether that target's
     own facts reached this workspace — the module docstring's own reason:
     the fence must still fire against a published-stubs jar, where the edge
-    is this class's own fact but the target's identity is unreadable."""
+    is this class's own fact but the target's identity is unreadable.
+
+    An edge whose BOTH ends are nested in one outer class fences nothing: it
+    is that class's own structure, not this module implementing it. protoc
+    emits two such edges in every full-protobuf `<Service>Grpc`
+    (`<Service>FileDescriptorSupplier` and `<Service>MethodDescriptorSupplier`
+    each extend `<Service>BaseDescriptorSupplier`), and counting them fenced
+    every stub a module compiles itself, so its client rows vanished with no
+    question."""
     hosts = nest_hosts(workspace)
-    return {
-        outer_of(bare_descriptor(str(row["superclass"])), hosts)
-        for row in workspace.query("superclasses")
-    }
+    fenced: set[str] = set()
+    for row in workspace.query("superclasses"):
+        target = outer_of(bare_descriptor(str(row["superclass"])), hosts)
+        if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:
+            continue
+        fenced.add(target)
+    return fenced
 
 
 def _row(catalog: Catalog, path: str, resolution: str) -> dict[str, Any]:

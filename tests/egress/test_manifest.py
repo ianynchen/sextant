@@ -214,13 +214,15 @@ def test_each_skipped_catalog_names_the_kinds_it_would_have_fed(analyzed_workspa
 
 def test_each_skipped_catalog_records_which_gate_skipped_it(analyzed_workspace_copy: Path):
     """The cause is data the map reads (ruled 2026-10-22), never parsed from the reason. On
-    the fixture both skips are the dependency gate on a classpath Maven resolved: neither
-    RSocket nor Spring Cloud Gateway is on it."""
+    the fixture every skip is the dependency gate on a classpath Maven resolved: neither
+    RSocket nor Spring Cloud Gateway is on it, nor — since spec 2026-10-24 added its
+    catalog — any SmallRye Reactive Messaging artifact."""
     metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
     assert metadata["module"]["dependency_source"] == "maven"
     assert {s["catalog_id"]: s["cause"] for s in metadata["skipped_catalogs"]} == {
         "spring-rsocket": "framework_absent",
         "spring-cloud-gateway-properties": "framework_absent",
+        "smallrye-reactive-messaging": "framework_absent",
     }
 
 

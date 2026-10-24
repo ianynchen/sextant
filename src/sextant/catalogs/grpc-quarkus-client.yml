@@ -1,0 +1,51 @@
+id: grpc-quarkus-client
+displayName: gRPC client (Quarkus @GrpcClient injection)
+style: injected_client
+protocol: grpc
+direction: outbound
+
+# Quarkus's `@GrpcClient` is its own catalog, not a second spelling in
+# `grpc-net-devh.yml`, because the two differ in how a client is NAMED — a
+# value OMITTED means "the field's name" here (CP-52 rows 2, 5) — and the
+# name WILL matter once OI-186 reads the client's configured address, which is
+# keyed by it. (`grpc-spring.yml` holds three spellings in one file because a
+# class annotation there names nothing; this one's value names the client.)
+# The ROW does not depend on the name today: it is the injected stub's own
+# `SERVICE_NAME`, read exactly as `grpc-net-devh.yml` reads it, so a value
+# omitted, named or the sentinel written out all derive the same row.
+#
+# `@GrpcClient("")` is not a case: it fails the Quarkus build (CP-52 row 6).
+#
+# WHAT IS READ: an annotated FIELD, joined to its declared stub type, and an
+# annotated method or constructor PARAMETER, joined to its declared type
+# (`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER, CP-52 row 2). One
+# rule in the `injected_client` engine for every catalog: the parameter's
+# annotations ride the method's signature (D00 §5a), and the engine reads them
+# there. A constructor client
+# (`Greeter(@GrpcClient("hello") HelloBlockingStub stub)`) and a field of the
+# same stub type are one row.
+
+detect:
+  coordinates: ["io.quarkus:quarkus-grpc"]
+
+# CP-52 rows 1-4. `io.quarkus.grpc.GrpcClient` is a FIELD/PARAMETER qualifier in
+# `quarkus-grpc-api`, NOT in `quarkus-grpc` (row 3: `quarkus-grpc`'s pom
+# declares the api artifact), so a module declaring `quarkus-grpc` reaches it
+# transitively. `GrpcDotNames.GRPC_CLIENT` is the name the extension itself
+# reads (row 4).
+measured:
+  - { artifact: io.quarkus:quarkus-grpc-api, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp52_quarkus_grpc_annotations.md }
+
+requires: [call_site, string_constants, annotation_args, typed_signatures]
+
+matches:
+  # D02 §2's `injected_client` style — see `grpc-net-devh.yml` for why the
+  # identity is a call-site read on the stub's outer class and why the row is
+  # service-level only (`method` NULL: per-method rows wait on the call graph).
+  field_annotation: io.quarkus.grpc.GrpcClient
+  identity_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`/`format_fixed` —
+# `grpc-net-devh.yml`'s own identical omission and reasoning.

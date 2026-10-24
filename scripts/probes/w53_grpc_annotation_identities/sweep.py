@@ -21,6 +21,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _jvm_annotations import classes, render
+
 REPO = Path(__file__).resolve().parents[3]
 M2 = Path.home() / ".m2" / "repository"
 
@@ -180,6 +183,31 @@ def main() -> None:
         print(
             f"| `{coordinate}` | `{fqn}` ({catalog}) | "
             f"{'**yes**' if found else 'no'} | {class_count(jar)} | {role} |"
+        )
+
+    # Added 2026-10-24 (final review of spec 2026-10-24-quarkus-messaging-and-grpc): where
+    # each annotation may SIT is what decides which injection points `injected_client` must
+    # read, so it is read off the class file here rather than cited as a hand-run `javap`.
+    print("\n### Where may each annotation sit?\n")
+    print("| # | annotation | read from | `@Target` | `@Retention` |")
+    print("|---|---|---|---|---|")
+    row = 0
+    done: set[str] = set()
+    for coordinate, internal, _catalog, _role in CLAIMS:
+        jar = read[coordinate][0]
+        fqn = internal.replace("/", ".")
+        if fqn in done or not carries(jar, internal):
+            continue
+        done.add(fqn)
+        annotation = classes(jar, [fqn])[fqn]
+        target = annotation.annotation("java.lang.annotation.Target")
+        retention = annotation.annotation("java.lang.annotation.Retention")
+        if target is None or retention is None:
+            raise ProbeError(f"{fqn} declares no @Target or no @Retention in {jar.name}")
+        row += 1
+        print(
+            f"| {row} | `{fqn}` | `{coordinate}` | {render(target.elements['value'])} | "
+            f"{retention.elements['value']} |"
         )
 
 

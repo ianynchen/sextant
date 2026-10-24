@@ -58,7 +58,9 @@ from typing import Any, cast
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import _DEFAULT_PLACEHOLDERS
-from sextant.application.resolve.dependencies import unmet_dependency
+from sextant.application.resolve.dependencies import _declared_coordinates, unmet_dependency
+from sextant.application.resolve.effective_annotations import folded_rows
+from sextant.application.resolve.engines.injected_client import _field_types
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import catalog_symbols, names_a_type
@@ -109,6 +111,37 @@ _BINDING_SOURCES = (_ANNOTATION_VALUE, _BEAN_NAME)
 # attribute for this, and which attribute means which direction is exactly
 # the knowledge that must stay in the catalog.
 _CHANNELS = "channels"
+# A `channels` rule's repeatable CONTAINER (spec 2026-10-24 §3a): two uses of one
+# repeatable annotation on one method reach the class file as the container alone (JLS
+# 9.7.5), so a rule naming only the member reads neither. `annotation_driven`'s
+# `mapping.annotations[].container` is the same word one style over, folded by the same
+# `effective_annotations.folded_rows`.
+_CONTAINER = "container"
+# `annotation_value`'s second rule list: a channel named on an INJECTION POINT — a field,
+# or a method or constructor parameter — rather than on a method. Its direction is the
+# injected TYPE's (`direction_by_type`), which is how the framework tells a producer
+# handle from a stream (CP-49 rows 21, 26), and the declaration carrying it is the row's
+# handler or caller.
+_INJECTED = "injected"
+_DIRECTION_BY_TYPE = "direction_by_type"
+# The channel WIRING (spec 2026-10-24 §3a, rulings 1-2): which connector a channel is
+# wired to, from configuration or from the dependency set, and so which protocol it speaks and
+# which configured attribute names its destination. Every word in it is catalog data;
+# the engine knows one attachment rule and two ways to compare a connector's name.
+_WIRING = "wiring"
+_CONNECTORS = "connectors"
+_ATTRIBUTE = "{attribute}"
+# The one attachment rule implemented: every orphan of a direction takes that direction's
+# connector when exactly one is in the module's dependency set (CP-50 rows 7, 17).
+_SOLE_CONNECTOR = "sole_connector"
+# The key whose presence makes a connector-table entry READ: an entry with no `protocol`
+# names a connector the framework counts (CP-50 rows 6, 16) and this catalog cannot read a
+# wire for — MQTT, Camel — so it decides attachment and is a question wherever it wires.
+_READ_BY_PROTOCOL = "protocol"
+_ATTACH_RULES = (_SOLE_CONNECTOR,)
+_EXACT = "exact"
+_IGNORING_CASE = "ignoring_case"
+_NAME_MATCHING = (_EXACT, _IGNORING_CASE)
 # D01 §3's two media columns — the closed set `fills` may name.
 _FILLABLE = ("consumes", "produces")
 # The vocabulary's own default separators (D02 §2d): `selected_by` names a
@@ -144,6 +177,45 @@ _NO_KEY_TEMPLATE = (
     "key names this channel's destination"
 )
 _NO_AGREED_VALUE = "resolved_config carries no value every environment agrees on for `{key}`"
+# Why a wired channel's wire or destination went unread, in the words the question's
+# candidate carries — the candidate, not the trail, is what the rendered document prints.
+_SPELLINGS_DISAGREE = (
+    "{keys} name one attribute and give different values; which spelling wins is the "
+    "configuration system's precedence, which nothing here measured"
+)
+_UNKNOWN_CONNECTOR = (
+    "connector `{connector}` (`{key}`) is not in this catalog's connector table, so the "
+    "protocol it speaks was not read"
+)
+_ONE_SIDED_CONNECTOR = (
+    "connector `{connector}` (`{key}`) declares no {direction} destination in this "
+    "catalog's connector table, so this side of it was not read"
+)
+_UNCHOSEN_CONNECTOR = (
+    "`{connector}` is one of {count} {direction} connectors in the dependency set ({names}) and "
+    "this channel configures none, so none is attached and the wire was not read"
+)
+_UNREAD_BESIDE = (
+    "`{key}` is configured, and this catalog reads `{connector}`'s {direction} destination "
+    "from `{attribute}` alone"
+)
+_EMPTY_DESTINATION = "`{key}` is configured empty, which names no destination"
+_EMPTY_CONNECTOR = "`{key}` is configured empty, which names no connector"
+_UNREAD_CONNECTOR = (
+    "connector `{connector}` ({how}) is one this catalog counts and does not read — its "
+    "connector-table entry carries no protocol — so the wire it carries was not read"
+)
+# What this pass can see is zero TABLED connectors, never zero connectors: a connector
+# whose coordinates no entry lists (a Quarkiverse one — NATS JetStream, Solace) is still
+# the sole one Quarkus attaches (CP-50 row 7), so the orphan is a question, not silence.
+_NO_TABLED_CONNECTOR = (
+    "no {direction} connector in this catalog's connector table is in the module's "
+    "dependency set, so whether a connector the table does not list is attached to this "
+    "orphan, and the wire it carries, were not read"
+)
+_CONFIGURED_BY = "configured by `{key}`"
+_SOLE_IN_THE_SET = "the only {direction} connector in the dependency set"
+
 # The two ends of the channel edge this engine touches (spec 2026-09-21 §3b): it WRITES
 # `read_by` — a handler whose annotation names a channel — and READS `fed_by` in `gaps`,
 # to ask only about a channel nothing fed. `sends_to` — a handler's output channel,
@@ -170,13 +242,15 @@ def writes_only_the_channel_edge(catalog: Catalog) -> bool:
     seam, after everything.
 
     The shipped channel index (`spring-integration.yml`) is exactly this shape.
-    A channels catalog that ALSO declares a `key` keeps its last turn — its
-    rows must — and its names reach no engine that ran before it: stated here
-    as the boundary, with no shipped instance."""
+    A channels catalog that ALSO declares a `key` or a `wiring` keeps its last
+    turn — its rows must — and its names reach no engine that ran before it.
+    `smallrye-reactive-messaging.yml` is the shipped instance, and loses
+    nothing by it: a wired channel writes no `read_by` edge at all."""
     address = catalog.matches.get(_ADDRESS)
     if (
         not isinstance(address, dict)
         or "key" in address
+        or _WIRING in address
         or _MEDIA in catalog.matches
         or _INDEXED in catalog.matches
     ):
@@ -220,7 +294,10 @@ def derives_rows(catalog: Catalog) -> bool:
     if isinstance(catalog.matches.get(_INDEXED), dict):
         # The third form always mints rows: its items ARE the declarations.
         return True
-    return isinstance(address, dict) and "key" in address
+    # `wiring` is the second thing that asks configuration where a channel's destination
+    # is (spec 2026-10-24 §3a): it names the attribute per connector rather than one
+    # `key` per catalog, and a channel it wires mints a row.
+    return isinstance(address, dict) and ("key" in address or _WIRING in address)
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -234,7 +311,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     """
     _validate_matches(catalog)
     if _ADDRESS in catalog.matches:
-        if _binding_source(catalog) == _ANNOTATION_VALUE:
+        if _binding_source(catalog) == _ANNOTATION_VALUE and _WIRING in catalog.matches[_ADDRESS]:
+            _derive_wired_channels(workspace, catalog)
+        elif _binding_source(catalog) == _ANNOTATION_VALUE:
             _derive_channels(workspace, catalog)
         else:
             _derive_bindings(workspace, catalog)
@@ -1341,25 +1420,45 @@ def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
     Nothing is resolved on the way in: a name still carrying a placeholder
     expression is asked about exactly as written, which is the phase-wide
     rule (rows keep expressions, `resolved_config` keeps values).
+
+    **A rule's `container` is folded first** (spec 2026-10-24 §3a): every use the
+    container holds is read as a use of the rule's own annotation on the same method,
+    through the same `folded_rows` `annotation_driven` folds its containers with. And
+    the `injected` rules add the channels named on injection points
+    (`_injected_channels`). A catalog declaring neither word reads exactly what it read
+    before either existed.
     """
-    rules = catalog.matches[_ADDRESS]["binding"][_CHANNELS]
+    binding = catalog.matches[_ADDRESS]["binding"]
     by_annotation: dict[str, list[dict[str, Any]]] = {}
-    for rule in rules:
+    containers: dict[str, str] = {}
+    for rule in binding[_CHANNELS]:
         # A LIST or a scalar (§3.1): one rule reachable under several annotation
         # names files under each, which is what a dict keyed by symbol already
         # expects — the rule object itself is shared, not copied.
-        for symbol in catalog_symbols(rule["annotation"], f"{catalog.source}: rule.annotation"):
+        symbols = catalog_symbols(rule["annotation"], f"{catalog.source}: rule.annotation")
+        for symbol in symbols:
             by_annotation.setdefault(symbol, []).append(rule)
+        if rule.get(_CONTAINER) is not None:
+            # One member: `_validate_channel_rule` refuses a container beside a list.
+            container = catalog_symbols(rule[_CONTAINER], f"{catalog.source}: rule.container")
+            containers[container[0]] = symbols[0]
     methods = {str(row["symbol"]) for row in workspace.query("method_symbols")}
+    rows = [
+        {
+            "target": str(row["target"]),
+            "annotation": str(row["annotation"]),
+            "args": _annotation_arguments(row["args"]),
+        }
+        for row in workspace.query("annotations")
+    ]
     found: list[_Channel] = []
     seen: set[tuple[str, str, str]] = set()
-    for row in workspace.query("annotations"):
-        target = str(row["target"])
+    for row in [*rows, *folded_rows(rows, containers)]:
+        target = row["target"]
         if target not in methods:
             continue
-        args = _annotation_arguments(row["args"])
-        for rule in by_annotation.get(str(row["annotation"]), []):
-            value = args.get(str(rule["arg"]))
+        for rule in by_annotation.get(row["annotation"], []):
+            value = row["args"].get(str(rule["arg"]))
             if not isinstance(value, str) or not value:
                 continue
             direction = str(rule.get("direction", catalog.direction))
@@ -1367,11 +1466,86 @@ def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
                 continue
             seen.add((value, direction, target))
             found.append(_Channel(value, target, direction))
+    for channel in _injected_channels(workspace, catalog, rows):
+        if (channel.name, channel.direction, channel.handler) in seen:
+            continue
+        seen.add((channel.name, channel.direction, channel.handler))
+        found.append(channel)
     # Sorted here rather than relying on the `annotations` query's own order:
     # the order rows reach `call_endpoints` and the ledger is a property of
     # this pass (NFR-1), and two rules of one catalog may answer for the same
     # annotation fact.
     return sorted(found, key=lambda channel: (channel.name, channel.direction, channel.handler))
+
+
+def _injected_channels(
+    workspace: Workspace, catalog: Catalog, annotation_rows: list[dict[str, Any]]
+) -> list[_Channel]:
+    """The channels the `injected` rules name on INJECTION POINTS (spec 2026-10-24 §3a): a
+    field carrying the rule's annotation, and a method or constructor parameter carrying
+    it. Its direction is `direction_by_type`'s for the injected type — the field's
+    declared type, the parameter's erased one — and the rule's own `direction` for any
+    other type; the field, or the declaration whose parameter it is, is the channel's
+    symbol.
+
+    A parameter's annotations live inside its declaration's signature and are never their
+    own `annotation` fact (Task 6 checkpoint (3), `shapes/arguments.py`'s reader), so the
+    parameter half is a second read — of the declarations, once, and only for a catalog
+    declaring the word."""
+    rules = catalog.matches[_ADDRESS]["binding"].get(_INJECTED) or []
+    if not rules:
+        return []
+    fields = _field_types(workspace)
+    parameter_lists = _parameter_lists(workspace)
+    found: list[_Channel] = []
+    for rule in rules:
+        where = f"{catalog.source}: {_INJECTED}"
+        annotations = set(catalog_symbols(rule["annotation"], f"{where}.annotation"))
+        by_type = {
+            symbol: str(direction)
+            for direction, types in (rule.get(_DIRECTION_BY_TYPE) or {}).items()
+            for symbol in catalog_symbols(types, f"{where}.{_DIRECTION_BY_TYPE}")
+        }
+        otherwise = str(rule.get("direction", catalog.direction))
+        arg = str(rule["arg"])
+        for row in annotation_rows:
+            if row["annotation"] not in annotations or row["target"] not in fields:
+                continue
+            value = row["args"].get(arg)
+            if isinstance(value, str) and value:
+                direction = by_type.get(fields[row["target"]], otherwise)
+                found.append(_Channel(value, row["target"], direction))
+        for symbol, parameters in parameter_lists:
+            for parameter in parameters:
+                type_symbol = str(
+                    parameter.get("erased_symbol")
+                    or (parameter.get("type") or {}).get("symbol")
+                    or ""
+                )
+                for use in parameter.get("annotations") or []:
+                    if use.get("annotation") not in annotations:
+                        continue
+                    value = (use.get("args") or {}).get(arg)
+                    if isinstance(value, str) and value:
+                        found.append(_Channel(value, symbol, by_type.get(type_symbol, otherwise)))
+    return found
+
+
+def _parameter_lists(workspace: Workspace) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Every declared method's and constructor's own parameter list, keyed by its
+    module-prefixed symbol. `method_declarations` hands its signature over decoded and
+    `constructor_declarations` as JSON text (`workspace._DECODED_COLUMNS`), so both
+    shapes are read."""
+    lists: list[tuple[str, list[dict[str, Any]]]] = []
+    for name in ("method_declarations", "constructor_declarations"):
+        for row in workspace.query(name):
+            signature = row["signature"]
+            if isinstance(signature, str):
+                signature = json.loads(signature)
+            parameters = signature.get("parameters") if isinstance(signature, dict) else None
+            if parameters:
+                lists.append((str(row["symbol"]), list(parameters)))
+    return lists
 
 
 def channel_index(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
@@ -1423,6 +1597,409 @@ def _channel_name(
     return "".join(parts), "resolved"
 
 
+# --- `annotation_value` with `wiring`: channels wired to a connector ------
+
+
+class _Read:
+    """One channel attribute as configuration answered it, over every spelling `keys`
+    declares for the channel's direction: whether any spelling is configured at all, the
+    one value they agree on, why there is none (`unread`), and the keys that were
+    configured — which is what a reason names."""
+
+    __slots__ = ("configured", "keys", "unread", "value")
+
+    def __init__(
+        self, configured: bool, value: str | None, unread: str | None, keys: tuple[str, ...]
+    ) -> None:
+        self.configured = configured
+        self.value = value
+        self.unread = unread
+        self.keys = keys
+
+
+_ABSENT = _Read(False, None, None, ())
+
+
+class _Wired:
+    """What the wiring made of one channel that is a boundary or a question.
+
+    `protocol` None is a wire nobody read — no row, and `question` is the
+    `binder_protocol` question asking which. A `protocol` with `destination` None is a
+    row whose address is unread, and `unread` says why."""
+
+    __slots__ = ("channel", "destination", "protocol", "question", "unread")
+
+    def __init__(
+        self,
+        channel: _Channel,
+        *,
+        protocol: str | None = None,
+        destination: str | None = None,
+        unread: str | None = None,
+        question: dict[str, Any] | None = None,
+    ) -> None:
+        self.channel = channel
+        self.protocol = protocol
+        self.destination = destination
+        self.unread = unread
+        self.question = question
+
+
+def _derive_wired_channels(workspace: Workspace, catalog: Catalog) -> None:
+    """One row per channel the wiring connects to a broker, on that connector's protocol
+    (spec 2026-10-24 §3c), and none for the rest.
+
+    **Unlike `_derive_channels`, a wired channel whose destination is unread still
+    derives a row.** There a channel names an in-process pipe and the key is the only
+    evidence it reaches a broker; here the CONNECTOR is that evidence — configured, or
+    the one the framework attaches — so the boundary is declared and only its address is
+    unread, `_derive_bindings`' own case ("an unresolved address is not an absent
+    endpoint"). Its question says why (`gaps`).
+
+    No `read_by` edge is written: the edge exists so an engine that read what FEEDS an
+    in-process channel can join it to the handler, and a wired channel's feeder is the
+    connector this pass already read. Rows dedupe on wire identity, as `_derive_channels`'
+    do."""
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for wired in _wired(workspace, catalog):
+        if wired.protocol is None:
+            continue
+        direction = wired.channel.direction
+        if wired.destination is not None:
+            identity = (wired.protocol, direction, wired.destination)
+            if identity in seen:
+                continue
+            seen.add(identity)
+        rows.append(
+            _row(catalog, wired.protocol, direction, wired.destination, wired.channel.handler, None)
+        )
+    workspace.derive("call_endpoints", rows=rows)
+
+
+def _wired(workspace: Workspace, catalog: Catalog) -> list[_Wired]:
+    """The wiring rule over every channel `_channels` found (spec 2026-10-24 ruling 2,
+    mirroring the framework's own wiring step as CP-50 read it):
+
+    1. A channel whose `connector_attribute` is configured is CONNECTOR-MANAGED. One
+       whose `disabled_when` holds as well produces no channel at all, so it is dropped
+       before anything else reads the set (CP-50 rows 3-4).
+    2. A managed channel is wired to its configured connector, whatever the dependency set
+       holds — a configured connector wins (rows 1, 8). One the table does not know, and a
+       COUNTED one (no `protocol`), is a question naming it.
+    3. An unmanaged channel whose NAME the other direction also carries is an in-memory
+       pipe — never an orphan (row 1) — and gives nothing.
+    4. Every other unmanaged channel is an ORPHAN. Under `orphans.attach:
+       sole_connector`, and unless `orphans.unless` holds, it takes its direction's
+       connector when exactly one connector in the dependency set serves that direction
+       (row 7) — a sole COUNTED one is a question naming it; two or more is a question
+       naming each; none is a question naming none. "None" is none the TABLE lists: a
+       connector whose coordinates no entry carries is still one Quarkus attaches, so
+       silence would drop a boundary nobody can see was dropped.
+
+    Read once per call over `_channels`, `resolved_config` and the module's dependency
+    set (GUIDELINES §8.7) — `run` and `gaps` each call it once."""
+    wiring = catalog.matches[_ADDRESS][_WIRING]
+    config = _config_values(workspace)
+    declared = _declared_coordinates(workspace) or set()
+    # EVERY connector in the dependency set counts, a protocol-less entry included: the
+    # framework counts every `@Connector` bean (CP-50 rows 6, 16), so Kafka beside MQTT is
+    # two connectors, and attaching Kafka there would publish a wire nobody attaches.
+    present = [
+        connector
+        for connector in wiring[_CONNECTORS]
+        if not declared.isdisjoint(str(entry) for entry in connector["coordinates"])
+    ]
+    connector_attribute = str(wiring["connector_attribute"])
+    # Every channel the framework would produce — a disabled one produces none.
+    live: list[tuple[_Channel, _Read]] = []
+    for channel in _channels(workspace, catalog):
+        read = _attribute(config, wiring, channel, connector_attribute)
+        if read.configured and _disabled(config, wiring, channel):
+            continue
+        live.append((channel, read))
+    carried = {
+        direction: {channel.name for channel, _read in live if channel.direction == direction}
+        for direction in (Direction.INBOUND, Direction.OUTBOUND)
+    }
+    attaching = _attaching(config, wiring)
+    wired: list[_Wired] = []
+    for channel, read in live:
+        if read.configured:
+            wired.append(_configured(config, wiring, channel, read))
+            continue
+        other = Direction.OUTBOUND if channel.direction == Direction.INBOUND else Direction.INBOUND
+        if channel.name in carried[other]:
+            continue
+        if not attaching:
+            continue
+        serving = [c for c in present if _serves(c, channel.direction)]
+        if len(serving) == 1 and _READ_BY_PROTOCOL not in serving[0]:
+            how = _SOLE_IN_THE_SET.format(direction=channel.direction)
+            wired.append(_Wired(channel, question=_unread_connector(channel, serving[0], how)))
+        elif len(serving) == 1:
+            wired.append(_destined(config, wiring, channel, serving[0]))
+        elif serving:
+            wired.append(_Wired(channel, question=_unchosen(channel, serving)))
+        else:
+            reason = _NO_TABLED_CONNECTOR.format(direction=channel.direction)
+            wired.append(_Wired(channel, question=_binder_question(channel, None, reason)))
+    return wired
+
+
+def _configured(
+    config: dict[str, dict[str, str | None]],
+    wiring: dict[str, Any],
+    channel: _Channel,
+    read: _Read,
+) -> _Wired:
+    """A connector-managed channel, wired to the connector its configuration names."""
+    key = " / ".join(read.keys)
+    if read.unread is not None:
+        return _Wired(channel, question=_binder_question(channel, None, read.unread))
+    name = str(read.value)
+    if not name.strip():
+        reason = _EMPTY_CONNECTOR.format(key=key)
+        return _Wired(channel, question=_binder_question(channel, None, reason))
+    connector = _connector_named(wiring, name)
+    if connector is None:
+        reason = _UNKNOWN_CONNECTOR.format(connector=name, key=key)
+        return _Wired(channel, question=_binder_question(channel, name, reason))
+    if _READ_BY_PROTOCOL not in connector:
+        how = _CONFIGURED_BY.format(key=key)
+        return _Wired(channel, question=_unread_connector(channel, connector, how))
+    if not _serves(connector, channel.direction):
+        reason = _ONE_SIDED_CONNECTOR.format(connector=name, key=key, direction=channel.direction)
+        return _Wired(channel, question=_binder_question(channel, name, reason))
+    return _destined(config, wiring, channel, connector)
+
+
+def _destined(
+    config: dict[str, dict[str, str | None]],
+    wiring: dict[str, Any],
+    channel: _Channel,
+    connector: dict[str, Any],
+) -> _Wired:
+    """A channel wired to `connector`: its protocol, and its destination read from the
+    attribute the connector names for the channel's direction — or the connector's own
+    `default` where that attribute is not configured. Unread where an `unread_when`
+    attribute is configured, where the spellings disagree, or where the value is empty."""
+    protocol = str(connector["protocol"])
+    direction = channel.direction
+    attribute = str(connector["destination"][direction])
+    for rule in (connector.get("unread_when") or {}).get(direction, []):
+        beside = _attribute(config, wiring, channel, str(rule["attribute"]))
+        if not beside.configured:
+            continue
+        if (
+            beside.unread is not None
+            or "is" not in rule
+            or _boolean(wiring, beside.value) is rule["is"]
+        ):
+            reason = _UNREAD_BESIDE.format(
+                key=" / ".join(beside.keys),
+                connector=connector["name"],
+                direction=direction,
+                attribute=attribute,
+            )
+            return _Wired(channel, protocol=protocol, unread=reason)
+    read = _attribute(config, wiring, channel, attribute)
+    if read.unread is not None:
+        return _Wired(channel, protocol=protocol, unread=read.unread)
+    raw = (
+        str(read.value)
+        if read.configured
+        else str(connector["default"]).replace(_BINDING, channel.name)
+    )
+    if not raw:
+        reason = _EMPTY_DESTINATION.format(key=" / ".join(read.keys))
+        return _Wired(channel, protocol=protocol, unread=reason)
+    return _Wired(channel, protocol=protocol, destination=_addressed(raw, protocol, direction))
+
+
+def _attribute(
+    config: dict[str, dict[str, str | None]],
+    wiring: dict[str, Any],
+    channel: _Channel,
+    attribute: str,
+) -> _Read:
+    """One attribute of one channel, across every spelling `wiring.keys` declares for
+    its direction. Not configured under any spelling is `_ABSENT`; configured but with no
+    value every environment agrees on is unread naming that key; two spellings agreeing
+    are one value, and two disagreeing are unread naming both (the controller's ruling:
+    which one wins is precedence nothing here measured)."""
+    name = _quoted(wiring, channel.name)
+    keys = [
+        str(template).replace(_BINDING, name).replace(_ATTRIBUTE, attribute)
+        for template in wiring["keys"][channel.direction]
+    ]
+    present = tuple(key for key in keys if key in config)
+    if not present:
+        return _ABSENT
+    values: dict[str, str] = {}
+    for key in present:
+        agreed = _agreed(config, key)
+        if agreed is None:
+            return _Read(True, None, _NO_AGREED_VALUE.format(key=key), present)
+        values[key] = agreed
+    if len(set(values.values())) > 1:
+        spelled = " and ".join(f"`{key}` = `{value}`" for key, value in values.items())
+        return _Read(True, None, _SPELLINGS_DISAGREE.format(keys=spelled), present)
+    return _Read(True, next(iter(values.values())), None, present)
+
+
+def _quoted(wiring: dict[str, Any], name: str) -> str:
+    """A channel name as a key spells it: wrapped in `quote.with` where it contains
+    `quote.containing` and is not wrapped already, verbatim otherwise."""
+    quote = wiring.get("quote")
+    if not quote:
+        return name
+    mark = str(quote["with"])
+    if str(quote["containing"]) in name and not name.startswith(mark):
+        return f"{mark}{name}{mark}"
+    return name
+
+
+def _disabled(
+    config: dict[str, dict[str, str | None]], wiring: dict[str, Any], channel: _Channel
+) -> bool:
+    rule = wiring.get("disabled_when")
+    if not rule:
+        return False
+    read = _attribute(config, wiring, channel, str(rule["attribute"]))
+    return read.unread is None and _boolean(wiring, read.value) is rule["is"]
+
+
+def _attaching(config: dict[str, dict[str, str | None]], wiring: dict[str, Any]) -> bool:
+    """Whether an orphan takes the sole connector: `orphans` declared, and its `unless`
+    key not configured, in every environment, to a value `booleans` reads as its `is`."""
+    orphans = wiring.get("orphans")
+    if not orphans:
+        return False
+    unless = orphans.get("unless")
+    if not unless:
+        return True
+    return _boolean(wiring, _agreed(config, str(unless["key"]))) is not unless["is"]
+
+
+def _boolean(wiring: dict[str, Any], raw: str | None) -> bool | None:
+    """A configured value as the configuration system converts a boolean (`wiring.booleans`,
+    CP-50 row 21): trimmed where `trimmed`, an empty value no value at all (None — the
+    setting's own default applies), and otherwise `True` exactly when it is one of
+    `true_values` (compared ignoring case where `ignoring_case`) and `False` for every other
+    value."""
+    if raw is None:
+        return None
+    booleans = wiring["booleans"]
+    value = raw.strip() if booleans.get("trimmed") else raw
+    if not value:
+        return None
+    truths = [str(entry) for entry in booleans["true_values"]]
+    if booleans.get("ignoring_case"):
+        return value.casefold() in {entry.casefold() for entry in truths}
+    return value in truths
+
+
+def _serves(connector: dict[str, Any], direction: str) -> bool:
+    """Whether a connector-table entry serves `direction`: a read entry by naming a
+    destination for it, a protocol-less one by listing it in `directions`."""
+    return direction in (connector.get("destination") or {}) or direction in (
+        connector.get("directions") or []
+    )
+
+
+def _connector_named(wiring: dict[str, Any], name: str) -> dict[str, Any] | None:
+    ignoring_case = wiring.get("connector_names", _EXACT) == _IGNORING_CASE
+    for connector in wiring[_CONNECTORS]:
+        declared = str(connector["name"])
+        if declared == name or (ignoring_case and declared.casefold() == name.casefold()):
+            return dict(connector)
+    return None
+
+
+def _unchosen(channel: _Channel, serving: list[dict[str, Any]]) -> dict[str, Any]:
+    names = sorted(str(connector["name"]) for connector in serving)
+    listed = ", ".join(names)
+    candidates = [
+        {
+            "binding": channel.name,
+            "binder": name,
+            "reason": _UNCHOSEN_CONNECTOR.format(
+                connector=name, count=len(names), direction=channel.direction, names=listed
+            ),
+        }
+        for name in names
+    ]
+    return _binder_row(channel, candidates, candidates[0]["reason"])
+
+
+def _unread_connector(channel: _Channel, connector: dict[str, Any], how: str) -> dict[str, Any]:
+    """The question a channel wired to a protocol-less connector earns: the connector is
+    known and counted, and the wire it carries is the part nobody read."""
+    name = str(connector["name"])
+    return _binder_question(channel, name, _UNREAD_CONNECTOR.format(connector=name, how=how))
+
+
+def _binder_question(channel: _Channel, binder: str | None, reason: str) -> dict[str, Any]:
+    return _binder_row(
+        channel, [{"binding": channel.name, "binder": binder, "reason": reason}], reason
+    )
+
+
+def _binder_row(
+    channel: _Channel, candidates: list[dict[str, Any]], evidence: str
+) -> dict[str, Any]:
+    """A `binder_protocol` question about one channel: WHICH WIRE it speaks is unread, so
+    `protocol` is NULL (F2 §3.4) and the channel name is the identity asked about."""
+    return {
+        "protocol": None,
+        "method": None,
+        "path": channel.name,
+        "question": _BINDER_PROTOCOL,
+        "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+        "evidence": evidence,
+    }
+
+
+def _wired_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """The questions `_wired` leaves: a `binder_protocol` for every channel whose wire was
+    not read, and a `channel_destination` for every row whose address was not — its
+    candidate carrying the reason, because the candidate is what the document prints.
+
+    Gated on the module's build, `_bean_name_questions`' reason: the `service_identity`
+    seam re-checks no gate, and this reads configuration a skipped module still has."""
+    if unmet_dependency(workspace, catalog) is not None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for wired in _wired(workspace, catalog):
+        if wired.question is not None:
+            rows.append(wired.question)
+            continue
+        if wired.destination is not None:
+            continue
+        rows.append(
+            {
+                "protocol": wired.protocol,
+                "method": None,
+                "path": wired.channel.name,
+                "question": _CHANNEL_DESTINATION,
+                "candidates": json.dumps(
+                    [
+                        {
+                            "channel": wired.channel.name,
+                            "handler": wired.channel.handler,
+                            "reason": wired.unread,
+                        }
+                    ],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence": wired.unread,
+            }
+        )
+    return rows
+
+
 def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     """The `channel_destination` open questions this catalog's unanswered
     channels earn — one per `(channel, handler)` whose destination
@@ -1467,6 +2044,8 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     if _binding_source(catalog) != _ANNOTATION_VALUE:
         return indexed + _bean_name_questions(workspace, catalog)
     address = catalog.matches[_ADDRESS]
+    if _WIRING in address:
+        return indexed + _wired_questions(workspace, catalog)
     template = address.get("key")
     config = _config_values(workspace)
     placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
@@ -1825,6 +2404,17 @@ def _validate_address(catalog: Catalog, address: Any) -> None:
     # nothing, and files each one as a question. Requiring a key there would
     # force a template to be invented, which is a convention no framework
     # states.
+    if _WIRING in address and source != _ANNOTATION_VALUE:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}.{_WIRING}` wires channels, so it "
+            f"needs `binding.from: {_ANNOTATION_VALUE}` (D02 §2d)"
+        )
+    if _WIRING in address and "key" in address:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}` declares both `key` and "
+            f"`{_WIRING}` — a wired channel's destination attribute is its connector's, so "
+            f"one catalog-wide key would answer for every connector (D02 §2d)"
+        )
     if source == _BEAN_NAME and "key" not in address:
         raise CatalogError(
             f"loading catalog {catalog.source}: `{_ADDRESS}` needs `key` and `binding` (D02 §2d)"
@@ -1853,6 +2443,16 @@ def _validate_address(catalog: Catalog, address: Any) -> None:
             )
         for rule in channels:
             _validate_channel_rule(catalog, rule)
+        injected = binding.get(_INJECTED, [])
+        if not isinstance(injected, list):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS}.binding.{_INJECTED}` must be "
+                f"a list of rules (D02 §2d)"
+            )
+        for rule in injected:
+            _validate_injected_rule(catalog, rule)
+        if _WIRING in address:
+            _validate_wiring(catalog, address[_WIRING], [*channels, *injected])
     else:
         suffix = binding.get("suffix")
         if not isinstance(suffix, list) or not suffix:
@@ -1891,6 +2491,249 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
         rule.get("direction", catalog.direction),
         Direction,
     )
+    container = rule.get(_CONTAINER)
+    if container is not None and not (
+        isinstance(container, str) and container and isinstance(rule["annotation"], str)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}.binding.{_CHANNELS}.{_CONTAINER}` "
+            f"must name ONE container type beside ONE annotation — a container folds into a "
+            f"single member — got {rule!r}"
+        )
+
+
+def _validate_injected_rule(catalog: Catalog, rule: Any) -> None:
+    """One `injected` entry: the annotation(s) and attribute as `channels` takes them,
+    the direction for any injected type, and `direction_by_type` mapping a direction to
+    the types that take it. Every half is matched verbatim against a fact, so a typo
+    declines silently and forever."""
+    where = f"loading catalog {catalog.source}: `{_ADDRESS}.binding.{_INJECTED}`"
+    by_type = rule.get(_DIRECTION_BY_TYPE, {}) if isinstance(rule, dict) else None
+    valid = (
+        isinstance(rule, dict)
+        and names_a_type(rule.get("annotation"))
+        and isinstance(rule.get("arg"), str)
+        and isinstance(by_type, dict)
+        and all(names_a_type(types) for types in by_type.values())
+    )
+    if not valid:
+        raise CatalogError(
+            f"{where} entries must be `{{annotation: <type>|[<type>, ...], arg: <attribute>, "
+            f"direction: <direction>, {_DIRECTION_BY_TYPE}: {{<direction>: [<type>, ...]}}}}`, "
+            f"got {rule!r}"
+        )
+    _closed(
+        catalog,
+        f"{_ADDRESS}.binding.{_INJECTED}.direction",
+        rule.get("direction", catalog.direction),
+        Direction,
+    )
+    for direction in cast(dict[str, Any], by_type):
+        _closed(
+            catalog, f"{_ADDRESS}.binding.{_INJECTED}.{_DIRECTION_BY_TYPE}", direction, Direction
+        )
+
+
+def _validate_wiring(catalog: Catalog, wiring: Any, rules: list[Any]) -> None:
+    """The `wiring` block (spec 2026-10-24 §3a). Every value reaches a configuration key
+    looked up verbatim, a row's protocol, or the dependency-set test, so each is checked for
+    shape here — a misspelt attribute reads as "not configured" and a channel silently
+    takes its default.
+
+    - `keys` maps every direction a rule can name to a non-empty list of templates, each
+      carrying `{binding}` and `{attribute}`;
+    - `connector_attribute` is a name; `connector_names` one of the closed pair;
+    - `quote`, `booleans`, `disabled_when` and `orphans` have their declared shapes,
+      `orphans.attach` the closed set this engine implements, and a rule's `is` a boolean
+      that only a declared `booleans` can answer;
+    - `connectors` is a non-empty list of distinct names (`_validate_connector`)."""
+    where = f"loading catalog {catalog.source}: `{_ADDRESS}.{_WIRING}`"
+    if not isinstance(wiring, dict):
+        raise CatalogError(f"{where} must be a mapping (D02 §2d)")
+    keys = wiring.get("keys")
+    if not isinstance(keys, dict) or not keys:
+        raise CatalogError(f"{where}.keys must map a direction to its key templates")
+    for direction, templates in keys.items():
+        _closed(catalog, f"{_ADDRESS}.{_WIRING}.keys", direction, Direction)
+        if (
+            not isinstance(templates, list)
+            or not templates
+            or not all(isinstance(t, str) and _BINDING in t and _ATTRIBUTE in t for t in templates)
+        ):
+            raise CatalogError(
+                f"{where}.keys.{direction} must be a non-empty list of templates each carrying "
+                f"`{_BINDING}` and `{_ATTRIBUTE}`, got {templates!r}"
+            )
+    for rule in rules:
+        direction = rule.get("direction", catalog.direction)
+        named = [direction, *((rule.get(_DIRECTION_BY_TYPE) or {}).keys())]
+        missing = [entry for entry in named if entry not in keys]
+        if missing:
+            raise CatalogError(
+                f"{where}.keys declares no templates for {', '.join(map(str, missing))}, a "
+                f"direction a channel rule names — its channels would read no attribute"
+            )
+    if not isinstance(wiring.get("connector_attribute"), str):
+        raise CatalogError(f"{where}.connector_attribute must name the connector attribute")
+    _closed_string(
+        catalog,
+        f"{_ADDRESS}.{_WIRING}.connector_names",
+        wiring.get("connector_names", _EXACT),
+        _NAME_MATCHING,
+    )
+    quote = wiring.get("quote")
+    if quote is not None and not (
+        isinstance(quote, dict)
+        and isinstance(quote.get("containing"), str)
+        and quote["containing"]
+        and isinstance(quote.get("with"), str)
+        and quote["with"]
+    ):
+        raise CatalogError(f"{where}.quote must be `{{containing, with}}`, got {quote!r}")
+    booleans = wiring.get("booleans")
+    if booleans is not None and not (
+        isinstance(booleans, dict)
+        and isinstance(booleans.get("true_values"), list)
+        and booleans["true_values"]
+        and all(isinstance(entry, str) and entry for entry in booleans["true_values"])
+        and isinstance(booleans.get("ignoring_case", False), bool)
+        and isinstance(booleans.get("trimmed", False), bool)
+    ):
+        raise CatalogError(
+            f"{where}.booleans must be `{{true_values: [<string>, ...], ignoring_case?: <bool>, "
+            f"trimmed?: <bool>}}` — quote every value, or YAML reads `ON` as a boolean — got "
+            f"{booleans!r}"
+        )
+
+    def boolean_rule(name: str, rule: Any, first: str) -> None:
+        shaped = isinstance(rule, dict) and isinstance(rule.get(first), str)
+        if not shaped or not isinstance(rule.get("is"), bool):
+            raise CatalogError(f"{where}.{name} must be `{{{first}, is: <bool>}}`, got {rule!r}")
+        if booleans is None:
+            raise CatalogError(
+                f"{where}.{name} compares a boolean, so `{_WIRING}.booleans` must say how the "
+                f"configuration system converts one"
+            )
+
+    if wiring.get("disabled_when") is not None:
+        boolean_rule("disabled_when", wiring["disabled_when"], "attribute")
+    orphans = wiring.get("orphans")
+    if orphans is not None:
+        if not isinstance(orphans, dict):
+            raise CatalogError(f"{where}.orphans must be `{{attach, unless?}}`, got {orphans!r}")
+        _closed_string(
+            catalog, f"{_ADDRESS}.{_WIRING}.orphans.attach", orphans.get("attach"), _ATTACH_RULES
+        )
+        if orphans.get("unless") is not None:
+            boolean_rule("orphans.unless", orphans["unless"], "key")
+    connectors = wiring.get(_CONNECTORS)
+    if not isinstance(connectors, list) or not connectors:
+        raise CatalogError(f"{where}.{_CONNECTORS} must be a non-empty list (D02 §2d)")
+    names: set[str] = set()
+    ignoring_case = wiring.get("connector_names", _EXACT) == _IGNORING_CASE
+    for connector in connectors:
+        _validate_connector(catalog, connector, keys, booleans is not None)
+        name = str(connector["name"])
+        folded = name.casefold() if ignoring_case else name
+        if folded in names:
+            raise CatalogError(
+                f"{where}.{_CONNECTORS} names `{name}` twice — a configured name would match "
+                f"whichever came first"
+            )
+        names.add(folded)
+
+
+def _validate_connector(
+    catalog: Catalog, connector: Any, keys: dict[str, Any], has_booleans: bool
+) -> None:
+    """One connector-table entry, in one of its two shapes, each with its `by:` probe record:
+
+    - READ: `{name, by, protocol, coordinates, destination: {<direction>: <attribute>},
+      default, unread_when?}` — a closed-set `protocol`, a destination for at least one
+      direction `keys` declares;
+    - COUNTED: `{name, by, coordinates, directions: [<direction>, ...]}` — no `protocol`,
+      `destination`, `default` or `unread_when`: a connector the framework counts and this
+      catalog reads no wire for."""
+    where = f"loading catalog {catalog.source}: `{_ADDRESS}.{_WIRING}.{_CONNECTORS}`"
+    entry = connector if isinstance(connector, dict) else {}
+    coordinates = entry.get("coordinates")
+    common = (
+        isinstance(connector, dict)
+        and isinstance(entry.get("name"), str)
+        and entry["name"]
+        and isinstance(entry.get("by"), str)
+        and entry["by"]
+        and isinstance(coordinates, list)
+        and coordinates
+        and all(isinstance(item, str) and item for item in coordinates)
+    )
+    if not common:
+        raise CatalogError(
+            f"{where} entries must carry `name`, `by` (the probe record that read them) and a "
+            f"non-empty `coordinates` list, got {connector!r}"
+        )
+    name = entry["name"]
+    if _READ_BY_PROTOCOL not in entry:
+        directions = entry.get("directions")
+        counted = (
+            isinstance(directions, list)
+            and directions
+            and not any(key in entry for key in ("destination", "default", "unread_when"))
+        )
+        if not counted:
+            raise CatalogError(
+                f"{where}: `{name}` declares no `protocol`, so it is a COUNTED entry — "
+                f"`{{name, by, coordinates, directions: [...]}}` and no destination — got "
+                f"{connector!r}"
+            )
+        for direction in cast(list[Any], directions):
+            _closed(catalog, f"{_ADDRESS}.{_WIRING}.{_CONNECTORS}.directions", direction, Direction)
+            if direction not in keys:
+                raise CatalogError(
+                    f"{where}: `{name}` names direction `{direction}`, for which `keys` "
+                    f"declares no templates"
+                )
+        return
+    destination = entry.get("destination")
+    read = (
+        isinstance(destination, dict)
+        and destination
+        and all(isinstance(attribute, str) and attribute for attribute in destination.values())
+        and isinstance(entry.get("default"), str)
+        and "directions" not in entry
+    )
+    if not read:
+        raise CatalogError(
+            f"{where} entries with a `protocol` must be `{{name, by, protocol, coordinates: "
+            f"[...], destination: {{<direction>: <attribute>}}, default, unread_when?}}`, got "
+            f"{connector!r}"
+        )
+    _closed(catalog, f"{_ADDRESS}.{_WIRING}.{_CONNECTORS}.protocol", entry["protocol"], Protocol)
+    unread = entry.get("unread_when", {})
+    if not isinstance(unread, dict):
+        raise CatalogError(f"{where}.unread_when must map a direction to rules, got {unread!r}")
+    for direction in [*cast(dict[str, Any], destination), *unread]:
+        if direction not in keys:
+            raise CatalogError(
+                f"{where}: `{name}` names direction `{direction}`, for which "
+                f"`keys` declares no templates"
+            )
+    for direction, rules in unread.items():
+        if not isinstance(rules, list) or not all(
+            isinstance(rule, dict)
+            and isinstance(rule.get("attribute"), str)
+            and isinstance(rule.get("is", False), bool)
+            for rule in rules
+        ):
+            raise CatalogError(
+                f"{where}: `{name}`'s unread_when.{direction} must be a list of "
+                f"`{{attribute, is?: <bool>}}`, got {rules!r}"
+            )
+        if not has_booleans and any("is" in rule for rule in rules):
+            raise CatalogError(
+                f"{where}: `{name}`'s unread_when.{direction} compares a boolean, so "
+                f"`{_WIRING}.booleans` must say how the configuration system converts one"
+            )
 
 
 def _validate_unselected(catalog: Catalog, binding: dict[str, Any]) -> None:

@@ -3604,6 +3604,197 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "messaging.an-ORPHAN-channel-takes-the-sole-connector": Guard(
+        what="a SmallRye channel no connector manages and only one direction carries takes "
+        "its direction's connector when exactly ONE is on the classpath",
+        why="spec 2026-10-24 ruling 2, Quarkus's own rule (CP-50 rows 7, 17): "
+        "`autoConfigureConnectorForOrphansAndProduceManagedChannels` attaches the sole "
+        "connector of a direction to every orphan as a run-time configuration default. 13 of "
+        "the 15 measured quickstart modules configure no connector at all and rely on it, so "
+        'without the attachment the kafka quickstart\'s own processor — `@Incoming("requests") '
+        '@Outgoing("quotes")` beside `quarkus-messaging-kafka` — is two real Kafka '
+        "boundaries the document does not show",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        elif len(serving) == 1:\n            wired.append(_destined(",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n"
+                "            wired.append(_destined(",
+            ),
+        ),
+    ),
+    "messaging.every-CONNECTOR-counts-toward-the-sole-one": Guard(
+        what="every connector in the module's dependency set counts toward the sole-connector "
+        "test — a COUNTED entry (no protocol: MQTT, Camel, in-memory) as much as a read one",
+        why="CP-50 rows 6, 16: Quarkus's `discoverConnectors` collects every bean carrying "
+        "`@Connector`, whatever it speaks. Counting only the connectors the table reads a "
+        "wire for makes Kafka the 'sole' connector of a module that also carries MQTT, so "
+        "every unconfigured orphan is published as a Kafka topic Quarkus never attaches — a "
+        "fabricated boundary DR-5 then links into Kafka consumers' graphs — and leaves a "
+        "module whose only connector is MQTT silent where Quarkus does attach it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        for connector in wiring[_CONNECTORS]\n"
+                "        if not declared.isdisjoint(",
+                replace="        for connector in wiring[_CONNECTORS]\n"
+                "        if _READ_BY_PROTOCOL in connector and not declared.isdisjoint(",
+            ),
+        ),
+    ),
+    "messaging.an-ORPHAN-with-no-TABLED-connector-asks": Guard(
+        what="a SmallRye orphan with no connector of its direction from the connector table "
+        "in the dependency set is a `binder_protocol` question with no binder, never silence",
+        why="final review finding 1: the engine sees zero TABLED connectors, not zero "
+        "connectors. A Quarkiverse connector (NATS JetStream, Solace) as a module's only one "
+        "is the sole connector Quarkus attaches (CP-50 row 7) and its coordinates are in no "
+        "entry, so dropping the orphan removes a broker boundary from the document with no "
+        "row, gap or question saying one was there",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        else:\n            reason = _NO_TABLED_CONNECTOR",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n"
+                "            reason = _NO_TABLED_CONNECTOR",
+            ),
+        ),
+    ),
+    "messaging.an-IN-MEMORY-channel-is-no-boundary": Guard(
+        what="a SmallRye channel name the module both produces and consumes is never an "
+        "orphan, takes no connector and gives no row",
+        why="CP-50 rows 1, 11: `detectOrphanChannels` keys each direction's channels by name "
+        "and `removeAll`s the other direction's, so a name both directions carry is an "
+        "in-process pipe. Without the check the sole connector is attached to both halves "
+        "and the document publishes a broker topic, inbound and outbound, for a hand-off "
+        "that never leaves the process — two fabricated boundaries that DR-5 then links "
+        "into any other service using the same topic name",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if channel.name in carried[other]:\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            continue",
+            ),
+        ),
+    ),
+    "messaging.the-CONNECTOR-table-names-the-protocol": Guard(
+        what="a wired SmallRye channel speaks the protocol of the connector that wires it — "
+        "the connector table's entry, never one fixed value",
+        why="spec 2026-10-24 ruling 1: one catalog reads six connectors, and `protocol` is "
+        "identity — DR-5 links on it. A fixed protocol publishes every AMQP, RabbitMQ, "
+        "Pulsar, JMS and SQS channel as Kafka, linking each into Kafka consumers' graphs it "
+        "never speaks to; the catalog's own `protocol:` line exists only because "
+        "`resolve/endpoints.py` requires one of a row-minting file",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find='    protocol = str(connector["protocol"])',
+                replace='    protocol = "kafka"  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
+    "messaging.wired-questions-ride-the-dependency-gate": Guard(
+        what="the wiring's questions are filed only for a module whose build names a "
+        "SmallRye artifact — the gate `run` passed through",
+        why="the `service_identity` seam re-checks neither `requires` nor the dependency gate, "
+        "and the wiring reads `resolved_config`, which a module without SmallRye still has. "
+        "Ungated, a module whose build declares no messaging at all files a question "
+        "asserting a channel wired to `smallrye-mqtt` exists, for a catalog the run "
+        "declined — `_bean_name_questions`' own defect, one mode over",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="    if unmet_dependency(workspace, catalog) is not None:\n        return []\n"
+                "    rows: list[dict[str, Any]] = []\n    for wired in _wired(",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return []\n"
+                "    rows: list[dict[str, Any]] = []\n    for wired in _wired(",
+            ),
+        ),
+    ),
+    "grpc.the-QUARKUS-service-annotation-corroborates": Guard(
+        what="`io.quarkus.grpc.GrpcService` is on `grpc-spring.yml`'s corroboration list, "
+        "beside the Spring and net.devh spellings",
+        why="spec 2026-10-24 ruling 3, CP-52 rows 1, 7: Quarkus REQUIRES the annotation on "
+        "every service bean, so it flags every served class. For a service built against "
+        "a PUBLISHED stubs jar the supertype match derives nothing and the annotation is "
+        "the only evidence a gRPC service is served at all; without the entry that class "
+        "is silence, which 2O design §1b rules out",
+        edits=(
+            Edit(
+                path="sextant/catalogs/grpc-spring.yml",
+                find="      - io.quarkus.grpc.GrpcService\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.a-QUARKUS-client-field-is-an-outbound-service": Guard(
+        what="a field annotated `io.quarkus.grpc.GrpcClient` derives the outbound service-"
+        "level row of the stub it is declared as, and net.devh's annotation of the same "
+        "simple name does not",
+        why="spec 2026-10-24 ruling 3, CP-52 rows 2, 4: a wrong FQN in an `injected_client` "
+        "catalog is SILENT (W53) — the annotation never matches, nothing is derived and "
+        "no skip or gap says a name was wrong, so every Quarkus gRPC client is missing "
+        "from the document. The weakening is the other framework's FQN, the mistake a "
+        "copy of `grpc-net-devh.yml` makes: the Quarkus fields stop deriving and "
+        "net.devh's start deriving under a catalog that claims Quarkus",
+        edits=(
+            Edit(
+                path="sextant/catalogs/grpc-quarkus-client.yml",
+                find="  field_annotation: io.quarkus.grpc.GrpcClient",
+                replace="  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient",
+            ),
+        ),
+    ),
+    "injected_client.a-PARAMETER-is-an-injection-point": Guard(
+        what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
+        "to that parameter's declared type, as a field's is",
+        why="OI-187: `io.quarkus.grpc.GrpcClient` and net.devh's both target PARAMETER, and "
+        "`injected_client` joined fields alone, so a constructor-injected client hit the "
+        "`stub_type is None` branch and vanished — no row, no gap, no question. Every "
+        "constructor-injected gRPC client is then an outbound call the document does not "
+        "show, and nothing says one was dropped",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="    injected.extend(_annotated_parameters(workspace, field_annotations))\n",
+                replace="",
+            ),
+        ),
+    ),
+    "supertype_derived.a-supertypes-members-are-what-it-INHERITS": Guard(
+        what="the methods an implementer can override are those its supertype declares plus "
+        "those of every type above it, interfaces and their default methods included",
+        why="protoc-gen-grpc-java puts every handler as a DEFAULT method on the nested "
+        "`<Service>Grpc$AsyncService` interface; `<Service>ImplBase` implements it and declares "
+        "only `<init>` and `bindService` (`fixtures/grpc-probe`, 1.62.2). Read on the base class "
+        "alone, no override of real generated code matches: every grpc-java, Spring gRPC, "
+        "net.devh and Quarkus service loses its handler, and an annotated one gets a false "
+        "`service_identity` question",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        pending.extend(parents.get(current, []))\n",
+                replace="",
+            ),
+        ),
+    ),
+    "injected_client.a-GENERATED-class-own-nesting-does-not-fence": Guard(
+        what="an `extends` edge whose both ends are nested in one outer class does not fence "
+        "that outer class's injected stubs",
+        why="protoc emits `<Service>FileDescriptorSupplier extends <Service>BaseDescriptorSupplier` "
+        "(and the method supplier likewise) inside every full-protobuf `<Service>Grpc` — "
+        "measured on both quarkus-quickstarts gRPC modules. Counted as an implementation, "
+        "every stub a module compiles itself is fenced, so a client-only module's resolved "
+        "gRPC client rows vanish with no question, net.devh and Quarkus alike",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='        if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:\n'
+                "            continue\n",
+                replace="",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "
@@ -4250,6 +4441,14 @@ def copy_tree(destination: Path) -> Path:
         "reactor-gateway",
         # The `type_header` read's fixture: two handlers whose exceptions live in jars.
         "orders-advice",
+        # Quarkus's SmallRye channels and gRPC client (spec 2026-10-24): the orphan
+        # attachment and the in-memory pair are read off one module's whole channel set,
+        # and the gRPC fence off protoc's nesting in its compiled classes, so their pins
+        # are e2e and need the module.
+        "orders-quarkus",
+        # protoc's own generated gRPC classes, which the inherited-member read is pinned on:
+        # only real generated code puts the handlers on `<Service>Grpc$AsyncService`.
+        "grpc-probe",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
@@ -4257,7 +4456,13 @@ def copy_tree(destination: Path) -> Path:
         # which exists only in real facts — so the test that pins it is an e2e one, and an
         # e2e test needs its fixture. 90 KB of sources and classes, and the stamp's mtime
         # survives `copy2`, so no `mvn` runs here either.
-        shutil.copytree(REPO / "fixtures" / named, destination / "fixtures" / named, ignore=ignore)
+        # `grpc-probe`'s `target/protobuf-maven-plugin` is 16MB of downloaded protoc binaries,
+        # a build cache the stamped `target/classes` no longer needs.
+        shutil.copytree(
+            REPO / "fixtures" / named,
+            destination / "fixtures" / named,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "protobuf-maven-plugin"),
+        )
     return destination
 
 

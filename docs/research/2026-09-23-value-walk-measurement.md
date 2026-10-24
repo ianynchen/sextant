@@ -385,7 +385,7 @@ to the 1,250):
 | `supertype_dispatch` | 18 | 2 of 2 |
 | `interface_implementation` | 9 | 1 of 1 |
 
-Fifty-one of the 101 shipped catalogs name a call-site position at all; 48 of those matched
+Fifty-one of the 101 shipped catalogs at the time name a call-site position at all; 48 of those matched
 something somewhere. **The other 50 name no call-site position**, and 37 of them are
 `annotation_driven` — they ask about annotation attributes alone, which this walk does not
 serve. The remaining **13 are not**: `graphql-schema`, `grpc-java`, `grpc-net-devh`,

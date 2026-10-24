@@ -166,12 +166,14 @@ FRAMEWORKS: dict[str, list[str]] = {
         "Jakarta / javax JMS API (direct)",
         "Spring for Apache Pulsar",
         "Micronaut JMS",
+        "SmallRye Reactive Messaging (Quarkus)",
     ],
     "AWS SQS": [
         "Spring Cloud AWS SQS 3.x / 4.x",
         "Spring Cloud AWS 1.x / 2.x (legacy)",
         "AWS SDK v2 (raw)",
         "Micronaut (raw AWS SDK; JMS over SQS)",
+        "SmallRye Reactive Messaging (Quarkus)",
     ],
     "Google Cloud Pub/Sub": [
         "Spring Cloud GCP Pub/Sub (PubSubTemplate)",
@@ -202,6 +204,9 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
     "apache-camel": ["Apache Camel"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
+    # Named 2026-10-24 when Quarkus gRPC shipped for grpc-java's generated forms and the field
+    # measurement found Quarkus's own Mutiny forms unread on both real modules.
+    "quarkus-grpc-mutiny": ["Quarkus gRPC"],
     # Surfaced 2026-09-22 when `temporal-cadence` and `vertx-eventbus` closed and the Async
     # row's blockers emptied while §5.12 still carried two Java frameworks with no catalog
     # at all — the definition's second clause, the same way `smallrye-reactive-messaging`

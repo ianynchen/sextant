@@ -5017,6 +5017,9 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
 
     assert [catalog.id for catalog in catalogs] != []
     assert sorted(entry.catalog_id for entry in skipped) == [
+        # The fifth `config_join` file (spec 2026-10-24 §3a), gated by its style like the
+        # others: an `@Incoming` names its framework, but a configuration key does not.
+        "smallrye-reactive-messaging",
         # The fourth `config_join` file (spec 2026-09-21 §7b), gated by its style like
         # the other three: a configuration key names no framework on its own.
         "spring-cloud-gateway-properties",

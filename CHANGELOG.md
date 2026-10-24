@@ -15,6 +15,55 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **Quarkus messaging: SmallRye Reactive Messaging channels become boundaries, wired as Quarkus
+  wires them** (spec 2026-10-24-quarkus-messaging-and-grpc, rulings 1-2; probes CP-49–CP-51).
+  `@Incoming`/`@Outgoing` (and their repeatable containers) and `@Channel` on an injected
+  `Emitter`/`MutinyEmitter` or `Multi`/`Publisher` name a channel. The channel's destination
+  comes from `mp.messaging.` or `quarkus.messaging.` configuration, and the connector that
+  wires it decides its protocol: Kafka, AMQP, RabbitMQ (`amqp`), Pulsar, JMS or SQS. A channel
+  is a boundary when its connector is configured, or when it is an orphan and exactly one
+  connector of its direction is on the classpath. An in-memory channel gives no row. MQTT,
+  Camel, in-memory and Google Pub/Sub connectors are counted but not read, and an unknown
+  connector or two unconfigured ones give a `binder_protocol` question naming them. An orphan
+  with no connector from the table in the dependency set is a `binder_protocol` question with no
+  binder, because a connector the table does not list (a Quarkiverse one) may be the one Quarkus
+  attaches. Measured on `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of
+  15 messaging modules. COVERAGE §2c's Quarkus Kafka, JMS / AMQP and SQS cells read ✅ (JMS is
+  pinned by a unit test only; no quickstart carries it).
+- **Quarkus gRPC on grpc-java's generated classes** (spec 2026-10-24-quarkus-messaging-and-grpc,
+  ruling 3; probe CP-52). `io.quarkus.grpc.GrpcService` is a third corroboration spelling for a
+  service extending `<Service>ImplBase`. `@GrpcClient` on a field or a constructor/method
+  parameter typed by a generated `…Stub` derives the service-level outbound row, whether its
+  value is named or omitted (`grpc-quarkus-client.yml`). Quarkus's Mutiny forms (a service
+  `implements <Service>`, a client typed `<Service>`, and a client typed by the generated
+  `Mutiny<Service>Grpc.Mutiny<Service>Stub`, which the generated `<Service>Bean` fences and
+  leaves silent) are not read yet (`quarkus-grpc-mutiny`, OI-192), so COVERAGE §2c's Quarkus
+  gRPC cell stays ◐.
+
+### Fixed
+
+- **A grpc-java service's handler is read from real generated code** (Task 4 fix round of spec
+  2026-10-24-quarkus-messaging-and-grpc). `supertype_derived` matched an override only against
+  methods the generated `<Service>ImplBase` DECLARES. protoc-gen-grpc-java puts every handler as
+  a default method on the nested `<Service>Grpc$AsyncService` interface, which the base only
+  implements. So no real ImplBase service (grpc-java, Spring gRPC, net.devh, Quarkus) was named as
+  its RPC's handler, and an annotated one got a false `service_identity` question. Only a
+  `.proto` in the module still gave the RPC a row, with handler NULL. A supertype's members are
+  now what a subclass inherits: its own methods plus those of its superclasses and the interfaces
+  it implements, transitively, default methods included. Pinned on `fixtures/grpc-probe`'s
+  protoc output.
+- **A gRPC client stub a module compiles itself is no longer fenced away** (Task 4 of spec
+  2026-10-24-quarkus-messaging-and-grpc, measured on `quarkus-quickstarts`). `injected_client`
+  withholds the outbound row for a service the module implements, judged by the module's
+  `extends` edges into the stub's generated outer class. protoc emits two such edges inside
+  every full-protobuf `<Service>Grpc` (`<Service>FileDescriptorSupplier` and
+  `<Service>MethodDescriptorSupplier` extend `<Service>BaseDescriptorSupplier`), so every
+  module compiling its own `.proto` lost every resolved client row, with no question, for
+  net.devh and Quarkus alike. An edge whose both ends are nested in one outer class is that
+  class's own structure, and it no longer fences.
+
 ## [0.2.0] — 2026-10-23
 
 **The Java + Spring Boot milestone.** A Java or Kotlin Spring Boot module is analysed,
