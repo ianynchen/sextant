@@ -43,6 +43,7 @@ from sextant.application.resolve.bean_conditions import (
     redact_condition_evidence,
 )
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.resolved_schedules import redact_schedule_value
 
 # The root a trace ran from, for the addresses it carries (2Q close, defect 1).
 # Imported for its TYPE and read field by field: the join from a root to the
@@ -1599,7 +1600,9 @@ def assemble_module_document(
     # The cost is two short sections in every document, which is the cheap
     # side of that trade.
     sections.append(MachineHeading(2, "Scheduled work"))
-    sections.extend(_scheduled_work_sections(report.scheduled_work, beans))
+    sections.extend(
+        _scheduled_work_sections(report.scheduled_work, report.resolved_schedules, beans, redactor)
+    )
     sections.append(MachineHeading(2, "Error handling"))
     sections.extend(_error_handler_sections(report.error_handlers, beans))
 
@@ -1724,19 +1727,32 @@ _NONE_RECORDED = "—"
 
 
 def _scheduled_work_sections(
-    rows: Sequence[dict[str, object]], beans: _BeanConditions
+    rows: Sequence[dict[str, object]],
+    configured: Sequence[dict[str, object]],
+    beans: _BeanConditions,
+    redactor: Redactor,
 ) -> list[Section]:
     """The `scheduled_work` table as one machine table, or the "None found."
     paragraph the endpoint sections use.
 
     The expression is rendered as CODE and never reformatted: a cron string
-    re-spaced for the page names a different schedule from the one that runs.
+    re-spaced for the page names a different schedule from the one that runs. It passes
+    the render redactor (`redact_text`) in the table and in a detail header alike: it is
+    the annotation literal the bundle masks in `annotations.args` and in both schedule
+    tables.
     `resolution` rides along because an `unresolved` expression is a
     placeholder this analysis did not substitute, and a reader who cannot see
     that would read `${orders.cron}` as the schedule itself.
 
     A job whose bean is conditional gets a detail block under the table stating where it
     exists (`_condition_entries`); an unconditional job gets none.
+
+    A job whose expression holds a placeholder gets, in the same block, what THIS
+    REPOSITORY configures for it per environment (`resolved_schedules`, spec
+    2026-10-23-configured-schedules §3c) — labelled as such, because the schedule that runs
+    is still the deployment's and the row stays `unresolved`. Such a block is headed by the
+    job's whole identity, trigger and expression after the handler: under `@Schedules` one
+    method is several jobs, and a handler alone would put two jobs' values under one name.
     """
     if not rows:
         return [MachineParagraph(_runs("None found."))]
@@ -1744,18 +1760,54 @@ def _scheduled_work_sections(
         (
             _code(bare_descriptor(str(row["handler"]))),
             _text(str(row["trigger"])),
-            _code(str(row["expression"])),
+            _code(redactor.redact_text(str(row["expression"]))),
             _text(str(row["resolution"])),
         )
         for row in rows
     )
     sections: list[Section] = [MachineTable(_SCHEDULED_HEADERS, table)]
+    by_job: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    for value in configured:
+        job = (str(value["handler"]), str(value["trigger"]), str(value["expression"]))
+        by_job.setdefault(job, []).append(value)
     for row in rows:
-        conditions = _condition_entries(row["handler"], beans)
-        if conditions:
-            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)
-            sections.append(MachineDetail((header, *conditions)))
+        handler = _code(bare_descriptor(str(row["handler"])))
+        values = by_job.get((str(row["handler"]), str(row["trigger"]), str(row["expression"])))
+        entries = _condition_entries(row["handler"], beans)
+        if values:
+            handler += _text(f" — {row['trigger']} ") + _code(
+                redactor.redact_text(str(row["expression"]))
+            )
+            body = _runs(_configured_values(values, redactor))
+            entries = [DetailEntry(_text("as configured in this repository"), body, None)] + entries
+        if entries:
+            header = DetailEntry(handler, None, None)
+            sections.append(MachineDetail((header, *entries)))
     return sections
+
+
+def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) -> str:
+    """One job's per-environment values, in the rows' environment order: environments that
+    read the same thing share one entry (`` `v` in `a`, `b` ``), and one whose value could
+    not be read says so with its reason (`` not set in `prod` (missing_key) ``). A value is
+    masked by this exit's redactor before it is compared — whole where a key it was read
+    through names a secret (`redact_schedule_value`, the decision the bundle takes too) —
+    so two environments that differ only in what the redactor hides read as the one entry
+    they render as."""
+    environments: dict[tuple[str | None, str | None], list[str]] = {}
+    for row in rows:
+        value = row["value"]
+        keys = json.loads(str(row["keys"]))
+        shown = None if value is None else redact_schedule_value(redactor, keys, str(value))
+        reason = None if value is not None else str(row["unresolved_reason"])
+        environments.setdefault((shown, reason), []).append(f"`{row['environment']}`")
+    entries = []
+    for (shown, reason), names in environments.items():
+        where = ", ".join(names)
+        entries.append(
+            f"not set in {where} ({reason})" if shown is None else f"`{shown}` in {where}"
+        )
+    return "; ".join(entries)
 
 
 def _error_handler_sections(

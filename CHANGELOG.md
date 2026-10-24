@@ -14,6 +14,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A placeholder inside a default is resolved, as Spring resolves it** (final review of spec
+  2026-10-23-configured-schedules). The one placeholder rule ended a placeholder at the FIRST
+  closing delimiter, so `${missing:${a}}` read as the literal `${a}` — in `resolved_config`
+  and in a scheduled job's per-environment value alike. Spring's `PlaceholderParser` ends a
+  placeholder at the closer that balances it and resolves a default's placeholders through
+  the same resolver (CP-48, `spring-core` 7.0.9), so
+  `${jobs.sweep.cron:${jobs.default.cron}}` now reads `jobs.default.cron`'s value where
+  `jobs.sweep.cron` is unset, an opener with no end stays text without hiding a later
+  placeholder, and a cycle through a default is still `placeholder_cycle`. The counted opener
+  is catalog data, `placeholders.nest`.
 - **A password written into a literal URL no longer leaks into the peer column, the
   documents or the bundle** (found 2026-10-23). `split_url` kept the authority's userinfo, so
   `RestTemplate.postForObject("https://svc:s3cret@billing.internal/charges", …)` derived
@@ -97,6 +107,25 @@ here would restate those documents rather than add anything.
     its documents. `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` do not move.
 
 ### Added
+
+- **A schedule set in configuration is stated per environment** (COVERAGE §5.12 `@Scheduled`
+  row 3 → ✅, Spring Boot's §2c Async cell → ✅; spec `2026-10-23-configured-schedules-design.md`,
+  option A ruled 2026-10-23). `@Scheduled(cron = "${orders.sweep.cron:0 0 * * * *}")` still
+  derives one `scheduled_work` row, `unresolved`, the expression verbatim — the schedule that
+  runs is the deployment's. Beside it, a new derived table **`resolved_schedules`** holds one
+  row per (job whose expression holds a placeholder, environment of `resolved_config`), keyed
+  by the job's `handler`, `trigger` and `expression` (so two placeholder crons under
+  `@Schedules` on one method are told apart), with the value this repository configures or
+  the reason it cannot be read (`missing_key`, `placeholder_cycle`, …). The expression is
+  substituted by the one placeholder rule configuration files use
+  (`resolve/config.py::substitute`, split from `_substitute`; delimiters, `:default` and key
+  matching from the config model), so a literal default applies where no environment sets the key. The module
+  document states it under the job's row, labelled as the repository's configuration:
+  *as configured in this repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*;
+  environments that read the same value share one entry. Exported in the bundle with `value`
+  masked by `redact_text`; the document's line passes the render redactor.
+  **`GRAPH_SCHEMA_VERSION` moves 6 → 7** (a new table): re-analyse the workspace. SpEL `#{…}`
+  is not evaluated; the diff's `schedule` kind is unchanged.
 
 - **Conditions belong to the bean, not to the controller** (COVERAGE `conditional-controllers`
   generalized; `OI-108` closed; spec `2026-10-22-conditional-beans-design.md`, three decisions

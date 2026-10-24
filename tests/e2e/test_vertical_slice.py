@@ -71,15 +71,17 @@ def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
     # hold vacuously while the second failed. Named here so the coverage is a
     # claim rather than a glob's side effect.
     #
-    # This fixture schedules nothing and declares no advice, so both exports
-    # are EMPTY, and that is what is being pinned: the empty file must be
-    # byte-identical too. A pre-declared table that shipped no parquet at all
-    # would leave a bundle consumer unable to tell "this module runs no
-    # background work" from "this bundle does not carry that answer".
+    # This fixture declares no advice, so that export is EMPTY, and that is
+    # what is being pinned: the empty file must be byte-identical too. A
+    # pre-declared table that shipped no parquet at all would leave a bundle
+    # consumer unable to tell "this module declares no error contract" from
+    # "this bundle does not carry that answer". (It scheduled nothing either
+    # until `scheduling/OrderSweeper` — spec 2026-10-23-configured-schedules
+    # §3e — so `scheduled_work` and `resolved_schedules` now compare full.)
     exported = {
         path.name for workspace in (first, second) for path in workspace.rglob("graph/*.parquet")
     }
-    for table in ("scheduled_work", "error_handlers"):
+    for table in ("scheduled_work", "resolved_schedules", "error_handlers"):
         assert f"{table}.parquet" in exported, (
             f"`{table}` did not reach the bundle, so the byte-identity comparison above "
             f"held over a file that was never written"
@@ -348,7 +350,9 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # under `conditional/`): seventeen new edges. Seven land on a body this module holds — three
     # `<init>` the configuration builds (`HttpAuditClient`, `StandardPricing`, `PromoPricing`) and
     # the four narrowed callees (`send` on each sender, `price` on each policy). Still 29%.
-    assert "Calls whose callee body this workspace read: 542 of 1839 (29%)" in document
+    # 542 of 1840 since `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e):
+    # its constructor's `Object.<init>`, the only call the class makes. Still 29%.
+    assert "Calls whose callee body this workspace read: 542 of 1840 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -405,7 +409,9 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # per new class that has a constructor), the `postForObject` in `HttpAuditClient`, and the
     # configuration's four constructor calls (`HttpAuditClient`, `RestTemplate`, `StandardPricing`,
     # `PromoPricing`).
-    assert "Dispatch, by outcome (call edges): narrowed 6, resolved 1833." in document
+    # resolved 1834 since `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e):
+    # its constructor's `Object.<init>`, `resolved`.
+    assert "Dispatch, by outcome (call edges): narrowed 6, resolved 1834." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -1832,7 +1838,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 168 since the conditional beans (spec 2026-10-22-conditional-beans): eleven class files
     # under `conditional/` — three interfaces, the two senders, two policies, a client, the
     # configuration and two controllers.
-    assert (None, 168) in origins
+    # 169 since `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e), one
+    # class file.
+    assert (None, 169) in origins
     header = duckdb.sql(
         "SELECT origin_tier, origin FROM read_parquet("
         f"'{bundle / 'graph' / 'documents.parquet'}') WHERE header_only"
@@ -2332,3 +2340,37 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
         "existence here is open\n"
     ) in pricing
     assert pricing.count("| narrowed |") == 2
+
+
+def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_run: Path):
+    """The document is the result (ruling 2026-10-17), for COVERAGE §5.12's `@Scheduled` row 3
+    (spec 2026-10-23-configured-schedules). `scheduling/OrderSweeper` has two jobs written with
+    a placeholder: `sweep`'s key is set in `application-prod.yml` only, so `prod` reads the
+    profile file and `default` the annotation's own `:0 0 * * * *`; `purge`'s is set nowhere.
+    Both rows stay `unresolved` — the schedule that runs is the deployment's — and each states
+    what this repository configures under it."""
+    document = (full_run / "render" / "architecture.md").read_text()
+    sweep = "`com/acme/orders/scheduling/OrderSweeper#sweep(sig_da8c82d5).`"
+    purge = "`com/acme/orders/scheduling/OrderSweeper#purge(sig_da8c82d5).`"
+    assert f"| {sweep} | cron | `${{orders.sweep.cron:0 0 * * * *}}` | unresolved |" in document
+    assert f"| {purge} | fixedRate | `${{orders.purge.rate}}` | unresolved |" in document
+    assert (
+        f"- {sweep} — cron `${{orders.sweep.cron:0 0 * * * *}}`\n"
+        "  - as configured in this repository: `0 0 * * * *` in `default`; "
+        "`0 */5 * * * *` in `prod`\n"
+    ) in document
+    assert (
+        f"- {purge} — fixedRate `${{orders.purge.rate}}`\n"
+        "  - as configured in this repository: not set in `default`, `prod` (missing_key)\n"
+    ) in document
+    [parquet] = list(full_run.rglob("resolved_schedules.parquet"))
+    rows = duckdb.sql(
+        "SELECT trigger, expression, environment, value, unresolved_reason "
+        f"FROM read_parquet('{parquet}') ORDER BY handler, trigger, expression, environment"
+    ).fetchall()
+    assert rows == [
+        ("fixedRate", "${orders.purge.rate}", "default", None, "missing_key"),
+        ("fixedRate", "${orders.purge.rate}", "prod", None, "missing_key"),
+        ("cron", "${orders.sweep.cron:0 0 * * * *}", "default", "0 0 * * * *", None),
+        ("cron", "${orders.sweep.cron:0 0 * * * *}", "prod", "0 */5 * * * *", None),
+    ]

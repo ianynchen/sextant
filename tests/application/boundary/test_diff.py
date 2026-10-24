@@ -40,7 +40,7 @@ _MODULE = {
 }
 _PROVENANCE = {"commit": "630906a7", "sextant_version": "0.1.0", "fact_schema_version": 2}
 _METADATA = {
-    "schema_version": 6,
+    "schema_version": 7,
     "boundary_vocabulary_version": 2,
     "catalog_hash": "sha256:catalogs",
     "module": _MODULE,
@@ -646,6 +646,32 @@ def test_the_diffs_own_output_is_masked(tmp_path: Path, sources: Callable[[Path]
     assert "s3cr3t" not in json.dumps(diff_sources(a, b, REDACTOR, REDACTOR).to_json())
 
 
+_SECRET_SCHEDULE = "${orders.sweep.cron:https://ops:hunter2@billing.internal}"
+
+
+def _secret_schedule(workspace: DuckDbWorkspace) -> None:
+    _insert(workspace, "scheduled_work", handler="A#sweep().", trigger="cron",
+            expression=_SECRET_SCHEDULE, resolution="unresolved", evidence="compiler",
+            catalog_id="spring-scheduling")  # fmt: skip
+
+
+@pytest.mark.pins("schedules.an-EXPRESSION-is-masked-in-the-DIFF")
+def test_a_schedule_expression_masked_by_the_bundle_diffs_empty_and_prints_masked(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The bundle masks `scheduled_work.expression` through `redact_text` (the annotation
+    literal `annotations.args` masks), so the diff makes the same call on a workspace's: the
+    bundle and its workspace diff empty, and a schedule the diff prints is masked."""
+    workspace = _built(tmp_path / "w", _secret_schedule)
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    assert [r["expression"] for r in verbatim.rows(KINDS["schedule"])] == [_SECRET_SCHEDULE]
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "empty", lambda w: None))
+    (entry,) = diff_sources(empty, verbatim, REDACTOR, REDACTOR).entries
+    assert entry.to["expression"] == "${orders.sweep.cron:https://billing.internal}"
+
+
 def _credential_condition(workspace: DuckDbWorkspace, root: Path) -> None:
     """A calling class under `@ConditionalOnProperty(havingValue = <a URL with a password>)`:
     the expression quotes it verbatim and the exporter strips the userinfo (`redact_json`).
@@ -712,7 +738,7 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
     with pytest.raises(
-        DiffRefused, match="both sides are graph_schema_version 4 and this build is 6"
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 7"
     ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
@@ -799,7 +825,7 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
-    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 6") as refused:
+    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 7") as refused:
         diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 

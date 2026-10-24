@@ -428,10 +428,16 @@ class Redactor:
         MORE PRECISE built-in pattern, never a reveal or exclude mechanism:
         this file has no mechanism that narrows, by construction.
         """
-        normalized = normalize_key(key)
-        if any(pattern in normalized for pattern in self._key_patterns):
+        if self.masks_key(key):
             return REDACTED
         return self.redact_text(value)
+
+    def masks_key(self, key: str) -> bool:
+        """Whether `key` names a secret — the test `redact_value` masks a value WHOLE by,
+        here for an exit that holds a value and the keys it was read through rather than
+        one key (`resolve/resolved_schedules.py::redact_schedule_value`)."""
+        normalized = normalize_key(key)
+        return any(pattern in normalized for pattern in self._key_patterns)
 
     def redact_json(self, text: str) -> str:
         """A JSON document with every STRING LEAF passed through

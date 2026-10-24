@@ -4670,6 +4670,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # Spec 2026-10-22-conditional-beans: the conditions pass, where spec 2026-10-21's
         # endpoint-only one ran (it replaced that pass at the same point).
         "record_bean_conditions",
+        # Spec 2026-10-23-configured-schedules §3b: below `resolve_config` and the
+        # scheduled-work engine (a `derive_endpoints` style), which it reads.
+        "record_resolved_schedules",
         "record_endpoint_attributes",
         "record_self_exchange",
         "record_routing_conflicts",

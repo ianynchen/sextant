@@ -30,9 +30,11 @@ same source, regardless of either one's own `doc_index`. Declaration order
 
 **Placeholders.** A winning raw value is substituted recursively against
 that SAME layered map for its own profile, `:default` (D02 §2i's
-`default_separator`) taken literally when the referenced key cannot be
-resolved, and a key already on the substitution stack reported as
-`placeholder_cycle` rather than looped forever. A key entirely absent from a
+`default_separator`) taken when the referenced key cannot be resolved — itself
+resolved against the same map where it holds a placeholder, as Spring's parser
+resolves it (CP-48 row 7) — and a key already on the substitution stack,
+reached through a default or not, reported as `placeholder_cycle` rather than
+looped forever. A key entirely absent from a
 profile's own layering — never a placeholder failure, just genuinely
 undeclared for that profile — resolves `missing_key` too: D01's own
 "unresolved for prod, resolved for dev" example is exactly this case, not a
@@ -59,6 +61,7 @@ it is reserved for the peer-resolution join (D01), which substitutes into an
 ENDPOINT expression, not a config value.
 """
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -80,6 +83,20 @@ UNRESOLVED_REASONS = (
 )
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
+
+
+def placeholder_rule(model: Mapping[str, Any]) -> tuple[dict[str, str], str]:
+    """A config model's `placeholders` and `key_matching` (D02 §2i), defaulted as this
+    pass defaults them — what `substitute` and a lookup beside it need to read a
+    reference the way this pass does. One accessor, so a second reader of the model
+    (`resolve/resolved_schedules.py`) cannot default either differently. Every
+    delimiter is present in the answer, a declared one over its default, which is how
+    `substitute` reads a partial block anyway — `nest` defaulting to the answer's own
+    `open`, not to a fixed string, since the opener counted for depth belongs to the
+    delimiters it nests (CP-48 row 2)."""
+    placeholders = {**_DEFAULT_PLACEHOLDERS, **model.get("placeholders", {})}
+    placeholders.setdefault("nest", placeholders["open"])
+    return placeholders, str(model.get("key_matching", "exact"))
 
 
 def resolve_config(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -143,8 +160,7 @@ def _resolve_model(
     # whole-string match when this is False.
     allow_filename_profile = bool(profiles_cfg.get("from_filename"))
     default_profile = str(profiles_cfg.get("default_profile", "default"))
-    key_matching = model.get("key_matching", "exact")
-    placeholders = model.get("placeholders", _DEFAULT_PLACEHOLDERS)
+    placeholders, key_matching = placeholder_rule(model)
     remote_prefixes = tuple(model.get("remote_prefixes", []))
 
     by_doc: dict[tuple[str, int], list[dict[str, object]]] = {}
@@ -341,8 +357,10 @@ def _resolve_row(
             "environment": profile,
             "unresolved_reason": "remote_source",
         }
-    resolved, reason = _substitute(
-        raw_value, merged, normalized_index, placeholders, key_matching, [key]
+    resolved, reason = substitute(
+        raw_value,
+        placeholders,
+        _layered_lookup(merged, normalized_index, placeholders, key_matching, [key]),
     )
     if resolved is None:
         return {
@@ -361,20 +379,25 @@ def _resolve_row(
     }
 
 
-def _substitute(
+def substitute(
     raw: str,
-    merged: dict[str, tuple[str, str]],
-    normalized_index: dict[str, str],
-    placeholders: dict[str, str],
-    key_matching: str,
-    stack: list[str],
+    placeholders: Mapping[str, str],
+    lookup: Callable[[str], tuple[str | None, str | None]],
 ) -> tuple[str | None, str | None]:
-    """Recursive `${key:default}` substitution (D02 §2i's `placeholders`
-    delimiters and `default_separator`) over a value already picked by
-    `_layer` for one profile. `stack` carries the chain of merged-map keys
-    currently being resolved, INCLUDING the top-level key this call is
-    ultimately answering for — a self-reference is caught the same way a
-    longer cycle is, on the very first lookup.
+    """The project's one placeholder rule: `${key:default}` substitution with
+    D02 §2i's `placeholders` delimiters and `default_separator`, read the way
+    Spring's own `PlaceholderParser` reads them (CP-48, `spring-core` 7.0.9).
+    `lookup(ref_key)` returns `(value, None)` or `(None, reason)` — what a key
+    MEANS (the layered map, one environment's resolved rows) is the caller's.
+
+    A placeholder ends at the closer that BALANCES it, the `nest` opener counted
+    on the way (CP-48 rows 2-3; `${` itself where a model declares none); an
+    opener with no end is text and the scan goes on after it (row 4). Its inside
+    is read again: the key is everything before the first separator in its text,
+    any placeholder there resolved first, and the default everything after it
+    (rows 5-6). Where `lookup` cannot answer the key, the default is resolved
+    through the SAME lookup (row 7) — `${a:${b}}` is `b`'s value — so a cycle
+    through a default is the lookup's to report, as any other cycle is (row 8).
 
     Returns `(resolved_string, None)` on success or `(None, reason)` on
     failure — a single embedded failure fails the WHOLE value; this pass
@@ -383,42 +406,129 @@ def _substitute(
     could not be read."""
     open_ = placeholders.get("open", "${")
     close_ = placeholders.get("close", "}")
+    nest = placeholders.get("nest", open_)
     separator = placeholders.get("default_separator", ":")
-    parts: list[str] = []
-    index = 0
-    while True:
-        start = raw.find(open_, index)
-        if start == -1:
-            parts.append(raw[index:])
-            break
-        parts.append(raw[index:start])
-        content_start = start + len(open_)
-        end = raw.find(close_, content_start)
-        if end == -1:
-            # No closing delimiter: not a placeholder after all, the rest
-            # of the string is literal.
-            parts.append(raw[start:])
-            break
-        inner = raw[content_start:end]
-        index = end + len(close_)
-        if separator and separator in inner:
-            ref_key, default = inner.split(separator, 1)
+    parts = _placeholder_parts(raw, open_, close_, nest)
+    return _resolved_parts(parts, separator, lookup)
+
+
+# A parsed string: its text, and each placeholder as the parts of its own inside.
+type _Parts = list[str | _Parts]
+
+
+def _placeholder_parts(text: str, open_: str, close_: str, nest: str) -> _Parts:
+    """`text` as text and placeholders, each placeholder its inside parsed in turn
+    (CP-48 row 5). Adjacent text is one piece, as `PlaceholderParser.addText` keeps it,
+    so a separator is found in the text it sits in."""
+    parts: _Parts = []
+
+    def text_piece(piece: str) -> None:
+        if not piece:
+            return
+        if parts and isinstance(parts[-1], str):
+            parts[-1] += piece
         else:
-            ref_key, default = inner, None
-        resolved, reason = _resolve_reference(
+            parts.append(piece)
+
+    position = 0
+    start = text.find(open_)
+    while start != -1:
+        end = _placeholder_end(text, start + len(open_), close_, nest)
+        if end == -1:
+            # No closer balances this opener: it is text, and the scan resumes just
+            # after it (CP-48 row 4).
+            text_piece(text[position : start + len(open_)])
+            position = start + len(open_)
+        else:
+            text_piece(text[position:start])
+            parts.append(_placeholder_parts(text[start + len(open_) : end], open_, close_, nest))
+            position = end + len(close_)
+        start = text.find(open_, position)
+    text_piece(text[position:])
+    return parts
+
+
+def _placeholder_end(text: str, index: int, close_: str, nest: str) -> int:
+    """Where the placeholder whose inside starts at `index` ends: the first closer at
+    depth zero, each `nest` passed raising the depth and each closer above zero lowering
+    it (CP-48 row 3, `nextValidEndPrefix`). -1 where none does."""
+    depth = 0
+    while index < len(text):
+        if text.startswith(close_, index):
+            if depth == 0:
+                return index
+            depth -= 1
+            index += len(close_)
+        elif text.startswith(nest, index):
+            depth += 1
+            index += len(nest)
+        else:
+            index += 1
+    return -1
+
+
+def _resolved_parts(
+    parts: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, str | None]]
+) -> tuple[str | None, str | None]:
+    """Every piece of `parts` resolved and joined, or the first failure's reason."""
+    resolved: list[str] = []
+    for part in parts:
+        if isinstance(part, str):
+            resolved.append(part)
+            continue
+        value, reason = _resolved_placeholder(part, separator, lookup)
+        if value is None:
+            return None, reason
+        resolved.append(value)
+    return "".join(resolved), None
+
+
+def _resolved_placeholder(
+    inside: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, str | None]]
+) -> tuple[str | None, str | None]:
+    """One placeholder: its key's parts resolved and looked up, and where `lookup` cannot
+    answer, its default's parts resolved through the same lookup (CP-48 row 7). The
+    separator splits the first piece of TEXT holding it, never a nested placeholder's own
+    (row 6) — so `${k:a:b}` defaults to `a:b`."""
+    key_parts: _Parts = []
+    default_parts: _Parts | None = None
+    for index, part in enumerate(inside):
+        if isinstance(part, str) and separator and separator in part:
+            key_text, default_text = part.split(separator, 1)
+            key_parts.append(key_text)
+            default_parts = [default_text, *inside[index + 1 :]]
+            break
+        key_parts.append(part)
+    key, reason = _resolved_parts(key_parts, separator, lookup)
+    if key is None:
+        return None, reason
+    value, reason = lookup(key)
+    if value is not None:
+        return value, None
+    if default_parts is None:
+        return None, reason
+    return _resolved_parts(default_parts, separator, lookup)
+
+
+def _layered_lookup(
+    merged: dict[str, tuple[str, str]],
+    normalized_index: dict[str, str],
+    placeholders: dict[str, str],
+    key_matching: str,
+    stack: list[str],
+) -> Callable[[str], tuple[str | None, str | None]]:
+    """`resolve_config`'s own lookup for `substitute`: a `${ref_key}` resolved
+    against the layered map `_layer` built for one profile, recursively.
+    `stack` carries the chain of merged-map keys currently being resolved,
+    INCLUDING the top-level key being answered for — a self-reference is
+    caught the same way a longer cycle is, on the very first lookup."""
+
+    def lookup(ref_key: str) -> tuple[str | None, str | None]:
+        return _resolve_reference(
             ref_key, merged, normalized_index, placeholders, key_matching, stack
         )
-        if resolved is None:
-            if default is not None:
-                # A literal default (D02 §2i): taken as written, never
-                # itself re-substituted — `${missing:fallback}` resolves to
-                # exactly `fallback`.
-                parts.append(default)
-            else:
-                return None, reason
-        else:
-            parts.append(resolved)
-    return "".join(parts), None
+
+    return lookup
 
 
 def _resolve_reference(
@@ -449,8 +559,10 @@ def _resolve_reference(
     if target in stack:
         return None, "placeholder_cycle"
     raw_value, _source = merged[target]
-    return _substitute(
-        raw_value, merged, normalized_index, placeholders, key_matching, stack + [target]
+    return substitute(
+        raw_value,
+        placeholders,
+        _layered_lookup(merged, normalized_index, placeholders, key_matching, stack + [target]),
     )
 
 

@@ -255,7 +255,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # `conditional/` — `NotificationSender`, its two implementations, `NotifyController`,
     # `AuditClient`, `HttpAuditClient`, `PricingPolicy`, `StandardPricing`, `PromoPricing`,
     # `ConditionalClientsConfig` and `PricingController`.
-    assert metadata["coverage"]["documents"] == 169
+    # 170 since `scheduling/OrderSweeper` (spec 2026-10-23-configured-schedules §3e): one class
+    # file.
+    assert metadata["coverage"]["documents"] == 170
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

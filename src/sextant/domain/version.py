@@ -113,6 +113,9 @@ SEXTANT_VERSION = version("sextant")
 #             older vintage holds decided verdicts this build says the repository cannot
 #             give — bumped so it is refused and re-analysed, never read beside new ones
 #             (user ruling, 2026-10-23, §6).
+#     7       `resolved_schedules`: a scheduled job's placeholder expression per
+#             environment (spec 2026-10-23-configured-schedules), a new derived table
+#             beside `scheduled_work`, which keeps one row per job.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -126,5 +129,5 @@ SEXTANT_VERSION = version("sextant")
 #     2       `dependency` gains `conditions`; `conditions` is the declared
 #             `{kind, expression}` set (spec 2026-10-23, rulings 2 and 3).
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 6
+GRAPH_SCHEMA_VERSION = 7
 BOUNDARY_VOCABULARY_VERSION = 2

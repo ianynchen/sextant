@@ -218,6 +218,44 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     catalog_id TEXT
 );
 
+-- A scheduled job's placeholder expression, per environment (spec
+-- 2026-10-23-configured-schedules §3b, option A): BESIDE `scheduled_work`, which
+-- keeps one row per job and its `unresolved`, because the job's schedule is still
+-- the deployment's. These rows are what the repository's own configuration says it
+-- is, environment by environment. One row per (`scheduled_work` row whose
+-- `expression` holds the config model's placeholder opener, environment of
+-- `resolved_config`); a job with no placeholder has none, and with no resolved
+-- environment the table is empty.
+--
+-- A derived TABLE rather than a view because the rule it applies — delimiters,
+-- `:default`, relaxed key matching — is `resolve/config.py::substitute`, in Python,
+-- and a SQL copy of it would be a second placeholder rule. Replaced whole per resolve
+-- through reset_resolved_schedules.sql + insert_resolved_schedules.sql, both run by
+-- its one writing pass (`resolve/resolved_schedules.py`), the `return_flows` pairing.
+CREATE TABLE IF NOT EXISTS resolved_schedules (
+    -- `scheduled_work.handler`, `.trigger` and `.expression`, verbatim, so a reader joins
+    -- straight back. `expression` is part of the job's identity, not decoration: a method
+    -- carrying two schedules of one kind (`@Schedules`) is two `scheduled_work` rows that
+    -- share the other two, and only the expression says which job a value belongs to.
+    handler           TEXT,
+    trigger           TEXT,
+    expression        TEXT,
+    -- One of `resolved_config`'s environments.
+    environment       TEXT,
+    -- Every key the substitution asked this environment's configuration for, in the
+    -- order it asked, as a JSON array (the `participants.aliases` convention). What the
+    -- redactor's KEY rule is applied to at every exit: a schedule is the value of the
+    -- key that configures it, so a key naming a secret masks the value whole
+    -- (`resolve/resolved_schedules.py::redact_schedule_value`).
+    keys              TEXT,
+    -- The expression with every placeholder substituted from that environment's
+    -- resolved configuration, or the annotation's own `:default` where none sets the
+    -- key. NULL exactly when `unresolved_reason` is set.
+    value             TEXT,
+    -- D01's closed set (`missing_key`, `placeholder_cycle`, ...), from the lookup.
+    unresolved_reason TEXT
+);
+
 -- The second non-wire table (2O design §4b): which exceptions a module answers
 -- and how. Its own table for the same reason `scheduled_work` is — an error
 -- handler is not a boundary anyone can address, it is what happens INSIDE one

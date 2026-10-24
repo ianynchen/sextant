@@ -10,8 +10,9 @@ allows it, and then the result says `producer_changed` — a fixed dispatch bug 
 catalog changes rows with no code change, and a diff that mixed the two could not say which
 it was reporting (decision 3, §7).
 
-**Both sides are read through the same exit (§3d).** A bundle's `path`/`peer` and
-`boundary-property` value were masked at export; a workspace's are verbatim. Each side comes
+**Both sides are read through the same exit (§3d).** A bundle's `path`/`peer`,
+`boundary-property` value and schedule `expression` were masked at export; a workspace's are
+verbatim. Each side comes
 with its OWN redactor — a workspace's is its module's `.sextant.yml` widening the built-ins,
 exactly as `export` would mask it; a bundle's is the built-ins, its own rules having been
 applied already — and its rule set is what it is compared under: a workspace records no
@@ -317,8 +318,9 @@ def _masked(
     kind: Kind, row: dict[str, object], redactor: Redactor, userinfo_in_peers: bool
 ) -> dict[str, object]:
     """The row as the exporter would have shipped it, cut to identity, attributes and
-    evidence: `path`/`peer` through `redact_text`, a property's value through
-    `redact_value`, each condition's `expression` through `redact_json` — the calls
+    evidence: `path`/`peer` and a schedule's `expression` through `redact_text`, a
+    property's value through `redact_value`, each condition's `expression` through
+    `redact_json` — the calls
     `_EXPORT_QUERIES` makes on the same columns. A condition entry is replaced, never
     edited: the source shares one entry between the kinds that carry it.
 
@@ -343,6 +345,8 @@ def _masked(
     if kind.name == "boundary-property":
         key = str(row["key"])
         projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))
+    if kind.name == "schedule":
+        projected["expression"] = _each(projected["expression"], redactor.redact_text)
     if kind.name == "data-contract":
         projected["fields"] = _by_wire_name(projected["fields"])
     if kind.name in ("endpoint", "dependency"):

@@ -19,6 +19,7 @@ from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.reachability import record_reachability
 from sextant.application.resolve.request_requirements import record_request_requirements
+from sextant.application.resolve.resolved_schedules import record_resolved_schedules
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
@@ -68,6 +69,10 @@ class ResolveReport:
     # all. Empty lists for a module that schedules nothing and handles nothing,
     # which is the same answer their pre-declared tables give.
     scheduled_work: list[dict[str, object]] = field(default_factory=list)
+    # What the REPOSITORY configures for a placeholder schedule, per environment (spec
+    # 2026-10-23-configured-schedules §3b), beside `scheduled_work` and never inside it: the
+    # job keeps one row and stays `unresolved`, and the document states these values under it.
+    resolved_schedules: list[dict[str, object]] = field(default_factory=list)
     error_handlers: list[dict[str, object]] = field(default_factory=list)
     # The conditions every BEAN carries, one row per (bean, route, condition, environment)
     # (spec 2026-10-22-conditional-beans §2): what every derived row finds through its own
@@ -286,6 +291,12 @@ def resolve(
     # both far above.
     with _timed("record_bean_conditions"):
         record_bean_conditions(workspace, declared)
+    # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment.
+    # It needs `resolve_config` (the values) and `derive_endpoints` (the scheduled-work
+    # engine runs as one of its styles), both above; nothing below reads what it writes,
+    # and it resets its own table, being its only writer.
+    with _timed("record_resolved_schedules"):
+        record_resolved_schedules(workspace, declared)
     # Spec 2026-09-22 §1f, and BELOW `apply_protocol_hints` for the reason
     # `record_request_requirements` above gives in full: a qualifying attribute names its
     # row by the row's identity columns, `protocol` among them, and that pass reclassifies
@@ -367,6 +378,7 @@ def resolve(
         coverage=coverage_of(workspace),
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),
+        resolved_schedules=workspace.query("resolved_schedules"),
         error_handlers=workspace.query("error_handlers"),
         bean_conditions=workspace.query("bean_conditions"),
         bean_presence=workspace.query("bean_presence"),

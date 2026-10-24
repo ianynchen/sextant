@@ -234,7 +234,10 @@ turned out to be nothing to build, found by reading what was already written dow
   verbatim, and COVERAGE §5.12 says why: the value comes from configuration a deployment
   overwrites, so substituting it would be a guess (`GUIDELINES` §8.2). That is the correct
   output. The matrix counts it as `limited` because the generator counts any `◐ shipped`
-  row; a boundary that is correct by design is not a blocker.
+  row; a boundary that is correct by design is not a blocker. **Closed 2026-10-23** (spec
+  2026-10-23-configured-schedules): the row stays `unresolved`, and what the repository's own
+  configuration sets for the placeholder is read per environment beside it
+  (`resolved_schedules`) — a configured value, labelled as such, not a substitution.
 
 **Retired as not-gaps, 2026-09-12 — measured, not fixed.**
 

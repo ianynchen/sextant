@@ -155,6 +155,8 @@ _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
+_RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
+_CONFIG = "sextant/application/resolve/config.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _PATH_PREFIX = "sextant/application/resolve/path_prefix.py"
 _SPRING_BOOT_SERVER_MODEL = "sextant/catalogs/server-models/spring-boot.yml"
@@ -1116,8 +1118,8 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path="sextant/egress/render/document.py",
-                find='        conditions = _condition_entries(row["handler"], beans)\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
-                replace='        conditions = []  # guard disabled by scripts/guard_check.py\n        if conditions:\n            header = DetailEntry(_code(bare_descriptor(str(row["handler"]))), None, None)\n',
+                find='        entries = _condition_entries(row["handler"], beans)\n',
+                replace="        entries = []  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3087,6 +3089,175 @@ GUARDS: dict[str, Guard] = {
                 path=_SCHEDULED_WORK,
                 find="            if expression == disabled.get(attribute):",
                 replace="            if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-PLACEHOLDER-expression-is-read-per-environment": Guard(
+        what="a scheduled job whose expression holds a placeholder gets one "
+        "`resolved_schedules` row per environment of `resolved_config`, its value read "
+        "from that environment's configuration (spec 2026-10-23-configured-schedules §3b)",
+        why="without it `scheduled_work` is the only answer, `unresolved` with the "
+        "expression verbatim, and a job whose cron the module's own files set in every "
+        "environment reads as a schedule nothing in the repository says — COVERAGE §5.12's "
+        "one limited `@Scheduled` row",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find='    if rows:\n        workspace.derive("resolved_schedules_insert", rows=rows)\n',
+                replace="    # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key": Guard(
+        what="`${key:default}` in a scheduled expression resolves to the default in an "
+        "environment whose configuration sets no `key`, through the config model's own "
+        "`default_separator` — the one placeholder rule `resolve_config` applies",
+        why="read without the separator, the default is part of the key, so the ordinary "
+        '`@Scheduled(cron = "${orders.sweep.cron:0 0 * * * *}")` — a schedule the '
+        "annotation itself fixes wherever configuration is silent — reads `missing_key` in "
+        "every environment",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find='                str(job["expression"]), placeholders, _recording(lookup, asked)\n',
+                replace='                str(job["expression"]), {**placeholders, "default_separator": ""}, '
+                "_recording(lookup, asked)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "schedules.the-DOCUMENT-states-a-schedules-configured-values": Guard(
+        what="the document states, under a placeholder job's row, what this repository "
+        "configures for it per environment, from `resolved_schedules` (spec "
+        "2026-10-23-configured-schedules §3c)",
+        why="the table is the end of the feature: without the line, `resolved_schedules` is "
+        "written and exported and the document a person opens still shows only "
+        "`${orders.sweep.cron}` `unresolved` — the answer reaches every exit but the one read",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="_scheduled_work_sections(report.scheduled_work, report.resolved_schedules, "
+                "beans, redactor)",
+                replace="_scheduled_work_sections(report.scheduled_work, [], beans, redactor)",
+            ),
+        ),
+    ),
+    "schedules.a-configured-VALUE-is-masked-on-export": Guard(
+        what="`resolved_schedules.value` leaves the bundle through `redact_schedule_value`, "
+        "joined from the map staged on (keys, value)",
+        why="the column is configuration read into the bundle; unjoined, a value the module "
+        "configured with a credential in it ships in the clear while the workspace's every "
+        "other exit masks it — the one-exit-forgot defect `field_writes.value` shipped",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="               s.environment, s.keys, coalesce(v.masked, s.value) AS value,\n",
+                replace="               s.environment, s.keys, s.value AS value,  -- guard disabled\n",
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-on-export": Guard(
+        what="`scheduled_work.expression` and `resolved_schedules.expression` leave the "
+        "bundle through `redact_text`, staged into the address map",
+        why="the expression is the annotation literal `annotations.args` masks on the way "
+        "out; unstaged, the same literal ships in the clear in two files beside the one "
+        "that hides it",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find='            "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "\n'
+                '            "UNION SELECT DISTINCT expression FROM resolved_schedules "\n'
+                '            "WHERE expression IS NOT NULL"\n',
+                replace='            ""  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-in-the-document": Guard(
+        what="the document prints a schedule's expression through the render redactor, in "
+        "the scheduled-work table and in a placeholder job's detail header",
+        why="the bundle masks the expression in three files; a document printing it raw "
+        "hands a reader the literal the bundle withheld",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='            _code(redactor.redact_text(str(row["expression"]))),\n',
+                replace='            _code(str(row["expression"])),  # guard disabled\n',
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='                redactor.redact_text(str(row["expression"]))\n            )\n',
+                replace='                str(row["expression"])  # guard disabled\n            )\n',
+            ),
+        ),
+    ),
+    "schedules.an-EXPRESSION-is-masked-in-the-DIFF": Guard(
+        what="the boundary diff passes a schedule's `expression` through `redact_text`, the "
+        "call the bundle export makes on `scheduled_work.expression`",
+        why="the bundle masks the expression; a diff reading a workspace verbatim reports "
+        "every masked schedule as changed between a bundle and the workspace it came from, "
+        "and prints the literal the bundle withheld",
+        edits=(
+            Edit(
+                path="sextant/application/boundary/diff.py",
+                find='    if kind.name == "schedule":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "placeholders.a-DEFAULT-holding-a-placeholder-is-resolved": Guard(
+        what="a placeholder's default is resolved through the same lookup as its key, so "
+        "`${a:${b}}` is `b`'s value where `a` is unset (CP-48 row 7)",
+        why="Spring's `NestedPlaceholderPart.resolve` resolves the default's parts; taken as "
+        'text, `@Scheduled(cron = "${jobs.sweep.cron:${jobs.default.cron}}")` and a '
+        "configuration value written the same way read as a literal `${…}` in every "
+        "environment that sets only the shared default",
+        edits=(
+            Edit(
+                path=_CONFIG,
+                find="    return _resolved_parts(default_parts, separator, lookup)\n",
+                replace='    return "".join(p for p in default_parts if isinstance(p, str)), None'
+                "  # guard disabled\n",
+            ),
+        ),
+    ),
+    "placeholders.a-placeholder-ENDS-at-the-closer-that-balances-it": Guard(
+        what="a placeholder ends at the closer at depth zero, each `nest` opener passed "
+        "raising the depth (CP-48 row 3, `nextValidEndPrefix`)",
+        why="ended at the first closer, `${missing:${a}}` reads the inside `missing:${a` and "
+        "keeps the trailing `}` — the literal `${a}` the branch shipped before its final "
+        "review, where Spring substitutes `a`",
+        edits=(
+            Edit(
+                path=_CONFIG,
+                find="            if depth == 0:\n                return index\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                "                return index\n",
+            ),
+        ),
+    ),
+    "spring-web.the-placeholder-NEST-opener-is-the-frameworks-own": Guard(
+        what='Spring\'s config model declares `placeholders.nest: "{"`, the opener '
+        "`PlaceholderParser` counts for depth (CP-48 row 2)",
+        why="without it the depth is counted by the whole opener `${`, and a bare brace inside "
+        "a placeholder (`${k{x}:d}`) ends it early — a key and default Spring never reads",
+        edits=(
+            Edit(
+                path="sextant/catalogs/spring-web.yml",
+                find='    nest: "{"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "schedules.a-value-whose-KEY-names-a-secret-is-masked-whole": Guard(
+        what="a configured schedule masks WHOLE where a key its expression was read through "
+        "names a secret, at the bundle and the document alike (`redact_schedule_value`)",
+        why='`@Scheduled(cron = "${app.token.cleanup.cron}")`: `resolved_config` masks the '
+        "key's value by the key rule, and without the test the schedule that IS that value "
+        "ships in the clear beside it — one exit undoing the mask the other applied",
+        edits=(
+            Edit(
+                path=_RESOLVED_SCHEDULES,
+                find="    if any(redactor.masks_key(key) for key in keys):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

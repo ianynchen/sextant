@@ -883,6 +883,123 @@ decoded leaf strings and is not affected.
 line through `redact_json` rather than `redact_text`), not by a wider character class: `'` and
 `,` are legal in userinfo, so no class can end the authority there.
 
+### OI-179 — `resolved_peers`' SQL substitution cannot read a `:default`
+**Minor · logged 2026-10-23 (spec `2026-10-23-configured-schedules` §4) · `src/sextant/storage/duckdb/workspace.py` `_NAMED_QUERIES["resolved_peers"]`**
+
+The `resolved_peers` named query substitutes a `${…}` in an outbound row's `path` or `peer`
+in SQL: one placeholder, `regexp_extract('\$\{([^}]*)\}')`, the whole inside of the braces as
+the key, `${`/`}` hard-coded. So `${billing.url:http://localhost:8080}` looks up the key
+`billing.url:http://localhost:8080`, which no configuration declares, and reads `missing_key`
+in an environment where Spring would use the default. It is also a second placeholder rule
+beside `resolve/config.py::substitute`, which the scheduled-work pass now uses.
+
+**What happens today:** nothing reads the query — no `workspace.query("resolved_peers")`
+outside its definition, and it is not exported — so no output is wrong yet.
+**Real triggering input:** an outbound client whose address placeholder carries a default,
+`@Value("${billing.url:http://localhost:8080}")`, the ordinary Spring form.
+**Closes** when something reads the query, by moving the substitution onto `substitute` (in
+Python, over one environment's `resolved_config`, as `resolve/resolved_schedules.py` does).
+
+### OI-180 — `config_join._channel_name` is a second placeholder walk beside `substitute`
+**Minor · logged 2026-10-23 (controller review of configured schedules, task 3) · `src/sextant/application/resolve/engines/config_join.py::_channel_name`**
+
+`_channel_name` walks a channel name's `${…}` itself: it reads the config model's delimiters,
+splits the default off and drops it, and asks its own per-environment map. The project's one
+placeholder rule is `resolve/config.py::substitute` (spec 2026-10-23-configured-schedules
+§3a). The walk differs from it on purpose in one place — a spelled default is not applied, so
+such a name stays `unresolved` — and on the rest (nesting, an unclosed opener) by having been
+written separately, so the two can drift.
+
+**What happens today:** not measured — whether any fixture or corpus channel name carries a
+default or a nested placeholder was not checked.
+**Real triggering input:** a Spring Integration channel named through configuration,
+`@ServiceActivator(inputChannel = "${orders.channel:orders}")`.
+**Closes** when `_channel_name` calls `substitute` with its own lookup, its "no default"
+choice stated as that lookup's (or ruled away), so one walk serves every reader.
+
+### OI-181 — a relaxed-key collision reads a different spelling in `resolved_schedules` than in `resolve_config`
+**Minor · logged 2026-10-23 (configured schedules, task 2) · `src/sextant/application/resolve/resolved_schedules.py::_environment_lookup`**
+
+Where `key_matching: relaxed` folds two configured spellings onto one key —
+`orders.sweepCron` and `orders.sweep-cron`, both normalizing to `orders.sweepcron` (the dot
+stays a separator) — `_environment_lookup` takes the first row in the `resolved_config` query's
+order, the alphabetically first spelling, while `resolve/config.py::_normalized_index` takes
+the first in merged-layering order. Both are deterministic; they can name different values for
+the same reference.
+
+**What happens today:** not measured, in the fixtures or the corpus. `resolved_config` keeps
+no layering order, so the lookup cannot match the other rule.
+**Real triggering input:** one environment's configuration spelling a key two relaxed-equal
+ways, e.g. `orders.sweep-cron` in `application.yml` and `orders.sweepCron` in a profile file.
+**Closes** when `resolved_config` carries the order (or the winning spelling) the layering
+chose, and the lookup reads it.
+
+### OI-182 — only the first declared config model is read for a scheduled expression, and `resolved_config` has no model column
+**Minor · logged 2026-10-23 (configured schedules, task 2) · `src/sextant/application/resolve/resolved_schedules.py::record_resolved_schedules`**
+
+`record_resolved_schedules` reads the delimiters, `default_separator` and `key_matching` of
+the FIRST catalog that declares a `config_model`. `resolve_config` resolves every declaring
+catalog into the one `resolved_config`, which carries no model column, so a second family's
+rows cannot be told apart and would be looked up under the first family's rule.
+
+**What happens today:** only `spring-web.yml` declares a `config_model` (D02 §2i: one per
+framework family), so the first is the only one and nothing is wrong yet.
+**Real triggering input:** a second framework family's config model shipping (Quarkus,
+Micronaut) in a module that also uses Spring's.
+**Closes** when `resolved_config` names the model each row came from and the pass reads each
+job's expression under its own catalog's model.
+
+### OI-183 — the boundary vocabulary's `schedule` identity collides under `@Schedules`
+**Minor · logged 2026-10-23 (controller review of configured schedules) · `src/sextant/application/boundary/vocabulary.py` (`Kind(name="schedule")`)**
+
+The `schedule` kind's identity is `(handler, trigger)`. Under `@Schedules`, one method carries
+two jobs of the same trigger — two crons — and `scheduled_work` holds both rows, which differ
+only in `expression`. The diff groups them into ONE entry whose `expression` is
+`{"several": [...]}`, so a change to one of the two crons reads as a change to a single
+schedule with several attributes rather than as the job it is. `resolved_schedules` already
+tells them apart by `expression`.
+
+**What happens today:** not measured on the field corpora; the hand-built `@Schedules` pin in
+`tests/application/test_resolved_schedules.py` has such a method.
+**Real triggering input:** `@Scheduled(cron = "0 0 1 * * *") @Scheduled(cron = "0 0 13 * * *")`
+on one method, an ordinary way to run a job twice a day.
+**Closes** by adding `expression` to the kind's identity — a change to what a diff entry
+IS, so a `BOUNDARY_VOCABULARY_VERSION` 2 → 3 decision for the user, not made here.
+
+### OI-184 — `substitute` does not model two `PlaceholderParser` behaviours CP-48 read: the whole-inside lookup and the escape character
+**Minor · logged 2026-10-23 (final review of configured schedules, CP-48 rows 9-10) · `src/sextant/application/resolve/config.py::substitute`**
+
+CP-48 read Spring's placeholder parser to make `substitute` match it on nesting and defaults.
+Two more of its behaviours are not modelled. Row 9: for `${a:b}` with no placeholder inside,
+`SimplePlaceholderPart` first looks up a property named `a:b` — the whole inside — and only
+then `a`. Row 10: the parser skips an opener or separator preceded by its escape character;
+which character, if any, Boot's binder and the bean factory's embedded value resolver pass is
+a constructor argument CP-48 did not read.
+
+**What happens today:** not measured on the fixtures or the corpus. A configuration declaring
+a key spelled with the separator in it reads the key before the separator instead; an escaped
+`\${…}` is substituted where Spring leaves it as text.
+**Real triggering input:** row 9, a key spelled with a colon (a quoted YAML key `"a:b"`); row
+10, a value meant to carry a literal `${`, written `\${literal}`.
+**Closes** when a probe reads the escape character the two callers construct the parser with,
+and `substitute` honours it and the whole-inside lookup, each pinned.
+
+### OI-185 — a `${…}` naming the activation key resolves inside `resolve_config` but reads `missing_key` in `resolved_schedules`
+**Minor · logged 2026-10-23 (final review of configured schedules) · `src/sextant/application/resolve/config.py::_resolve_model`, `src/sextant/application/resolve/resolved_schedules.py::_environment_lookup`**
+
+`resolve_config` keeps the activation key (the model's `from_document_key`,
+`spring.config.activate.on-profile`) in its layered map, so a configuration value
+referencing it resolves, but writes no `resolved_config` row for it (M-c, fix round 1: a
+directive, not configuration a module reads). `resolved_schedules` looks keys up in
+`resolved_config`'s rows, so a scheduled expression referencing the same key reads
+`missing_key` — the one placeholder rule answering one reference two ways, by its lookup.
+
+**What happens today:** no real input known; not measured on the fixtures or the corpus.
+**Real triggering input:** `@Scheduled(cron = "${spring.config.activate.on-profile}")`, or a
+cron whose default names the key — a profile name is not a schedule, so no ordinary job does.
+**Closes** when the two lookups answer the activation key alike: `resolve_config` writes its
+row, or the schedules lookup is handed the layered map's answer for it.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

@@ -27,3 +27,7 @@ orders:
   # NotificationSender's two implementations split on this: Kafka where it is `kafka` (here),
   # Log where it is `log` or absent (default). Set in prod only.
   notify: kafka
+  # OrderSweeper.sweep's cron (spec 2026-10-23-configured-schedules §3e), set here only:
+  # `default` reads the annotation's own default instead. `orders.purge.rate` is set nowhere.
+  sweep:
+    cron: "0 */5 * * * *"
