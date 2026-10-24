@@ -1096,6 +1096,32 @@ through the Maven classpath.
 out of the set the dependency gate and the connector count read. That is a decision about every
 catalog's gate, so it needs its own evidence, pinned on a fallback-path fixture.
 
+### OI-191 — `injected_client`'s fence was tripped by protoc's own nested classes · **CLOSED 2026-10-24**
+**Critical by effect · logged and closed 2026-10-24 (Task 4 field measurement of spec `2026-10-24-quarkus-messaging-and-grpc`) · `src/sextant/application/resolve/engines/injected_client.py::_fenced_outer_classes`**
+
+The fence withholds an injected stub's outbound row when the module implements the service,
+judged by any `extends` edge into the stub's outer class. protoc-gen-grpc-java emits
+`<Service>FileDescriptorSupplier` and `<Service>MethodDescriptorSupplier`, each extending
+`<Service>BaseDescriptorSupplier`, inside every full-protobuf `<Service>Grpc`. Those edges fenced
+the outer class by themselves.
+- On `grpc-plain-text-quickstart`, `examples/GreeterGrpc#` was in the fenced set, and only those
+  two edges reached it.
+- On a copy of `fixtures/orders-quarkus`, giving its stand-in stub that pair made the
+  `acme.pricing.Pricing` client row vanish, and no question was filed.
+
+So every module that compiles its own `.proto` lost every resolved gRPC client row, net.devh and
+Quarkus alike. A published stubs jar gave an unresolved row, so on real code no client row was
+ever resolved.
+
+**Closed** the same day. An edge whose subclass is nested in the same outer class as its target
+fences nothing, and a module class extending `<Service>ImplBase` from outside it still fences.
+Pinned by `test_the_generated_classs_own_nested_extends_edges_do_not_fence` and
+`test_a_genuine_implementer_beside_the_generated_suppliers_is_still_fenced`
+(`tests/application/test_injected_client.py`), and by
+`test_a_quarkus_client_beside_protocs_own_generated_nesting_derives_its_row`
+(`tests/application/test_grpc_quarkus.py`). Guard:
+`injected_client.a-GENERATED-class-own-nesting-does-not-fence`.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

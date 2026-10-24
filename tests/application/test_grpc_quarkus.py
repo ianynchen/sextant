@@ -239,6 +239,28 @@ def test_a_quarkus_client_stub_field_derives_one_service_level_outbound_row(
     assert row["resolution"] == "resolved"
 
 
+@pytest.mark.pins("injected_client.a-GENERATED-class-own-nesting-does-not-fence")
+def test_a_quarkus_client_beside_protocs_own_generated_nesting_derives_its_row(tmp_path: Path):
+    """A Quarkus module compiles its `.proto` itself (`quarkus-grpc`'s code generation),
+    so the stub's outer class always carries protoc's `HelloFileDescriptorSupplier
+    extends HelloBaseDescriptorSupplier` — measured on both `quarkus-quickstarts` gRPC
+    modules. That edge is inside the generated class and fences nothing."""
+    base = OUTER.removesuffix("#") + "$HelloBaseDescriptorSupplier#"
+    nesting = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + OUTER.removesuffix("#") + "$HelloFileDescriptorSupplier#",
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + base,
+        )
+    ]
+    rows = _client_rows(
+        tmp_path, [*_injected_field(QUARKUS_CLIENT), _service_name_site(), *nesting]
+    )
+
+    assert [(row["path"], row["resolution"]) for row in rows] == [(SERVICE_NAME, "resolved")]
+
+
 def test_two_quarkus_client_fields_of_one_stub_type_derive_one_row(tmp_path: Path):
     """One named, one value omitted, two injection points of the same stub
     type: one service-level fact, not two (`test_injected_client.py`'s own

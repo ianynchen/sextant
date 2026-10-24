@@ -305,6 +305,65 @@ def test_a_different_services_implementer_does_not_fence(tmp_path: Path):
     assert [row["path"] for row in rows] == [SERVICE_NAME]
 
 
+def _generated_descriptor_suppliers(outer: str = OUTER) -> list[SymbolFact]:
+    """What protoc-gen-grpc-java ALWAYS emits inside `<Service>Grpc` beside the stubs
+    when the messages are full protobuf: a `<Service>BaseDescriptorSupplier` and two
+    classes extending it, `<Service>FileDescriptorSupplier` and
+    `<Service>MethodDescriptorSupplier` — measured on `quarkus-quickstarts`
+    (`grpc-plain-text-quickstart`'s `examples.GreeterGrpc`, `javap`). Two `extends`
+    edges whose both ends are nested in the stub's own outer class."""
+    base = outer.removesuffix("#") + "$BillingServiceBaseDescriptorSupplier#"
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + base,
+            construct_kind=ConstructKind.CLASS,
+        ),
+        *(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE
+                + outer.removesuffix("#")
+                + f"$BillingService{kind}DescriptorSupplier#",
+                construct_kind=ConstructKind.CLASS,
+                superclass=_MODULE + base,
+            )
+            for kind in ("File", "Method")
+        ),
+    ]
+
+
+@pytest.mark.pins("injected_client.a-GENERATED-class-own-nesting-does-not-fence")
+def test_the_generated_classs_own_nested_extends_edges_do_not_fence(tmp_path: Path):
+    """A client-only module compiling its own `.proto`: the generated outer class
+    carries `FileDescriptorSupplier extends BaseDescriptorSupplier`, an edge INSIDE
+    that class, not this module implementing the service. Fenced on it, every
+    resolved client row of such a module vanished with no question — measured on a
+    copy of `fixtures/orders-quarkus` whose stand-in stub was given the pair."""
+    facts = [*_injected_field(), _service_name_site(), *_generated_descriptor_suppliers()]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(SERVICE_NAME, "resolved")]
+
+
+def test_a_genuine_implementer_beside_the_generated_suppliers_is_still_fenced(tmp_path: Path):
+    """The bound on the rule above: a module class OUTSIDE the generated outer class
+    extending its `ImplBase` still fences, with the generated nesting present."""
+    facts = [
+        *_injected_field(),
+        _service_name_site(),
+        *_generated_descriptor_suppliers(),
+        *_implementor_facts(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 # --- (c) unreadable identity: unresolved fallback and a filed question -----
 
 

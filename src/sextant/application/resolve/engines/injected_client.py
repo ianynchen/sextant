@@ -34,7 +34,11 @@ matches the injected stub type's own outer class
 `…OrderServiceGrpc#`)? The extends RELATIONSHIP is a fact of the module's own
 class even when its target lives in an unscanned jar — what the jar withholds
 is the identity, not the edge — so this test survives the published-stubs-jar
-case the identity-based version could not.
+case the identity-based version could not. An edge whose subclass is nested in
+that SAME outer class is not one: it is the generated class's own structure
+(protoc's `<Service>FileDescriptorSupplier extends
+<Service>BaseDescriptorSupplier`, in every full-protobuf `<Service>Grpc`), and
+it does not fence (`_fenced_outer_classes`).
 
 **An injection point is a FIELD or a PARAMETER, one rule.** The annotation is
 joined to the type its own injection point declares: a field's, through the
@@ -236,12 +240,23 @@ def _fenced_outer_classes(workspace: Workspace) -> set[str]:
     (capability 9.13's `superclass`), regardless of whether that target's
     own facts reached this workspace — the module docstring's own reason:
     the fence must still fire against a published-stubs jar, where the edge
-    is this class's own fact but the target's identity is unreadable."""
+    is this class's own fact but the target's identity is unreadable.
+
+    An edge whose BOTH ends are nested in one outer class fences nothing: it
+    is that class's own structure, not this module implementing it. protoc
+    emits two such edges in every full-protobuf `<Service>Grpc`
+    (`<Service>FileDescriptorSupplier` and `<Service>MethodDescriptorSupplier`
+    each extend `<Service>BaseDescriptorSupplier`), and counting them fenced
+    every stub a module compiles itself, so its client rows vanished with no
+    question."""
     hosts = nest_hosts(workspace)
-    return {
-        outer_of(bare_descriptor(str(row["superclass"])), hosts)
-        for row in workspace.query("superclasses")
-    }
+    fenced: set[str] = set()
+    for row in workspace.query("superclasses"):
+        target = outer_of(bare_descriptor(str(row["superclass"])), hosts)
+        if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:
+            continue
+        fenced.add(target)
+    return fenced
 
 
 def _row(catalog: Catalog, path: str, resolution: str) -> dict[str, Any]:

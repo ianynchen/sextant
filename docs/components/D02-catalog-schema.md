@@ -3479,6 +3479,11 @@ module's own classes carry an `extends` edge whose OUTER class matches the injec
 type's own outer class? The extends RELATIONSHIP is a fact of the module's own class even
 when its target lives in an unscanned jar — what the jar withholds is the identity, not the
 edge — so this test survives the published-stubs-jar case an identity-based fence could not.
+An edge whose subclass is nested in that SAME outer class fences nothing: it is the generated
+class's own structure, not the module implementing it. protoc emits two in every
+full-protobuf `<Service>Grpc` (`<Service>FileDescriptorSupplier` and
+`<Service>MethodDescriptorSupplier` extend `<Service>BaseDescriptorSupplier`). Counted, they
+fenced every stub a module compiles itself, and its client rows vanished with no question.
 
 `direction` is always the catalog's own `outbound`; `handler`/`caller`/`peer` are all
 NULL — the injection names no calling method of its own (a field declaration, not a call

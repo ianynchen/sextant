@@ -3744,6 +3744,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "injected_client.a-GENERATED-class-own-nesting-does-not-fence": Guard(
+        what="an `extends` edge whose both ends are nested in one outer class does not fence "
+        "that outer class's injected stubs",
+        why="protoc emits `<Service>FileDescriptorSupplier extends <Service>BaseDescriptorSupplier` "
+        "(and the method supplier likewise) inside every full-protobuf `<Service>Grpc` — "
+        "measured on both quarkus-quickstarts gRPC modules. Counted as an implementation, "
+        "every stub a module compiles itself is fenced, so a client-only module's resolved "
+        "gRPC client rows vanish with no question, net.devh and Quarkus alike",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='        if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:\n'
+                "            continue\n",
+                replace="",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

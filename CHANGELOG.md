@@ -30,6 +30,18 @@ here would restate those documents rather than add anything.
   `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of 15 messaging modules.
   COVERAGE §2c's Quarkus Kafka cell reads ✅.
 
+### Fixed
+
+- **A gRPC client stub a module compiles itself is no longer fenced away** (Task 4 of spec
+  2026-10-24-quarkus-messaging-and-grpc, measured on `quarkus-quickstarts`). `injected_client`
+  withholds the outbound row for a service the module implements, judged by the module's
+  `extends` edges into the stub's generated outer class. protoc emits two such edges inside
+  every full-protobuf `<Service>Grpc` (`<Service>FileDescriptorSupplier` and
+  `<Service>MethodDescriptorSupplier` extend `<Service>BaseDescriptorSupplier`), so every
+  module compiling its own `.proto` lost every resolved client row, with no question, for
+  net.devh and Quarkus alike. An edge whose both ends are nested in one outer class is that
+  class's own structure, and it no longer fences.
+
 ## [0.2.0] — 2026-10-23
 
 **The Java + Spring Boot milestone.** A Java or Kotlin Spring Boot module is analysed,
