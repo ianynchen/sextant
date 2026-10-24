@@ -3460,7 +3460,9 @@ is no longer a bounded rendering to reach for, so a cap here would be a new,
 separately argued bound on what a MODEL is handed, and §8.4's audit list is
 where it would have to be entered.
 
-### OI-26 — `SEXTANT_VERSION` is declared three times
+### OI-26 — `SEXTANT_VERSION` is declared three times · **CLOSED 2026-10-23**
+**Closed** by the first version bump (0.1.0 → 0.2.0, the Spring Boot milestone): both stamping sites import `domain/version.SEXTANT_VERSION`, which reads the package metadata, so moving `pyproject.toml`'s one `version` moved every stamp — the condition this entry said would falsify it did not occur.
+
 **Minor · found 2026-09-06 by 2Q `G4` while verifying OI-24 ·
 `src/sextant/domain/version.py:1`, `src/sextant/ingress/read/__init__.py:16`,
 `src/sextant/application/stages/analyze.py:67`**
