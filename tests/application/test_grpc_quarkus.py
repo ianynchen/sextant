@@ -25,6 +25,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -110,6 +111,30 @@ def _injected_field(annotation: str, args: dict[str, object] | None = None) -> l
             use=AnnotationUse(annotation=annotation, args=args or {}),
             retention="RUNTIME",
         ),
+    ]
+
+
+def _constructor_parameter(
+    annotation: str, args: dict[str, object] | None = None, *, stub_type: str = BLOCKING_STUB
+) -> list[object]:
+    """`Greeter(@GrpcClient("hello") HelloBlockingStub stub)`: the extractor
+    records a parameter's annotations on its method's signature, beside the
+    parameter's declared type (D00 §5a), not as annotation facts."""
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + "com/acme/hello/Greeter#`<init>`(sig_init).",
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            signature=Signature(
+                parameters=[
+                    Parameter(
+                        name="stub",
+                        type=TypeRef(symbol=stub_type),
+                        annotations=[AnnotationUse(annotation=annotation, args=args or {})],
+                    )
+                ]
+            ),
+        )
     ]
 
 
@@ -240,6 +265,35 @@ def test_two_quarkus_client_fields_of_one_stub_type_derive_one_row(tmp_path: Pat
     assert [row["path"] for row in rows] == [SERVICE_NAME]
 
 
+@pytest.mark.pins("injected_client.a-PARAMETER-is-an-injection-point")
+@pytest.mark.parametrize(
+    "args",
+    [pytest.param({"value": "hello"}, id="named"), pytest.param({}, id="value-omitted")],
+)
+def test_a_quarkus_client_constructor_parameter_derives_one_service_level_outbound_row(
+    tmp_path: Path, args: dict[str, object]
+):
+    """CP-52 row 2: `@GrpcClient` targets PARAMETER as well as FIELD, and a
+    constructor-injected client is the same outbound service as a field."""
+    rows = _client_rows(
+        tmp_path, [*_constructor_parameter(QUARKUS_CLIENT, args), _service_name_site()]
+    )
+
+    assert [(row["path"], row["direction"], row["resolution"]) for row in rows] == [
+        (SERVICE_NAME, "outbound", "resolved")
+    ]
+
+
+def test_a_quarkus_client_field_and_parameter_of_one_stub_type_derive_one_row(tmp_path: Path):
+    facts = [
+        *_injected_field(QUARKUS_CLIENT, {"value": "hello"}),
+        *_constructor_parameter(QUARKUS_CLIENT),
+        _service_name_site(),
+    ]
+
+    assert [row["path"] for row in _client_rows(tmp_path, facts)] == [SERVICE_NAME]
+
+
 @pytest.mark.declines("grpc-quarkus-client")
 @pytest.mark.pins("grpc.a-QUARKUS-client-field-is-an-outbound-service")
 def test_net_devhs_client_annotation_is_not_a_quarkus_client(tmp_path: Path):
@@ -248,3 +302,13 @@ def test_net_devhs_client_annotation_is_not_a_quarkus_client(tmp_path: Path):
     OTHER framework. `grpc-net-devh` owns that spelling; this catalog derives
     nothing from it."""
     assert _client_rows(tmp_path, [*_injected_field(DEVH_CLIENT), _service_name_site()]) == []
+
+
+@pytest.mark.declines("grpc-quarkus-client")
+@pytest.mark.pins("grpc.a-QUARKUS-client-field-is-an-outbound-service")
+def test_net_devhs_client_annotation_on_a_parameter_is_not_a_quarkus_client(tmp_path: Path):
+    """The parameter half of the same near-miss: the other framework's
+    annotation on a constructor parameter derives nothing here either."""
+    facts = [*_constructor_parameter(DEVH_CLIENT), _service_name_site()]
+
+    assert _client_rows(tmp_path, facts) == []

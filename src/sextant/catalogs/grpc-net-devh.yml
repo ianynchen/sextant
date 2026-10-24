@@ -16,6 +16,12 @@ measured:
   - { artifact: net.devh:grpc-client-spring-boot-starter, versions: ["3.1.0.RELEASE"],
       identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
 
+# `net.devh.boot.grpc.client.inject.GrpcClient` is `@Target` {ANNOTATION_TYPE,
+# FIELD, METHOD, PARAMETER}, `@Retention` RUNTIME (`javap -v` on the 3.1.0.RELEASE
+# jar's own class file, read 2026-10-24). So a PARAMETER client is a real shape
+# here too, and the engine reads it as it reads a field. A `@GrpcClient` on a
+# METHOD itself (a setter) is NOT read: it joins no declared stub type (OI-188).
+
 requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 matches:

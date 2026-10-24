@@ -3728,6 +3728,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "injected_client.a-PARAMETER-is-an-injection-point": Guard(
+        what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
+        "to that parameter's declared type, as a field's is",
+        why="OI-187: `io.quarkus.grpc.GrpcClient` and net.devh's both target PARAMETER, and "
+        "`injected_client` joined fields alone, so a constructor-injected client hit the "
+        "`stub_type is None` branch and vanished — no row, no gap, no question. Every "
+        "constructor-injected gRPC client is then an outbound call the document does not "
+        "show, and nothing says one was dropped",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="    injected.extend(_annotated_parameters(workspace, field_annotations))\n",
+                replace="",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

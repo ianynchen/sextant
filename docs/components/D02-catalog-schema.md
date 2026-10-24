@@ -3440,8 +3440,8 @@ row alone would have, which inverted the whole redundancy the two halves exist f
 ### `injected_client`
 
 A second, separate style from `supertype_derived` — injection is a different SHAPE of
-evidence (a field the module declares and a framework populates, never a class the module
-itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
+evidence (a field, or a method or constructor parameter, the module declares and a framework
+populates, never a class the module itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
 fusing the two into one engine, even though both read the same kind of identity-building
 call site.
 
@@ -3455,6 +3455,11 @@ matches:
   identity_marker:
     service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
 ```
+
+**An injection point is a field or a parameter, one rule.** `field_annotation` is joined to the
+type its own injection point declares: a field's, or the annotated parameter's of a method or
+constructor, read off the method's `signature.parameters[].annotations` (D00 §5a). Both go through
+the same fence and identity read, and a field and a parameter of one stub type are one row.
 
 **One row per injected stub, at the SERVICE level.** `method` stays NULL and `path` is
 `<protoPackage>.<Service>` — the stub type's own outer class marker call, read exactly as

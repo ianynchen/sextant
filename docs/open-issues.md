@@ -1021,31 +1021,37 @@ system that implement the same generated service.
 frameworks are measured by a probe (net.devh's key and its `static://` / `dns:///` forms are
 not yet), and the value goes through the one placeholder rule, `config.substitute`, as a peer.
 
-### OI-187 — an `@GrpcClient` on a constructor or method PARAMETER derives nothing, for Quarkus
-**Major · logged 2026-10-24 (task review of Quarkus gRPC) · `src/sextant/application/resolve/engines/injected_client.py::_matches`, `_field_types`**
+### OI-187 — an `@GrpcClient` on a constructor or method PARAMETER derived nothing · **CLOSED 2026-10-24**
+**Major · logged and closed 2026-10-24 (task review of Quarkus gRPC) · `src/sextant/application/resolve/engines/injected_client.py::_matches`**
 
-`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER (CP-52 row 2); Quarkus reads both
-injection points and names a parameter's client by its parameter name (rows 5, 6).
-`injected_client` joins an annotation to a declared FIELD's type (`_field_types` reads the
-`fields` table and `_matches` looks the annotation's `target` up in it), so a parameter-position
-client finds no field, hits the `stub_type is None` branch and is skipped. No row, no gap, no
-question: the client is a silent drop, the failure shape W53 names for a wrong FQN. net.devh's
-`@GrpcClient` targets were not measured by W53, so whether `grpc-net-devh.yml` is exposed too is
-unknown.
+`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER (CP-52 row 2); `injected_client` joined an
+annotation to a declared FIELD's type only, so a parameter-position client hit the
+`stub_type is None` branch and was skipped: no row, no gap, no question. Measured at the time: 0 of
+the 4 `@GrpcClient` uses in `examples/quarkus-quickstarts` were parameters.
 
-**What happens today:** a service whose clients are constructor-injected shows no outbound gRPC
-call. Measured: 0 of the 4 `@GrpcClient` uses in `examples/quarkus-quickstarts` are parameters
-(all four are fields, in `grpc-plain-text-quickstart` and `grpc-tls-quickstart`), so the
-corpus does not trigger it.
-**Real triggering input:** `Greeter(@GrpcClient("hello") GreeterGrpc.GreeterBlockingStub stub)`,
-a bean taking its client through a constructor, which CDI permits and CP-52 row 2 lists.
-**Parameter annotation facts exist:** `ClassScanner.java` records each parameter's annotations
-on the method symbol's signature (`parameters[].annotations`, D00 §5a — the field `annotation_driven`
-reads for `@RequestBody`), not as annotation facts with a parameter target; the declared type is
-on the same parameter entry.
-**Closes** when `injected_client` also joins an annotated parameter, from the signature's
-`parameters`, to that parameter's declared type, deriving the same service-level row as a field
-and fencing it the same way; pinned by a constructor-parameter test beside the field ones.
+**Closed** the same day, once the entry's own check found the parameter annotations were already
+recorded: the extractor writes them on the method signature's `parameters[].annotations` (D00 §5a),
+beside the declared type. `injected_client` now reads an annotated parameter of a method or
+constructor, joined to that parameter's declared type, through the same fence and identity read as a
+field — one rule for every `injected_client` catalog, with no per-catalog switch. net.devh's
+`@GrpcClient` targets PARAMETER too (`javap` on 3.1.0.RELEASE), so it gains the same read. Pinned by
+`tests/application/test_grpc_quarkus.py` and `tests/application/test_injected_client.py`, guard
+`injected_client.a-PARAMETER-is-an-injection-point`.
+
+### OI-188 — an `@GrpcClient` on a METHOD (net.devh setter injection) joins no stub type and derives nothing
+**Minor · logged 2026-10-24 (fixing OI-187) · `src/sextant/application/resolve/engines/injected_client.py::_matches`, `src/sextant/catalogs/grpc-net-devh.yml`**
+
+net.devh's `@GrpcClient` is `@Target` {ANNOTATION_TYPE, FIELD, METHOD, PARAMETER} (`javap` on
+3.1.0.RELEASE). An annotation placed on a method itself has the method as its `annotations` target,
+which is in no declared-field table, so it hits the `stub_type is None` branch and derives no row, no
+gap and no question. The stub type would be the method's single parameter, and net.devh's setter
+semantics for it are not measured.
+
+**What happens today:** a net.devh client injected through an annotated setter shows no outbound gRPC
+call. Not measured on the fixtures or the corpus (the field-corpus pins carry no outbound calls).
+**Real triggering input:** `@GrpcClient("hello") public void setStub(HelloBlockingStub stub)`.
+**Closes** when a probe reads how net.devh populates a method-targeted `@GrpcClient`, and
+`injected_client` joins a method-position annotation to its parameter's declared type, pinned.
 
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**

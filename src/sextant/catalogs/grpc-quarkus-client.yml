@@ -16,14 +16,14 @@ direction: outbound
 #
 # `@GrpcClient("")` is not a case: it fails the Quarkus build (CP-52 row 6).
 #
-# WHAT IS READ: an annotated FIELD, joined to its declared stub type.
-# WHAT IS NOT: an annotated PARAMETER. `io.quarkus.grpc.GrpcClient` targets
-# FIELD and PARAMETER (CP-52 row 2), and a constructor- or method-parameter
-# client (`Greeter(@GrpcClient("hello") HelloBlockingStub stub)`) derives no row,
-# gap or question. `injected_client` joins an annotation to a declared field's
-# type and nothing else; the extractor does record parameter annotations, on
-# the method signature's parameters rather than as annotation facts, and
-# `injected_client` does not read them. Logged as OI-187, not fixed here.
+# WHAT IS READ: an annotated FIELD, joined to its declared stub type, and an
+# annotated method or constructor PARAMETER, joined to its declared type
+# (`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER, CP-52 row 2). One
+# rule in the `injected_client` engine for every catalog: the parameter's
+# annotations ride the method's signature (D00 §5a), and the engine reads them
+# there. A constructor client
+# (`Greeter(@GrpcClient("hello") HelloBlockingStub stub)`) and a field of the
+# same stub type are one row.
 
 detect:
   coordinates: ["io.quarkus:quarkus-grpc"]
