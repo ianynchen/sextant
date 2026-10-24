@@ -29,6 +29,13 @@ here would restate those documents rather than add anything.
   connector or two unconfigured ones give a `binder_protocol` question naming them. Measured on
   `quarkus-quickstarts` (Quarkus 3.40.1.1): 28 resolved rows across 13 of 15 messaging modules.
   COVERAGE §2c's Quarkus Kafka cell reads ✅.
+- **Quarkus gRPC on grpc-java's generated classes** (spec 2026-10-24-quarkus-messaging-and-grpc,
+  ruling 3; probe CP-52). `io.quarkus.grpc.GrpcService` is a third corroboration spelling for a
+  service extending `<Service>ImplBase`. `@GrpcClient` on a field or a constructor/method
+  parameter typed by a generated `…Stub` derives the service-level outbound row, whether its
+  value is named or omitted (`grpc-quarkus-client.yml`). Quarkus's Mutiny forms (a service
+  `implements <Service>`, a client typed `<Service>`) are not read yet (`quarkus-grpc-mutiny`,
+  OI-192), so COVERAGE §2c's Quarkus gRPC cell stays ◐.
 
 ### Fixed
 

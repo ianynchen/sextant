@@ -4407,6 +4407,11 @@ def copy_tree(destination: Path) -> Path:
         "reactor-gateway",
         # The `type_header` read's fixture: two handlers whose exceptions live in jars.
         "orders-advice",
+        # Quarkus's SmallRye channels and gRPC client (spec 2026-10-24): the orphan
+        # attachment and the in-memory pair are read off one module's whole channel set,
+        # and the gRPC fence off protoc's nesting in its compiled classes, so their pins
+        # are e2e and need the module.
+        "orders-quarkus",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

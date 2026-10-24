@@ -61,7 +61,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ✅ | ✅ | ✅ | ✅ | ◐ (1A 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1B, 1 open) | ✅ | ✅ | ✅ | ✅ | ◐ (1A 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -82,7 +82,7 @@ register.
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (1 not shipped) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ◐ (1 not shipped) | ✅ | — | — | — | ✅ |
+| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ◐ (1 open, 1 not shipped) | ✅ | — | — | — | ✅ |
 | **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ✅ | ✅ | — |
 | **Ktor** | ✅ | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ✅ | — | — | — | — | — | — | — | — | — | — | — |
@@ -3277,7 +3277,7 @@ Boundaries, each verified against the shipped code:
 | grpc-java | ✅ full | 1/1 | — |
 | Spring gRPC | ✅ full | 1/1 | — |
 | net.devh grpc-spring-boot-starter | ✅ full | 2/2 | — |
-| Quarkus gRPC | ◐ partial | 0/1 | not shipped: 1 at A |
+| Quarkus gRPC | ◐ partial | 1/2 | not shipped: 1 at B; `quarkus-grpc-mutiny` |
 <!-- END GENERATED: frameworks 5.7 -->
 
 **The schema half shipped in Phase 2O Task 4; the JVM bytecode half shipped in Task 5.**
@@ -3343,7 +3343,8 @@ reaches is filed as a question rather than dropped.
 | Java | grpc-java | generated `FooGrpc.FooImplBase` implementing `io.grpc.BindableService`; stubs extend `Abstract{Async,Blocking,Future}Stub` | inheritance, not a call | `supertype_derived` | ✅ shipped (2O Task 5) — **B, as scoped**: the extends edge (capability 9.13) plus a call-site-argument read, framework-neutral, no annotation needed |
 | Java | net.devh grpc-spring-boot-starter | `net.devh.boot.grpc.client.inject.GrpcClient` (client stub injection) | field injection | `injected_client` | ✅ shipped (2O Task 5) — service-level only (`method` NULL); per-method outbound waits on 2Q's call graph |
 | Java | net.devh grpc-spring-boot-starter | `net.devh.boot.grpc.server.service.GrpcService` (server annotation) | class annotation, **no service name** | `annotation_driven` `corroborates` | ✅ shipped (2O Task 5, fix round 2) — derives NO row by design (`supertype_derived` above already derives it, and the annotation names no identity); it files a `service_identity` open question for a flagged class no gRPC endpoint names as a handler |
-| Java | Quarkus gRPC | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` | — | `annotation` | A — server side rides `supertype_derived` already (framework-neutral); the `@GrpcService` corroboration catalog carries the Spring gRPC and net.devh spellings only, and `@GrpcClient` injection is net.devh's annotation only |
+| Java | Quarkus gRPC | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` on grpc-java's generated classes — a `@GrpcService` class extending `<Service>Grpc.<Service>ImplBase`, a `@GrpcClient` field or constructor/method parameter typed `<Service>Grpc.<Service>BlockingStub` (or another `…Stub`), value named or omitted | the service rides `supertype_derived` (framework-neutral) with `@GrpcService` as a third corroboration spelling in `grpc-spring.yml`; the client is `grpc-quarkus-client.yml` on `injected_client` | `supertype_derived` + `corroborates`, `injected_client` | ✅ **shipped** (2026-10-24, spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md` ruling 3; probe CP-52, `quarkus-grpc-api` 3.17.5). Service-level client rows only (`method` NULL), as net.devh's. Pinned by `tests/e2e/test_grpc_quarkus_delivered.py` on `fixtures/orders-quarkus` (the service's RPC with no `service_identity` question, and the value-omitted client at its stub's `SERVICE_NAME`, beside protoc's own nested descriptor-supplier classes, which no longer fence it: `OI-191`). **Measured on `quarkus-quickstarts` @ `81a5844`:** both gRPC modules' `GreeterGrpc.GreeterBlockingStub` client derives `helloworld.Greeter`, resolved. **Stated boundary:** the client's configured address is not its peer (`OI-186`) |
+| Java | Quarkus gRPC | **Quarkus's Mutiny forms** — a `@GrpcService` class that `implements <Service>` (the generated `io.quarkus.grpc.MutinyService` interface), and a `@GrpcClient` field typed `<Service>` | the interface carries no identity call: the identity is reached only through the generated `<Service>Client`/`<Service>Bean` → `Mutiny<Service>Grpc` → `<Service>Grpc.getServiceDescriptor()` | `supertype_derived` / `injected_client` (not joined) | **B** — not shipped (`quarkus-grpc-mutiny`, `OI-192`). Measured on both `quarkus-quickstarts` gRPC modules, which use these forms: the client `@GrpcClient("hello") Greeter helloService` derives an `unresolved` row at `examples/Greeter#` plus a `service_identity` question, and the server `HelloWorldService implements Greeter` is not joined to its handler — its inbound row `helloworld.Greeter/SayHello` comes from the module's `.proto` alone (`grpc-schema`, handler NULL), and the class is a `service_identity` question |
 | Java | Spring gRPC | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `supertype_derived` is the reliable match and the annotation only adds interceptors | `supertype_derived` + `corroborates` | ✅ shipped (2O Task 5) inbound via the framework-neutral supertype match, with the annotation's own corroboration shipped beside it (fix round 2) — a question where the supertype match saw nothing, never a row |
 | Go | grpc-go | `pb.RegisterFooServer(s, impl)`, `pb.NewFooClient(conn)` | **the generated function names the service** | `registration_call` | A |
 | Python | grpcio | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |

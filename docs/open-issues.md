@@ -1122,6 +1122,37 @@ Pinned by `test_the_generated_classs_own_nested_extends_edges_do_not_fence` and
 (`tests/application/test_grpc_quarkus.py`). Guard:
 `injected_client.a-GENERATED-class-own-nesting-does-not-fence`.
 
+### OI-192 — Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined
+**Major · logged 2026-10-24 (Task 4 field measurement of spec `2026-10-24-quarkus-messaging-and-grpc`; register `quarkus-grpc-mutiny`) · `src/sextant/application/resolve/engines/injected_client.py`, `src/sextant/application/resolve/engines/supertype_derived.py`, `src/sextant/catalogs/grpc-quarkus-client.yml`, `src/sextant/catalogs/grpc-java.yml`**
+
+`quarkus-grpc` generates, per service, a `MutinyService` interface (`examples.Greeter`), a client
+implementing it (`GreeterClient`, holding a `MutinyGreeterGrpc$MutinyGreeterStub`), a bean
+(`GreeterBean extends MutinyGreeterGrpc$GreeterImplBase`), and `MutinyGreeterGrpc`, whose
+`bindService` calls `GreeterGrpc.getServiceDescriptor()`. Only `GreeterGrpc` makes the
+`ServiceDescriptor.newBuilder("helloworld.Greeter")` call that both styles read the identity from.
+- **Client:** `@GrpcClient("hello") Greeter helloService` is typed by the interface. Its outer
+  class is itself and makes no marker call, so `injected_client` derives an `unresolved` row at
+  `examples/Greeter#` and a `service_identity` question.
+- **Service:** `@GrpcService public class HelloWorldService implements Greeter` extends no
+  `ImplBase`, so `supertype_derived` does not match it. The inbound row
+  `helloworld.Greeter/SayHello` comes from the module's `.proto` alone (`grpc-schema`, handler
+  NULL), and the corroboration files a `service_identity` question on the class.
+
+**What happens today**, measured on `quarkus-quickstarts` @ `81a5844`, on `grpc-plain-text-quickstart`
+and `grpc-tls-quickstart` (both of the corpus's Quarkus gRPC modules use these forms):
+- the Mutiny client is unresolved and cannot link;
+- the service's handler is not linked;
+- a module without its `.proto` in source would have no inbound row.
+
+The same modules' `GreeterGrpc.GreeterBlockingStub` client resolves (`OI-191`).
+**Real triggering input:** both quickstarts, as above. This is the form the Quarkus gRPC guide
+documents.
+**Closes** when both Mutiny forms resolve to `<protoPackage>.<Service>`, by a structural rule
+that reads the generated classes' own edges and calls, not one that names Quarkus's generated
+class suffixes. The client must resolve, and the service must be named as the handler of its
+RPC. Pinned on a fixture whose stand-ins carry the generated Mutiny classes, and re-measured on
+both quickstarts.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 

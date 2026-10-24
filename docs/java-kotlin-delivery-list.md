@@ -49,7 +49,7 @@ SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
 SSE                | SSE        |
-gRPC               | gRPC       |
+gRPC               | gRPC       | quarkus-grpc-mutiny
 Kafka              | Kafka      |
 JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
@@ -60,7 +60,8 @@ Async              | Async      | quartz akka-pekko-actors
 
 **Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
 the only remaining gaps are in languages this target does not cover. gRPC's are Go, Python,
-Rust and Swift; there is no Java gap left in it.
+Rust and Swift, plus, since 2026-10-24, one Java gap: `quarkus-grpc-mutiny`, which blocks the
+row until it closes (§1).
 
 **REST inbound joined this block on 2026-10-22**, when `conditional-controllers` — its last open
 id — closed. The cell still reads `◐ (1B 3C)` for four §5.1 rows that were never on this
@@ -202,6 +203,7 @@ jdk-body-publisher | Minor
 jdk-newbuilder-copy | Minor
 apache-execute-httphost-peer | Minor
 gateway-detect-4x-coordinate | Minor
+quarkus-grpc-mutiny | Major
 ```
 
 **Closed by the waves, verified by reading the code on 2026-09-11 — a WEAKER
@@ -509,6 +511,19 @@ run 34669970510; the cell reads `✅`.
 | # | issue |
 |---|---|
 | `jaxrs-sse` | **closed** — implemented, pinned by `test_a_jaxrs_sse_endpoint_is_classified_as_sse` and `test_quarkus_element_type_alone_makes_a_stream_sse` (`tests/e2e/test_rest_inbound_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `jakarta-jaxrs.yml`/`javax-jaxrs.yml` carry `protocol_hint.hint_media` on `@Produces(SERVER_SENT_EVENTS)`; `quarkus-rest.yml` adds a second, presence-only evidence kind, `protocol_hint.hint_annotations`, for `@RestStreamElementType`/`@RestSseElementType` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §3c). Was: JAX-RS `@Produces(SERVER_SENT_EVENTS)` — an attribute on a sibling annotation of the verb's method, the same engine form as `quarkus-jaxrs` (§0, "Moved to engine work") |
+
+### gRPC — NOT DELIVERED (`quarkus-grpc-mutiny`, named 2026-10-24 at the Quarkus gRPC close)
+
+The row had no blocker, and its cell read `◐` only for languages this target does not cover.
+Quarkus gRPC shipped on 2026-10-24 for grpc-java's generated `ImplBase`/`…Stub` forms. Measuring
+it on the real Quarkus modules found that both of them use the OTHER form, Quarkus's own Mutiny
+classes, which nothing reads. That is a Java gap against a catalogued library, so it is named
+here. The ```scoped-out entry stays: once this id closes, the cell's remaining gaps are Go,
+Python, Rust and Swift again.
+
+| # | issue |
+|---|---|
+| `quarkus-grpc-mutiny` | **named 2026-10-24** (Task 4 field measurement of spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md`; `OI-192`). Quarkus generates a `MutinyService` interface per service (`examples.Greeter`) beside grpc-java's classes. Its quickstarts write the service as `@GrpcService public class HelloWorldService implements Greeter` and the client as `@GrpcClient("hello") Greeter helloService`. Neither reaches the identity, which only `GreeterGrpc`'s `ServiceDescriptor.newBuilder("helloworld.Greeter")` states, through the generated `GreeterClient`/`GreeterBean` → `MutinyGreeterGrpc` → `GreeterGrpc.getServiceDescriptor()`. **Real input:** `quarkus-quickstarts` @ `81a5844`, `grpc-plain-text-quickstart` and `grpc-tls-quickstart`. Each derives an `unresolved` outbound row at `examples/Greeter#` plus a `service_identity` question for the client, and a `service_identity` question on the service class, whose inbound row `helloworld.Greeter/SayHello` comes from the `.proto` alone with handler NULL. Costs a Quarkus module written the documented way its gRPC client's identity and its service's handler link — and without the `.proto` in the module, its inbound row too |
 
 ### Kafka — DELIVERED (`smallrye-reactive-messaging`, the last open id, closed 2026-10-24; matrix `✅`)
 

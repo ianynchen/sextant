@@ -202,6 +202,9 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
     "apache-camel": ["Apache Camel"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
+    # Named 2026-10-24 when Quarkus gRPC shipped for grpc-java's generated forms and the field
+    # measurement found Quarkus's own Mutiny forms unread on both real modules.
+    "quarkus-grpc-mutiny": ["Quarkus gRPC"],
     # Surfaced 2026-09-22 when `temporal-cadence` and `vertx-eventbus` closed and the Async
     # row's blockers emptied while §5.12 still carried two Java frameworks with no catalog
     # at all — the definition's second clause, the same way `smallrye-reactive-messaging`

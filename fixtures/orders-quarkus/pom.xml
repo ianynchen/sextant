@@ -85,5 +85,30 @@
       <groupId>jakarta.inject</groupId>
       <artifactId>jakarta.inject-api</artifactId>
     </dependency>
+    <!-- Quarkus gRPC (spec §3d/§3e): `@GrpcService`/`@GrpcClient` live in
+         `quarkus-grpc-api` (CP-52 rows 1, 3), which `quarkus-grpc` brings in a real build;
+         with all-exclusions it is declared here too. `grpc-api`/`grpc-stub` are what the
+         hand-written generated stand-ins (`HelloGrpc`, `PricingGrpc`) compile against, and
+         what a real Quarkus gRPC module carries transitively. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-grpc</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-grpc-api</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-api</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-stub</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
   </dependencies>
 </project>
