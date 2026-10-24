@@ -214,6 +214,32 @@ def test_a_quarkus_client_stub_field_derives_one_service_level_outbound_row(
     assert row["resolution"] == "resolved"
 
 
+def test_two_quarkus_client_fields_of_one_stub_type_derive_one_row(tmp_path: Path):
+    """One named, one value omitted, two injection points of the same stub
+    type: one service-level fact, not two (`test_injected_client.py`'s own
+    pin for net.devh)."""
+    second = "com/acme/hello/Refunder#hello."
+    facts = [
+        *_injected_field(QUARKUS_CLIENT, {"value": "hello"}),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + second,
+            construct_kind=ConstructKind.FIELD,
+            signature=Signature(returns=TypeRef(symbol=BLOCKING_STUB)),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + second,
+            use=AnnotationUse(annotation=QUARKUS_CLIENT),
+            retention="RUNTIME",
+        ),
+        _service_name_site(),
+    ]
+    rows = _client_rows(tmp_path, facts)
+
+    assert [row["path"] for row in rows] == [SERVICE_NAME]
+
+
 @pytest.mark.declines("grpc-quarkus-client")
 @pytest.mark.pins("grpc.a-QUARKUS-client-field-is-an-outbound-service")
 def test_net_devhs_client_annotation_is_not_a_quarkus_client(tmp_path: Path):

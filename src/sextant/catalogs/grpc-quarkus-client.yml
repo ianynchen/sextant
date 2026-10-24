@@ -7,13 +7,23 @@ direction: outbound
 # Quarkus's `@GrpcClient` is its own catalog, not a second spelling in
 # `grpc-net-devh.yml`, because the two differ in how a client is NAMED — a
 # value OMITTED means "the field's name" here (CP-52 rows 2, 5) — and the
-# configured name is what the peer-address follow-up (open-issues, "a gRPC
-# client's configured address as its peer") will key on. The ROW does not
-# depend on the name: it is the injected stub's own `SERVICE_NAME`, read
-# exactly as `grpc-net-devh.yml` reads it, so a value omitted, named or the
-# sentinel written out all derive the same row.
+# name WILL matter once OI-186 reads the client's configured address, which is
+# keyed by it. (`grpc-spring.yml` holds three spellings in one file because a
+# class annotation there names nothing; this one's value names the client.)
+# The ROW does not depend on the name today: it is the injected stub's own
+# `SERVICE_NAME`, read exactly as `grpc-net-devh.yml` reads it, so a value
+# omitted, named or the sentinel written out all derive the same row.
 #
 # `@GrpcClient("")` is not a case: it fails the Quarkus build (CP-52 row 6).
+#
+# WHAT IS READ: an annotated FIELD, joined to its declared stub type.
+# WHAT IS NOT: an annotated PARAMETER. `io.quarkus.grpc.GrpcClient` targets
+# FIELD and PARAMETER (CP-52 row 2), and a constructor- or method-parameter
+# client (`Greeter(@GrpcClient("hello") HelloBlockingStub stub)`) derives no row,
+# gap or question. `injected_client` joins an annotation to a declared field's
+# type and nothing else; the extractor does record parameter annotations, on
+# the method signature's parameters rather than as annotation facts, and
+# `injected_client` does not read them. Logged as OI-187, not fixed here.
 
 detect:
   coordinates: ["io.quarkus:quarkus-grpc"]

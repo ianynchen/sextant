@@ -1021,6 +1021,32 @@ system that implement the same generated service.
 frameworks are measured by a probe (net.devh's key and its `static://` / `dns:///` forms are
 not yet), and the value goes through the one placeholder rule, `config.substitute`, as a peer.
 
+### OI-187 — an `@GrpcClient` on a constructor or method PARAMETER derives nothing, for Quarkus
+**Major · logged 2026-10-24 (task review of Quarkus gRPC) · `src/sextant/application/resolve/engines/injected_client.py::_matches`, `_field_types`**
+
+`io.quarkus.grpc.GrpcClient` targets FIELD and PARAMETER (CP-52 row 2); Quarkus reads both
+injection points and names a parameter's client by its parameter name (rows 5, 6).
+`injected_client` joins an annotation to a declared FIELD's type (`_field_types` reads the
+`fields` table and `_matches` looks the annotation's `target` up in it), so a parameter-position
+client finds no field, hits the `stub_type is None` branch and is skipped. No row, no gap, no
+question: the client is a silent drop, the failure shape W53 names for a wrong FQN. net.devh's
+`@GrpcClient` targets were not measured by W53, so whether `grpc-net-devh.yml` is exposed too is
+unknown.
+
+**What happens today:** a service whose clients are constructor-injected shows no outbound gRPC
+call. Measured: 0 of the 4 `@GrpcClient` uses in `examples/quarkus-quickstarts` are parameters
+(all four are fields, in `grpc-plain-text-quickstart` and `grpc-tls-quickstart`), so the
+corpus does not trigger it.
+**Real triggering input:** `Greeter(@GrpcClient("hello") GreeterGrpc.GreeterBlockingStub stub)`,
+a bean taking its client through a constructor, which CDI permits and CP-52 row 2 lists.
+**Parameter annotation facts exist:** `ClassScanner.java` records each parameter's annotations
+on the method symbol's signature (`parameters[].annotations`, D00 §5a — the field `annotation_driven`
+reads for `@RequestBody`), not as annotation facts with a parameter target; the declared type is
+on the same parameter entry.
+**Closes** when `injected_client` also joins an annotated parameter, from the signature's
+`parameters`, to that parameter's declared type, deriving the same service-level row as a field
+and fencing it the same way; pinned by a constructor-parameter test beside the field ones.
+
 ### OI-159 — framework and build-tool knowledge in the common stitch tier, three instances
 **Major · entered 2026-10-20, found by the design review of PR #56 · `src/sextant/application/stitch/links.py`, `gateway.py`, `participants.py`**
 
