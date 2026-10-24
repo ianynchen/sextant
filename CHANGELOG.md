@@ -4,13 +4,26 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/) (GUIDELINES §5).
 
-Nothing has been released yet: `0.1.0` is the working version and the
-version-bump gate has not opened, so everything below sits under Unreleased.
-This file starts at Phase 2O — earlier phases are recorded in
+`0.2.0` is the first release: the Java + Spring Boot milestone, declared
+2026-10-23 when every Spring Boot protocol cell of `docs/COVERAGE.md` §2c read ✅
+except REST inbound, whose remaining line (Spring Data REST's projections,
+excerpts, HAL affordances and event handlers) is a tier-C stated boundary — not
+in the code at all. Nothing was released before it, so `0.2.0` carries every
+change since the project began. This file starts at Phase 2O — earlier phases are recorded in
 `docs/superpowers/plans/` and `docs/superpowers/specs/`, and backfilling them
 here would restate those documents rather than add anything.
 
 ## [Unreleased]
+
+## [0.2.0] — 2026-10-23
+
+**The Java + Spring Boot milestone.** A Java or Kotlin Spring Boot module is analysed,
+documented and exported end to end, across REST (in and out), SOAP, GraphQL,
+WebSocket, SSE, gRPC, Kafka, JMS/AMQP, SQS, Pub/Sub and scheduled/async work.
+A workspace or bundle from any earlier build is refused by its stamps
+(`sextant_version`, `graph_schema_version` 7, `fact_schema_version` 5,
+`boundary_vocabulary_version` 2): re-run `sextant module analyze`, then re-render
+and re-export.
 
 ### Fixed
 
