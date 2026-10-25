@@ -42,8 +42,9 @@ detect:
 # reads (row 4).
 #
 # CP-53: what `GrpcClientProcessor.discoverInjectedClients` does with an
-# injected interface (rows 3-6), and what `GrpcServerProcessor` serves
-# (row 9), read off `quarkus-grpc-deployment`'s own bytecode.
+# injected interface (rows 3-6), and row 9: an annotation counts only when
+# declared on the class itself. Read off `quarkus-grpc-deployment`'s own
+# bytecode.
 measured:
   - { artifact: io.quarkus:quarkus-grpc-api, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp52_quarkus_grpc_annotations.md }
@@ -67,9 +68,10 @@ matches:
   interface_client:
     implements: io.quarkus.grpc.MutinyClient
   # CP-52 row 7, CP-53 row 9: Quarkus serves only a class declaring
-  # `@GrpcService` itself. The generated `<Service>Bean` extends the Mutiny
-  # base and carries none, so it fences none of the stubs nested beside that
-  # base.
+  # `@GrpcService` itself. An extends edge fences when its subclass, or a
+  # module class below it, declares it. The generated `<Service>Bean` extends
+  # the Mutiny base and carries none, so it fences none of the stubs nested
+  # beside that base.
   served_by_annotation: io.quarkus.grpc.GrpcService
 
 # No `wrappers`/`nullability`/`serialization`/`known_types`/`format_fixed` —

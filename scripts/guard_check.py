@@ -3932,6 +3932,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.an-ANNOTATED-descendant-makes-its-base-a-fence": Guard(
+        what="under `served_by_annotation`, an `extends` edge fences when a module class "
+        "BELOW its subclass declares the annotation, not only the subclass itself",
+        why="CP-52 row 7: an abstract base is not a bean, so `abstract BaseGreeter extends "
+        "GreeterGrpc.GreeterImplBase` with `@GrpcService Impl extends BaseGreeter` serves the "
+        "service through BaseGreeter's edge, the only one naming `GreeterGrpc`. Read on the "
+        "subclass alone, the module's client of its own service is published as a resolved "
+        "outbound call, and no later pass removes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="            current = parent.get(current)\n",
+                replace="            current = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "grpc.an-injected-WRAPPER-stub-takes-the-identity-it-delegates-to": Guard(
         what="an injected type whose outer class makes no marker call takes the identity of the "
         "one marked class its nest's code reaches",

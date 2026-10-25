@@ -314,19 +314,39 @@ def _fenced_outer_classes(workspace: Workspace, annotation: str | None) -> set[s
     question.
 
     Under a catalog naming `served_by_annotation`, an edge counts only when its
-    subclass declares that annotation: the framework serves no other class
-    (CP-53 row 9)."""
+    subclass, or a module class below it, declares that annotation itself: the
+    framework serves no other class (CP-52 row 7, CP-53 row 9). An abstract
+    base between the generated base and the annotated class is not a bean, so
+    the class below it is served through its edge."""
     hosts = nest_hosts(workspace)
+    edges = workspace.query("superclasses")
     served = _served(workspace, annotation)
+    serving = _serving(served, edges) if served is not None else None
     fenced: set[str] = set()
-    for row in workspace.query("superclasses"):
-        if served is not None and str(row["symbol"]) not in served:
+    for row in edges:
+        if serving is not None and bare_descriptor(str(row["symbol"])) not in serving:
             continue
         target = outer_of(bare_descriptor(str(row["superclass"])), hosts)
         if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:
             continue
         fenced.add(target)
     return fenced
+
+
+def _serving(served: set[str], edges: list[dict[str, Any]]) -> set[str]:
+    """Every class declaring the serving annotation, and every class above one
+    of them through `superclasses`, bare."""
+    parent = {
+        bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
+        for row in edges
+    }
+    serving: set[str] = set()
+    for start in served:
+        current: str | None = bare_descriptor(start)
+        while current is not None and current not in serving:
+            serving.add(current)
+            current = parent.get(current)
+    return serving
 
 
 def _row(catalog: Catalog, path: str, resolution: str) -> dict[str, Any]:

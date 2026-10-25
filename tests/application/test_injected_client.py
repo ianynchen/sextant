@@ -601,6 +601,43 @@ def test_an_annotated_quarkus_implementer_still_fences(tmp_path: Path):
     assert rows == []
 
 
+def _indirect_implementer(*, annotated: bool) -> list[object]:
+    """`abstract class BaseGreeter extends GreeterGrpc.GreeterImplBase`, with no
+    annotation, and `Impl extends BaseGreeter`, declaring `@GrpcService` when
+    `annotated`. An abstract class is not a bean, so Quarkus serves `Impl`."""
+    return [
+        *_generated(),
+        *_class(QK_PLAIN_BASE, interfaces=("io/grpc/BindableService#",)),
+        *_class("examples/BaseGreeter#", superclass=QK_PLAIN_BASE),
+        *_class(
+            "examples/Impl#",
+            superclass="examples/BaseGreeter#",
+            annotation=GRPC_SERVICE if annotated else None,
+        ),
+        *_injected_field(QK_BLOCKING_STUB, annotation=QUARKUS_CLIENT),
+    ]
+
+
+@pytest.mark.pins("grpc.an-ANNOTATED-descendant-makes-its-base-a-fence")
+def test_an_annotated_subclass_of_an_unannotated_base_still_fences(tmp_path: Path):
+    """The one edge naming `GreeterGrpc` is `BaseGreeter`'s, and `BaseGreeter`
+    carries no annotation. The class below it does, so the module serves the
+    service through that edge and its client of it gets no outbound row."""
+    rows, questions = _quarkus(tmp_path, _indirect_implementer(annotated=True))
+
+    assert rows == []
+    assert questions == []
+
+
+@pytest.mark.pins("grpc.an-UNANNOTATED-generated-bean-does-not-fence")
+def test_an_unannotated_chain_below_the_generated_base_does_not_fence(tmp_path: Path):
+    """The bound on the rule above: with no annotation anywhere below the
+    edge, nothing is served through it, and the client row stays."""
+    rows, _ = _quarkus(tmp_path, _indirect_implementer(annotated=False))
+
+    assert rows == [(QK_NAME, "resolved")]
+
+
 @pytest.mark.pins("grpc.two-INTERFACE-clients-resolve-neither")
 def test_two_mutiny_clients_for_one_interface_is_unresolved(tmp_path: Path):
     """Two classes implementing `Greeter` and `MutinyClient`: Quarkus's map

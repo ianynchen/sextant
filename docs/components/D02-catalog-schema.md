@@ -3538,7 +3538,7 @@ matches:
 | key | shape | what it changes |
 |---|---|---|
 | `interface_client` | `{implements}`, a dotted type | Every module class that directly implements `implements` is keyed by the FIRST other interface it declares, and by no later one (the framework reads no further, CP-53 row 3). An injected type that is such a key, with exactly one class under it, is read as that class, so the row takes that class's identity. Two or more classes under one key: the injected type is read as itself, which gives the unresolved row and its `service_identity` question, because the framework's map keeps one of them in an order the facts do not state. |
-| `served_by_annotation` | one dotted annotation type | An `extends` edge fences only when its subclass declares this annotation on the class itself (CP-53 row 9). A generated bean extending a generated base carries none, so it fences nothing. |
+| `served_by_annotation` | one dotted annotation type | An `extends` edge fences only when its subclass, or a module class below it through `superclasses`, declares this annotation on the class itself (CP-52 row 7, CP-53 row 9). An unannotated abstract base between the generated base and the annotated class is not a bean, so the class below it is served through its edge. A generated bean extending a generated base carries none and has nothing below it, so it fences nothing. |
 
 Each is shape-checked when present; a malformed value refuses the catalog.
 
