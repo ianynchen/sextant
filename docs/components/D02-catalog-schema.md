@@ -3449,6 +3449,27 @@ overwritten. The merged row therefore carries BOTH halves: this style's handler 
 the descriptor's own contracts. Before the fix it carried strictly less than the descriptor
 row alone would have, which inverted the whole redundancy the two halves exist for.
 
+**Three optional keys serve a generated wrapper around the generated service class**
+(spec 2026-10-25 §3a, §3b; probe CP-53). The wrapper's own outer class makes no marker call,
+so without them the gate above refuses it. A catalog declaring none of them matches exactly as
+described above; `grpc-java.yml` declares none, and `grpc-quarkus.yml` declares all three:
+
+```yaml
+matches:
+  # … supertype_marker and members as above …
+  service_supertype: io.grpc.BindableService
+  served_by_annotation: io.quarkus.grpc.GrpcService
+  delegating_bean: { implements: io.quarkus.grpc.MutinyBean, delegate_field: delegate }
+```
+
+| key | shape | what it changes |
+|---|---|---|
+| `service_supertype` | one dotted type | A supertype whose outer class is unmarked still matches when it implements this type (directly or through its supertypes) **and** its nest's code reaches exactly one marked outer class (`shapes/identity_calls.py`'s `delegated_outers`). The identity and wire names are that marked class's. Two marked classes reached is no match, no row and no question. |
+| `served_by_annotation` | one dotted annotation type | Every implementer, in every form, must declare this annotation on the class itself; an inherited one does not count (the framework reads the declared annotation, CP-53 row 9). |
+| `delegating_bean` | `{implements, delegate_field}`, both strings | For each module class B that directly implements `implements`, the declared type I of B's field named `delegate_field`. The module class implementing I (and carrying `served_by_annotation`) is the handler, under the identity and wire names of B's superclass; its candidate methods are the ones I declares, correlated as `members` correlates them. B's superclass must have no subclass but B, and no module class may extend a class nested in the marked class that superclass delegates to (CP-53 row 10, read structurally); otherwise the bean is skipped and the extends form applies. Two or more such implementors: no handler row (the unresolved fallback row at B's superclass), and one `service_identity` question naming all of them, because the framework takes the first in an order the bytecode does not fix. B itself is never a handler: it carries no `served_by_annotation`. |
+
+Each is shape-checked when present; a malformed value refuses the catalog.
+
 ### `injected_client`
 
 A second, separate style from `supertype_derived` — injection is a different SHAPE of

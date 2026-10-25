@@ -83,7 +83,21 @@ annotation corroboration spec §1b describes for this exact case — surfacing
 the class as a `service_identity` question when the supertype match sees
 nothing at all — now ships beside it, on `annotation_driven.gaps`
 (`grpc-spring.yml`), so silence is no longer the outcome for an annotated
-service built against published stubs."""
+service built against published stubs.
+
+**Three optional `matches` keys** (spec 2026-10-25 §3a, §3b, CP-53) serve a
+generated WRAPPER around the generated service class, where the wrapper's own
+outer class makes no marker call:
+- `service_supertype`: a supertype implementing this type matches too, when
+  its nest's code reaches exactly one marked class (`delegated_outers`); the
+  identity and wire names are that class's.
+- `served_by_annotation`: an implementer matches only if it declares this
+  annotation itself.
+- `delegating_bean`: a module class implementing `implements` and holding a
+  `delegate_field` is a generated bean that forwards to a module class; that
+  class is the handler, under the bean's base's identity. The bean itself is
+  never a handler, because it carries no `served_by_annotation`.
+A catalog declaring none of them matches exactly as before."""
 
 import json
 from dataclasses import dataclass, field
@@ -94,17 +108,22 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.identity_calls import (
     all_string_arguments,
     calling_classes,
+    delegated_outers,
     first_string_arguments,
     nest_hosts,
     outer_of,
     parsed_call_sites,
     split_call,
 )
-from sextant.domain.symbols import bare_descriptor, method_name
+from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
 
 _REQUIRED_MATCHES = ("supertype_marker", "members")
 _REQUIRED_MARKER = ("service_name_call", "method_name_call")
 _MEMBERS = "overridden_public_methods"
+# The optional keys (spec 2026-10-25 §3a, §3b), each naming one type.
+_OPTIONAL_TYPES = ("service_supertype", "served_by_annotation")
+_DELEGATING_BEAN = ("implements", "delegate_field")
 
 # CP-8(b)/(d) falsifying for one implementer — the marker calls ARE on the
 # supertype's own generated class (that is what made this a match at all,
@@ -145,6 +164,17 @@ _UNCORRELATED = (
     "unread (CP-8(d))"
 )
 
+# Two or more classes carrying the serving annotation implement the type a
+# delegating bean's field is declared as. The framework delegates to the first
+# its class index yields, and nothing in the bytecode fixes that order, so
+# naming one of them as the handler would be a guess (CP-53 row 9).
+_CONTENDED = (
+    "classes {names} all implement the type the generated bean delegates to and "
+    "carry the serving annotation — the framework delegates to the first one its "
+    "class index yields, an order nothing in the facts fixes, so which of them "
+    "handles these RPCs is not derivable (CP-53 row 9)"
+)
+
 
 @dataclass(frozen=True)
 class _ClassMatch:
@@ -174,6 +204,9 @@ class _ClassMatch:
     # Overridden public method names the readable wire-name inventory does not
     # account for (I-1) — filed as a gap rather than dropped silently.
     uncorrelated: tuple[str, ...] = ()
+    # Every class a delegating bean could be delegating to, when there is more
+    # than one (CP-53 row 9). None of them is the handler; the gap names all.
+    contenders: tuple[str, ...] = ()
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -241,6 +274,7 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
         if path in seen:
             continue
         seen.add(path)
+        named = match.contenders or (match.implementer,)
         rows.append(
             {
                 "protocol": catalog.protocol,
@@ -248,7 +282,7 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
                 "path": path,
                 "question": "service_identity",
                 "candidates": json.dumps(
-                    [{"class": match.implementer, "reason": reason}],
+                    [{"class": name, "reason": reason} for name in named],
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
@@ -284,6 +318,8 @@ def _reason(match: _ClassMatch) -> str | None:
         )
     if match.uncorrelated:
         reasons.append(_UNCORRELATED.format(names=", ".join(match.uncorrelated)))
+    if match.contenders:
+        reasons.append(_CONTENDED.format(names=", ".join(match.contenders)))
     return "; ".join(reasons) if reasons else None
 
 
@@ -316,6 +352,13 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     methods_by_bare = {bare_descriptor(owner): m for owner, m in methods_by_class.items()}
     parents = _parents(workspace)
     known_symbols = {str(row["symbol"]) for row in workspace.query("declared_symbols")}
+    # Spec §3a: a supertype whose own outer class makes no marker call takes
+    # the identity of the one marked class its nest delegates to — read only
+    # for a catalog that names the type such a supertype implements.
+    service_supertype = catalog.matches.get("service_supertype")
+    delegated = delegated_outers(call_sites, marked, hosts) if service_supertype else {}
+    identities = _Identities(marked, delegated, service_supertype, parents, hosts)
+    served = _served(workspace, catalog.matches.get("served_by_annotation"))
 
     matches: list[_ClassMatch] = []
     for row in workspace.query("superclasses"):
@@ -329,34 +372,240 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             continue
         # W4b: the nest host the class file STATES, falling back to the `$` split
         # only where it states none.
-        outer = outer_of(bare_descriptor(supertype), hosts)
-        if outer not in marked:
+        outer = identities.of(bare_descriptor(supertype))
+        if outer is None:
             # Ordinary class inheritance. No evidence means NO ROW, never an
             # unresolved one (the gate above).
             continue
-        supertype_names = _inherited_names(supertype, methods_by_bare, parents)
-        implementer_methods = methods_by_class.get(implementer, {})
-        overridden_public = {
-            name: symbol
-            for name, (symbol, visibility) in implementer_methods.items()
-            if name in supertype_names and visibility == "public"
-        }
-        if not overridden_public:
-            # "The registration is the evidence" restated one level over: a
-            # class merely extending the generated base without overriding
-            # any of its methods proves nothing this style derives from.
+        if served is not None and implementer not in served:
+            # The catalog's serving annotation, on the class itself, is a
+            # conjunct of every form it serves (CP-52 row 7). A generated
+            # delegating bean carries none, so it is never a handler.
             continue
-        service_name = service_names.get(outer)
-        wires = wire_names.get(outer, [])
-        if service_name is None or not wires:
-            # The marker call is there (the gate) and its argument is not —
-            # CP-8(b)/(d) falsified for this class. Unresolved, plus a gap.
-            matches.append(
-                _ClassMatch(implementer=implementer, supertype=supertype, unreadable=True)
+        match = _matched(
+            implementer,
+            supertype,
+            _inherited_names(supertype, methods_by_bare, parents),
+            methods_by_class.get(implementer, {}),
+            service_names.get(outer),
+            wire_names.get(outer, []),
+        )
+        if match is not None:
+            matches.append(match)
+    # Spec §3b, CP-53 rows 8-10: a generated bean that delegates to a module
+    # class is served by that class. The bean's identity and wire names are its
+    # base's; the handler's candidate methods are the ones the delegate type
+    # declares.
+    bean = catalog.matches.get("delegating_bean")
+    if bean is not None:
+        superclass_of = _superclass_of(workspace)
+        pool = _handler_pool(workspace, known_symbols, served)
+        for bean_class, delegate in _delegating_beans(workspace, bean, known_symbols):
+            base = superclass_of.get(bare_descriptor(bean_class))
+            outer = identities.of(base) if base is not None else None
+            if base is None or outer is None:
+                continue
+            if not _delegate_form_applies(bean_class, base, outer, superclass_of, hosts):
+                continue
+            handlers = [c for c in pool if _reaches(bare_descriptor(c), delegate, parents)]
+            if len(handlers) > 1:
+                # CP-53 row 9: the framework takes the first in its index's
+                # order, which nothing here can read. No handler; a gap.
+                matches.append(
+                    _ClassMatch(implementer=handlers[0], supertype=base, contenders=tuple(handlers))
+                )
+                continue
+            match = (
+                _matched(
+                    handlers[0],
+                    base,
+                    _inherited_names(delegate, methods_by_bare, parents),
+                    methods_by_class.get(handlers[0], {}),
+                    service_names.get(outer),
+                    wire_names.get(outer, []),
+                )
+                if handlers
+                else None
             )
-            continue
-        matches.append(_correlated(implementer, supertype, service_name, wires, overridden_public))
+            if match is not None:
+                matches.append(match)
     return matches
+
+
+def _matched(
+    implementer: str,
+    supertype: str,
+    candidate_names: set[str],
+    implementer_methods: dict[str, tuple[str, str]],
+    service_name: str | None,
+    wires: list[str],
+) -> _ClassMatch | None:
+    """`implementer`'s public methods named in `candidate_names`, correlated to
+    the identity's wire names — or `None` when it declares none of them."""
+    overridden_public = {
+        name: symbol
+        for name, (symbol, visibility) in implementer_methods.items()
+        if name in candidate_names and visibility == "public"
+    }
+    if not overridden_public:
+        # "The registration is the evidence" restated one level over: a
+        # class merely extending the generated base without overriding
+        # any of its methods proves nothing this style derives from.
+        return None
+    if service_name is None or not wires:
+        # The marker call is there (the gate) and its argument is not —
+        # CP-8(b)/(d) falsified for this class. Unresolved, plus a gap.
+        return _ClassMatch(implementer=implementer, supertype=supertype, unreadable=True)
+    return _correlated(implementer, supertype, service_name, wires, overridden_public)
+
+
+@dataclass(frozen=True)
+class _Identities:
+    """Which outer class's marker calls state a supertype's identity."""
+
+    marked: set[str]
+    # Unmarked outer -> the one marked outer its nest delegates to (spec §3a).
+    delegated: dict[str, str]
+    service_supertype: str | None
+    parents: dict[str, list[str]]
+    hosts: dict[str, str]
+
+    def of(self, supertype: str) -> str | None:
+        """The supertype's own outer class when that class makes a marker
+        call. Otherwise, when the catalog names a `service_supertype` and the
+        supertype implements it, the marked class its outer class delegates
+        to. `None` when neither holds."""
+        outer = outer_of(supertype, self.hosts)
+        if outer in self.marked:
+            return outer
+        if self.service_supertype is None or outer not in self.delegated:
+            return None
+        if not _reaches(supertype, _catalog_symbol(self.service_supertype), self.parents):
+            return None
+        return self.delegated[outer]
+
+
+def _served(workspace: Workspace, annotation: str | None) -> set[str] | None:
+    """Every symbol carrying `annotation` itself — `annotations` holds the
+    annotations a class file declares, never inherited ones, which is what the
+    framework reads (CP-53 row 9). `None` when the catalog names none."""
+    if annotation is None:
+        return None
+    wanted = _catalog_symbol(annotation)
+    return {
+        str(row["target"])
+        for row in workspace.query("annotations")
+        if str(row["annotation"]) == wanted
+    }
+
+
+def _delegating_beans(
+    workspace: Workspace, bean: dict[str, Any], known_symbols: set[str]
+) -> list[tuple[str, str]]:
+    """`(bean, its delegate field's declared type, bare)` for every module class
+    that DIRECTLY implements `bean.implements` — the framework reads its known
+    direct implementors (CP-53 row 8). A bean declaring no such field is left
+    out."""
+    implements = _catalog_symbol(bean["implements"])
+    field_types: dict[tuple[str, str], str] = {}
+    for row in workspace.query("fields"):
+        raw = row["returns"]
+        returns = json.loads(str(raw)) if raw is not None else None
+        declared = returns.get("symbol") if isinstance(returns, dict) else None
+        field = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(field)
+        if declared and owner is not None:
+            field_types[(owner, member_name(field))] = str(declared)
+    found: list[tuple[str, str]] = []
+    for row in workspace.query("implementations"):
+        bean_class = str(row["symbol"])
+        raw = row["interfaces"]
+        interfaces = raw if isinstance(raw, list) else json.loads(str(raw))
+        if bean_class not in known_symbols:
+            continue
+        if implements not in {bare_descriptor(str(entry)) for entry in interfaces}:
+            continue
+        delegate = field_types.get((bare_descriptor(bean_class), str(bean["delegate_field"])))
+        if delegate is not None:
+            found.append((bean_class, delegate))
+    return found
+
+
+def _superclass_of(workspace: Workspace) -> dict[str, str]:
+    """Every type's direct superclass, both sides bare."""
+    return {
+        bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
+        for row in workspace.query("superclasses")
+    }
+
+
+def _handler_pool(
+    workspace: Workspace, known_symbols: set[str], served: set[str] | None
+) -> list[str]:
+    """The module's classes a delegating bean may delegate to, sorted: those
+    carrying the serving annotation where the catalog names one, never an
+    interface (the framework looks for implementing classes)."""
+    interfaces = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
+    declared = {
+        str(row["symbol"])
+        for query in ("superclasses", "implementations")
+        for row in workspace.query(query)
+    }
+    pool = declared & known_symbols
+    if served is not None:
+        pool &= served
+    return sorted(pool - interfaces)
+
+
+def _delegate_form_applies(
+    bean_class: str, base: str, outer: str, superclass_of: dict[str, str], hosts: dict[str, str]
+) -> bool:
+    """CP-53 row 10's two conditions on a bean's base, as the framework reads them.
+
+    The base's only subclass, at any depth, is the bean. A second one means the
+    user extended the base directly, and the extends form serves that class.
+
+    No module class extends a class nested in `outer`, the marked class the
+    base takes its identity from. The framework asks this by name (the base's
+    name with its wrapper prefix removed); that name is a class nested in
+    `outer`, read here by structure instead. An edge inside `outer`'s own nest
+    is its own structure (protoc's descriptor suppliers), not a module
+    extending it."""
+    subclasses = {child for child in superclass_of if _extends(child, base, superclass_of)}
+    if subclasses != {bare_descriptor(bean_class)}:
+        return False
+    return not any(
+        outer_of(parent, hosts) == outer and outer_of(child, hosts) != outer
+        for child, parent in superclass_of.items()
+    )
+
+
+def _extends(child: str, base: str, superclass_of: dict[str, str]) -> bool:
+    """Whether `base` is one of `child`'s superclasses, at any depth."""
+    seen: set[str] = set()
+    current = superclass_of.get(child)
+    while current is not None and current not in seen:
+        if current == base:
+            return True
+        seen.add(current)
+        current = superclass_of.get(current)
+    return False
+
+
+def _reaches(start: str, target: str, parents: dict[str, list[str]]) -> bool:
+    """Whether `target` is `start` or one of its supertypes, transitively
+    (both bare)."""
+    seen = {start}
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        if current == target:
+            return True
+        for parent in parents.get(current, []):
+            if parent not in seen:
+                seen.add(parent)
+                pending.append(parent)
+    return False
 
 
 def _correlated(
@@ -548,6 +797,22 @@ def _validate_matches(catalog: Catalog) -> None:
     for key in _REQUIRED_MARKER:
         if key in marker:
             _validate_call(catalog, marker[key], key)
+    for key in _OPTIONAL_TYPES:
+        if key in matches and not isinstance(matches[key], str):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `matches.{key}` must name one type, "
+                f"got {matches[key]!r} (spec 2026-10-25 §3a, §3b)"
+            )
+    if "delegating_bean" in matches:
+        bean = matches["delegating_bean"]
+        valid = isinstance(bean, dict) and all(
+            isinstance(bean.get(key), str) for key in _DELEGATING_BEAN
+        )
+        if not valid:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `matches.delegating_bean` must be "
+                f"`{{implements, delegate_field}}`, got {bean!r} (spec 2026-10-25 §3b)"
+            )
 
 
 def _validate_call(catalog: Catalog, declared: Any, key: str) -> None:

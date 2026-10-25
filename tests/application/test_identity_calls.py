@@ -69,3 +69,13 @@ def test_a_call_into_a_library_class_is_not_an_identity() -> None:
     sites = [_call(CLIENT, "log", "java/util/logging/Logger#", "info")]
 
     assert delegated_outers(sites, {GRPC}, HOSTS) == {}
+
+
+def test_a_marked_class_named_by_its_nested_type_is_read_as_its_outer() -> None:
+    """`calling_classes` gives the type that DECLARES the marker call, which
+    can be a nested one; a call is read against outer classes, so the marked
+    set is read the same way."""
+    nested = "com/acme/proto/BillingGrpc$Descriptors#"
+    sites = [_call(IMPL_BASE, "bindService", GRPC, "getServiceDescriptor")]
+
+    assert delegated_outers(sites, {nested}, {**HOSTS, nested: GRPC}) == {WRAPPER: GRPC}

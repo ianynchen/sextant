@@ -153,7 +153,11 @@ def delegated_outers(
     An outer that reaches no marked class, or two different ones, is absent —
     nothing is guessed between two. A marked class is never remapped, even
     when it calls another marked class: it states an identity itself. A
-    visited set ends the walk on a cycle of unmarked outers."""
+    visited set ends the walk on a cycle of unmarked outers.
+
+    `marked` is read as outer classes too: `calling_classes` gives the type
+    that DECLARES a marker call, which can be a nested one."""
+    marked = {outer_of(declaring, hosts) for declaring in marked}
     calls: dict[str, set[str]] = {}
     for site in call_sites:
         caller = caller_outer_class(str(site["caller"]))

@@ -21,7 +21,9 @@ mirrors)."""
 import json
 from pathlib import Path
 
-from sextant.application.ports.catalogs import Catalog, CatalogSource
+import pytest
+
+from sextant.application.ports.catalogs import Catalog, CatalogError, CatalogSource
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -35,8 +37,12 @@ from sextant.domain.facts import (
     DeclaredShapeFact,
     Document,
     OperationRecord,
+    Signature,
     SymbolFact,
+    TypeRef,
 )
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "superclass", "annotation_args"}
@@ -132,13 +138,15 @@ def _implementor_facts(*method_names: str, superclass: str | None = None) -> lis
     return facts
 
 
-def _service_name_site(value: str | None = SERVICE_NAME, *, ordinal: int = 0) -> CallSiteFact:
+def _service_name_site(
+    value: str | None = SERVICE_NAME, *, ordinal: int = 0, outer: str = OUTER
+) -> CallSiteFact:
     """CP-8(b)'s own `ServiceDescriptor.newBuilder("<protoPackage>.<Service>")`
     call, declared on the OUTER generated class (`getServiceDescriptor`),
     never on the nested `ImplBase` an implementer extends."""
     return CallSiteFact(
         document_id="doc_1",
-        caller=f"{_MODULE}{OUTER}getServiceDescriptor().",
+        caller=f"{_MODULE}{outer}getServiceDescriptor().",
         target=CallTarget(
             owner="io/grpc/ServiceDescriptor#", name="newBuilder", descriptor="(...)V"
         ),
@@ -153,7 +161,12 @@ def _service_name_site(value: str | None = SERVICE_NAME, *, ordinal: int = 0) ->
 
 
 def _method_name_site(
-    wire_method: str, *, service: str = SERVICE_NAME, accessor: str | None = None, ordinal: int = 1
+    wire_method: str,
+    *,
+    service: str = SERVICE_NAME,
+    accessor: str | None = None,
+    ordinal: int = 1,
+    outer: str = OUTER,
 ) -> CallSiteFact:
     """CP-8(d)'s own
     `MethodDescriptor.generateFullMethodName(SERVICE_NAME, "<Method>")` call
@@ -161,7 +174,7 @@ def _method_name_site(
     on the SAME outer class."""
     return CallSiteFact(
         document_id="doc_1",
-        caller=f"{_MODULE}{OUTER}{accessor or f'get{wire_method}Method'}().",
+        caller=f"{_MODULE}{outer}{accessor or f'get{wire_method}Method'}().",
         target=CallTarget(
             owner="io/grpc/MethodDescriptor#", name="generateFullMethodName", descriptor="(...)V"
         ),
@@ -624,3 +637,285 @@ def test_an_annotated_class_the_supertype_match_derived_files_no_question(tmp_pa
 
     assert [row["path"] for row in rows] == [f"{SERVICE_NAME}/GetOrder"]
     assert questions == []
+
+
+# --- (e) Quarkus's Mutiny forms (spec 2026-10-25 §2a, §3a, §3b; CP-53) ------
+#
+# These run the SHIPPED `grpc-quarkus.yml` and `grpc-java.yml`, so a wrong
+# FQN in either catalog fails here. The class names are the shapes measured
+# in `quarkus-quickstarts`' `grpc-plain-text-quickstart` (spec §2a); the
+# module, as everywhere in this file, is invented.
+
+QUARKUS_CAPABILITIES = CAPABILITIES | {"typed_signatures"}
+QK_GRPC = "examples/GreeterGrpc#"
+QK_PLAIN_BASE = "examples/GreeterGrpc$GreeterImplBase#"
+QK_MUTINY_BASE = "examples/MutinyGreeterGrpc$GreeterImplBase#"
+QK_INTERFACE = "examples/Greeter#"
+QK_BEAN = "examples/GreeterBean#"
+QK_SERVICE = "examples/HelloWorldService#"
+QK_NAME = "helloworld.Greeter"
+GRPC_SERVICE = "io/quarkus/grpc/GrpcService#"
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == catalog_id)
+
+
+def _class(
+    symbol: str,
+    *,
+    superclass: str | None = None,
+    interfaces: tuple[str, ...] = (),
+    methods: tuple[str, ...] = (),
+    kind: ConstructKind = ConstructKind.CLASS,
+) -> list[SymbolFact]:
+    facts = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + symbol,
+            construct_kind=kind,
+            superclass=_MODULE + superclass if superclass else None,
+            interfaces=list(interfaces),
+        )
+    ]
+    for name in methods:
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=f"{_MODULE}{symbol}{name}(sig_{name}).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + symbol,
+            )
+        )
+    return facts
+
+
+def _call(caller: str, owner: str, name: str, *, ordinal: int = 0) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=f"{_MODULE}{caller}",
+        target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+    )
+
+
+def _generated(*, base_calls: tuple[str, ...] = (QK_GRPC,)) -> list[object]:
+    """What `quarkus-grpc`'s code generation compiles into the module for one
+    `service Greeter` (spec §2a): grpc-java's own `GreeterGrpc`, which makes
+    both marker calls; the Mutiny interface; the Mutiny ImplBase, which
+    implements `BindableService` and whose `bindService` calls the marked
+    class (`base_calls`); and the generated `GreeterBean`, which extends that
+    base, implements `MutinyBean`, holds a `delegate` field typed as the
+    interface and carries no annotation."""
+    facts: list[object] = [
+        _service_name_site(QK_NAME, outer=QK_GRPC),
+        _method_name_site("SayHello", service=QK_NAME, outer=QK_GRPC),
+        *_class(QK_INTERFACE, methods=("sayHello",), kind=ConstructKind.INTERFACE),
+        *_class(QK_MUTINY_BASE, interfaces=("io/grpc/BindableService#",), methods=("sayHello",)),
+        *_class(
+            QK_BEAN,
+            superclass=QK_MUTINY_BASE,
+            interfaces=("io/grpc/BindableService#", "io/quarkus/grpc/MutinyBean#"),
+            methods=("sayHello",),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{QK_BEAN}delegate.",
+            construct_kind=ConstructKind.FIELD,
+            enclosing=_MODULE + QK_BEAN,
+            signature=Signature(returns=TypeRef(symbol=QK_INTERFACE)),
+        ),
+        _call(f"{QK_BEAN}sayHello(sig_sayHello).", QK_INTERFACE, "sayHello"),
+    ]
+    for ordinal, marked in enumerate(base_calls):
+        facts.append(
+            _call(
+                f"{QK_MUTINY_BASE}bindService().", marked, "getServiceDescriptor", ordinal=ordinal
+            )
+        )
+    return facts
+
+
+def _service(
+    symbol: str = QK_SERVICE,
+    *,
+    annotated: bool = True,
+    superclass: str | None = None,
+    interfaces: tuple[str, ...] = (QK_INTERFACE,),
+) -> list[object]:
+    """A user's service class: by default `@GrpcService ... implements
+    Greeter`, the form both quickstarts write."""
+    facts: list[object] = [
+        *_class(symbol, superclass=superclass, interfaces=interfaces, methods=("sayHello",))
+    ]
+    if annotated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=_MODULE + symbol,
+                use=AnnotationUse(annotation=GRPC_SERVICE),
+                retention="RUNTIME",
+            )
+        )
+    return facts
+
+
+def _resolved(
+    tmp_path: Path, facts: list[object], catalog_id: str = "grpc-quarkus"
+) -> tuple[list[tuple[object, object, object]], list[dict[str, object]]]:
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_shipped(catalog_id)]), QUARKUS_CAPABILITIES)
+    rows = [
+        (row["path"], row["handler"], row["resolution"]) for row in workspace.query("endpoints")
+    ]
+    questions = workspace.query("open_questions")
+    workspace.close()
+    return rows, questions
+
+
+def _handler(symbol: str) -> str:
+    return f"{_MODULE}{symbol}sayHello(sig_sayHello)."
+
+
+@pytest.mark.pins("grpc.a-QUARKUS-service-implementing-its-interface-is-the-handler")
+def test_a_quarkus_service_implementing_the_mutiny_interface_is_its_rpcs_handler(tmp_path: Path):
+    """CP-53 rows 8-11: Quarkus serves the generated bean as delegating to the
+    `@GrpcService` class that implements the bean's `delegate` type. The
+    identity and the wire name are the ones the bean's base delegates to
+    (`GreeterGrpc`'s), the handler is the user's method."""
+    rows, questions = _resolved(tmp_path, [*_generated(), *_service()])
+
+    assert rows == [(f"{QK_NAME}/SayHello", _handler(QK_SERVICE), "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("grpc.the-GENERATED-bean-is-never-a-handler")
+def test_the_generated_bean_is_never_a_handler(tmp_path: Path):
+    """`GreeterBean` extends the delegating base and declares `sayHello`, which
+    is every conjunct of the extends form but one: it carries no
+    `@GrpcService` (CP-52 row 7)."""
+    rows, _ = _resolved(tmp_path, [*_generated(), *_service()])
+
+    assert [row for row in rows if str(row[1]).startswith(_MODULE + QK_BEAN)] == []
+
+
+@pytest.mark.declines("grpc-quarkus")
+@pytest.mark.pins("grpc.the-GENERATED-bean-is-never-a-handler")
+def test_a_bean_with_no_annotated_implementor_serves_nothing(tmp_path: Path):
+    """CP-53 row 9: a bean whose delegate type has no implementor carrying
+    `@GrpcService` on the class itself is skipped. Every other conjunct
+    holds."""
+    rows, questions = _resolved(tmp_path, [*_generated(), *_service(annotated=False)])
+
+    assert rows == []
+    assert questions == []
+
+
+def test_a_quarkus_service_extending_the_mutiny_base_directly_is_served(tmp_path: Path):
+    """The fourth form: `@GrpcService X extends MutinyGreeterGrpc.GreeterImplBase`.
+    The base now has two subclasses, so Quarkus skips the generated bean
+    (CP-53 row 10), and X is served through the base it extends, whose identity
+    is the marked class that base delegates to (spec §3a)."""
+    direct = "examples/DirectGreeter#"
+    facts = [*_generated(), *_service(direct, superclass=QK_MUTINY_BASE, interfaces=())]
+
+    rows, questions = _resolved(tmp_path, facts)
+
+    assert rows == [(f"{QK_NAME}/SayHello", _handler(direct), "resolved")]
+    assert questions == []
+
+
+def test_a_module_extending_the_plain_generated_base_turns_the_delegate_form_off(
+    tmp_path: Path,
+):
+    """CP-53 row 10's second condition, stated structurally: a module class
+    extends a class nested in the marked class the bean's base delegates to
+    (Quarkus reads it as the base's name with `Mutiny` removed). The bean is
+    then skipped, so the interface's implementor is not served through it;
+    the class extending the plain base is served by the extends form."""
+    plain = "examples/PlainGreeter#"
+    facts = [
+        *_generated(),
+        *_service(),
+        *_class(QK_PLAIN_BASE, interfaces=("io/grpc/BindableService#",), methods=("sayHello",)),
+        *_service(plain, superclass=QK_PLAIN_BASE, interfaces=()),
+    ]
+
+    rows, _ = _resolved(tmp_path, facts)
+
+    assert rows == [(f"{QK_NAME}/SayHello", _handler(plain), "resolved")]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param(_service(), id="implements-the-interface"),
+        pytest.param(
+            _service("examples/DirectGreeter#", superclass=QK_MUTINY_BASE, interfaces=()),
+            id="extends-the-mutiny-base",
+        ),
+    ],
+)
+def test_grpc_java_catalog_does_not_delegate(tmp_path: Path, extra: list[object]):
+    """Delegation is switched on by a catalog declaring `service_supertype`,
+    and `grpc-java.yml` declares none: the Mutiny base's own outer class makes
+    no marker call, so neither Mutiny form matches there."""
+    rows, questions = _resolved(tmp_path, [*_generated(), *extra], "grpc-java")
+
+    assert rows == []
+    assert questions == []
+
+
+def test_a_delegating_base_reaching_two_services_is_no_match(tmp_path: Path):
+    """Spec §3a: a base whose code reaches two marked classes has no identity,
+    so nothing proves which service it is. No row and no question, the same
+    outcome as a supertype making no marker call."""
+    other = "examples/OtherGrpc#"
+    facts = [
+        *_generated(base_calls=(QK_GRPC, other)),
+        _service_name_site("other.Other", outer=other, ordinal=3),
+        *_service(),
+    ]
+
+    rows, questions = _resolved(tmp_path, facts)
+
+    assert rows == []
+    assert questions == []
+
+
+def test_two_annotated_implementors_of_one_delegate_type_file_a_question_naming_both(
+    tmp_path: Path,
+):
+    """CP-53 row 9: Quarkus delegates to the FIRST annotated implementor its
+    index yields, an order the bytecode does not fix. Which class handles the
+    RPCs is therefore not derivable: neither gets a handler row, and the
+    question names both."""
+    second = "examples/OtherHelloWorldService#"
+    rows, questions = _resolved(tmp_path, [*_generated(), *_service(), *_service(second)])
+
+    assert rows == [(QK_MUTINY_BASE, None, "unresolved")]
+    assert [q["question"] for q in questions] == ["service_identity"]
+    named = {c["class"] for c in json.loads(str(questions[0]["candidates"]))}
+    assert named == {_MODULE + QK_SERVICE, _MODULE + second}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("service_supertype", ["io.grpc.BindableService"]),
+        ("served_by_annotation", 3),
+        ("delegating_bean", {"implements": "io.quarkus.grpc.MutinyBean"}),
+        ("delegating_bean", "io.quarkus.grpc.MutinyBean"),
+    ],
+)
+def test_a_malformed_quarkus_key_is_refused(tmp_path: Path, key: str, value: object):
+    matches = dict(_shipped("grpc-quarkus").matches)
+    matches[key] = value
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match=key):
+        derive_endpoints(workspace, [_catalog(matches=matches)], capabilities=CAPABILITIES)
+    workspace.close()

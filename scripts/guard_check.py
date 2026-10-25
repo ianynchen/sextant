@@ -3760,6 +3760,39 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-QUARKUS-service-implementing-its-interface-is-the-handler": Guard(
+        what="a `@GrpcService` class implementing the interface a generated Mutiny bean's "
+        "`delegate` field is declared as is the handler of that bean's RPCs, under the "
+        "identity the bean's base delegates to",
+        why="spec 2026-10-25 §3b, CP-53 rows 8-11: `@GrpcService class X implements Greeter` "
+        "is the form both Quarkus quickstarts write. Without the delegate form its RPCs keep "
+        "the `.proto`'s handler-less row plus a `service_identity` question, so the service "
+        "a Quarkus module serves has no handler in the document and no trace reaches it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find='    bean = catalog.matches.get("delegating_bean")\n',
+                replace="    bean = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.the-GENERATED-bean-is-never-a-handler": Guard(
+        what="under a catalog naming `served_by_annotation`, an implementer that does not "
+        "declare that annotation itself matches no form, so the generated Mutiny bean "
+        "(which carries none) is never a handler",
+        why="CP-52 row 7, CP-53 row 9: Quarkus serves only `@GrpcService` classes and reads "
+        "the annotation declared on the class. `GreeterBean` extends the delegating base and "
+        "declares every RPC method, so without the check it is published as the handler of "
+        "every RPC, ahead of the user's class, and a bean with no service behind it is "
+        "published as a served service",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        if served is not None and implementer not in served:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "injected_client.a-PARAMETER-is-an-injection-point": Guard(
         what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
         "to that parameter's declared type, as a field's is",
