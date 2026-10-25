@@ -1,6 +1,6 @@
 # Quarkus's Mutiny gRPC forms, and a call a module makes to its own service — design
 
-**Status: DRAFT 2026-10-25.** Closes register item `quarkus-grpc-mutiny` (Plane SEXTANT-176)
+**Status: BUILT 2026-10-25** ("As built" below). Closes register item `quarkus-grpc-mutiny` (Plane SEXTANT-176)
 and `OI-192` (SEXTANT-66). Moves COVERAGE §2b's Quarkus gRPC cell from `◐` to `✅`, which
 makes Quarkus's row read `✅` everywhere it is scored.
 
@@ -308,3 +308,48 @@ Rebuilt with JDK 21. Re-pin any count the new classes move.
   (§4) were created with this spec.
 - `scripts/field_check.py`: six `ok`. No pinned corpus has gRPC self-calls, so this is to be
   confirmed, not assumed.
+
+## As built — measured on quarkus-quickstarts
+
+`quarkusio/quarkus-quickstarts` @ `81a5844` (Quarkus 3.40.1.1), the two gRPC modules as built for
+the 2026-10-24 spec, each analysed with `sextant module analyze` and `render` after Task 8:
+
+| | `grpc-plain-text-quickstart` | `grpc-tls-quickstart` |
+|---|---|---|
+| inbound gRPC | `helloworld.Greeter/SayHello`, handler `HelloWorldService#sayHello`, resolved (`grpc-quarkus`) | `helloworld.Greeter/SayHello`, handler `HelloWorldTlsService#sayHello`, resolved (`grpc-quarkus`) |
+| open questions | none | none |
+| gRPC outbound rows | none | none |
+| `rpc_hops` | 4: `GreeterBlockingStub`, `GreeterBlockingV2Stub`, `GreeterFutureStub`, `GreeterStub` `#sayHello` → the handler | the same 4 → the handler |
+| `GET /hello/blocking/{name}` | one hop step, `via grpc helloworld.Greeter/SayHello` → `HelloWorldService#sayHello`, expanded (92 steps, 50 terminals) | the same → `HelloWorldTlsService#sayHello` (82 steps, 46 terminals) |
+| `GET /hello/mutiny/{name}` | one hop step through `GreeterClient` → `MutinyGreeterStub` → `GreeterStub`, → `HelloWorldService#sayHello`, expanded (101 steps, 55 terminals) | the same → `HelloWorldTlsService#sayHello` (90 steps, 51 terminals) |
+| document arrows | `blockingUnaryCall (declared ClientCalls) via grpc helloworld.Greeter/SayHello`, `asyncUnaryCall (declared ClientCalls) via grpc helloworld.Greeter/SayHello` | the same |
+| `reachability` rows | 181 | 165 |
+
+That is §6's expectation on both modules. `Greeter#sayHello` stays narrowed to its two bodies
+(§4, OI-196): the `HelloWorldService` branch is `revisited`, having been reached through the hop
+first.
+
+`fixtures/orders-quarkus` (§3f) carries the stand-ins as specified, with three choices made in
+building them:
+- **`PricingGrpc` moved** from `hello/` to `pricing/`, beside `MutinyPricingGrpc`, `Pricing`, the
+  generated `PricingClient` and `PricingBean`. It had to: the Mutiny stub's constructor calls the
+  delegate stub's protected `build`, which compiles only from the same package, as protoc places
+  them. `PricingBean` is kept because Quarkus's generator emits a bean for every service of a
+  compiled `.proto`; it serves nothing and fences nothing.
+- **`quarkus-grpc-stubs` 3.40.1.1** is the one dependency not at the BOM's 3.17.5: the Mutiny
+  stand-ins call its `ClientCalls.oneToOne`/`ServerCalls.oneToOne` as the measured generated
+  classes do, and that is the version those classes were generated against.
+- Each Mutiny `Pricing` client form was also checked on its own (a scratch copy with the other
+  forms removed): each resolves `acme.pricing.Pricing` with no question. The e2e pin sees one
+  deduplicated row.
+
+**Deviations from §3, each ruled during the build:**
+- **`service_supertype` is per catalog** (plan ruling, §3a's amendment): `grpc-quarkus.yml`
+  declares it with `served_by_annotation`, and `grpc-java.yml` is unchanged. The generated bean
+  is excluded because it carries no `@GrpcService`, not by a skip list (§3b).
+- **CP-53's gates** (§3b's amendment): the client map keys an implementor by its first other
+  interface; the delegate form applies only when the bean's superclass has exactly one subclass
+  in the module and no module class extends a class nested in the delegated outer; two
+  `@GrpcService` implementors of one delegate interface leave both unjoined, with one question.
+- **`rpc_hops.path` is masked on export** through the address map, as `roots.path` is (D06 §3),
+  against §3e's "nothing masked": it carries `endpoints.path`'s value.

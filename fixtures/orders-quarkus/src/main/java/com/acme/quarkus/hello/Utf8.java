@@ -7,8 +7,9 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
-// The marshaller the two generated stand-ins share, in place of protobuf's.
-enum Utf8 implements MethodDescriptor.Marshaller<String> {
+// The marshaller every generated stand-in shares, in place of protobuf's. Public, because
+// `quotes/QuotesGrpc` and `pricing/PricingGrpc` are in other packages.
+public enum Utf8 implements MethodDescriptor.Marshaller<String> {
     INSTANCE;
 
     @Override

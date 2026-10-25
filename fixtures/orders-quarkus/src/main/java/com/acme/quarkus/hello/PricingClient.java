@@ -1,5 +1,6 @@
 package com.acme.quarkus.hello;
 
+import com.acme.quarkus.pricing.PricingGrpc;
 import io.quarkus.grpc.GrpcClient;
 
 // Quarkus's `@GrpcClient` with its value OMITTED (spec 2026-10-24 §3e; CP-52 rows 2, 5):
