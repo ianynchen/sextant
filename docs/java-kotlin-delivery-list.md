@@ -33,6 +33,11 @@ Adding a Critical or Major anywhere without naming the feature it blocks fails t
 too — that is the check aimed at half-delivery: the half you did not do has to appear here,
 against the feature it belongs to, or the build goes red.
 
+**The issues themselves live in Plane (ruled 2026-10-24).** These blocks name ids; each open
+id is a work item in the Plane project `SEXTANT`, and
+[`open-issues.md`](open-issues.md#id-map) maps every id, OI number or slug, to its
+`SEXTANT-n`. A new blocker is created in Plane first, then named here.
+
 **Minor items are logged, not blocking (ruled 2026-09-13, after PR A2).** The definition above
 says a feature is delivered with no open Critical or Major, so the ```delivery block carries
 Critical and Major ids only. Every Minor gap keeps its `severity` line and its §1 row
