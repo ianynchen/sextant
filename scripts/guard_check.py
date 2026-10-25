@@ -3900,6 +3900,82 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.an-INTERFACE-client-resolves-through-the-generated-client": Guard(
+        what="under `interface_client`, an injected interface is read as the one module class "
+        "implementing it and the named client type, and takes that class's identity",
+        why="spec 2026-10-25 §3b, CP-53 rows 3, 6: `@GrpcClient Greeter` is the client form both "
+        "Quarkus quickstarts write, and Quarkus injects the generated `GreeterClient` for it. "
+        "Read as the interface itself, the row is `examples/Greeter#`, unresolved, with a "
+        "`service_identity` question, so the service the module calls is not named",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='    clients = _interface_clients(workspace, catalog.matches.get("interface_client"))\n',
+                replace="    clients = _interface_clients(workspace, None)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-UNANNOTATED-generated-bean-does-not-fence": Guard(
+        what="under `served_by_annotation`, an `extends` edge fences an injected stub's outer "
+        "class only when the subclass declares that annotation itself",
+        why="CP-52 row 7, CP-53 row 9: Quarkus serves only `@GrpcService` classes. Its generated "
+        "`GreeterBean` extends `MutinyGreeterGrpc$GreeterImplBase` in every module that "
+        "compiles the `.proto`, so counted, it fences the Mutiny stub and a client-only "
+        "module's Mutiny stub client vanishes with no row and no question",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='    fenced = _fenced_outer_classes(workspace, catalog.matches.get("served_by_annotation"))\n',
+                replace="    fenced = _fenced_outer_classes(workspace, None)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-injected-WRAPPER-stub-takes-the-identity-it-delegates-to": Guard(
+        what="an injected type whose outer class makes no marker call takes the identity of the "
+        "one marked class its nest's code reaches",
+        why="spec 2026-10-25 §3a: `MutinyGreeterGrpc` states no identity, and its stub's "
+        "constructor builds `GreeterGrpc`'s stub. Read on the injected type's own outer "
+        "class alone, every Mutiny stub client and every interface client is an unresolved "
+        "row plus a question, though the service it calls is in the module's own facts",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="                service_name=service_names.get(delegated.get(outer, outer)),\n",
+                replace="                service_name=service_names.get(outer),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "grpc.two-INTERFACE-clients-resolve-neither": Guard(
+        what="an injected interface answered by two or more client classes is read as no class",
+        why="CP-53 row 3: Quarkus's map keeps one of them, in an order nothing in the facts "
+        "fixes. Taking the first in sort order names a service that is right only by chance, "
+        "with no question saying it was a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="        if len(answered) == 1:\n",
+                replace="        if answered:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-MUTINY-client-is-keyed-by-its-first-other-interface": Guard(
+        what="a class implementing `interface_client.implements` answers only the FIRST other "
+        "interface it declares",
+        why="CP-53 row 3: Quarkus keys the client by its first interface other than "
+        "`MutinyClient` and reads no further. Keyed by every interface, a client declaring a "
+        "second one answers an injection point Quarkus does not wire to it, and the row "
+        "names a service that injection point is never given",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="        keyed = next((entry for entry in declared if entry != implements), None)\n"
+                "        if keyed is not None:\n",
+                replace="        for keyed in [entry for entry in declared if entry != implements]:\n",
+            ),
+        ),
+    ),
     "jakarta-servlet.every-type-is-spelled-jakarta": Guard(
         what="every type `jakarta-servlet.yml` names is spelled `jakarta`, the API it describes",
         why="the mirror leak: a `javax` name kept in the jakarta catalog would match legacy "

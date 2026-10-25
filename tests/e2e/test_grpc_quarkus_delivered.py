@@ -45,10 +45,7 @@ def quarkus_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[d
         workspace.close()
 
 
-@pytest.mark.pins(
-    "grpc.a-QUARKUS-client-field-is-an-outbound-service",
-    "injected_client.a-GENERATED-class-own-nesting-does-not-fence",
-)
+@pytest.mark.pins("grpc.a-QUARKUS-client-field-is-an-outbound-service")
 def test_a_quarkus_grpc_client_field_is_an_outbound_service(quarkus_tables):
     """`PricingClient`'s `@GrpcClient` field, value omitted (the client is named by the
     field, CP-52 rows 2, 5): one outbound, service-level row at the stub's own

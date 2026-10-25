@@ -239,7 +239,6 @@ def test_a_quarkus_client_stub_field_derives_one_service_level_outbound_row(
     assert row["resolution"] == "resolved"
 
 
-@pytest.mark.pins("injected_client.a-GENERATED-class-own-nesting-does-not-fence")
 def test_a_quarkus_client_beside_protocs_own_generated_nesting_derives_its_row(tmp_path: Path):
     """A Quarkus module compiles its `.proto` itself (`quarkus-grpc`'s code generation),
     so the stub's outer class always carries protoc's `HelloFileDescriptorSupplier

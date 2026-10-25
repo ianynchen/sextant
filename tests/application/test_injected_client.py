@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from sextant.application.ports.catalogs import Catalog, CatalogSource
+from sextant.application.ports.catalogs import Catalog, CatalogError, CatalogSource
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -30,6 +30,8 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "annotation_args", "typed_signatures"}
@@ -68,7 +70,9 @@ def _document(document_id: str = "doc_1") -> Document:
     )
 
 
-def _injected_field(stub_type: str = BLOCKING_STUB, field: str = FIELD) -> list[object]:
+def _injected_field(
+    stub_type: str = BLOCKING_STUB, field: str = FIELD, *, annotation: str = GRPC_CLIENT_SYMBOL
+) -> list[object]:
     """The one shape `injected_client` matches on: a field's own declared
     type (D00 §5a's typed signature — `Signature.returns`, bare, the
     `single_call._argument_type_identity` precedent) plus the `@GrpcClient`
@@ -83,7 +87,7 @@ def _injected_field(stub_type: str = BLOCKING_STUB, field: str = FIELD) -> list[
         AnnotationFact(
             document_id="doc_1",
             target=_MODULE + field,
-            use=AnnotationUse(annotation=GRPC_CLIENT_SYMBOL),
+            use=AnnotationUse(annotation=annotation),
             retention="RUNTIME",
         ),
     ]
@@ -408,3 +412,253 @@ def test_an_unreadable_identity_files_a_question_rather_than_guessing(tmp_path: 
     assert questions[0]["path"] == BLOCKING_STUB
     candidates = json.loads(str(questions[0]["candidates"]))
     assert candidates[0]["class"] == _MODULE + FIELD
+
+
+# --- (d) Quarkus's Mutiny client forms (spec 2026-10-25 §2a, §3a, §3b; CP-53)
+#
+# These run the SHIPPED `grpc-quarkus-client.yml`, so a wrong FQN in it fails
+# here. The class names are the shapes measured in `quarkus-quickstarts`'
+# `grpc-plain-text-quickstart` (spec §2a); the module is invented.
+
+QUARKUS_CAPABILITIES = CAPABILITIES | {"superclass"}
+QUARKUS_CLIENT = "io/quarkus/grpc/GrpcClient#"
+GRPC_SERVICE = "io/quarkus/grpc/GrpcService#"
+MUTINY_CLIENT = "io/quarkus/grpc/MutinyClient#"
+QK_GRPC = "examples/GreeterGrpc#"
+QK_BLOCKING_STUB = "examples/GreeterGrpc$GreeterBlockingStub#"
+QK_PLAIN_BASE = "examples/GreeterGrpc$GreeterImplBase#"
+QK_MUTINY_GRPC = "examples/MutinyGreeterGrpc#"
+QK_MUTINY_STUB = "examples/MutinyGreeterGrpc$MutinyGreeterStub#"
+QK_MUTINY_BASE = "examples/MutinyGreeterGrpc$GreeterImplBase#"
+QK_INTERFACE = "examples/Greeter#"
+QK_CLIENT = "examples/GreeterClient#"
+QK_BEAN = "examples/GreeterBean#"
+QK_NAME = "helloworld.Greeter"
+
+
+def _class(
+    symbol: str,
+    *,
+    superclass: str | None = None,
+    interfaces: tuple[str, ...] = (),
+    kind: ConstructKind = ConstructKind.CLASS,
+    annotation: str | None = None,
+) -> list[object]:
+    facts: list[object] = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + symbol,
+            construct_kind=kind,
+            superclass=_MODULE + superclass if superclass else None,
+            interfaces=list(interfaces),
+        )
+    ]
+    if annotation is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=_MODULE + symbol,
+                use=AnnotationUse(annotation=annotation),
+                retention="RUNTIME",
+            )
+        )
+    return facts
+
+
+def _call(caller: str, owner: str, name: str, *, ordinal: int = 0) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=f"{_MODULE}{caller}",
+        target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+        invoke_kind="virtual",
+        ordinal=ordinal,
+    )
+
+
+def _mutiny_client(
+    symbol: str = QK_CLIENT, *, interfaces: tuple[str, ...] = (QK_INTERFACE, MUTINY_CLIENT)
+) -> list[object]:
+    """`GreeterClient implements Greeter, MutinyClient<MutinyGreeterStub>`
+    (spec §2a): it builds its stub with `MutinyGreeterGrpc.newMutinyStub`,
+    and its `sayHello` calls the stub's."""
+    return [
+        *_class(symbol, interfaces=interfaces),
+        _call(f"{symbol}`<init>`(sig_init).", QK_MUTINY_GRPC, "newMutinyStub"),
+        _call(f"{symbol}sayHello(sig_sayHello).", QK_MUTINY_STUB, "sayHello", ordinal=1),
+    ]
+
+
+def _generated(
+    *, client_interfaces: tuple[str, ...] = (QK_INTERFACE, MUTINY_CLIENT)
+) -> list[object]:
+    """What `quarkus-grpc`'s code generation compiles into a module for one
+    `service Greeter` (spec §2a), the client half: grpc-java's `GreeterGrpc`,
+    which states the identity; the Mutiny interface; the Mutiny stub, whose
+    constructor calls `GreeterGrpc.newStub`; and the generated client, which
+    declares `client_interfaces`."""
+    return [
+        _service_name_site(QK_NAME, outer=QK_GRPC),
+        *_class(QK_INTERFACE, interfaces=("io/quarkus/grpc/MutinyService#",)),
+        *_class(
+            QK_MUTINY_STUB,
+            superclass="io/grpc/stub/AbstractStub#",
+            interfaces=("io/quarkus/grpc/MutinyStub#",),
+        ),
+        _call(f"{QK_MUTINY_STUB}`<init>`(sig_init).", QK_GRPC, "newStub"),
+        *_mutiny_client(interfaces=client_interfaces),
+    ]
+
+
+def _bean() -> list[object]:
+    """The generated `GreeterBean extends MutinyGreeterGrpc.GreeterImplBase
+    implements BindableService, MutinyBean`, which carries no annotation, and
+    the Mutiny base it extends, whose `bindService` calls `GreeterGrpc`."""
+    return [
+        *_class(QK_MUTINY_BASE, interfaces=("io/grpc/BindableService#",)),
+        _call(f"{QK_MUTINY_BASE}bindService().", QK_GRPC, "getServiceDescriptor"),
+        *_class(
+            QK_BEAN,
+            superclass=QK_MUTINY_BASE,
+            interfaces=("io/grpc/BindableService#", "io/quarkus/grpc/MutinyBean#"),
+        ),
+        _call(f"{QK_BEAN}sayHello(sig_sayHello).", QK_INTERFACE, "sayHello"),
+    ]
+
+
+def _quarkus(
+    tmp_path: Path, facts: list[object]
+) -> tuple[list[tuple[object, object]], list[dict[str, object]]]:
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    shipped = [c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "grpc-quarkus-client"]
+    resolve(workspace, tmp_path / "facts", _Catalogs(shipped), QUARKUS_CAPABILITIES)
+    rows = [(row["path"], row["resolution"]) for row in workspace.query("endpoints")]
+    questions = workspace.query("open_questions")
+    workspace.close()
+    return rows, questions
+
+
+@pytest.mark.pins("grpc.an-INTERFACE-client-resolves-through-the-generated-client")
+def test_a_client_typed_by_the_mutiny_interface_resolves_through_its_generated_client(
+    tmp_path: Path,
+):
+    """CP-53 rows 3, 6: Quarkus answers an injected service interface with the
+    generated client that implements it and `MutinyClient`. That client states
+    no identity; its code reaches `GreeterGrpc` through the Mutiny stub
+    (spec §3a), so the row is `GreeterGrpc`'s service."""
+    facts = [*_generated(), *_injected_field(QK_INTERFACE, annotation=QUARKUS_CLIENT)]
+
+    rows, questions = _quarkus(tmp_path, facts)
+
+    assert rows == [(QK_NAME, "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("grpc.an-injected-WRAPPER-stub-takes-the-identity-it-delegates-to")
+def test_an_injected_mutiny_stub_takes_the_identity_its_class_delegates_to(tmp_path: Path):
+    """Spec §3a: `MutinyGreeterGrpc` makes no marker call of its own, and the
+    stub's constructor calls `GreeterGrpc.newStub`. A client-only module
+    injecting the Mutiny stub talks to `GreeterGrpc`'s service."""
+    facts = [*_generated(), *_injected_field(QK_MUTINY_STUB, annotation=QUARKUS_CLIENT)]
+
+    rows, questions = _quarkus(tmp_path, facts)
+
+    assert rows == [(QK_NAME, "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("grpc.an-UNANNOTATED-generated-bean-does-not-fence")
+def test_a_mutiny_stub_client_resolves_and_is_not_fenced_by_the_generated_bean(tmp_path: Path):
+    """`GreeterBean` extends a class nested in `MutinyGreeterGrpc`, the Mutiny
+    stub's own outer class, which is the symbol fence's whole test. It carries
+    no `@GrpcService`, and Quarkus serves only a class that does (CP-52 row 7,
+    CP-53 row 9), so under `served_by_annotation` it fences nothing."""
+    facts = [
+        *_generated(),
+        *_bean(),
+        *_injected_field(QK_MUTINY_STUB, annotation=QUARKUS_CLIENT),
+    ]
+
+    rows, questions = _quarkus(tmp_path, facts)
+
+    assert rows == [(QK_NAME, "resolved")]
+    assert questions == []
+
+
+def test_an_annotated_quarkus_implementer_still_fences(tmp_path: Path):
+    """The bound on the rule above: a class that declares `@GrpcService` and
+    extends the generated base serves the service, so the module's client of
+    it gets no outbound row."""
+    facts = [
+        *_generated(),
+        *_class(QK_PLAIN_BASE, interfaces=("io/grpc/BindableService#",)),
+        *_class("examples/HelloWorldService#", superclass=QK_PLAIN_BASE, annotation=GRPC_SERVICE),
+        *_injected_field(QK_BLOCKING_STUB, annotation=QUARKUS_CLIENT),
+    ]
+
+    rows, _ = _quarkus(tmp_path, facts)
+
+    assert rows == []
+
+
+@pytest.mark.pins("grpc.two-INTERFACE-clients-resolve-neither")
+def test_two_mutiny_clients_for_one_interface_is_unresolved(tmp_path: Path):
+    """Two classes implementing `Greeter` and `MutinyClient`: Quarkus's map
+    keeps one of them in an order nothing here can read (CP-53 row 3,
+    `Map.put`), so neither is taken. The row and question are the ones an
+    unreadable identity gets today."""
+    facts = [
+        *_generated(),
+        *_mutiny_client("examples/OtherGreeterClient#"),
+        *_injected_field(QK_INTERFACE, annotation=QUARKUS_CLIENT),
+    ]
+
+    rows, questions = _quarkus(tmp_path, facts)
+
+    assert rows == [(QK_INTERFACE, "unresolved")]
+    assert [(q["question"], q["path"]) for q in questions] == [("service_identity", QK_INTERFACE)]
+
+
+@pytest.mark.pins("grpc.a-MUTINY-client-is-keyed-by-its-first-other-interface")
+def test_a_mutiny_client_is_keyed_by_its_first_interface_other_than_mutiny_client(
+    tmp_path: Path,
+):
+    """CP-53 row 3: Quarkus keys a `MutinyClient` implementor by the FIRST
+    interface it declares that is not `MutinyClient`, and reads no further. A
+    client declaring `MutinyClient, Greeter, Audited` answers `Greeter`, and
+    an injected `Audited` is not answered by it."""
+    audited = "examples/Audited#"
+    facts = [
+        *_generated(client_interfaces=(MUTINY_CLIENT, QK_INTERFACE, audited)),
+        *_class(audited, kind=ConstructKind.INTERFACE),
+        *_injected_field(QK_INTERFACE, annotation=QUARKUS_CLIENT),
+        *_injected_field(
+            audited, "com/acme/billing/AuditService#audited.", annotation=QUARKUS_CLIENT
+        ),
+    ]
+
+    rows, _ = _quarkus(tmp_path, facts)
+
+    assert set(rows) == {(QK_NAME, "resolved"), (audited, "unresolved")}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("interface_client", "io.quarkus.grpc.MutinyClient"),
+        ("interface_client", {"implements": 3}),
+        ("served_by_annotation", ["io.quarkus.grpc.GrpcService"]),
+    ],
+)
+def test_a_malformed_quarkus_client_key_is_refused(tmp_path: Path, key: str, value: object):
+    shipped = next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "grpc-quarkus-client"
+    )
+    matches = dict(shipped.matches)
+    matches[key] = value
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match=key):
+        derive_endpoints(workspace, [_catalog(matches=matches)], capabilities=CAPABILITIES)
+    workspace.close()

@@ -786,6 +786,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
 | `grpc-quarkus-client` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
+|  | `io.quarkus:quarkus-grpc-deployment` | 3.17.5 |
 | `grpc-quarkus` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
 |  | `io.quarkus:quarkus-grpc-deployment` | 3.17.5 |
 | `grpc-spring` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
