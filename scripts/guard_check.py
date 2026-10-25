@@ -3850,6 +3850,34 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-SELF-call-is-not-an-outbound-row": Guard(
+        what="an outbound `grpc` row for a service the module serves (an inbound row with a "
+        "handler) and whose peer is absent or this module is removed",
+        why="spec 2026-10-25 ruling 1: a service that calls its own inbound endpoints is a "
+        "traceable hop, not an outbound call. Without the pass, a Quarkus or Spring service "
+        "that injects a client of the service it serves publishes a call to a far end that "
+        "is itself",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="    if not served:\n        return\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
+            ),
+        ),
+    ),
+    "grpc.a-call-naming-ANOTHER-host-stays-outbound": Guard(
+        what="an outbound row whose peer names a host that is not this module is kept",
+        why="spec 2026-10-25 ruling 3: the same service name at another address is another "
+        "deployment's copy, and a pass that dropped every row would erase a real outbound "
+        "call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="    return host.lower() in _LOOPBACK\n",
+                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "injected_client.a-PARAMETER-is-an-injection-point": Guard(
         what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
         "to that parameter's declared type, as a field's is",

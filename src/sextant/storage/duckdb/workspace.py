@@ -1816,6 +1816,8 @@ _NAMED_DERIVATIONS = {
     # — see the statement's own header for why that ordering is load-bearing.
     "borrowed_endpoints_drop": "drop_borrowed_endpoints.sql",
     "borrowed_error_handlers_drop": "drop_borrowed_error_handlers.sql",
+    # Spec 2026-10-25 §3c. Runs from `resolve/self_calls.py`, right after `derive_endpoints`.
+    "self_call_endpoints_drop": "drop_self_call_endpoints.sql",
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
     "type_hierarchy_reset": "reset_type_hierarchy.sql",
