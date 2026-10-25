@@ -766,7 +766,8 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 scope. A trace can never disagree with the edges it came from, because it is them.
 
 **Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots`,
-`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link` work and unbuilt.
+`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link`
+work and unbuilt.
 
 **It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
 business logic and gets the same trace a request does, so the walk reads `Root.kind` for

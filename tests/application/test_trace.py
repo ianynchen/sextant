@@ -283,6 +283,9 @@ def test_a_walk_crosses_a_hop_into_the_served_handler():
     assert [(step.callee, step.target, step.via, step.stop) for step in landed] == [
         ("handler", _CLIENT_CALL, _WIRE, None)
     ]
+    # Not a terminal, so not classified as one: the `ClientCalls` row's `unresolved` is
+    # about a library the walk no longer stops at.
+    assert (landed[0].terminal_kind, landed[0].target_kind) == (None, None)
     after = trace.steps[trace.steps.index(landed[0]) + 1]
     assert (after.caller, after.depth) == ("handler", landed[0].depth + 1)
     assert _CLIENT_CALL not in [step.target for step in trace.terminals]
@@ -294,6 +297,7 @@ def test_a_hop_with_no_handler_stays_a_boundary_with_its_wire_path():
     trace = _hopped("rest", None)
     [landed] = [step for step in trace.steps if step.via is not None]
     assert (landed.callee, landed.via, landed.stop) == (None, _WIRE, TraceStop.BOUNDARY)
+    assert landed.terminal_kind == "unresolved"
     assert landed in trace.terminals
 
 

@@ -70,10 +70,10 @@ this walk's; `docs/COVERAGE.md` §7 carries the measurement.
 
 NFR-1 binds ordering as well as content. Steps come out in depth-first order
 over `call_edges`' own total ordering (`caller`, `ordinal`, `target`,
-`callee`), and several hops at one site in `rpc_hops`' own (`handler`), so the
-walk is the source order of the statements, and the `expanded` set that decides
-which occurrence of a shared method is the expanded one is therefore the same
-set on every run.
+`callee`), and several hops at one site in `rpc_hops`' own `handler` order, so
+the walk is the source order of the statements, and the `expanded` set that
+decides which occurrence of a shared method is the expanded one is therefore the
+same set on every run.
 """
 
 from collections import defaultdict, deque
@@ -319,6 +319,10 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
     replaced by one row per hop: the same call, its `callee` the handler it lands on (NULL
     where there is none here) and `via` its wire path (spec 2026-10-25 §3d).
 
+    A hop that lands on a handler is not a terminal, so it drops the `ClientCalls` row's
+    `terminal_kind`/`target_kind` (D01: NULL on a row that is not a terminal). A hop with no
+    handler is still the boundary and keeps the row's classification.
+
     Replaced in the frame's rows rather than at the step, so each hop is an ordinary row
     to the walk: its handler's subtree follows it before the next hop's step, as a narrowed
     site's candidates do, and `_stop` decides it as it decides any callee.
@@ -329,10 +333,11 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
         if not hops:
             rows.append(row)
             continue
-        rows.extend(
-            {**row, "callee": hop["handler"], "via": f"{hop['protocol']} {hop['path']}"}
-            for hop in hops
-        )
+        for hop in hops:
+            landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {hop['path']}"}
+            if hop["handler"] is not None:
+                landed |= {"terminal_kind": None, "target_kind": None}
+            rows.append({**row, **landed})
     return rows
 
 
