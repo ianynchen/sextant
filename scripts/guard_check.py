@@ -4222,6 +4222,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "trace.the-walk-CROSSES-a-hop-into-the-handler": Guard(
+        what="at a call site `rpc_hops` names, the walk steps into the hop's handler, with "
+        "the wire path in `via`, instead of stopping at the client-call library",
+        why="spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop "
+        "that is traceable. Ignoring the hops ends every trace through a gRPC stub at "
+        "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the handler the "
+        "call lands on is in no trace and the call in no section of the document",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find='        hops = index.hops.get((method, int(str(row["ordinal"]))))\n',
+                replace="        hops = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- 2Q, the shared dispatch rule --------------------------------------
     "dispatch.callee-descriptor-is-stripped-to-bare": Guard(
         what="the method a return flow joins TO is keyed by its BARE descriptor, because "

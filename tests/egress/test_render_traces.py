@@ -48,6 +48,7 @@ def _step(
     stop: TraceStop | None = None,
     returns: tuple[tuple[int, str], ...] = (),
     resolution: Resolution = Resolution.RESOLVED,
+    via: str | None = None,
 ) -> Step:
     return Step(
         depth=depth,
@@ -60,6 +61,7 @@ def _step(
         resolution=resolution,
         stop=stop,
         returns=returns,
+        via=via,
     )
 
 
@@ -444,6 +446,26 @@ def test_a_dynamic_step_says_the_body_is_created_not_called_there():
         )
     )
     assert "a0->>a0: lambda$list$0 (dynamic)" in _diagram(trace).mermaid
+
+
+def test_a_hop_arrow_names_the_wire_path():
+    """Spec 2026-10-25 §3d: a stub's call into `ClientCalls` that lands on this module's own
+    handler. The arrow ends at the handler, `(declared ClientCalls)` says what the code
+    called, and the wire path says how it got there — the diagram and the step table say
+    the same thing, one as a label and one in `Reaches`."""
+    trace = _trace(
+        _step(
+            invoke_kind="static",
+            target="io/grpc/stub/ClientCalls#blockingUnaryCall().",
+            callee="s maven c 1 a/HelloWorldService#sayHello().",
+            via="grpc helloworld.Greeter/SayHello",
+        )
+    )
+    assert (
+        "a0->>a1: blockingUnaryCall (declared ClientCalls) via grpc helloworld.Greeter/SayHello"
+        in _diagram(trace).mermaid
+    )
+    assert _step_table(trace).rows[0][-1] == (("text", "via grpc helloworld.Greeter/SayHello"),)
 
 
 def test_an_ordinary_call_carries_no_dynamic_marker():

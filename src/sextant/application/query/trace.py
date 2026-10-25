@@ -47,6 +47,14 @@ than it looks in three specific ways a reader must be told:
 - `revisited` — the callee was expanded elsewhere in this trace. Its subtree is
   shown at its first occurrence.
 
+**A gRPC call to this module's own service is followed, not stopped at** (spec
+2026-10-25 §3d, ruling 2: *"a call hop that's traceable"*). A stub method's call into the
+client-call API is a `boundary` in `call_edges`, a library no workspace reads; where
+`rpc_hops` names the handler that call lands on, the step goes to that handler instead and
+carries the wire path in `via`. The handler is then any callee — expanded, `revisited` or a
+`cycle` by the same three answers — and a hop with no handler here is still a `boundary`,
+with its wire path.
+
 **There is no fourth**, and there was: `depth_limit` retired with the bound it
 reported (FR-6, F7 §8.1, W31), along with the `Trace.truncated` property that
 answered "did that bound cut this short". Every reason left is a fact about the
@@ -62,9 +70,10 @@ this walk's; `docs/COVERAGE.md` §7 carries the measurement.
 
 NFR-1 binds ordering as well as content. Steps come out in depth-first order
 over `call_edges`' own total ordering (`caller`, `ordinal`, `target`,
-`callee`), so the walk is the source order of the statements, and the `expanded`
-set that decides which occurrence of a shared method is the expanded one is
-therefore the same set on every run.
+`callee`), and several hops at one site in `rpc_hops`' own (`handler`), so the
+walk is the source order of the statements, and the `expanded` set that decides
+which occurrence of a shared method is the expanded one is therefore the same
+set on every run.
 """
 
 from collections import defaultdict, deque
@@ -119,6 +128,10 @@ class Step:
     # None where the edge is not a terminal at all.
     terminal_kind: str | None = None
     target_kind: str | None = None
+    # Spec 2026-10-25 §3d: `"<protocol> <path>"` where this call left for the wire and
+    # `callee` is where it lands in this module (`rpc_hops`) — `target` still names the
+    # client-call method the code called. None on every other step.
+    via: str | None = None
 
 
 @dataclass(frozen=True)
@@ -154,11 +167,13 @@ class Trace:
 
 @dataclass
 class _Index:
-    """The three reads a walk needs, taken once for any number of traces."""
+    """The four reads a walk needs, taken once for any number of traces."""
 
     edges: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     returns: dict[tuple[str, int, str], list[tuple[int, str]]] = field(default_factory=dict)
     responses: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
+    # `rpc_hops` by its call site, `(caller, ordinal)` — the `call_edges` row it replaces.
+    hops: dict[tuple[str, int], list[dict[str, object]]] = field(default_factory=dict)
 
 
 def _index(workspace: Workspace) -> _Index:
@@ -172,7 +187,10 @@ def _index(workspace: Workspace) -> _Index:
     responses: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for row in workspace.query("method_returns"):
         responses[str(row["method"])].append((int(str(row["ordinal"])), str(row["value"])))
-    return _Index(edges=edges, returns=returns, responses=responses)
+    hops: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
+    for row in workspace.query("rpc_hops"):
+        hops[(str(row["caller"]), int(str(row["ordinal"])))].append(row)
+    return _Index(edges=edges, returns=returns, responses=responses, hops=hops)
 
 
 def trace_of(workspace: Workspace, root: Root) -> Trace:
@@ -256,7 +274,7 @@ def _walk(
     # fan-outs make that unmeasurable — mall-admin's widest trace is 48 steps — but the
     # frame already pays a copy here, and `popleft` is the same copy without the square.
     stack: list[tuple[str, int, frozenset[str], deque[dict[str, object]]]] = [
-        (method, 1, frozenset({method}), deque(index.edges.get(method, ())))
+        (method, 1, frozenset({method}), deque(_rows(method, index)))
     ]
     while stack:
         caller, depth, path, pending = stack[-1]
@@ -279,6 +297,7 @@ def _walk(
                 stop=stop,
                 terminal_kind=None if row["terminal_kind"] is None else str(row["terminal_kind"]),
                 target_kind=None if row["target_kind"] is None else str(row["target_kind"]),
+                via=None if row.get("via") is None else str(row["via"]),
                 returns=tuple(
                     index.returns.get(
                         (caller, int(str(row["ordinal"])), callee or ""),
@@ -292,7 +311,29 @@ def _walk(
             # Pushed immediately, which is what makes this pre-order: everything this
             # callee leads to is visited before the caller's next row, exactly as the
             # recursive form did.
-            stack.append((callee, depth + 1, path | {callee}, deque(index.edges.get(callee, ()))))
+            stack.append((callee, depth + 1, path | {callee}, deque(_rows(callee, index))))
+
+
+def _rows(method: str, index: _Index) -> list[dict[str, object]]:
+    """`method`'s `call_edges` rows in their own order, each call site that `rpc_hops` names
+    replaced by one row per hop: the same call, its `callee` the handler it lands on (NULL
+    where there is none here) and `via` its wire path (spec 2026-10-25 §3d).
+
+    Replaced in the frame's rows rather than at the step, so each hop is an ordinary row
+    to the walk: its handler's subtree follows it before the next hop's step, as a narrowed
+    site's candidates do, and `_stop` decides it as it decides any callee.
+    """
+    rows: list[dict[str, object]] = []
+    for row in index.edges.get(method, ()):
+        hops = index.hops.get((method, int(str(row["ordinal"]))))
+        if not hops:
+            rows.append(row)
+            continue
+        rows.extend(
+            {**row, "callee": hop["handler"], "via": f"{hop['protocol']} {hop['path']}"}
+            for hop in hops
+        )
+    return rows
 
 
 def _stop(

@@ -765,8 +765,8 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 `cycle` as it goes, over the same tables at module scope and over the federation at system
 scope. A trace can never disagree with the edges it came from, because it is them.
 
-**Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots` and
-`return_flows`. Module scope only; the federation half is `Bundle`/`Link` work and unbuilt.
+**Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots`,
+`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link` work and unbuilt.
 
 **It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
 business logic and gets the same trace a request does, so the walk reads `Root.kind` for
@@ -782,6 +782,17 @@ with no children is a method that calls nothing):
 | `boundary` | The workspace read no body for the callee — the ruled third-party boundary, where a trace stops |
 | `cycle` | The callee is already on the path from the root. Recursion is real code: it is stated, not followed |
 | `revisited` | The callee was expanded elsewhere in this trace; its subtree is shown at its first occurrence |
+
+**A gRPC call to this module's own service is a hop, not a stop** (spec
+`2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2). At a `call_edges` row whose
+`(caller, ordinal)` has `rpc_hops` rows, the walk takes one step per hop instead of the
+`boundary` step: the row's `target`, `invoke_kind` and `resolution`, `callee` the hop's
+`handler`, and `via` the wire path (`grpc helloworld.Greeter/SayHello`). The handler is then
+any callee, so it is expanded, `revisited` or a `cycle` by the table above, and a hop whose
+`handler` is NULL is still `boundary`, carrying its wire path. The step leaves
+`Trace.terminals`, so a trace through a stub has one terminal fewer. The document's arrow ends
+at the handler's lifeline, labelled `blockingUnaryCall (declared ClientCalls) via grpc
+helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the wire path.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the

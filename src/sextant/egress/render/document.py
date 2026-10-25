@@ -1963,7 +1963,9 @@ _TRACE_PREAMBLE = (
         "claimed it, which on real repositories is most of them — 94-96% across the three "
         "measured. It does NOT separate a sibling build module from a third-party "
         "library: both read `unresolved` unless a catalog names the type, so the `Call` "
-        "column's full descriptor is still what tells them apart."
+        "column's full descriptor is still what tells them apart. A gRPC call to a service "
+        "this module serves is not stopped at the client-call library: it continues to "
+        "the module's own handler, and `Reaches` reads `via` and the wire path."
     ),
     (
         "`revisited` means the callee was expanded ELSEWHERE in this same trace and its "
@@ -2302,7 +2304,13 @@ def _reaches_cell(step: Step) -> str:
     Composed here rather than derived here: both values arrive on the row (D01 §3), and
     inventing the classification in the renderer would be derivation hiding in
     presentation, which the import-linter contract forbids.
+
+    A step with `via` reads `via <protocol> <path>` (spec 2026-10-25 §3d): what that call
+    reaches is the wire path to this module's own handler, not the client-call library its
+    `terminal_kind` classifies.
     """
+    if step.via is not None:
+        return f"via {step.via}"
     if step.terminal_kind is None:
         return _NONE_RECORDED
     if step.target_kind is None:
@@ -2656,6 +2664,11 @@ def _message_label(step: Step) -> str:
     an arrow reading like an ordinary call there is the one place this diagram
     could assert something the graph does not say.
 
+    `via <protocol> <path>` is a call that left for the wire and lands on this
+    module's own handler (spec 2026-10-25 §3d): the arrow ends at the handler,
+    `(declared ClientCalls)` says what the code called, and this says how it
+    got there.
+
     `[stop]` marks a lifeline the walk did not enter, which is where the trace
     ends on that branch; a step with no stop was expanded, and its own calls
     follow.
@@ -2677,6 +2690,8 @@ def _message_label(step: Step) -> str:
         label = f"{label} (declared {simple_name(declared)})"
     if step.invoke_kind == "dynamic":
         label = f"{label} (dynamic)"
+    if step.via is not None:
+        label = f"{label} via {step.via}"
     if step.stop is not None:
         label = f"{label} [{step.stop}]"
     return label
