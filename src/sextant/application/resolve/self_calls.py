@@ -67,6 +67,9 @@ def _is_this_module(peer: str | None) -> bool:
 
     The scheme and the port are ignored: `localhost`, `localhost:9000`,
     `http://localhost:9000` and `[::1]:9000` are all this module.
+
+    A gRPC name-resolver target such as `dns:///localhost:9000` is not read as loopback,
+    so such a row stays outbound (the safe side).
     """
     if peer is None:
         return True

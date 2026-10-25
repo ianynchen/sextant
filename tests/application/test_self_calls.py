@@ -115,6 +115,24 @@ def test_another_protocol_is_untouched(tmp_path: Path) -> None:
     assert len(_remaining(workspace)) == 2
 
 
+@pytest.mark.pins("grpc.a-SERVED-identity-matches-exactly")
+def test_only_the_exact_served_identity_is_dropped(tmp_path: Path) -> None:
+    """A name that merely starts with a served identity is another service."""
+    workspace = _workspace(
+        tmp_path,
+        ("grpc", "inbound", "helloworld.Greeter/SayHello", HANDLER, None),
+        ("grpc", "outbound", "helloworld.Greeter", CALLER, None),
+        ("grpc", "outbound", "helloworld.GreeterAdmin", CALLER, None),
+        ("grpc", "outbound", "helloworld.Greeter.v2", CALLER, None),
+    )
+    record_self_calls(workspace)
+    assert _remaining(workspace) == [
+        ("grpc", "inbound", "helloworld.Greeter/SayHello"),
+        ("grpc", "outbound", "helloworld.Greeter.v2"),
+        ("grpc", "outbound", "helloworld.GreeterAdmin"),
+    ]
+
+
 def test_a_service_this_module_does_not_handle_stays_outbound(tmp_path: Path) -> None:
     workspace = _workspace(
         tmp_path,

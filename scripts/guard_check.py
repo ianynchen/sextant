@@ -3878,6 +3878,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-SERVED-identity-matches-exactly": Guard(
+        what="an outbound row is dropped only when its path IS a served service identity, "
+        "not when it merely starts with one",
+        why="spec 2026-10-25 §3c: `helloworld.GreeterAdmin` and `helloworld.Greeter.v2` are "
+        "other services than `helloworld.Greeter`. A prefix match would erase a real "
+        "outbound call to a service this module does not serve",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='        and str(row["path"]) in served\n',
+                replace='        and any(str(row["path"]).startswith(k) for k in served)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
     "injected_client.a-PARAMETER-is-an-injection-point": Guard(
         what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
         "to that parameter's declared type, as a field's is",
