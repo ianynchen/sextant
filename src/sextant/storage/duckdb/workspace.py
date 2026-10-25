@@ -1037,17 +1037,16 @@ _NAMED_QUERIES = {
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
     """,
-    # Spec 2026-10-25 §3d/§5: the edges of the methods declared in the client stub classes
-    # the `rpc_hops` pass found, filtered here rather than in Python, so the pass reads a
-    # handful of rows rather than every edge of the module. A method's class is its own
-    # `enclosing` fact; `type_hierarchy` names classes bare and `symbols` module-prefixed,
-    # so the last space-separated token is compared, as `boundary_shape_documents` does.
+    # Spec 2026-10-25 §3d/§5: the `rpc_hops` pass reads the methods that make calls, picks
+    # the ones declared in a client stub class by the one symbol rule (`domain/symbols.py`,
+    # the rule it reads a callee's class by), and reads only their edges below — a handful
+    # of rows rather than every edge of the module.
+    "call_edge_callers": "SELECT DISTINCT caller FROM call_edges ORDER BY caller",
     "stub_call_edges": """
-        SELECT e.caller, e.ordinal, e.target, e.callee
-        FROM call_edges e
-        JOIN symbols y ON y.symbol = e.caller
-        WHERE regexp_extract(y.enclosing, '[^ ]+$') IN (SELECT unnest(?::VARCHAR[]))
-        ORDER BY e.caller, e.ordinal, e.target, e.callee
+        SELECT caller, ordinal, target, callee
+        FROM call_edges
+        WHERE caller IN (SELECT unnest(?::VARCHAR[]))
+        ORDER BY caller, ordinal, target, callee
     """,
     # Spec 2026-10-25 §3d: a stub call to a served RPC, and the handler it lands on. Total
     # (NFR-1): one (caller, ordinal) names one wire path, and a path with several handlers

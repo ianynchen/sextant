@@ -3908,6 +3908,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.only-a-STUB-method-gets-a-hop": Guard(
+        what="only a method of a class whose ancestry reaches `client_stub_supertype` is "
+        "read for a hop",
+        why="spec 2026-10-25 §3d: the caller is a client stub method. Without the filter, a "
+        "generated server-side `AsyncService` default method, or a hand-written method "
+        "calling `ClientCalls` with a generated accessor directly, gets a hop the stub "
+        "classes alone are evidence for",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find='        if caller_outer_class(str(row["caller"])) in stubs\n',
+                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "grpc.a-stub-naming-TWO-wire-methods-gets-no-hop": Guard(
         what="a stub method whose accessors name more than one wire method gets no hop",
         why="spec 2026-10-25 §3d: exactly one wire method, or no row. Taking the first would "

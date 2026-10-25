@@ -980,3 +980,37 @@ def test_a_malformed_quarkus_key_is_refused(tmp_path: Path, key: str, value: obj
     with pytest.raises(CatalogError, match=key):
         derive_endpoints(workspace, [_catalog(matches=matches)], capabilities=CAPABILITIES)
     workspace.close()
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("client_stub_supertype", None),
+        ("client_call_owner", None),
+        ("client_stub_supertype", ["io.grpc.stub.AbstractStub"]),
+        ("client_call_owner", 3),
+    ],
+)
+def test_a_malformed_client_side_key_is_refused(tmp_path: Path, key: str, value: object):
+    """Spec 2026-10-25 §3d: `client_stub_supertype` and `client_call_owner` are declared
+    together, each one type. `None` stands for the key left out while its partner stays."""
+    matches = dict(_shipped("grpc-java").matches)
+    if value is None:
+        del matches[key]
+    else:
+        matches[key] = value
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match=key):
+        derive_endpoints(workspace, [_catalog(matches=matches)], capabilities=CAPABILITIES)
+    workspace.close()
+
+
+def test_the_shipped_client_side_keys_are_accepted(tmp_path: Path):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _catalog(matches=dict(_shipped("grpc-java").matches))
+    assert derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES) == []
+    workspace.close()

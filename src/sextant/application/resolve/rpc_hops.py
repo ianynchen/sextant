@@ -33,8 +33,9 @@ A call to a service the module does not serve keeps its outbound row and gets no
 
 ## Cost (§5)
 
-One read of `endpoints` (inbound, through `served_handlers`), one of `type_hierarchy`, and
-one of `call_edges` filtered in SQL to the methods of the stub classes. The call sites and
+One read of `endpoints` (inbound, through `served_handlers`), one of `type_hierarchy`, one
+of the distinct callers in `call_edges`, and one of `call_edges` filtered in SQL to the
+callers declared in a stub class. The call sites and
 nest hosts are the per-load reads `supertype_derived` already makes.
 """
 
@@ -42,6 +43,10 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.engines.supertype_derived import (
+    CLIENT_KEYS,
+    validate_client_keys,
+)
 from sextant.application.resolve.self_calls import served_handlers
 from sextant.application.resolve.shapes.identity_calls import (
     all_string_arguments,
@@ -55,9 +60,6 @@ from sextant.application.resolve.shapes.identity_calls import (
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.symbols import owner_of
-
-# The two `matches` keys that name the client side of a `supertype_derived` catalog.
-_KEYS = ("client_stub_supertype", "client_call_owner")
 
 
 def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -84,8 +86,13 @@ def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
         sites_by_caller.setdefault(str(site["caller"]), []).append(site)
     client_call_owner = _catalog_symbol(catalog.matches["client_call_owner"])
 
+    callers = [
+        str(row["caller"])
+        for row in workspace.query("call_edge_callers")
+        if caller_outer_class(str(row["caller"])) in stubs
+    ]
     edges_by_caller: dict[str, list[dict[str, object]]] = {}
-    for edge in workspace.query("stub_call_edges", classes=sorted(stubs)):
+    for edge in workspace.query("stub_call_edges", callers=callers):
         edges_by_caller.setdefault(str(edge["caller"]), []).append(edge)
 
     rows: list[dict[str, object]] = []
@@ -151,26 +158,21 @@ def _wire_methods(
 def _stub_catalog(catalogs: list[Catalog]) -> Catalog | None:
     """The one declared catalog naming the client side, or None. Refuses a second one:
     two could name two different stubs, and nothing here chooses between them."""
-    carrying = [c for c in catalogs if any(key in c.matches for key in _KEYS)]
+    carrying = [c for c in catalogs if any(key in c.matches for key in CLIENT_KEYS)]
     if len(carrying) > 1:
         raise CatalogError(
             f"loading catalogs {', '.join(str(c.source) for c in carrying)}: more than one "
-            f"names `{_KEYS[0]}`/`{_KEYS[1]}`; one catalog names the gRPC client side "
+            f"names `{CLIENT_KEYS[0]}`/`{CLIENT_KEYS[1]}`; one catalog names the gRPC client side "
             f"(spec 2026-10-25 §3d)"
         )
     if not carrying:
         return None
     catalog = carrying[0]
-    for key in _KEYS:
-        if not isinstance(catalog.matches.get(key), str):
-            raise CatalogError(
-                f"loading catalog {catalog.source}: `matches.{key}` must name one type, "
-                f"got {catalog.matches.get(key)!r} (spec 2026-10-25 §3d)"
-            )
+    validate_client_keys(catalog)
     if not isinstance(catalog.matches.get("supertype_marker"), dict):
         raise CatalogError(
-            f"loading catalog {catalog.source}: `{_KEYS[0]}` needs the `supertype_marker` "
-            f"that names the identity calls (spec 2026-10-25 §3d)"
+            f"loading catalog {catalog.source}: `{CLIENT_KEYS[0]}` needs the "
+            f"`supertype_marker` that names the identity calls (spec 2026-10-25 §3d)"
         )
     return catalog
 

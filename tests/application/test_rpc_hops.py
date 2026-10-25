@@ -15,10 +15,9 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.rpc_hops import record_rpc_hops
-from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
-from sextant.domain.symbols import owner_of
+from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -85,17 +84,6 @@ def _method_name_site(accessor: str, wire_method: str, ordinal: int = 0) -> Call
     )
 
 
-def _method(symbol: str) -> SymbolFact:
-    """A method fact whose `enclosing` is the type its symbol names, as the extractor
-    writes one."""
-    return SymbolFact(
-        document_id="doc_1",
-        symbol=_MODULE + symbol,
-        construct_kind=ConstructKind.METHOD,
-        enclosing=_MODULE + str(owner_of(symbol)),
-    )
-
-
 def _catalog(source: str = "grpc-java.yml") -> Catalog:
     """The shipped `grpc-java.yml`, so the keys the pass reads are the catalog's own."""
     shipped = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "grpc-java")
@@ -151,7 +139,6 @@ _STUB_HIERARCHY = [(BLOCKING, _BLOCKING_BASE), (_BLOCKING_BASE, _ABSTRACT_STUB)]
 _GREETER_FACTS: list[object] = [
     _service_name_site(),
     _method_name_site(ACCESSOR, "SayHello"),
-    _method(BLOCKING_CALL),
 ]
 
 
@@ -188,7 +175,7 @@ def test_an_async_stub_method_gets_its_own_hop(tmp_path: Path) -> None:
     after a `Channel#newCall` at 3 that is not the client-call API."""
     workspace = _workspace(
         tmp_path,
-        facts=[*_GREETER_FACTS, _method(ASYNC_CALL)],
+        facts=_GREETER_FACTS,
         edges=[
             *_blocking_edges(),
             (ASYNC_CALL, 0, f"{ASYNC}getChannel(sig_6605009e).", None),
@@ -219,7 +206,6 @@ def test_an_unhandled_rpc_of_a_served_service_gets_a_row_with_no_handler(
         facts=[
             *_GREETER_FACTS,
             _method_name_site(goodbye_accessor, "SayGoodbye"),
-            _method(goodbye_call),
         ],
         edges=_blocking_edges(goodbye_accessor, goodbye_call),
         hierarchy=_STUB_HIERARCHY,
@@ -267,7 +253,6 @@ def test_a_stub_method_naming_two_wire_methods_gets_no_hop(tmp_path: Path) -> No
             _service_name_site(),
             _method_name_site(ACCESSOR, "SayHello"),
             _method_name_site(ACCESSOR, "SayGoodbye", ordinal=1),
-            _method(BLOCKING_CALL),
         ],
         edges=_blocking_edges(),
         hierarchy=_STUB_HIERARCHY,
@@ -277,26 +262,27 @@ def test_a_stub_method_naming_two_wire_methods_gets_no_hop(tmp_path: Path) -> No
     assert _hops(workspace) == []
 
 
+@pytest.mark.pins("grpc.only-a-STUB-method-gets-a-hop")
 def test_a_class_that_is_not_a_stub_gets_no_hop(tmp_path: Path) -> None:
-    """`AsyncService`'s default `sayHello` calls `getSayHelloMethod` and then
-    `ServerCalls`, but it is the server side: nothing in its ancestry is a client stub."""
+    """A method of a class outside the stub ancestry gets no hop, though it makes the same
+    two calls a stub method does — an accessor in the marked nest, then `ClientCalls`.
+    `AsyncService` is the server side; a hand-written module method calling
+    `ClientCalls.blockingUnaryCall(channel, GreeterGrpc.getSayHelloMethod(), …)` directly
+    has the same shape. Beside a real stub, so the pass reaches its stub-class filter."""
     default_method = f"{ASYNC_SERVICE}sayHello(sig_11111111)."
     workspace = _workspace(
         tmp_path,
-        facts=[
-            _service_name_site(),
-            _method_name_site(ACCESSOR, "SayHello"),
-            _method(default_method),
-        ],
+        facts=_GREETER_FACTS,
         edges=[
+            *_blocking_edges(),
             (default_method, 0, ACCESSOR, ACCESSOR),
             (default_method, 1, "io/grpc/stub/ClientCalls#asyncUnaryCall(sig_3ed83b3e).", None),
         ],
-        hierarchy=[],
+        hierarchy=[*_STUB_HIERARCHY, (ASYNC_SERVICE, "io/grpc/BindableService#")],
         handled=[(f"{SERVICE}/SayHello", HANDLER)],
     )
     record_rpc_hops(workspace, [_catalog()])
-    assert _hops(workspace) == []
+    assert [row[0] for row in _hops(workspace)] == [_MODULE + BLOCKING_CALL]
 
 
 def test_a_stub_method_that_never_reaches_the_client_call_api_gets_no_hop(

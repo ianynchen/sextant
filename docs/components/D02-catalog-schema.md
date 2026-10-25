@@ -3488,7 +3488,9 @@ matches:
 | `client_stub_supertype` | one dotted type | A class whose `type_hierarchy` ancestry reaches this type, through library rows too, is a client stub; its methods are the callers a hop is written for. |
 | `client_call_owner` | one dotted type | The type whose static methods send a stub's call (`ClientCalls#blockingUnaryCall`, `#asyncUnaryCall`); a stub method's first call into it is the hop's `ordinal`. |
 
-Both are required together, each one string, beside a `supertype_marker`. More than one
+Both are required together, each one string, beside a `supertype_marker`; a malformed pair
+refuses the catalog as the keys above do (`supertype_derived.validate_client_keys`, which the
+pass also calls, since it reads a catalog the engine may have skipped). More than one
 declared catalog carrying them refuses the resolve, naming every file: two could name two
 different stubs, and the pass does not choose.
 

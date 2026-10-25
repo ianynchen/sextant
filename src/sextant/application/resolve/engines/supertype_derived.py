@@ -124,6 +124,9 @@ _MEMBERS = "overridden_public_methods"
 # The optional keys (spec 2026-10-25 §3a, §3b), each naming one type.
 _OPTIONAL_TYPES = ("service_supertype", "served_by_annotation")
 _DELEGATING_BEAN = ("implements", "delegate_field")
+# The client side (spec 2026-10-25 §3d), read by `resolve/rpc_hops.py` and not by this
+# engine; checked here so a malformed catalog is refused like the keys above.
+CLIENT_KEYS = ("client_stub_supertype", "client_call_owner")
 
 # CP-8(b)/(d) falsifying for one implementer — the marker calls ARE on the
 # supertype's own generated class (that is what made this a match at all,
@@ -812,6 +815,24 @@ def _validate_matches(catalog: Catalog) -> None:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `matches.delegating_bean` must be "
                 f"`{{implements, delegate_field}}`, got {bean!r} (spec 2026-10-25 §3b)"
+            )
+    validate_client_keys(catalog)
+
+
+def validate_client_keys(catalog: Catalog) -> None:
+    """Refuses a catalog naming one client-side key without the other, or either as
+    anything but one type. Called by this engine for a catalog it runs, and by
+    `resolve/rpc_hops.py` for the one it reads, which may be a catalog this engine
+    skipped."""
+    present = [key for key in CLIENT_KEYS if key in catalog.matches]
+    if not present:
+        return
+    for key in CLIENT_KEYS:
+        if not isinstance(catalog.matches.get(key), str):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `matches.{key}` must name one type, "
+                f"got {catalog.matches.get(key)!r}; `{CLIENT_KEYS[0]}` and "
+                f"`{CLIENT_KEYS[1]}` are declared together (spec 2026-10-25 §3d)"
             )
 
 
