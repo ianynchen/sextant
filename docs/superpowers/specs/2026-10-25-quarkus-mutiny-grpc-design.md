@@ -112,8 +112,8 @@ Where it is used, and nowhere else:
 This covers `MutinyGreeterGrpc$GreeterImplBase` and `MutinyGreeterStub`. It also covers a
 user's `@GrpcService class X extends MutinyGreeterGrpc.GreeterImplBase`, the fourth Quarkus
 form, which nothing reads today. Wrapper generators with the same shape (reactor-grpc's
-`Reactor<Service>Grpc`) come along without being named. That is a consequence of the rule,
-not a claim: no corpus here carries one.
+`Reactor<Service>Grpc`) would be read by the same rule, given a catalog that declares
+`service_supertype` (amended above); no corpus here carries one.
 
 ### 3b. Quarkus's wiring, as catalog data
 
