@@ -54,8 +54,8 @@ here would restate those documents rather than add anything.
   `Reaches` cell say so. **`GRAPH_SCHEMA_VERSION` moves 7 → 8** (a new table): re-analyse the
   workspace. Measured on both `quarkus-quickstarts` gRPC modules: `helloworld.Greeter/SayHello`
   is joined to its handler with no question, no gRPC outbound row is left, and both REST traces
-  reach the handler. Closes OI-192; `quarkus-grpc-mutiny` leaves the delivery register on this
-  branch's CI run.
+  reach the handler. `quarkus-grpc-mutiny` leaves the delivery register on this branch's CI
+  run.
 
 ### Fixed
 

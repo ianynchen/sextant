@@ -1,8 +1,9 @@
 # Quarkus's Mutiny gRPC forms, and a call a module makes to its own service — design
 
 **Status: BUILT 2026-10-25** ("As built" below). Closes register item `quarkus-grpc-mutiny` (Plane SEXTANT-176)
-and `OI-192` (SEXTANT-66). Moves COVERAGE §2b's Quarkus gRPC cell from `◐` to `✅`, which
-makes Quarkus's row read `✅` everywhere it is scored.
+and `OI-192` (SEXTANT-66), and moves COVERAGE §2c's Quarkus gRPC cell from `◐` to `✅`, which
+makes Quarkus's row read `✅` everywhere it is scored — both in the commit after this branch's
+CI run (As built). Until then the cell reads `◐ (1 open)`.
 
 ## 1. The rulings (2026-10-25)
 
@@ -129,10 +130,10 @@ no identity, giving today's unresolved row plus question.
 A Quarkus inbound catalog (`grpc-quarkus.yml`, style `supertype_derived`, detected by
 `io.quarkus:quarkus-grpc`) carries the server rule:
 ```yaml
+  served_by_annotation: io.quarkus.grpc.GrpcService
   delegating_bean:
     implements: io.quarkus.grpc.MutinyBean
     delegate_field: delegate
-    served_by_annotation: io.quarkus.grpc.GrpcService
 ```
 - **Who is served.** For each module class B implementing `MutinyBean`, take its `delegate`
   field's type I. Every module class C that implements I and carries `@GrpcService` is
@@ -301,9 +302,10 @@ Rebuilt with JDK 21. Re-pin any count the new classes move.
   - no gRPC outbound row;
   - both REST traces reaching the handler.
 - `tests/e2e/test_grpc_quarkus_delivered.py` pins the fixture's forms (§3f).
-- COVERAGE §5.7's Mutiny row moves to ✅ shipped. The delivery list's `quarkus-grpc-mutiny`
-  moves to the `closed` block with its test and CI run, and §2c is regenerated with
-  `scripts/coverage_matrix.py`, the Quarkus gRPC cell reading `✅`.
+- COVERAGE §5.7's Mutiny row moves to ✅ shipped. After this branch's CI run, the delivery
+  list's `quarkus-grpc-mutiny` moves to the `closed` block with its test and that run, and §2c
+  is regenerated with `scripts/coverage_matrix.py`, the Quarkus gRPC cell reading `✅` (As
+  built).
 - In Plane, SEXTANT-176 and SEXTANT-66 move to Done with the PR. OI-196, OI-197 and OI-198
   (§4) were created with this spec.
 - `scripts/field_check.py`: six `ok`. No pinned corpus has gRPC self-calls, so this is to be
@@ -352,4 +354,20 @@ building them:
   in the module and no module class extends a class nested in the delegated outer; two
   `@GrpcService` implementors of one delegate interface leave both unjoined, with one question.
 - **`rpc_hops.path` is masked on export** through the address map, as `roots.path` is (D06 §3),
-  against §3e's "nothing masked": it carries `endpoints.path`'s value.
+  against §3e's "nothing masked": it carries `endpoints.path`'s value. The document masks the
+  same path in a hop's arrow label and `Reaches` cell with the render redactor, as it masks a
+  root's path.
+- **The register close lands after CI** (controller ruling, "done means green in CI"):
+  this branch leaves COVERAGE §2c's Quarkus gRPC cell at `◐ (1 open)`, `quarkus-grpc-mutiny`
+  in the delivery list's open block and OI-192 open. The commit after this branch's CI run
+  moves the item to `closed` with that run, marks OI-192 closed and regenerates the cell to
+  `✅`.
+
+**Stated boundaries found during the build**, each logged:
+- `OI-199` — a delegated identity is read only where the marker call sits on the outer class.
+- `OI-200` — a `MutinyBean` implementor with no `delegate` field is skipped without a question.
+- `OI-201` — a gRPC identity that is contended, not unreadable, still files the "SERVICE_NAME
+  unreadable" question.
+- `OI-202` — a gRPC service reaching the generated `ImplBase` through an intermediate class is
+  not named as its RPC's handler (grpc-java's extends form, before this branch). Real input
+  can do this: an abstract base class between the service and the generated base.

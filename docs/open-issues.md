@@ -196,7 +196,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-188 | [SEXTANT-49](https://app.plane.so/portolan/browse/SEXTANT-49/) | an `@GrpcClient` on a METHOD (net.devh setter injection) joins no stub type and derives nothing |
 | OI-189 | [SEXTANT-51](https://app.plane.so/portolan/browse/SEXTANT-51/) | an empty `connector=` on a SmallRye channel is a question where Quarkus likely sees an orphan |
 | OI-190 | [SEXTANT-65](https://app.plane.so/portolan/browse/SEXTANT-65/) | under the POM-reading fallback, a test-scoped in-memory connector counts toward the sole one |
-| OI-192 | [SEXTANT-66](https://app.plane.so/portolan/browse/SEXTANT-66/) | Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined · **CLOSED 2026-10-25** |
+| OI-192 | [SEXTANT-66](https://app.plane.so/portolan/browse/SEXTANT-66/) | Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined |
 | OI-194 | [SEXTANT-67](https://app.plane.so/portolan/browse/SEXTANT-67/) | an UNTABLED SmallRye connector beside a tabled one leaves the tabled one looking sole |
 | OI-195 | [SEXTANT-68](https://app.plane.so/portolan/browse/SEXTANT-68/) | a Quarkus `%profile.`-prefixed key is read as a literal key, not as that profile's value |
 | OI-196 | [SEXTANT-189](https://app.plane.so/portolan/browse/SEXTANT-189/) | a call through an injected client interface stays narrowed to every implementor, not the bean the framework injects |
