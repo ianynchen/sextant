@@ -3892,6 +3892,34 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-STUB-call-to-a-served-rpc-is-a-hop": Guard(
+        what="a generated client stub's call to an RPC this module serves is written as an "
+        "`rpc_hops` row naming the handler it lands on",
+        why="spec 2026-10-25 ruling 2: a self-call is a traceable hop. Without the row the "
+        "trace from a REST method through `GreeterBlockingStub#sayHello` stops at "
+        "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the call is "
+        "lost from the document altogether",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("rpc_hops_insert", rows=rows)\n',
+            ),
+        ),
+    ),
+    "grpc.a-stub-naming-TWO-wire-methods-gets-no-hop": Guard(
+        what="a stub method whose accessors name more than one wire method gets no hop",
+        why="spec 2026-10-25 §3d: exactly one wire method, or no row. Taking the first would "
+        "land a call on the handler of an RPC it may not make, a hop the code does not take",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if len(named) != 1:\n",
+                replace="        if not named:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "injected_client.a-PARAMETER-is-an-injection-point": Guard(
         what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
         "to that parameter's declared type, as a field's is",

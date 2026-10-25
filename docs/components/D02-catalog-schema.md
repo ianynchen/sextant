@@ -3452,7 +3452,7 @@ row alone would have, which inverted the whole redundancy the two halves exist f
 **Three optional keys serve a generated wrapper around the generated service class**
 (spec 2026-10-25 §3a, §3b; probe CP-53). The wrapper's own outer class makes no marker call,
 so without them the gate above refuses it. A catalog declaring none of them matches exactly as
-described above; `grpc-java.yml` declares none, and `grpc-quarkus.yml` declares all three:
+described above; `grpc-java.yml` declares none of these three, and `grpc-quarkus.yml` declares all three:
 
 ```yaml
 matches:
@@ -3469,6 +3469,28 @@ matches:
 | `delegating_bean` | `{implements, delegate_field}`, both strings | For each module class B that directly implements `implements`, the declared type I of B's field named `delegate_field`. The module class implementing I (and carrying `served_by_annotation`) is the handler, under the identity and wire names of B's superclass; its candidate methods are the ones I declares, correlated as `members` correlates them. B's superclass must have no subclass but B, and no module class may extend a class nested in the marked class that superclass delegates to (CP-53 row 10, read structurally); otherwise the bean is skipped and the extends form applies. Two or more such implementors: no handler row (the unresolved fallback row at B's superclass), and one `service_identity` question naming all of them, because the framework takes the first in an order the bytecode does not fix. B itself is never a handler: it carries no `served_by_annotation`. |
 
 Each is shape-checked when present; a malformed value refuses the catalog.
+
+**Two more keys name the CLIENT side, and this style's engine does not read them**
+(spec 2026-10-25 §3d). `resolve/rpc_hops.py` does: a call from a generated client stub to an
+RPC the module serves lands on its handler (D01 §3, `rpc_hops`). They sit in this style's
+`matches` because the pass reads the same `supertype_marker` to find the wire method a stub
+calls. `grpc-java.yml` declares both:
+
+```yaml
+matches:
+  # … supertype_marker and members as above …
+  client_stub_supertype: io.grpc.stub.AbstractStub
+  client_call_owner: io.grpc.stub.ClientCalls
+```
+
+| key | shape | what it changes |
+|---|---|---|
+| `client_stub_supertype` | one dotted type | A class whose `type_hierarchy` ancestry reaches this type, through library rows too, is a client stub; its methods are the callers a hop is written for. |
+| `client_call_owner` | one dotted type | The type whose static methods send a stub's call (`ClientCalls#blockingUnaryCall`, `#asyncUnaryCall`); a stub method's first call into it is the hop's `ordinal`. |
+
+Both are required together, each one string, beside a `supertype_marker`. More than one
+declared catalog carrying them refuses the resolve, naming every file: two could name two
+different stubs, and the pass does not choose.
 
 ### `injected_client`
 

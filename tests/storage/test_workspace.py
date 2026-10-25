@@ -2358,6 +2358,38 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     assert kept == [expression, expression]
 
 
+def test_the_bundle_carries_rpc_hops_with_its_path_masked_as_the_endpoints_is(tmp_path: Path):
+    """Spec 2026-10-25 §3d/§3e: `rpc_hops` is exported, and its `path` is the inbound row's
+    wire path carried, so it takes the address map `endpoints.path` and `roots.path` take
+    (D06 §3). A wire path is never a credential, which is why the case is a value no real
+    stub produces: the rule, not the expected shape, is what masks."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    secret = "https://u:hunter2@h/Greeter/SayHello"
+    workspace._connection.execute(
+        "INSERT INTO rpc_hops VALUES "
+        "('mod examples/GreeterGrpc$GreeterBlockingStub#sayHello(sig_1).', 3, 'grpc', "
+        "'helloworld.Greeter/SayHello', 'mod examples/HelloWorldService#sayHello(sig_2).', "
+        "'compiler'), "
+        "('mod examples/GreeterGrpc$GreeterStub#sayHello(sig_3).', 4, 'grpc', ?, NULL, "
+        "'compiler')",
+        [secret],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    rows = duckdb.sql(
+        "SELECT ordinal, path, handler FROM "
+        f"read_parquet('{bundle / 'graph' / 'rpc_hops.parquet'}') ORDER BY ordinal"
+    ).fetchall()
+    kept = [row["path"] for row in workspace.query("rpc_hops")]
+    workspace.close()
+
+    assert rows == [
+        (3, "helloworld.Greeter/SayHello", "mod examples/HelloWorldService#sayHello(sig_2)."),
+        (4, "https://h/Greeter/SayHello", None),
+    ]
+    assert secret in kept
+
+
 def test_the_alternate_orderings_carry_the_same_rows_in_a_different_order(tmp_path: Path):
     """F8 §9.4 (W37). DuckDB over Parquet has no B-trees; the levers are sort order and
     the zone maps that come with it, so a second FILE in a second order is the index.

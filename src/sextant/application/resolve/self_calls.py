@@ -46,7 +46,13 @@ def served_services(workspace: Workspace) -> dict[str, set[str]]:
     From inbound `grpc` rows whose `handler` is set; an inbound path is
     `<identity>/<Method>`, e.g. `helloworld.Greeter/SayHello`.
     """
-    served: dict[str, set[str]] = {}
+    return {identity: set(paths) for identity, paths in served_handlers(workspace).items()}
+
+
+def served_handlers(workspace: Workspace) -> dict[str, dict[str, set[str]]]:
+    """`served_services`, with each served wire path mapped to its handlers: one read of
+    `endpoints` for a pass that needs both (`resolve/rpc_hops.py`)."""
+    served: dict[str, dict[str, set[str]]] = {}
     for row in workspace.query("endpoints"):
         if (
             str(row["protocol"]) not in _PROTOCOLS
@@ -58,7 +64,7 @@ def served_services(workspace: Workspace) -> dict[str, set[str]]:
         path = str(row["path"])
         identity, separator, _method = path.rpartition("/")
         if separator:
-            served.setdefault(identity, set()).add(path)
+            served.setdefault(identity, {}).setdefault(path, set()).add(str(row["handler"]))
     return served
 
 

@@ -828,6 +828,36 @@ CREATE TABLE IF NOT EXISTS call_edges (
     target_kind   TEXT
 );
 
+-- Spec 2026-10-25 §3d (ruling 2): where a gRPC client stub's call to an RPC this module
+-- serves lands. `call_edges` stops at the client-call API, a library boundary; this table
+-- names the module's own handler on the far side, so the trace walk can follow a
+-- self-call instead of stopping. `call_edges` itself is untouched: the hop is a catalog
+-- rule over compiled facts, not something the compiler wrote at the site.
+--
+-- One row per (stub method, handler), written only for a service the module serves
+-- (§3c). A stub method naming no single wire method, or never reaching the client-call
+-- API, has none. A derived TABLE because the rule is Python
+-- (`resolve/rpc_hops.py`); replaced whole per resolve through reset_rpc_hops.sql +
+-- insert_rpc_hops.sql, both run by that one writing pass, the `return_flows` pairing.
+CREATE TABLE IF NOT EXISTS rpc_hops (
+    -- The stub method making the call, module-prefixed as `call_edges.caller` is.
+    caller   TEXT,
+    -- The call site in `caller` whose target belongs to the client-call API: where the
+    -- call leaves for the wire. `caller` plus `ordinal` joins the `call_edges` row.
+    ordinal  INTEGER,
+    -- The catalog's protocol (`grpc`).
+    protocol TEXT,
+    -- The wire path `<service identity>/<wire method>`, spelled as the inbound
+    -- `endpoints.path` it names.
+    path     TEXT,
+    -- That inbound row's handler, module-prefixed. NULL where the module serves the
+    -- service but has no handler for this RPC: the trace still carries the wire path.
+    handler  TEXT,
+    -- D00 §4's evidence set. Always `compiler`, the convention endpoint rows follow: a
+    -- catalog's rule over compiled facts.
+    evidence TEXT
+);
+
 -- Spec 2026-09-22 §3d and §7a: what the backward value walk WOULD resolve, and
 -- what it could not, at every position a catalog asked about.
 --

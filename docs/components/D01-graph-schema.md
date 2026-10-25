@@ -148,6 +148,30 @@ rows, none picked.
   `return_flows`' reason: the bundle is a published surface, and freezing this shape into
   one before anything outside the workspace reads it makes every later change breaking.
 
+**`rpc_hops`** carries `caller`, `ordinal`, `protocol`, `path`, `handler` and `evidence`
+(spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
+call to an RPC this module serves lands. `call_edges` stops at the client-call API, a library
+whose body no workspace reads, so a trace through `GreeterBlockingStub#sayHello` ended at
+`ClientCalls#blockingUnaryCall` and never reached the module's own `HelloWorldService#sayHello`.
+`caller` is a method of a class whose `type_hierarchy` reaches the catalog's
+`client_stub_supertype` (library rows included); `ordinal` is its first call whose target
+belongs to `client_call_owner`, where the call leaves for the wire, so `(caller, ordinal)`
+joins the `call_edges` row; `path` is `<service identity>/<wire method>`, the wire method read
+off the one accessor the stub method calls in the generated class's nest
+(`getSayHelloMethod`, whose body names `SayHello`). Exactly one wire method and a client-call
+site, or no row.
+
+- **Only for a service the module serves** (§3c: an inbound `grpc` row with a handler). One
+  row per handler of the path; a served service's RPC with no handler here gets one row with
+  `handler` NULL, so the trace still carries the wire path when the outbound row is fenced.
+  A call to a service the module does not serve keeps its outbound row and gets no hop.
+- **`evidence` is `compiler`**, the endpoint rows' convention: a catalog's rule over
+  compiled facts. `call_edges` is untouched; the hop lives in its own table, which is also
+  what a curation names (ruling 4).
+- **Exported**, `path` through the address map, as `roots.path` is ([D06](D06-bundle-format.md)
+  §3). A derived table rather than a view, because the rule is Python
+  (`resolve/rpc_hops.py`); replaced whole per resolve by that one writing pass.
+
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
 accessors, which are already `calls`), and `contains` from class to method (the method's
@@ -1331,6 +1355,7 @@ own cadence.
 | 5 | No table change: what `endpoints.peer` may hold. Before 2026-10-23 `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`), which no exit could tell from a Spring-WS `mailto:` peer, so a workspace of that vintage is refused rather than masked by a guess (user ruling) | `render`, `enrich`, `export` and `query` refuse it by its stamp; `system analyze` now refuses a participant by the same stamps, naming it and the command; `module diff` refuses two such sides unless the producer change is allowed, and then masks each scheme-less peer with an `@` whole (user ruling) |
 | 6 | No table change: condition verdicts a deployment can change are no longer decided (spec `2026-10-23-deployment-set-conditions-design.md`). A `profile` or `property` condition is `unresolved` unless the environment's own name decides it, and the module's own reading is its evidence | refused by its stamp exactly as at 5, so a workspace holding the older decided verdicts is re-analysed rather than read beside new ones (user ruling, spec §6) |
 | 7 | `resolved_schedules`, a new derived table: a scheduled job's placeholder expression per environment, read from the module's configuration through the one placeholder rule (spec `2026-10-23-configured-schedules-design.md`); `scheduled_work` keeps one row per job and its `unresolved` | refused by its stamp exactly as at 5 and 6, so a workspace without the table is re-analysed rather than read as one whose jobs have no configured values |
+| 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

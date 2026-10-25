@@ -116,6 +116,9 @@ SEXTANT_VERSION = version("sextant")
 #     7       `resolved_schedules`: a scheduled job's placeholder expression per
 #             environment (spec 2026-10-23-configured-schedules), a new derived table
 #             beside `scheduled_work`, which keeps one row per job.
+#     8       `rpc_hops`: where a gRPC client stub's call to an RPC this module serves
+#             lands, its handler named (spec 2026-10-25-quarkus-mutiny-grpc §3d), a new
+#             derived table beside `call_edges`, which is untouched.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -129,5 +132,5 @@ SEXTANT_VERSION = version("sextant")
 #     2       `dependency` gains `conditions`; `conditions` is the declared
 #             `{kind, expression}` set (spec 2026-10-23, rulings 2 and 3).
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 7
+GRAPH_SCHEMA_VERSION = 8
 BOUNDARY_VOCABULARY_VERSION = 2

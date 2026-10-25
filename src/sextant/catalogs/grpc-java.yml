@@ -42,6 +42,17 @@ matches:
   # restated for a style reached by `extends` rather than a framework
   # registration call.
   members: overridden_public_methods
+  # The CLIENT side, read by `resolve/rpc_hops.py` and not by this style's engine
+  # (spec 2026-10-25 §3d): a call from a generated client stub to an RPC this module
+  # serves lands on its handler. protoc-gen-grpc-java emits every stub
+  # (`<Service>Grpc$<Service>BlockingStub`, `$<Service>Stub`, `$<Service>FutureStub`) as a
+  # subclass of `AbstractStub` through `AbstractBlockingStub`/`AbstractAsyncStub`/
+  # `AbstractFutureStub`, and each stub method leaves for the wire through a static
+  # `ClientCalls` method (`blockingUnaryCall`, `asyncUnaryCall`, `futureUnaryCall`).
+  # Measured on `quarkus-quickstarts` @ `81a5844`, `grpc-plain-text-quickstart`'s
+  # `type_hierarchy` and `call_edges` (spec §2c).
+  client_stub_supertype: io.grpc.stub.AbstractStub
+  client_call_owner: io.grpc.stub.ClientCalls
 
 # No `wrappers`/`nullability`/`serialization`/`known_types`
 # (`grpc-schema.yml`'s identical omission, same reason): this style's own
