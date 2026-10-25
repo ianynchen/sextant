@@ -3727,6 +3727,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-WRAPPER-takes-the-one-identity-it-delegates-to": Guard(
+        what="an outer class whose nest reaches TWO different marked classes has no "
+        "delegated identity; only a nest that reaches exactly one takes it",
+        why="spec 2026-10-25 §3a: a facade over two generated services, or a base class "
+        "that calls both, does not state which service it is. Taking the first one "
+        "reached would file its RPCs under a service it only half belongs to — a "
+        "fabricated service identity, in the same place `_correlated` refuses a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/identity_calls.py",
+                find="        if len(reached) == 1:\n",
+                replace="        if reached:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "grpc.a-QUARKUS-client-field-is-an-outbound-service": Guard(
         what="a field annotated `io.quarkus.grpc.GrpcClient` derives the outbound service-"
         "level row of the stub it is declared as, and net.devh's annotation of the same "
