@@ -3793,6 +3793,63 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-user-base-calling-a-stub-is-not-a-SERVICE": Guard(
+        what="under `service_supertype`, a supertype whose outer class only DELEGATES to a "
+        "marked class matches only if it implements the named service type",
+        why="spec 2026-10-25 §3a: a user base class that calls `GreeterGrpc.newBlockingStub` "
+        "delegates to `GreeterGrpc` exactly as the Mutiny base does. Without the "
+        "`BindableService` conjunct every subclass of it overriding a method is published "
+        "as an inbound gRPC handler of a service it only calls — the C-1 fabrication again",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        if not _reaches(supertype, _catalog_symbol(self.service_supertype), "
+                "self.parents):\n            return None\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.the-DELEGATE-form-is-off-when-the-base-has-another-subclass": Guard(
+        what="a delegating bean whose base has a subclass other than the bean serves nothing",
+        why="CP-53 row 10: Quarkus skips such a bean, and the class extending the base "
+        "directly is the one served. Without the check the interface's implementor is "
+        "published as a second handler of the same RPC, one Quarkus never serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="    if subclasses != {bare_descriptor(bean_class)}:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.two-ANNOTATED-implementors-serve-neither": Guard(
+        what="two or more annotated implementors of a bean's delegate type name no handler; "
+        "the question names them all",
+        why="CP-53 row 9: Quarkus delegates to the first its index yields, an order nothing "
+        "in the facts fixes. Taking the first in sort order publishes a handler that is "
+        "right only by chance, with no question saying it was a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="            if len(handlers) > 1:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-UNANNOTATED-implementor-of-the-delegate-is-not-served": Guard(
+        what="a class implementing a bean's delegate type is its handler only if it declares "
+        "the catalog's serving annotation",
+        why="CP-53 row 9: Quarkus delegates only to an implementor carrying `@GrpcService`. "
+        "The generated `GreeterClient` implements the same interface, so without the filter "
+        "every Quarkus service is contended with its own client and loses its handler",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        pool &= served\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "injected_client.a-PARAMETER-is-an-injection-point": Guard(
         what="an `injected_client` annotation on a method or constructor PARAMETER is joined "
         "to that parameter's declared type, as a field's is",

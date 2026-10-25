@@ -515,7 +515,7 @@ def _delegating_beans(
         field = bare_descriptor(str(row["symbol"]))
         owner = owner_of(field)
         if declared and owner is not None:
-            field_types[(owner, member_name(field))] = str(declared)
+            field_types[(owner, member_name(field))] = bare_descriptor(str(declared))
     found: list[tuple[str, str]] = []
     for row in workspace.query("implementations"):
         bean_class = str(row["symbol"])

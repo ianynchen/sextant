@@ -848,6 +848,66 @@ def test_a_module_extending_the_plain_generated_base_turns_the_delegate_form_off
     assert rows == [(f"{QK_NAME}/SayHello", _handler(plain), "resolved")]
 
 
+@pytest.mark.pins("grpc.the-DELEGATE-form-is-off-when-the-base-has-another-subclass")
+def test_a_class_extending_the_mutiny_base_turns_the_delegate_form_off(tmp_path: Path):
+    """CP-53 row 10's first condition: the bean's base has a subclass other
+    than the bean, so Quarkus skips the bean. The interface's implementor is
+    then not served through it; only the class extending the base is."""
+    direct = "examples/DirectGreeter#"
+    facts = [
+        *_generated(),
+        *_service(),
+        *_service(direct, superclass=QK_MUTINY_BASE, interfaces=()),
+    ]
+
+    rows, _ = _resolved(tmp_path, facts)
+
+    assert rows == [(f"{QK_NAME}/SayHello", _handler(direct), "resolved")]
+
+
+@pytest.mark.pins("grpc.an-UNANNOTATED-implementor-of-the-delegate-is-not-served")
+def test_the_generated_client_implementing_the_interface_is_not_a_handler(tmp_path: Path):
+    """Quarkus also generates `GreeterClient implements Greeter, MutinyClient`
+    (spec §2a). It implements the delegate type and carries no `@GrpcService`,
+    so it is not a class the bean delegates to (CP-53 row 9), and the user's
+    service stays the one handler."""
+    facts = [
+        *_generated(),
+        *_service(),
+        *_service(
+            "examples/GreeterClient#",
+            annotated=False,
+            interfaces=(QK_INTERFACE, "io/quarkus/grpc/MutinyClient#"),
+        ),
+    ]
+
+    rows, questions = _resolved(tmp_path, facts)
+
+    assert rows == [(f"{QK_NAME}/SayHello", _handler(QK_SERVICE), "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("grpc.a-user-base-calling-a-stub-is-not-a-SERVICE")
+def test_a_user_base_calling_a_stub_is_not_a_service(tmp_path: Path):
+    """Spec §3a: a user base class whose code calls `GreeterGrpc.newBlockingStub`
+    delegates to the marked class too, but it does not implement
+    `BindableService`, so nothing says it is a service. Its annotated subclass
+    overriding the base's method gets no row and no question."""
+    base = "examples/ClientBase#"
+    facts = [
+        _service_name_site(QK_NAME, outer=QK_GRPC),
+        _method_name_site("SayHello", service=QK_NAME, outer=QK_GRPC),
+        *_class(base, methods=("sayHello",)),
+        _call(f"{base}stub().", QK_GRPC, "newBlockingStub"),
+        *_service("examples/Gateway#", superclass=base, interfaces=()),
+    ]
+
+    rows, questions = _resolved(tmp_path, facts)
+
+    assert rows == []
+    assert questions == []
+
+
 @pytest.mark.parametrize(
     "extra",
     [
@@ -885,6 +945,7 @@ def test_a_delegating_base_reaching_two_services_is_no_match(tmp_path: Path):
     assert questions == []
 
 
+@pytest.mark.pins("grpc.two-ANNOTATED-implementors-serve-neither")
 def test_two_annotated_implementors_of_one_delegate_type_file_a_question_naming_both(
     tmp_path: Path,
 ):
