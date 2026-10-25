@@ -64,6 +64,7 @@ def test_a_client_of_a_service_this_module_handles_is_dropped(tmp_path: Path) ->
     assert _remaining(workspace) == [("grpc", "inbound", "helloworld.Greeter/SayHello")]
 
 
+@pytest.mark.pins("grpc.a-DESCRIPTOR-only-inbound-row-serves-nothing")
 def test_a_descriptor_only_inbound_row_serves_nothing(tmp_path: Path) -> None:
     """A `.proto` row has no handler: a client module compiles the `.proto` too, so it
     says nothing about what this module serves."""

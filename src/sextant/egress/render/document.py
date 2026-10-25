@@ -2052,7 +2052,7 @@ def _trace_sections(
     sections.append(MachineParagraph(_runs(_traces_drawn_sentence(traces))))
     for trace in traces:
         sections.append(_trace_detail(trace, redactor, candidates or {}))
-        participants, messages = _sequence_view(trace)
+        participants, messages = _sequence_view(trace, redactor)
         sections.append(
             MachineDiagram(
                 sequence_diagram(participants, messages).rstrip("\n"),
@@ -2293,7 +2293,7 @@ def _spelled(environments: Sequence[str]) -> str:
     return ", ".join(f"`{e}`" for e in environments)
 
 
-def _reaches_cell(step: Step) -> str:
+def _reaches_cell(step: Step, redactor: Redactor) -> str:
     """What one step's call REACHES (D00 §4's `terminal_kind`, F7 §8.2, W30).
 
     `persistence (database)` where the sub-field says which store, `persistence` alone
@@ -2307,10 +2307,11 @@ def _reaches_cell(step: Step) -> str:
 
     A step with `via` reads `via <protocol> <path>` (spec 2026-10-25 §3d): what that call
     reaches is the wire path to this module's own handler, not the client-call library its
-    `terminal_kind` classifies.
+    `terminal_kind` classifies. The path is the inbound path the endpoint table masks in
+    `_wire_address`, so it passes the redactor here too (2K design §1).
     """
     if step.via is not None:
-        return f"via {step.via}"
+        return f"via {redactor.redact_text(step.via)}"
     if step.terminal_kind is None:
         return _NONE_RECORDED
     if step.target_kind is None:
@@ -2332,7 +2333,7 @@ def _trace_step_table(trace: Trace, redactor: Redactor) -> MachineTable:
             _text(_NONE_RECORDED if step.result is None else str(step.result)),
             _text(_returns_cell(step.returns, redactor)),
             _text(_NONE_RECORDED if step.stop is None else str(step.stop)),
-            _text(_reaches_cell(step)),
+            _text(_reaches_cell(step, redactor)),
         )
         for step in trace.steps
     )
@@ -2435,7 +2436,7 @@ def _returned_value(value: object, redactor: Redactor) -> str:
 
 
 def _sequence_view(
-    trace: Trace,
+    trace: Trace, redactor: Redactor
 ) -> tuple[list[SequenceParticipant], list[SequenceMessage | SequenceAlternatives]]:
     """One trace as participants and messages — the projection, where every
     decision about the diagram is made (M07 "The renderer adds nothing").
@@ -2479,7 +2480,7 @@ def _sequence_view(
         return SequenceMessage(
             source=_participant(bare_descriptor(step.caller)),
             target=_participant(_reached(step)),
-            label=_message_label(step),
+            label=_message_label(step, redactor),
         )
 
     messages = _grouped(list(trace.steps), _message)
@@ -2648,7 +2649,7 @@ def _reached(step: Step) -> str:
     return step.target if step.callee is None else bare_descriptor(step.callee)
 
 
-def _message_label(step: Step) -> str:
+def _message_label(step: Step, redactor: Redactor) -> str:
     """One arrow's whole text: the method called, where it was DECLARED if
     that is not where it landed, and then what the walk did about it.
 
@@ -2667,7 +2668,7 @@ def _message_label(step: Step) -> str:
     `via <protocol> <path>` is a call that left for the wire and lands on this
     module's own handler (spec 2026-10-25 §3d): the arrow ends at the handler,
     `(declared ClientCalls)` says what the code called, and this says how it
-    got there.
+    got there. The path passes the redactor, as `_reaches_cell`'s does.
 
     `[stop]` marks a lifeline the walk did not enter, which is where the trace
     ends on that branch; a step with no stop was expanded, and its own calls
@@ -2691,7 +2692,7 @@ def _message_label(step: Step) -> str:
     if step.invoke_kind == "dynamic":
         label = f"{label} (dynamic)"
     if step.via is not None:
-        label = f"{label} via {step.via}"
+        label = f"{label} via {redactor.redact_text(step.via)}"
     if step.stop is not None:
         label = f"{label} [{step.stop}]"
     return label

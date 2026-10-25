@@ -646,7 +646,7 @@ def test_an_annotated_class_the_supertype_match_derived_files_no_question(tmp_pa
 # in `quarkus-quickstarts`' `grpc-plain-text-quickstart` (spec §2a); the
 # module, as everywhere in this file, is invented.
 
-QUARKUS_CAPABILITIES = CAPABILITIES | {"typed_signatures"}
+QUARKUS_CAPABILITIES = CAPABILITIES | {"typed_signatures", "implemented_interfaces"}
 QK_GRPC = "examples/GreeterGrpc#"
 QK_PLAIN_BASE = "examples/GreeterGrpc$GreeterImplBase#"
 QK_MUTINY_BASE = "examples/MutinyGreeterGrpc$GreeterImplBase#"
@@ -827,6 +827,7 @@ def test_a_quarkus_service_extending_the_mutiny_base_directly_is_served(tmp_path
     assert questions == []
 
 
+@pytest.mark.pins("grpc.the-DELEGATE-form-is-off-when-a-module-extends-the-delegated-nest")
 def test_a_module_extending_the_plain_generated_base_turns_the_delegate_form_off(
     tmp_path: Path,
 ):

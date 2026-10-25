@@ -194,6 +194,7 @@ def test_an_async_stub_method_gets_its_own_hop(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.pins("grpc.an-UNHANDLED-rpc-of-a-served-service-gets-a-hop")
 def test_an_unhandled_rpc_of_a_served_service_gets_a_row_with_no_handler(
     tmp_path: Path,
 ) -> None:
@@ -243,6 +244,21 @@ def test_a_service_not_served_here_gets_no_hop(tmp_path: Path) -> None:
     assert _hops(workspace) == []
 
 
+@pytest.mark.pins("grpc.a-stub-of-a-service-NOT-served-gets-no-hop")
+def test_a_stub_of_a_service_other_than_the_one_served_gets_no_hop(tmp_path: Path) -> None:
+    """The module serves `helloworld.Hello`, with a handler, and calls `Greeter` through its
+    stub: a call to a service it does not serve is outbound, so it gets no hop."""
+    workspace = _workspace(
+        tmp_path,
+        facts=_GREETER_FACTS,
+        edges=_blocking_edges(),
+        hierarchy=_STUB_HIERARCHY,
+        handled=[("helloworld.Hello/SayHello", HANDLER)],
+    )
+    record_rpc_hops(workspace, [_catalog()])
+    assert _hops(workspace) == []
+
+
 @pytest.mark.pins("grpc.a-stub-naming-TWO-wire-methods-gets-no-hop")
 def test_a_stub_method_naming_two_wire_methods_gets_no_hop(tmp_path: Path) -> None:
     """An accessor whose body names two wire methods says nothing about which one this
@@ -285,6 +301,7 @@ def test_a_class_that_is_not_a_stub_gets_no_hop(tmp_path: Path) -> None:
     assert [row[0] for row in _hops(workspace)] == [_MODULE + BLOCKING_CALL]
 
 
+@pytest.mark.pins("grpc.no-CLIENT-CALL-site-means-no-hop")
 def test_a_stub_method_that_never_reaches_the_client_call_api_gets_no_hop(
     tmp_path: Path,
 ) -> None:

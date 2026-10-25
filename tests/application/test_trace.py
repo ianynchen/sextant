@@ -273,7 +273,10 @@ def _hopped(root: str, handler: str | None) -> Trace:
     return _traced(Root(handler=root, kind=RootKind.INBOUND_ENDPOINT), index)
 
 
-@pytest.mark.pins("trace.the-walk-CROSSES-a-hop-into-the-handler")
+@pytest.mark.pins(
+    "trace.the-walk-CROSSES-a-hop-into-the-handler",
+    "trace.a-HOP-onto-a-handler-is-not-a-terminal",
+)
 def test_a_walk_crosses_a_hop_into_the_served_handler():
     """Without the hop the walk ends at `ClientCalls#blockingUnaryCall`, a library body no
     workspace reads, and the module's own handler is never reached — with the outbound row

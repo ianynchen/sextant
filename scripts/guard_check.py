@@ -3822,6 +3822,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.the-DELEGATE-form-is-off-when-a-module-extends-the-delegated-nest": Guard(
+        what="a delegating bean serves nothing when a module class outside the marked class "
+        "its base delegates to extends a class nested in that marked class",
+        why="CP-53 row 10's second condition: Quarkus skips the bean when the module extends "
+        "the plain generated base (the base's name with `Mutiny` removed), and that class is "
+        "served by the extends form. Without the check the interface's implementor is "
+        "published as a second handler of the same RPC, one Quarkus never serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="    return not any(\n"
+                "        outer_of(parent, hosts) == outer and outer_of(child, hosts) != outer\n"
+                "        for child, parent in superclass_of.items()\n"
+                "    )\n",
+                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "grpc.two-ANNOTATED-implementors-serve-neither": Guard(
         what="two or more annotated implementors of a bean's delegate type name no handler; "
         "the question names them all",
@@ -3862,6 +3880,21 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/self_calls.py",
                 find="    if not served:\n        return\n",
                 replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
+            ),
+        ),
+    ),
+    "grpc.a-DESCRIPTOR-only-inbound-row-serves-nothing": Guard(
+        what="only an inbound `grpc` row with a handler names a service this module serves; a "
+        "row the `.proto` alone derives (handler NULL) serves nothing",
+        why="spec 2026-10-25 §3c: a client-only module compiles the `.proto` too, so it has "
+        "an inbound descriptor row for every RPC it calls. Counted as served, every client "
+        "row of such a module is dropped as a self-call, and the services it calls vanish "
+        "from the document",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='            or row["handler"] is None\n',
+                replace="",
             ),
         ),
     ),
@@ -3932,6 +3965,53 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/rpc_hops.py",
                 find="        if len(named) != 1:\n",
                 replace="        if not named:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-stub-of-a-service-NOT-served-gets-no-hop": Guard(
+        what="a stub call gets a hop only when its service identity is one this module "
+        "serves, not whenever the module serves some service",
+        why="spec 2026-10-25 §3d: a module serving `Hello` that calls `Greeter` through its "
+        "stub makes an outbound call. A hop there lands on no handler and replaces the "
+        "`ClientCalls` boundary with a wire path into a service the module does not have",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if identity is None or identity not in served:\n",
+                replace="        if identity is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="served[identity].get(path, set())",
+                replace="served.get(identity, {}).get(path, set())",
+            ),
+        ),
+    ),
+    "grpc.no-CLIENT-CALL-site-means-no-hop": Guard(
+        what="a stub method gets a hop only at a call site whose target belongs to the "
+        "catalog's `client_call_owner`",
+        why="spec 2026-10-25 §3d: the hop is keyed by the call site where the call leaves for "
+        "the wire. A stub method that never calls `ClientCalls` has no such site, and a row "
+        "with no ordinal joins no `call_edges` row: a hop the walk can never take",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if ordinal is None:\n            continue\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.an-UNHANDLED-rpc-of-a-served-service-gets-a-hop": Guard(
+        what="a stub call to an RPC of a served service that has no handler here still gets "
+        "one `rpc_hops` row, its handler NULL",
+        why="spec 2026-10-25 §3d: the outbound row of a served service is fenced, so without "
+        "the row the step carries no wire path and the call's destination is nowhere in the "
+        "document",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        for handler in handlers or [None]:\n",
+                replace="        for handler in handlers:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -4237,6 +4317,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "trace.a-HOP-onto-a-handler-is-not-a-terminal": Guard(
+        what="a hop step that lands on a handler drops the `ClientCalls` row's "
+        "`terminal_kind` and `target_kind`",
+        why="D01: both are NULL on a row that is not a terminal. Kept, the step reads "
+        "`unresolved` for a library the walk no longer stops at, and a reader is told the "
+        "call ends somewhere it does not",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find='                landed |= {"terminal_kind": None, "target_kind": None}\n',
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- 2Q, the shared dispatch rule --------------------------------------
     "dispatch.callee-descriptor-is-stripped-to-bare": Guard(
         what="the method a return flow joins TO is keyed by its BARE descriptor, because "
@@ -4368,6 +4462,60 @@ GUARDS: dict[str, Guard] = {
                 path=_DOCUMENT,
                 find='    if step.stop is not None:\n        label = f"{label} [{step.stop}]"\n',
                 replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-arrow-names-the-wire-path": Guard(
+        what="a step with `via` carries `via <protocol> <path>` on its arrow",
+        why="spec 2026-10-25 §3d: the arrow ends at this module's own handler while "
+        "`(declared ClientCalls)` says the code called a library. Without the wire path the "
+        "diagram shows a library call landing on a handler, with nothing saying how",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    if step.via is not None:\n"
+                '        label = f"{label} via {redactor.redact_text(step.via)}"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-step-reaches-its-wire-path": Guard(
+        what="a step with `via` reads `via <protocol> <path>` in the step table's `Reaches` column",
+        why="spec 2026-10-25 §3d: what a hop reaches is the wire path to this module's own "
+        "handler. Without it the column shows the `ClientCalls` classification, or nothing, "
+        "for a call the diagram draws into a handler",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    if step.via is not None:\n"
+                '        return f"via {redactor.redact_text(step.via)}"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-arrow-passes-the-redactor": Guard(
+        what="a hop's wire path passes the render redactor in the sequence-diagram arrow label",
+        why="2K design §1: it is the inbound path the endpoint table masks, so a credential "
+        "or a repo value pattern in it would be printed in clear in the trace's diagram "
+        "while the endpoint table hides it",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        label = f"{label} via {redactor.redact_text(step.via)}"\n',
+                replace='        label = f"{label} via {step.via}"  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-reaches-cell-passes-the-redactor": Guard(
+        what="a hop's wire path passes the render redactor in the step table's `Reaches` cell",
+        why="2K design §1: it is the inbound path the endpoint table masks, so a credential "
+        "or a repo value pattern in it would be printed in clear in the trace's step table "
+        "while the endpoint table hides it",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        return f"via {redactor.redact_text(step.via)}"\n',
+                replace='        return f"via {step.via}"  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),

@@ -85,8 +85,11 @@ def test_a_quarkus_grpc_client_field_is_an_outbound_service(quarkus_tables):
     service: `@GrpcClient Pricing` through the generated `PricingClient`, the module class
     implementing both it and `MutinyClient`, and `@GrpcClient MutinyPricingStub` through
     the one marked class its nest calls into, `PricingGrpc`. An unread one would be a row
-    at the injected type, unresolved. The generated `PricingBean` extends
-    `MutinyPricingGrpc`'s base and fences nothing: no module class serves Pricing."""
+    at the injected type, unresolved, so a broken form fails the exact set. The set is
+    deduplicated, so it cannot show that the generated `PricingBean`, which extends
+    `MutinyPricingGrpc`'s base, fences nothing: a fenced form leaves the other forms' one row.
+    That is pinned by `test_injected_client.py`'s
+    `test_a_mutiny_stub_client_resolves_and_is_not_fenced_by_the_generated_bean`."""
     grpc_out = {
         (str(r["path"]), r["method"], str(r["resolution"]))
         for r in quarkus_tables["endpoints"]
@@ -163,6 +166,7 @@ def test_a_self_call_is_a_hop_to_its_handler(quarkus_tables, path, via, handler)
     assert all(step.stop is None for step in hops), hops
 
 
+@pytest.mark.pins("render_trace.a-HOP-arrow-names-the-wire-path")
 def test_the_document_draws_the_hop(quarkus_tables):
     """The rendered trace of `GET /quotes/blocking/{symbol}` draws the arrow into the
     handler's lifeline, labelled with what the code called and the wire path it left by
