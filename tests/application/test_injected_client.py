@@ -420,7 +420,7 @@ def test_an_unreadable_identity_files_a_question_rather_than_guessing(tmp_path: 
 # here. The class names are the shapes measured in `quarkus-quickstarts`'
 # `grpc-plain-text-quickstart` (spec §2a); the module is invented.
 
-QUARKUS_CAPABILITIES = CAPABILITIES | {"superclass"}
+QUARKUS_CAPABILITIES = CAPABILITIES | {"superclass", "implemented_interfaces"}
 QUARKUS_CLIENT = "io/quarkus/grpc/GrpcClient#"
 GRPC_SERVICE = "io/quarkus/grpc/GrpcService#"
 MUTINY_CLIENT = "io/quarkus/grpc/MutinyClient#"

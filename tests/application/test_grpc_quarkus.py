@@ -40,6 +40,7 @@ CAPABILITIES = {
     "annotation_args",
     "typed_signatures",
     "superclass",
+    "implemented_interfaces",
 }
 _MODULE = "sextant-jvm maven com.acme/hello-client 1.0.0 "
 

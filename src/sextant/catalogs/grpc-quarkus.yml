@@ -35,7 +35,7 @@ measured:
   - { artifact: io.quarkus:quarkus-grpc-api, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp52_quarkus_grpc_annotations.md }
 
-requires: [call_site, string_constants, superclass, annotation_args, typed_signatures]
+requires: [call_site, string_constants, superclass, implemented_interfaces, annotation_args, typed_signatures]
 
 matches:
   # The marker calls and the member rule are `grpc-java.yml`'s, unchanged: the

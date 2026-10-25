@@ -51,7 +51,7 @@ measured:
   - { artifact: io.quarkus:quarkus-grpc-deployment, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp53_quarkus_mutiny_wiring.md }
 
-requires: [call_site, string_constants, annotation_args, typed_signatures]
+requires: [call_site, string_constants, superclass, implemented_interfaces, annotation_args, typed_signatures]
 
 matches:
   # D02 §2's `injected_client` style — see `grpc-net-devh.yml` for why the
