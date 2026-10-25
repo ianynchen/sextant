@@ -100,8 +100,11 @@ AbstractStub`, `scanned: false`), so "is a gRPC client stub" is readable from st
 Where it is used, and nowhere else:
 - `injected_client`: the identity of an injected type that is already a `@GrpcClient` point.
 - `supertype_derived`: the gate and the identity of a supertype that implements
-  `io.grpc.BindableService`. This is new catalog data in `grpc-java.yml`, `service_supertype:
-  io.grpc.BindableService`, a grpc-java API type.
+  `io.grpc.BindableService`, as catalog data, `service_supertype: io.grpc.BindableService`,
+  a grpc-java API type. *Amended 2026-10-25 (plan ruling):* the key is declared by
+  `grpc-quarkus.yml`, together with `served_by_annotation`, and not by `grpc-java.yml`, which
+  is unchanged. So reactor-grpc-style wrappers do not come along for free (below); each would
+  need a catalog of its own.
   - The BindableService condition is what stops a user base class that merely calls
     `GreeterGrpc.newBlockingStub` from becoming a "service" (the C-1 gate's reason, kept).
   - A marked supertype does not need it, so today's matches are unchanged.
@@ -138,12 +141,23 @@ A Quarkus inbound catalog (`grpc-quarkus.yml`, style `supertype_derived`, detect
   handlers are C's public methods that I declares, correlated to wire names exactly as
   `overridden_public_methods` correlates them today (decapitalized lookup; ambiguity refused;
   uncorrelated methods filed as a gap).
-- **B itself is never a handler and never a fence.** A class implementing `MutinyBean` is
-  skipped by `grpc-java.yml`'s match, which §3a would otherwise let match `GreeterBean`.
-  - The skip is a Quarkus statement, so it lives in the Quarkus catalog and reaches the
-    engine as a list of skipped implementer markers.
-  - The builder picks the mechanism; the requirement is that `grpc-java.yml` itself names no
-    Quarkus type.
+- **B itself is never a handler and never a fence.** *As built (plan ruling):* there is no skip
+  list. `grpc-java.yml` does not delegate, and `grpc-quarkus.yml` requires
+  `served_by_annotation` on the class itself, which the generated bean never carries. The
+  fence gets the same key (Task 4).
+
+*Amended 2026-10-25 by CP-53* (`scripts/probes/cp53_quarkus_mutiny_wiring.md`), mirroring
+Quarkus exactly:
+- **The client map** keys an implementor by its FIRST declared interface other than
+  `MutinyClient`.
+- **The delegate form applies only when** the bean's superclass has exactly one subclass in
+  the module, and no module class extends a class nested in the marked outer the bean's base
+  delegates to. That is Quarkus's own gate, stated structurally rather than by its "name with
+  `Mutiny` removed".
+- **`served_by_annotation` must be declared on the class itself.**
+- **Two or more such classes for one delegate interface:** Quarkus picks one in index order,
+  which cannot be derived. So neither is a handler: the unresolved row is written (the
+  engine's existing ambiguity precedent), with one question naming both.
 
 ### 3c. The fence is by service: a module that serves S gets no outbound row for S
 
