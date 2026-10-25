@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-196 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-199 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -199,6 +199,9 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-192 | [SEXTANT-66](https://app.plane.so/portolan/browse/SEXTANT-66/) | Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined |
 | OI-194 | [SEXTANT-67](https://app.plane.so/portolan/browse/SEXTANT-67/) | an UNTABLED SmallRye connector beside a tabled one leaves the tabled one looking sole |
 | OI-195 | [SEXTANT-68](https://app.plane.so/portolan/browse/SEXTANT-68/) | a Quarkus `%profile.`-prefixed key is read as a literal key, not as that profile's value |
+| OI-196 | [SEXTANT-189](https://app.plane.so/portolan/browse/SEXTANT-189/) | a call through an injected client interface stays narrowed to every implementor, not the bean the framework injects |
+| OI-197 | [SEXTANT-190](https://app.plane.so/portolan/browse/SEXTANT-190/) | curation (FR-15, FR-16; M01, D03) is designed and not built, including correcting a self-call pairing |
+| OI-198 | [SEXTANT-191](https://app.plane.so/portolan/browse/SEXTANT-191/) | HTTP, SOAP and messaging self-calls are still a self_exchange question, not ruling C's hop |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
