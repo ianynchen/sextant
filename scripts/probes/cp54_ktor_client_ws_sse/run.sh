@@ -19,6 +19,13 @@ cd "$(dirname "$0")"
 : "${JAVA_HOME:?JAVA_HOME must name the JDK whose javap and java the probe runs}"
 EXPECTED_KOTLIN_MV=2.4.0
 
+# The probe module is compiled for Java 21 (kotlin-maven-plugin `jvmTarget`), and `probe.py`
+# checks the class files' major version; the JDK that runs it has to be 21 as well.
+if ! "$JAVA_HOME/bin/java" -version 2>&1 | head -1 | grep -q 'version "21[."]'; then
+  echo "JAVA_HOME must be a JDK 21: $("$JAVA_HOME/bin/java" -version 2>&1 | head -1)" >&2
+  exit 1
+fi
+
 echo "compiling the probe module" >&2
 (cd module \
   && { mvn -q -B -o clean package >&2 || mvn -q -B clean package >&2; } \

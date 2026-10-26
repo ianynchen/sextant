@@ -10,6 +10,7 @@
        client an engine that records the final URL instead of opening a socket. -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
+    <!-- kotlin-maven-plugin ignores maven.compiler.release; its own jvmTarget (below) sets the bytecode level. -->
     <kotlin.version>2.4.20</kotlin.version>
     <ktor.version>3.6.0</ktor.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -28,6 +29,7 @@
     <plugins>
       <plugin>
         <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <configuration><jvmTarget>21</jvmTarget></configuration>
         <executions><execution><id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution></executions>
       </plugin>
     </plugins>

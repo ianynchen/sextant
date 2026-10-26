@@ -51,7 +51,16 @@ private fun resolveWith(label: String, base: String, relative: String, call: sus
     }
 
 fun main() {
-    println("IDENTITY\tktor-client-core\t" + HttpClient::class.java.`package`.implementationVersion)
+    // The version each Ktor jar in use states, as the running process sees it. The server jars are
+    // only loaded, not run.
+    val loaded = listOf(
+        "ktor-http" to io.ktor.http.HttpMethod::class.java,
+        "ktor-client-core" to HttpClient::class.java,
+        "ktor-client-mock" to MockEngine::class.java,
+        "ktor-server-websockets" to Class.forName("io.ktor.server.websocket.RoutingKt", false, HttpClient::class.java.classLoader),
+        "ktor-server-sse" to Class.forName("io.ktor.server.sse.RoutingKt", false, HttpClient::class.java.classLoader),
+    )
+    for ((name, type) in loaded) println("IDENTITY\t$name\t" + type.`package`.implementationVersion)
     println("IDENTITY\tkotlin-stdlib\t" + KotlinVersion.CURRENT)
 
     val fresh = HttpRequestBuilder()
@@ -72,7 +81,7 @@ fun main() {
 
     resolveWith("ws relative, https base", "https://api.example.com/v1/", "/chat") { it.ws("/chat") { } }
     resolveWith("wss relative, http base", "http://api.example.com/v1/", "/chat") { it.wss("/chat") { } }
-    resolveWith("webSocket absolute ws URL", "https://api.example.com/v1/", "ws://chat.example.com/room") {
+    resolveWith("webSocketSession absolute ws URL", "https://api.example.com/v1/", "ws://chat.example.com/room") {
         it.webSocketSession("ws://chat.example.com/room")
     }
 }

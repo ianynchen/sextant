@@ -4,7 +4,7 @@
 `ktor-client-core-jvm`, `ktor-server-websockets-jvm` and `ktor-server-sse-jvm` **as their own
 manifests state it** (`Implementation-Version` 3.6.0), plus `ktor-client-mock-jvm` 3.6.0 as the
 engine the join rows ran on. The probe module is compiled by Kotlin 2.4.20 (the class files carry
-Kotlin metadata 2.4.0, the only version kotlinc writes into a class file) for Java 21 bytecode.
+Kotlin metadata 2.4.0, the only version kotlinc writes into a class file) for Java 21 bytecode (class file major version 65; the pom sets the Kotlin compiler's `jvmTarget`).
 `probe.py` reads each jar out of the local Maven repository and takes the version from the jar,
 never from the directory name the harness found it under (the CP-5 failure the convention exists
 to prevent), and the process that ran Ktor's own code has to report the same version or the run
@@ -52,8 +52,8 @@ is the question it answers; the verdicts after the table are keyed to the same l
 |---|---|
 | artifacts reporting this version | io.ktor:ktor-http-jvm, io.ktor:ktor-client-core-jvm, io.ktor:ktor-client-mock-jvm, io.ktor:ktor-server-websockets-jvm, io.ktor:ktor-server-sse-jvm |
 | where the jar states that version | MANIFEST.MF `Implementation-Version` |
-| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of `io.ktor.client.HttpClient`: 3.6.0; Kotlin runtime 2.4.20 |
-| the probe module's compiler | `kotlin.Metadata` `mv` on `probe.ProbeKt`: 2.4.0 (the metadata version is the only version kotlinc writes into a class file) |
+| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of a class from each jar: ktor-http 3.6.0, ktor-client-core 3.6.0, ktor-client-mock 3.6.0, ktor-server-websockets 3.6.0, ktor-server-sse 3.6.0; Kotlin runtime 2.4.20 |
+| the probe module's compiler | `kotlin.Metadata` `mv` on `probe.ProbeKt`: 2.4.0 (the metadata version is the only version kotlinc writes into a class file); class file major version 65 (Java 21) |
 
 | # | question | artifact | version | observed |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ is the question it answers; the verdicts after the table are keyed to the same l
 | 60 | `DefaultRequest` join: extra: deeper path (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/a/b/`, call `get("c/d")` -> Ktor sent `https://api.example.com/v1/a/b/c/d` |
 | 61 | `DefaultRequest` join through a WebSocket call: ws relative, https base (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/`, address `/chat` -> the engine received `ws://api.example.com:443/chat` |
 | 62 | `DefaultRequest` join through a WebSocket call: wss relative, http base (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `http://api.example.com/v1/`, address `/chat` -> the engine received `wss://api.example.com/chat` |
-| 63 | `DefaultRequest` join through a WebSocket call: webSocket absolute ws URL (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/`, address `ws://chat.example.com/room` -> the engine received `ws://chat.example.com/room` |
+| 63 | `DefaultRequest` join through a WebSocket call: webSocketSession absolute ws URL (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/`, address `ws://chat.example.com/room` -> the engine received `ws://chat.example.com/room` |
 
 ## What the rows say
 
@@ -142,7 +142,8 @@ one sequence.** For `get("…")`, `get { url("…") }`, `request("…") { method
 body-capable verbs (`post`, `put`, `patch`) and also `delete`, `head` and `options` with an
 address string set the verb **twice**: once straight after the builder is created, before `url`,
 and again at the end, with the same value both times. A body adds `setBody` and `setBodyType`,
-each twice because the compiler writes both sides of an `instanceof OutgoingContent` test. The
+each twice; the bytecode has an `instanceof OutgoingContent` test between them, so the two copies are
+probably its two branches (an inference from the bytecode, not a measured cause). The
 address is a string constant in the same function as the call. The builder is argument 0 of the
 `HttpStatement` constructor and the client is argument 1. The relative call (row 14) and the call
 on a client made by `config` (row 15) compile exactly like the others; the shape does not show
@@ -173,8 +174,9 @@ chosen by its descriptor and not by its arity alone.
 **(d) Rows 28–45 — the client WebSocket and SSE calls.** The WebSocket functions keep plain names
 (`webSocket`, `ws`, `wss`, `webSocketSession`), each with three overloads: request-lambda only,
 `urlString` first (argument 1 is the address), and `method, host, port, path` (path is argument
-4, port is a boxed `Integer`). The SSE functions all carry a hash-like suffix because they take
-a `Duration`: `sse`, `sseSession`, `serverSentEvents` and `serverSentEventsSession`, six
+4, port is a boxed `Integer`). The SSE functions all carry a hash-like suffix (the spec reads it as
+the compiler's encoding of a `Duration` parameter; this probe records the suffixes, not the
+cause): `sse`, `sseSession`, `serverSentEvents` and `serverSentEventsSession`, six
 overloads each, with the suffixes in rows 32–35. The suffix does not identify a form by itself:
 `sse-Mswn-_c` is both the address form (argument 1 a `String`) and the request-lambda form with
 a deserializer (argument 1 a `Function1`), so the descriptor decides where the address is.
@@ -214,8 +216,8 @@ joins `http://localhost` (row 57); a bare host as the base works as the root (ro
 the base is appended **after** the call's own query (`?limit=5&key=1`, row 59); a deeper base
 directory ending in `/` takes the whole relative path (row 60). A relative WebSocket address
 goes through the same join, but Ktor then rewrites the scheme: `ws("/chat")` over an `https` base
-reached the engine as `ws://api.example.com:443/chat` (the port 443 the `https` base implied is
-kept) and `wss` over an `http` base as `wss://api.example.com/chat`; an absolute `ws://` address
+reached the engine as `ws://api.example.com:443/chat` (the port 443 is probably the `https` base's default, kept after the
+scheme changed; that is an inference, the probe records only the result) and `wss` over an `http` base as `wss://api.example.com/chat`; an absolute `ws://` address
 is untouched (rows 61–63). Supports §3g item 1 (confirmed: the spec's example of
 `https://api.openai.com/v1/` plus `/chat` is row 52's pattern) and item 2. A WebSocket row that
 keeps the whole URL in `path` should decide whether it reports Ktor's rewritten scheme and port

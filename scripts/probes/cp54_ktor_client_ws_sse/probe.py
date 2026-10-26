@@ -497,23 +497,39 @@ def main(argv: list[str]) -> int:
     for key, (group, artifact) in ARTIFACTS.items():
         jar = jar_at(group, artifact, VERSION)
         if jar is None:
-            print(f"NOT IN THE LOCAL REPOSITORY: {group}:{artifact}:{VERSION}", file=sys.stderr)
-            return 1
+            raise ProbeError(f"NOT IN THE LOCAL REPOSITORY: {group}:{artifact}:{VERSION}")
         jars[key] = (jar, identity(jar, VERSION)[0])
     columns = sorted({stated for _, stated in jars.values()})
+    if len(columns) != 1:
+        raise ProbeError(
+            f"the Ktor jars state different versions: { {k: v[1] for k, v in jars.items()} }"
+        )
 
     ran = run_main(java_home, arguments["CLASSES"], arguments["CLASSPATH"])
     reported = {r[1]: r[2] for r in ran if r[0] == "IDENTITY"}
-    if reported.get("ktor-client-core") not in columns:
-        raise ProbeError(
-            f"the process that ran Ktor's DefaultRequest reports {reported.get('ktor-client-core')!r}, "
-            f"the jars' manifests state {columns}"
-        )
+    for key, (group, artifact) in ARTIFACTS.items():
+        name = artifact.removesuffix("-jvm")
+        if reported.get(name) != jars[key][1]:
+            raise ProbeError(
+                f"the process reports {name} {reported.get(name)!r}, "
+                f"the jar's manifest states {jars[key][1]!r}"
+            )
+    for entry in ran:
+        if entry[0] in ("MERGE", "PROTOCOL") and (
+            entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")
+        ):
+            raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
 
     module = classes(Path(arguments["CLASSES"]), [PROBE, "probe.MainKt"])
     probe = module[PROBE]
     metadata = re.search(r"mv=\[(?:I\()?(\d+)\)?,(?:I\()?(\d+)\)?,(?:I\()?(\d+)\)?\]", probe.text)
     stated_metadata = ".".join(metadata.groups()) if metadata else "NOT FOUND"
+    major = re.search(r"^\s+major version: (\d+)", probe.text, flags=re.MULTILINE)
+    stated_major = major.group(1) if major else "NOT FOUND"
+    if stated_major != "65":  # class file major version 65 is Java 21
+        raise ProbeError(
+            f"the probe module's class files are major version {stated_major}, not 65 (Java 21)"
+        )
     if stated_metadata != expected_metadata:
         raise ProbeError(
             f"the probe module's class files state Kotlin metadata {stated_metadata}, "
@@ -552,13 +568,17 @@ def main(argv: list[str]) -> int:
     )
     print("| where the jar states that version | MANIFEST.MF `Implementation-Version` |")
     print(
-        "| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of "
-        f"`io.ktor.client.HttpClient`: {reported['ktor-client-core']}; Kotlin runtime "
-        f"{reported['kotlin-stdlib']} |"
+        "| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of a class from each jar: "
+        + ", ".join(
+            f"{a.removesuffix('-jvm')} {reported[a.removesuffix('-jvm')]}"
+            for _, a in ARTIFACTS.values()
+        )
+        + f"; Kotlin runtime {reported['kotlin-stdlib']} |"
     )
     print(
         f"| the probe module's compiler | `kotlin.Metadata` `mv` on `{PROBE}`: {stated_metadata} "
-        "(the metadata version is the only version kotlinc writes into a class file) |"
+        f"(the metadata version is the only version kotlinc writes into a class file); class file "
+        f"major version {stated_major} (Java 21) |"
     )
     print()
     print("| # | question | artifact | version | observed |")
@@ -601,14 +621,25 @@ def main(argv: list[str]) -> int:
         for m in methods_of(companion)
         if m.public and m.name.startswith("get") and m.result.endswith("HttpMethod")
     ]
-    listed = []
-    for step in body(verb, "<clinit>")[-30:]:
-        if (
-            step.opcode == "getstatic"
-            and step.comment.startswith("Field ")
-            and "HttpMethod" in step.comment
-        ):
-            listed.append(step.comment.split()[1].split(":")[0])
+    # the verbs read since the previous `putstatic`, when the one that stores `DefaultMethods` comes
+    listed: list[str] = []
+    collected: list[str] = []
+    for step in body(verb, "<clinit>"):
+        if step.opcode == "getstatic":
+            field_read = re.match(
+                r"Field (?:io/ktor/http/HttpMethod\.)?(\w+):Lio/ktor/http/HttpMethod;", step.comment
+            )
+            if field_read:
+                collected.append(field_read.group(1))
+        elif step.opcode == "putstatic":
+            if step.comment.startswith("Field DefaultMethods:"):
+                listed = collected
+                break
+            collected = []
+    if not listed:
+        raise ProbeError(
+            "HttpMethod's static initialiser never stores DefaultMethods from verb fields"
+        )
     emit(
         "the verb getters on `HttpMethod.Companion`, and the verbs `DefaultMethods` lists (a)",
         "http",
