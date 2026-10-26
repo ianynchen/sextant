@@ -4811,6 +4811,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "ktor.the-row-protocol-is-part-of-the-dedup-key": Guard(
+        what="`combinator`'s `_emitted` deduplicates on the ROW's protocol, not the catalog's",
+        why='`route("/api") { sse("/events") { }; get("/events") { } }` is an `sse` and an `http` '
+        "`GET /api/events` with one handler. Keyed on the catalog's `http`, the two are one "
+        "identity and whichever came second is silently discarded",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='                row["protocol"],\n                catalog.direction,\n',
+                replace="                catalog.protocol,  # guard disabled by scripts/guard_check.py\n"
+                "                catalog.direction,\n",
+            ),
+        ),
+    ),
     "ktor.a-GET-bound-websocket-under-a-disagreeing-scope-is-dropped": Guard(
         what="a verbless route meets a scope's verb by its `registered_verb` and never takes "
         "the scope's verb: `_verbs_disagree` compares the registered verb, and `_merged` "

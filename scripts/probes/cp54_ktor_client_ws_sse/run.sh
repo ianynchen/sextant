@@ -10,8 +10,9 @@
 # writes into a class file; a disagreement aborts the run.
 #
 # Needs a JDK at `$JAVA_HOME` (for `javap` and `java`), Maven, and network on the first run only
-# (Ktor 3.6.0, Kotlin 2.4.20 and ktor-client-mock are cached in ~/.m2 afterwards). Not a test:
-# nothing in the suite runs it.
+# (Ktor 3.6.0, Kotlin 2.4.20, ktor-client-mock, ktor-server-test-host and ktor-server-cio are
+# cached in ~/.m2 afterwards). Row group (h) binds a CIO server to 127.0.0.1 on a free port for the
+# length of its requests. Not a test: nothing in the suite runs it.
 set -euo pipefail
 
 cd "$(dirname "$0")"

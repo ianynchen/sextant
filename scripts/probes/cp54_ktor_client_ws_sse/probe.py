@@ -5,7 +5,9 @@ with what each argument is, the `DefaultRequest` URL setters, the verb and URL a
 builder starts with, and how `DefaultRequest` joins a relative address onto its base. Every cell is
 read off the Ktor jars and the probe module's class files with `javap -c`, except the join and the
 fresh-builder defaults, which `Main.kt` takes from Ktor itself by running its `DefaultRequest`
-plugin over a mock engine. The version in each column is the jar's own manifest, and the process
+plugin over a mock engine, and which verb each WebSocket and SSE route answers (h), which
+`Main.kt` asks Ktor's own router by sending requests to small routing trees on Ktor's test host
+and on a CIO server. The version in each column is the jar's own manifest, and the process
 that ran Ktor's code has to report the same one. Prints the observation table
 `cp54_ktor_client_ws_sse.md` carries."""
 
@@ -32,12 +34,16 @@ CLIENT = ("io.ktor", "ktor-client-core-jvm")
 MOCK = ("io.ktor", "ktor-client-mock-jvm")
 SERVER_WS = ("io.ktor", "ktor-server-websockets-jvm")
 SERVER_SSE = ("io.ktor", "ktor-server-sse-jvm")
+TEST_HOST = ("io.ktor", "ktor-server-test-host-jvm")
+SERVER_CIO = ("io.ktor", "ktor-server-cio-jvm")
 ARTIFACTS = {
     "http": HTTP,
     "client": CLIENT,
     "mock": MOCK,
     "server_ws": SERVER_WS,
     "server_sse": SERVER_SSE,
+    "test_host": TEST_HOST,
+    "server_cio": SERVER_CIO,
 }
 
 METHOD = "io.ktor.http.HttpMethod"
@@ -515,10 +521,14 @@ def main(argv: list[str]) -> int:
                 f"the jar's manifest states {jars[key][1]!r}"
             )
     for entry in ran:
-        if entry[0] in ("MERGE", "PROTOCOL") and (
+        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH") and (
             entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")
         ):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
+    # (h) a request the server never received measures nothing about routing.
+    for entry in ran:
+        if entry[0] == "DISPATCH" and entry[3] == "NOT RECEIVED":
+            raise ProbeError(f"the server received no request: {' | '.join(entry)}")
 
     module = classes(Path(arguments["CLASSES"]), [PROBE, "probe.MainKt"])
     probe = module[PROBE]
@@ -766,6 +776,25 @@ def main(argv: list[str]) -> int:
                 f"`DefaultRequest` join through a WebSocket call: {label} (g)",
                 "client",
                 f"base `{base}`, address `{relative}` -> the engine received `{result}`",
+            )
+
+    # (h) which verb each WebSocket and SSE route answers, asked of Ktor's own router
+    for entry in ran:
+        if entry[0] == "DISPATCH":
+            _, label, request, received, selected, outcome = entry
+            if label.startswith("test host"):
+                key = "test_host"
+            elif label.startswith("`sse") or "sse {" in label:
+                key = "server_sse"
+            else:
+                key = "server_ws"
+            route = (
+                f"the router selected `{selected}`" if selected != "NONE" else "no route selected"
+            )
+            emit(
+                f"{label} sent `{request}` (h)",
+                key,
+                f"the server received `{received}`; {route}; {outcome}",
             )
     return 0
 

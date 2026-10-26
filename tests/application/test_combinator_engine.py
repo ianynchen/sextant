@@ -7403,6 +7403,7 @@ def test_a_pathless_sse_route_is_the_handle_it_compiles_to(tmp_path: Path):
     ]
 
 
+@pytest.mark.pins("ktor.the-row-protocol-is-part-of-the-dedup-key")
 def test_http_routes_are_unchanged(tmp_path: Path):
     """The HTTP verbs beside the new ones keep their protocol and their verbs: in one
     `route("/api") { get("/orders"); webSocket("/chat"); sse("/events"); get("/events") }`
@@ -7448,6 +7449,13 @@ def test_a_verb_rules_protocol_and_registered_verb_are_validated(tmp_path: Path)
     matches["vocabulary"]["prefixes"][0]["protocol"] = "websocket"  # type: ignore[index]
     with pytest.raises(CatalogError, match="protocol"):
         _resolve(tmp_path, [], _catalog(matches))
+    # `verb: none` is the rule's answer for its verb; beside `verb_arg` it is two.
+    matches = copy.deepcopy(_matches())
+    rule = matches["vocabulary"]["verbs"][0]  # type: ignore[index]
+    rule["verb"] = "none"
+    rule["verb_arg"] = 0
+    with pytest.raises(CatalogError, match="verb_arg"):
+        _resolve(tmp_path, [], _catalog(matches))
     # `registered_verb` names the verb a VERBLESS route is registered under: beside
     # `verb: none` alone, and an upper-case verb word.
     for verb, registered in (("GET", "GET"), ("none", "get"), ("none", 7)):
@@ -7457,3 +7465,36 @@ def test_a_verb_rules_protocol_and_registered_verb_are_validated(tmp_path: Path)
         rule["registered_verb"] = registered
         with pytest.raises(CatalogError, match="registered_verb"):
             _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_an_unresolved_websocket_row_keeps_its_protocol(tmp_path: Path):
+    """`other.webSocket("/stray") { }` inside `route("/api") { }` is registered on a `Route`
+    this block never handed it (`receiver_arg: 0` is not the origin), so the row is
+    unresolved with its path unread — and it is still a WebSocket row: the rule's protocol is
+    stamped on the poisoned route too, never left to fall back to the catalog's `http`."""
+    facts = _sessions_under(("route3", [_literal("/api")], []))
+    facts.append(
+        _site(
+            _selector_body(0),
+            0,
+            _WEBSOCKET_ROUTING,
+            "webSocket$default",
+            result=100,
+            descriptor=f"({_ROUTE}{_JVM_STRING}{_JVM_STRING}{_JVM_FN2}ILjava/lang/Object;){_ROUTE}",
+            arguments=[
+                CallArgument(kind="field", symbol=DECLARER + "other."),
+                _literal("/stray"),
+                CallArgument(kind="null"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=50),
+                CallArgument(kind="int", value=2),
+                CallArgument(kind="null"),
+            ],
+        )
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _protocol_identities(rows) == [
+        ("websocket", None, None, _MODULE + _SUSPEND_BODY, "unresolved")
+    ]

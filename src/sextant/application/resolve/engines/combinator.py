@@ -1711,9 +1711,10 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     array holding one, an empty array — poisons `method` alone. A rule declaring
     `verb: none` is VERBLESS — a WebSocket route — carrying the `registered_verb` it
     declares, if any; one declaring `protocol` stamps it on every branch (spec
-    2026-10-26 §3b)."""
+    2026-10-26 §3b) — the unresolved one a receiver off the origin yields included: a
+    WebSocket route registered on another `Route` is still a WebSocket route."""
     if not _receiver_argument_is_the_origin(site, rule, scope):
-        return [_Route(poisons=_IDENTITY_POISON)]
+        return [_Route(poisons=_IDENTITY_POISON, protocol=rule.get("protocol"))]
     arguments = site["arguments"]
     if "verb_arg" in rule:
         verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]), scope)
@@ -2017,6 +2018,13 @@ def _merged(left: _Route, right: _Route) -> _Route:
     same merge of two verbs does. Registered under none, nothing the other side
     carries can disagree with it, and an unreadable verb there is not its poison. The
     other columns fold as they always do.
+
+    That last rule rests on one assumption, true of every caller today: a `method` poison
+    on the side a verbless route meets comes from a SCOPE's verb that could not be read
+    (`_prefix_constraints`, `_verbs_at`) or from an identity poison that poisons `path`
+    as well, so dropping `method` never makes a row resolved whose own read failed. A
+    future word that poisons `method` alone for another reason would have to be kept
+    apart here.
     """
     poisons = _union(left.poisons, right.poisons)
     verbless = left.verbless or right.verbless

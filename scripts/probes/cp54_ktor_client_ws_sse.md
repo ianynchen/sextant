@@ -3,7 +3,8 @@
 **Version scope.** Everything below is measured against Ktor **3.6.0**: `ktor-http-jvm`,
 `ktor-client-core-jvm`, `ktor-server-websockets-jvm` and `ktor-server-sse-jvm` **as their own
 manifests state it** (`Implementation-Version` 3.6.0), plus `ktor-client-mock-jvm` 3.6.0 as the
-engine the join rows ran on. The probe module is compiled by Kotlin 2.4.20 (the class files carry
+engine the join rows ran on, and `ktor-server-test-host-jvm` and `ktor-server-cio-jvm` 3.6.0 as
+the servers the dispatch rows (h) ran on. The probe module is compiled by Kotlin 2.4.20 (the class files carry
 Kotlin metadata 2.4.0, the only version kotlinc writes into a class file) for Java 21 bytecode (class file major version 65; the pom sets the Kotlin compiler's `jvmTarget`).
 `probe.py` reads each jar out of the local Maven repository and takes the version from the jar,
 never from the directory name the harness found it under (the CP-5 failure the convention exists
@@ -25,7 +26,10 @@ readings before any catalog states them.
 **What this probe does not settle.** It measures what the libraries and the Kotlin compiler
 produce for a probe module of our own; it reads no downloaded project and runs no application
 (the module is compiled and its `main` runs Ktor's `DefaultRequest` over a mock engine that
-opens no connection). The verbs `get`, `post`, `put`, `patch`, `delete`, `head`, `options` with
+opens no connection, and, for rows (h), installs small routing trees of its own in Ktor's test
+host and in a CIO server bound to `127.0.0.1` on a free port, sends them requests, and stops
+them). Rows (h) measure one server engine, CIO; whether Netty or Jetty complete a WebSocket
+upgrade on a verb other than GET is not measured. The verbs `get`, `post`, `put`, `patch`, `delete`, `head`, `options` with
 an address string are measured; `trace`, `query`, `submitForm`, `request(HttpRequestBuilder)` and
 a request built by hand are not. The SSE client's join of a relative address is not measured: the
 mock engine does not offer the SSE capability, so the SSE call stops before it sends anything
@@ -50,9 +54,9 @@ is the question it answers; the verdicts after the table are keyed to the same l
 
 | what the run read | 3.6.0 |
 |---|---|
-| artifacts reporting this version | io.ktor:ktor-http-jvm, io.ktor:ktor-client-core-jvm, io.ktor:ktor-client-mock-jvm, io.ktor:ktor-server-websockets-jvm, io.ktor:ktor-server-sse-jvm |
+| artifacts reporting this version | io.ktor:ktor-http-jvm, io.ktor:ktor-client-core-jvm, io.ktor:ktor-client-mock-jvm, io.ktor:ktor-server-websockets-jvm, io.ktor:ktor-server-sse-jvm, io.ktor:ktor-server-test-host-jvm, io.ktor:ktor-server-cio-jvm |
 | where the jar states that version | MANIFEST.MF `Implementation-Version` |
-| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of a class from each jar: ktor-http 3.6.0, ktor-client-core 3.6.0, ktor-client-mock 3.6.0, ktor-server-websockets 3.6.0, ktor-server-sse 3.6.0; Kotlin runtime 2.4.20 |
+| what the process that ran Ktor's code reported | `Package.getImplementationVersion` of a class from each jar: ktor-http 3.6.0, ktor-client-core 3.6.0, ktor-client-mock 3.6.0, ktor-server-websockets 3.6.0, ktor-server-sse 3.6.0, ktor-server-test-host 3.6.0, ktor-server-cio 3.6.0; Kotlin runtime 2.4.20 |
 | the probe module's compiler | `kotlin.Metadata` `mv` on `probe.ProbeKt`: 2.4.0 (the metadata version is the only version kotlinc writes into a class file); class file major version 65 (Java 21) |
 
 | # | question | artifact | version | observed |
@@ -120,10 +124,25 @@ is the question it answers; the verdicts after the table are keyed to the same l
 | 61 | `DefaultRequest` join through a WebSocket call: ws relative, https base (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/`, address `/chat` -> the engine received `ws://api.example.com:443/chat` |
 | 62 | `DefaultRequest` join through a WebSocket call: wss relative, http base (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `http://api.example.com/v1/`, address `/chat` -> the engine received `wss://api.example.com/chat` |
 | 63 | `DefaultRequest` join through a WebSocket call: webSocketSession absolute ws URL (g) | `io.ktor:ktor-client-core-jvm` | 3.6.0 | base `https://api.example.com/v1/`, address `ws://chat.example.com/room` -> the engine received `ws://chat.example.com/room` |
+| 64 | `method(HttpMethod.Post) { webSocket("/ws") { } }` sent `POST /ws` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `POST`; no route selected; status line `HTTP/1.1 405 Method Not Allowed` |
+| 65 | `method(HttpMethod.Post) { webSocket("/ws") { } }` sent `GET /ws` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `GET`; no route selected; status line `HTTP/1.1 404 Not Found` |
+| 66 | `webSocket("/ws") { }` sent `GET /ws` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `GET`; the router selected `/ws/(method:GET)/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; status line `HTTP/1.1 101 Switching Protocols` |
+| 67 | `webSocket("/ws") { }` sent `POST /ws` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `POST`; no route selected; status line `HTTP/1.1 405 Method Not Allowed` |
+| 68 | `webSocketRaw("/raw") { }` sent `GET /raw` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `GET`; the router selected `/raw/(method:GET)/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; status line `HTTP/1.1 101 Switching Protocols` |
+| 69 | `webSocketRaw("/raw") { }` sent `POST /raw` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `POST`; no route selected; status line `HTTP/1.1 405 Method Not Allowed` |
+| 70 | `route("/p") { webSocket { } }` sent `GET /p` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `GET`; the router selected `/p/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; status line `HTTP/1.1 101 Switching Protocols` |
+| 71 | `route("/p") { webSocket { } }` sent `POST /p` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `POST`; the router selected `/p/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; status line `HTTP/1.1 500 Internal Server Error`; the call failed: IllegalStateException: Unable to perform upgrade as it is not requested by the client: request should have Upgrade and Connection headers filled properly |
+| 72 | `route("/r") { method(HttpMethod.Post) { webSocket { } } }` sent `POST /r` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `POST`; the router selected `/r/(method:POST)/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; status line `HTTP/1.1 500 Internal Server Error`; the call failed: IllegalStateException: Unable to perform upgrade as it is not requested by the client: request should have Upgrade and Connection headers filled properly |
+| 73 | `route("/r") { method(HttpMethod.Post) { webSocket { } } }` sent `GET /r` (h) | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 | the server received `GET`; no route selected; status line `HTTP/1.1 405 Method Not Allowed` |
+| 74 | `sse("/e") { }` sent `GET /e` (h) | `io.ktor:ktor-server-sse-jvm` | 3.6.0 | the server received `GET`; the router selected `/e/(method:GET)`; status 200 |
+| 75 | `sse("/e") { }` sent `POST /e` (h) | `io.ktor:ktor-server-sse-jvm` | 3.6.0 | the server received `POST`; no route selected; status 405 |
+| 76 | `route("/q") { sse { } }` sent `GET /q` (h) | `io.ktor:ktor-server-sse-jvm` | 3.6.0 | the server received `GET`; the router selected `/q`; status 200 |
+| 77 | `route("/q") { sse { } }` sent `POST /q` (h) | `io.ktor:ktor-server-sse-jvm` | 3.6.0 | the server received `POST`; the router selected `/q`; status 200 |
+| 78 | test host client, `webSocket("/ws") { }` sent `POST /ws` (h) | `io.ktor:ktor-server-test-host-jvm` | 3.6.0 | the server received `GET`; the router selected `/ws/(method:GET)/(header:Connection = Upgrade)/(header:Upgrade = websocket)`; upgraded |
 
 ## What the rows say
 
-Letters (a)–(g) are the questions the probe was written to answer. Each verdict names the spec
+Letters (a)–(h) are the questions the probe was written to answer. Each verdict names the spec
 section (`docs/superpowers/specs/2026-10-26-ktor-client-websockets-sse-design.md`) it supports.
 
 **(a) Rows 1–2 — the verbs are static fields, nine of them, and the old getters stop at
@@ -223,6 +242,35 @@ is untouched (rows 61–63). Supports §3g item 1 (confirmed: the spec's example
 keeps the whole URL in `path` should decide whether it reports Ktor's rewritten scheme and port
 or only the joined path; the record only states what Ktor does.
 
+**(h) Rows 64–78 — which verb each WebSocket and SSE route answers, asked of Ktor's router.**
+Rows 16–27 measure signatures and call shapes; these measure what Ktor itself DISPATCHES. Each
+tree is installed in a Ktor application and sent real requests, and two things are recorded by
+Ktor per request: the verb the server received (an `onCall` hook) and the route node the router
+selected (the `RoutingCallStarted` event, fired after resolution and before the handler; "no
+route selected" means none matched). WebSocket requests are a raw RFC 6455 handshake over a socket
+to a real CIO server, because Ktor's clients refuse to set `Upgrade` by hand and the test host's
+WebSocket client sends its handshake as GET whatever verb it is handed (row 78: asked for POST,
+the server received GET). SSE requests go through Ktor's own test host. Dispatch was chosen over a
+route-tree dump; the selected node's own `toString` shows its selectors anyway.
+- A WebSocket route WITH a path answers GET only. `webSocket("/ws")` and `webSocketRaw("/raw")`
+  select `/ws/(method:GET)/(header:Connection = Upgrade)/(header:Upgrade = websocket)` for a GET
+  and upgrade (101); a POST selects nothing (405) (rows 66–69). Under
+  `method(HttpMethod.Post) { webSocket("/ws") { } }` neither verb selects a route: POST is 405,
+  GET is 404 (rows 64–65) — a GET node under a POST selector, never dispatched.
+- A path-less WebSocket route has NO verb selector: `route("/p") { webSocket { } }` selects
+  `/p/(header:Connection = Upgrade)/(header:Upgrade = websocket)` for GET and for POST (rows
+  70–71), and under `method(HttpMethod.Post)` the router selects it for POST (row 72) and not for
+  GET (row 73). Routing answers any verb; the CIO ENGINE then completes the upgrade for GET only —
+  the POST calls fail with "Unable to perform upgrade as it is not requested by the client" from
+  `CIOApplicationResponse` (500, rows 71–72). Other engines are not measured.
+- `sse("/e")` answers GET only: it selects `/e/(method:GET)`, and POST is 405 (rows 74–75). The
+  path-less `route("/q") { sse { } }` selects `/q` itself for GET and for POST, 200 both (rows
+  76–77): no verb selector, as `handle { }`.
+
+Supports §3b and §3g item 5 with one correction: SSE rows carry GET only where a path is given;
+the path-less `sse { }` serves the scope's verb, or every verb. The WebSocket rows are verbless,
+GET-bound where a path is given.
+
 **Where this record differs from the spec's first draft** (flagged for the builder and the
 reviewer; the measurement is what it is):
 - §2a says all five client forms compile to one sequence. Only the GET-shaped forms do; the
@@ -233,5 +281,8 @@ reviewer; the measurement is what it is):
 - §3d names `sse-Mswn-_c$default` as the SSE function. That name is shared by two overloads and
   is the right one only for the plain `sse(urlString)` call; other forms have other suffixes.
 - §3g item 3 allows that `url { … }` might be a separate setter; it is (row 46).
+- §3g item 5 says Ktor registers WebSocket and SSE routes under GET. Only the forms with a path
+  do (rows 64–69, 74–75); the path-less `webSocket { }` and `sse { }` select no verb at all
+  (rows 70–73, 76–77).
 - Not in the spec: the join rewrites a WebSocket call's scheme and may add `:443` (rows 61–62),
   and a call with no base at all sends to `http://localhost` (row 57).

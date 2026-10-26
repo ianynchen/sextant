@@ -23,6 +23,13 @@
     <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-core-jvm</artifactId><version>${ktor.version}</version></dependency>
     <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-cio-jvm</artifactId><version>${ktor.version}</version></dependency>
     <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-mock-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <!-- Probe-only, like the mock engine. Row group (h) asks Ktor which verb each WebSocket and SSE
+         route answers: SSE through Ktor's own test host; WebSocket through a real CIO server and a
+         raw socket, because the test host's client sends every WebSocket handshake as GET whatever
+         verb it is handed (measured in row group (h) itself), and Ktor's clients refuse to set the
+         `Upgrade` header by hand. -->
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-test-host-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-cio-jvm</artifactId><version>${ktor.version}</version></dependency>
   </dependencies>
   <build>
     <sourceDirectory>src/main/kotlin</sourceDirectory>
