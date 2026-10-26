@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-206 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-213 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -208,7 +208,14 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-202 | [SEXTANT-195](https://app.plane.so/portolan/browse/SEXTANT-195/) | a gRPC service reaching the generated ImplBase through an intermediate class is not named as its RPC's handler |
 | OI-203 | [SEXTANT-196](https://app.plane.so/portolan/browse/SEXTANT-196/) | a grpc-kotlin coroutine stub's self-call is fenced but gets no hop, so its trace ends at a library boundary |
 | OI-204 | [SEXTANT-197](https://app.plane.so/portolan/browse/SEXTANT-197/) | an unknown key inside a catalog's delegating_bean block is not refused |
-| OI-205 | [SEXTANT-198](https://app.plane.so/portolan/browse/SEXTANT-198/) | C#/.NET has no scanner (assessed, not measured, not prioritized) |
+| OI-205 | [SEXTANT-198](https://app.plane.so/portolan/browse/SEXTANT-198/) | C#/.NET has no scanner (language order 7) |
+| OI-206 | [SEXTANT-199](https://app.plane.so/portolan/browse/SEXTANT-199/) | Ktor: HTTP client, WebSockets and SSE are not read (Java/Kotlin framework order 1) |
+| OI-207 | [SEXTANT-200](https://app.plane.so/portolan/browse/SEXTANT-200/) | Vert.x: one Web row and the WebClient are not read (Java/Kotlin framework order 3) |
+| OI-208 | [SEXTANT-201](https://app.plane.so/portolan/browse/SEXTANT-201/) | Python has no scanner: FastAPI, Flask, Django (language order 2) |
+| OI-209 | [SEXTANT-202](https://app.plane.so/portolan/browse/SEXTANT-202/) | JavaScript/TypeScript has no scanner: Node.js, Express, NestJS (language order 3) |
+| OI-210 | [SEXTANT-203](https://app.plane.so/portolan/browse/SEXTANT-203/) | Go has no scanner (language order 4) |
+| OI-211 | [SEXTANT-204](https://app.plane.so/portolan/browse/SEXTANT-204/) | Rust has no scanner (language order 5) |
+| OI-212 | [SEXTANT-205](https://app.plane.so/portolan/browse/SEXTANT-205/) | Swift has no scanner (language order 6) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
