@@ -306,6 +306,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # the handler at slot 1, `handle(GenericHandler)` at slot 0, and a name
             # alone would read one slot for both. None for the ordinary step.
             "descriptor": _validated_descriptor(step, catalog, "steps"),
+            # Spec 2026-10-26 §3c: the argument a step's receiver arrives as, for an
+            # extension function compiled to a static method (its argument 0 is the
+            # receiver, its own `receiver` null). None for the ordinary step, which joins
+            # the chain through its own `receiver`.
+            "receiver_arg": _validated_receiver_arg(step, catalog),
             "captures": _merged_captures(step),
             # F5 §6.2 (W29): the repeatable half. A step declaring `collects` accumulates
             # an entry per visit instead of overwriting, because a request may carry any
@@ -422,6 +427,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
     walk_index = cached_value_index(workspace)
+    # The steps that join through an argument (`receiver_arg`), by name — empty for every
+    # catalog declaring none, which then indexes each site by its own `receiver` exactly as
+    # before and pays nothing for the rule (GUIDELINES §8.7).
+    extension_steps: dict[str, list[dict[str, Any]]] = {}
+    for step in steps:
+        if step["receiver_arg"] is not None:
+            extension_steps.setdefault(step["method"], []).append(step)
+    relative_to_client_base = _validated_relative_to_client_base(matches, catalog)
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -446,7 +459,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # another.
         by_receiver: dict[Any, list[dict[str, Any]]] = {}
         for site in sites:
-            by_receiver.setdefault(site["receiver"], []).append(site)
+            by_receiver.setdefault(_receiver_of(site, extension_steps), []).append(site)
         facts = CallFacts(
             supertypes=supertypes,
             caller_call_sites=sites,
@@ -482,6 +495,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             all_parameters=caller_parameters,
             annotations=annotations,
             verb_fields=verb_fields,
+            relative_to_client_base=relative_to_client_base,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -538,6 +552,14 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
             f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
             f"declares `poisons` — a poison is a step's own effect on the chain it sits "
             f"in, and a root has no chain before it (spec 2026-09-21 §4)"
+        )
+    # `receiver_arg` is how a step JOINS a chain, and a root starts one: the word would
+    # load and do nothing, the `poisons` reason above.
+    if "receiver_arg" in root:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
+            f"declares `receiver_arg` — it says which argument a STEP joins the chain "
+            f"through, and a root starts the chain (spec 2026-10-26 §3c)"
         )
     return {
         # A LIST or a scalar (§3.1): one library reachable under its class name
@@ -668,8 +690,13 @@ class _ChainContext:
     annotations: dict[str, list[tuple[str, dict[str, Any]]]]
     # Spec 2026-10-26 §3a: the static fields that name a verb (`verb_values.fields`),
     # keyed on `(owner, field name)` — what an `http_method: argN` capture reads when
-    # its argument is a `field`-kind one. Empty for a catalog declaring none.
+    # its argument is a static field (`enum`- or `field`-kind, D00 §5). Empty for a
+    # catalog declaring none.
     verb_fields: dict[tuple[str, str], str]
+    # Spec 2026-10-26 §3c: whether a relative address is relative to a base the executing
+    # CLIENT holds (`matches.relative_to_client_base`) — False for every catalog not
+    # declaring it, whose relative address reads as it always has.
+    relative_to_client_base: bool = False
     # Where a walk records each chain END's captures instead of deriving a row
     # — the collecting context `_bean_chain_capture` builds. None on the
     # deriving walk.
@@ -1614,19 +1641,22 @@ def _composed_address(
     url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         if context.workspace is None or context.values is None:
-            return url_of(url_argument)
+            return _against_client_base(url_of(url_argument), context)
         # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
         # identities, so the path is text the code states, and who is CALLED is asked
         # separately of the first operand — the user's ruling of 2026-10-17, "peer and path
         # from separate evidence".
         captured = (_address_read(captures.get("url"), context) or {}).get("captured_at")
-        return with_authority(
-            url_of(url_argument),
-            _address_read(captures.get("url"), context),
-            str(captured[0]) if captured else None,
-            context.workspace,
-            context.values,
-            context.catalog.value_model or (),
+        return _against_client_base(
+            with_authority(
+                url_of(url_argument),
+                _address_read(captures.get("url"), context),
+                str(captured[0]) if captured else None,
+                context.workspace,
+                context.values,
+                context.catalog.value_model or (),
+            ),
+            context,
         )
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
@@ -1637,6 +1667,33 @@ def _composed_address(
     if path is None:
         return None, None, "unresolved"
     return _address_of(base + path)
+
+
+def _against_client_base(
+    address: tuple[str | None, str | None, str], context: _ChainContext
+) -> tuple[str | None, str | None, str]:
+    """`address` where the catalog says a relative address is relative to a base the
+    executing CLIENT holds (`relative_to_client_base`, spec 2026-10-26 §3c): Ktor joins
+    `get("relative/path")` onto the client's `defaultRequest` base, and onto
+    `http://localhost` where it has none (CP-54 rows 51-57). No capture of the chain reads
+    that base, so the address the code states is a PATH and not the URL called: it keeps
+    the path, peer NULL, at `unresolved`.
+
+    Only a relative address read in full moves. An absolute one is the whole address (Ktor
+    ignores the base for it, CP-54 row 55); a `${…}` expression is configuration that may be
+    absolute, read where the configuration join reads it; and a `partial` or `unresolved`
+    address already says it was not read in full. Every catalog not declaring the word
+    keeps its relative address as it always has."""
+    peer, path, resolution = address
+    if (
+        not context.relative_to_client_base
+        or peer is not None
+        or path is None
+        or resolution != str(Resolution.RESOLVED)
+        or carries_expression(path)
+    ):
+        return address
+    return None, path, str(Resolution.UNRESOLVED)
 
 
 def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str, Any] | None:
@@ -1896,6 +1953,56 @@ def _validated_descriptor(entry: dict[str, Any], catalog: Catalog, where: str) -
             f"(spec 2026-09-21 §5)"
         )
     return declared
+
+
+def _validated_receiver_arg(step: dict[str, Any], catalog: Catalog) -> int | None:
+    """A step's optional `receiver_arg`, refused unless it is an argument index — a
+    non-negative integer, and not a boolean, which Python counts as one. An index no call
+    site can carry joins nothing, and a step declared that way would load and silently
+    never be reached (spec 2026-10-26 §3c)."""
+    declared = step.get("receiver_arg")
+    if declared is None:
+        return None
+    if isinstance(declared, bool) or not isinstance(declared, int) or declared < 0:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: step `{step.get('method')}` declares "
+            f"`receiver_arg: {declared!r}`, which is not an argument index — it names the "
+            f"argument the step's receiver arrives as, a non-negative integer (spec "
+            f"2026-10-26 §3c)"
+        )
+    return declared
+
+
+def _validated_relative_to_client_base(matches: dict[str, Any], catalog: Catalog) -> bool:
+    """`matches.relative_to_client_base`, a boolean when declared (spec 2026-10-26 §3c)."""
+    declared = matches.get("relative_to_client_base", False)
+    if not isinstance(declared, bool):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `relative_to_client_base` is `true` or "
+            f"`false`, got {declared!r} (D02 §2's `fluent` style)"
+        )
+    return declared
+
+
+def _receiver_of(site: dict[str, Any], extension_steps: dict[str, list[dict[str, Any]]]) -> Any:
+    """The value id `site` joins a chain through (spec 2026-10-26 §3c): its own `receiver`,
+    or — where it matches a step declaring `receiver_arg: N` — argument N's value id. An
+    extension function compiles to a STATIC method, so `HttpRequestKt.url(builder, "…")`
+    has a null `receiver` and the builder it extends is argument 0, an `instance`
+    whose `source` is the builder's id. The step's owner and descriptor still decide the
+    match, so a same-named call anywhere else joins as it always did. An argument carrying
+    no `source` joins nothing, as a null `receiver` does.
+
+    The FORWARD walk's join: a step is reached from the chain it extends. The backward
+    prefix walk (`_prefix_captures`) still reads each producer's own `receiver`, so it
+    stops at an extension call, as it stops at any static call."""
+    candidates = extension_steps.get(str(site["name"]))
+    if candidates:
+        step = _matching_step(site, candidates)
+        if step is not None:
+            argument = _arg_at(site["arguments"], step["receiver_arg"])
+            return None if argument is None else argument.get("source")
+    return site["receiver"]
 
 
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:

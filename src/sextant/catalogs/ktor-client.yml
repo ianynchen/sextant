@@ -1,0 +1,110 @@
+id: ktor-client
+displayName: Ktor HTTP client
+style: fluent
+protocol: http
+direction: outbound
+
+# Both spellings, as `ktor-routing.yml` lists the server's: Gradle resolves the Kotlin
+# Multiplatform artifact `ktor-client-core` to its `-jvm` variant, and a Maven build names
+# the `-jvm` artifact itself. `fluent` is not a gated style (`resolve/dependencies.py`), so
+# this list describes the library and decides nothing about which modules are read.
+detect:
+  coordinates: ["io.ktor:ktor-client-core-jvm", "io.ktor:ktor-client-core"]
+
+measured:
+  - { artifact: io.ktor:ktor-client-core-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+  - { artifact: io.ktor:ktor-http-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# Ktor's client calls are INLINE functions, so a caller's bytecode holds no `get(…)` call
+# to match: it holds the builder sequence Kotlin inlined, the same for every form —
+# `client.get(u)`, `client.post(u) { setBody(x) }`, `client.get { url(u) }`,
+# `client.request(u) { method = HttpMethod.Put }`, `client.prepareGet(u)` (CP-54 row
+# group (b), rows 3-15, `scripts/probes/cp54_ktor_client_ws_sse.md`):
+#
+#   new HttpRequestBuilder()                       root
+#   HttpRequestKt.url(builder, "…")                the address; a static extension
+#   builder.setMethod(getstatic HttpMethod.<Verb>) the verb
+#   builder.setBody(x), builder.setBodyType(…)     where a body is set
+#   new HttpStatement(builder, client)             the request handed to the client
+#   statement.execute()
+#
+# One value id for the builder throughout, so the chain is `okhttp.yml`'s shape: a
+# constructor root, steps on its value, and a terminal joined through an argument
+# `source` rather than through receiver/result chaining.
+matches:
+  # A fresh builder's verb is GET: `HttpRequestBuilder.<init>` stores `getstatic
+  # HttpMethod.Get` into `method`, and a builder nothing is set on reports `GET` when run
+  # (CP-54 row 50). Allowlisted in `tests/architecture/test_defaulted_identity_values.py`
+  # on the condition stated there: every builder member that sets the verb is a step.
+  roots:
+    - { owner: io.ktor.client.request.HttpRequestBuilder, method: <init>, captures: { http_method: GET } }
+  # The verb is a STATIC FIELD of `HttpMethod`, nine of them (CP-54 row 1), handed to
+  # `setMethod` as a `getstatic` (an `enum`-kind argument: the field is typed as its own
+  # owner, D00 §5) and read through this table. The same table `ktor-routing.yml` declares
+  # for its `verb_values`, spelled again because a `fluent` catalog keeps it here; a field
+  # the table does not name is no verb (`method` NULL at `unresolved`), never the root's GET.
+  verb_values:
+    fields:
+      "io.ktor.http.HttpMethod#Get": GET
+      "io.ktor.http.HttpMethod#Post": POST
+      "io.ktor.http.HttpMethod#Put": PUT
+      "io.ktor.http.HttpMethod#Patch": PATCH
+      "io.ktor.http.HttpMethod#Delete": DELETE
+      "io.ktor.http.HttpMethod#Head": HEAD
+      "io.ktor.http.HttpMethod#Options": OPTIONS
+      "io.ktor.http.HttpMethod#Trace": TRACE
+      "io.ktor.http.HttpMethod#Query": QUERY
+  # MEASURED, `javap -p` on ktor-client-core-jvm 3.6.0: `HttpRequestBuilder` sets the verb
+  # through `setMethod(HttpMethod)` alone, beside `takeFrom(HttpRequestBuilder)` and
+  # `takeFromWithExecutionContext`, which copy another builder's verb, address and body
+  # whole. Those two are a stated boundary, not steps: a request built by copying keeps the
+  # root's GET where the copied builder's verb is something else.
+  #
+  # Every step names its owner, and `url` its overload, because these names are generic.
+  steps:
+    # `HttpRequestKt.url(HttpRequestBuilder, String)` is an EXTENSION function, compiled to
+    # a static method whose argument 0 is the builder (`receiver_arg: 0`) and argument 1
+    # the address. Its two siblings share the name and are not read (CP-54 row 47):
+    # `url(builder, block)` hands a `URLBuilder` to a lambda, and `url(builder, scheme,
+    # host, port, path, block)` carries the SCHEME at argument 1 — read as the address, it
+    # would publish a call to `https`. The parts form is not assembled (spec §3g).
+    - { owner: io.ktor.client.request.HttpRequestKt, method: url,
+        descriptor: "(Lio/ktor/client/request/HttpRequestBuilder;Ljava/lang/String;)V",
+        receiver_arg: 0, captures: { url: arg1 } }
+    # Set twice by every non-GET form with an address — once before `url`, once at the
+    # end, the same value both times (CP-54 rows 4-10). Last wins, which is Ktor's own
+    # property setter: one row, with the verb the request carries.
+    - { owner: io.ktor.client.request.HttpRequestBuilder, method: setMethod,
+        captures: { http_method: arg0 } }
+    # Compiled twice where a body is set, the two branches of an `OutgoingContent` test,
+    # with the same argument. `setBodyType` carries a `TypeInfo` built by `typeOf<T>()`,
+    # which is not read.
+    - { owner: io.ktor.client.request.HttpRequestBuilder, method: setBody,
+        captures: { body: arg0 } }
+  # The builder is argument 0 of `HttpStatement`'s constructor, the client argument 1
+  # (CP-54 row (b)); a builder never handed to one is not a call this module makes.
+  # `<init>` is the root's own name: the constructed builder IS the value the statement
+  # consumes, the `apache-httpclient.yml` constructor form.
+  terminal:
+    - { method: <init>, terminal_via_argument: { owner: io.ktor.client.statement.HttpStatement, method: <init> } }
+  # A relative address is joined onto the client's `defaultRequest` base, or onto
+  # `http://localhost` where the client has none (CP-54 rows 51-57). No step of this chain
+  # reads the client, so a relative call keeps the path it states, peer NULL, at
+  # `unresolved`; an absolute one is the whole address, as Ktor treats it (row 55).
+  relative_to_client_base: true
+
+# Shared verbatim across every outbound catalog on purpose — `okhttp.yml` carries the
+# reason: shape expansion is a global insert-if-absent pass keyed on the type symbol
+# alone, so every outbound catalog's `wrappers` must agree.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

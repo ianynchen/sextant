@@ -5567,6 +5567,134 @@ def test_a_fluent_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path
             _resolve_fluent(tmp_path, [], catalog)
 
 
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_fluent_verb_capture_reads_a_static_field_the_extractor_reads_as_an_enum(
+    tmp_path: Path,
+):
+    """The shape the extractor really emits for `setMethod(HttpMethod.Put)`: a static field
+    typed as its own owner is an `enum`-kind argument (D00 §5, `MethodFlow.java`; measured
+    on the CP-54 probe module), not a `field`-kind one. The same table reads it."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="enum", symbol="io/ktor/http/HttpMethod#Put.")
+    ) == [("PUT", "/orders/1", "resolved")]
+
+
+# --- `receiver_arg` (spec 2026-10-26 §3c): a step that is an extension function ---
+#
+# A Kotlin extension function compiles to a STATIC method whose argument 0 is the
+# receiver, so the call's own `receiver` is null and the value it extends arrives as an
+# argument. `receiver_arg: N` says which argument that is.
+
+_EXTENSION_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [
+        {
+            "owner": "com.acme.http.RequestKt",
+            "method": "url",
+            "receiver_arg": 0,
+            "captures": {"url": "arg1"},
+        },
+    ],
+    "terminal": [
+        {
+            "method": "<init>",
+            "terminal_via_argument": {"owner": "com.acme.http.Statement", "method": "<init>"},
+        }
+    ],
+}
+
+
+def _extension_chain(caller: str, extended: int) -> list:
+    """`new Request.Builder()`, then the static `RequestKt.url(<value extended>, "…")`, then
+    `new Statement(builder)`: the builder's value id is 2, and `extended` is the value id
+    the extension call is handed as its argument 0."""
+    return [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            "com/acme/http/RequestKt#",
+            "url",
+            1,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", source=extended, symbol=BUILDER),
+                CallArgument(kind="string", value="https://orders.example.com/orders"),
+            ],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            "com/acme/http/Statement#",
+            "<init>",
+            2,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=2, symbol=BUILDER)],
+            invoke_kind="special",
+        ),
+    ]
+
+
+def _extension_rows(tmp_path: Path, extended: int) -> list:
+    facts = _extension_chain("com/acme/http/Client#get().", extended)
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_EXTENSION_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("fluent.an-EXTENSION-step-joins-through-its-receiver-argument")
+def test_a_receiver_arg_step_joins_the_chain_through_that_argument(tmp_path: Path):
+    """The static extension call's own `receiver` is null, so before `receiver_arg` the walk
+    never reached it: the chain derived with `path` NULL at `unresolved`. Joined through
+    argument 0's value id, its `url` capture is the row's address."""
+    assert _extension_rows(tmp_path, extended=2) == [
+        ("GET", "orders.example.com", "/orders", "resolved")
+    ]
+
+
+def test_an_extension_call_on_another_value_is_not_folded(tmp_path: Path):
+    """The near-miss: the same extension call handed a DIFFERENT value (id 99, some other
+    builder) belongs to that value's chain, not this one. The row still derives — the
+    builder was handed to `Statement` — with the address it never captured: `path` NULL
+    at `unresolved`, never the other builder's address."""
+    assert _extension_rows(tmp_path, extended=99) == [("GET", None, None, "unresolved")]
+
+
+def test_a_receiver_arg_that_is_not_an_argument_position_is_refused(tmp_path: Path):
+    """`receiver_arg` is an argument index, a non-negative integer, and a step's word: a
+    root starts the chain and joins nothing. Anything else is a broken file, refused at
+    load rather than read as a step that silently never joins."""
+    step = _EXTENSION_MATCHES["steps"][0]
+    for broken_step in (
+        {**step, "receiver_arg": "0"},
+        {**step, "receiver_arg": -1},
+        {**step, "receiver_arg": True},
+    ):
+        catalog = _fluent_catalog({**_EXTENSION_MATCHES, "steps": [broken_step]})
+        with pytest.raises(CatalogError, match="receiver_arg"):
+            _resolve_fluent(tmp_path, [], catalog)
+    root = {**_EXTENSION_MATCHES["roots"][0], "receiver_arg": 0}
+    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "roots": [root]})
+    with pytest.raises(CatalogError, match="receiver_arg"):
+        _resolve_fluent(tmp_path, [], catalog)
+
+
+def test_a_relative_to_client_base_that_is_not_a_boolean_is_refused(tmp_path: Path):
+    """`relative_to_client_base` is `true` or `false`; a string such as `"yes"` would read
+    as set in one place and unset in another, so it is refused at load."""
+    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "relative_to_client_base": "yes"})
+    with pytest.raises(CatalogError, match="relative_to_client_base"):
+        _resolve_fluent(tmp_path, [], catalog)
+
+
 # --- `A-M3`/`A-M4` (principles sweep §3.3): the two Spring HTTP clients ------
 #
 # Both catalogs were built from the five verbs the fixture happened to use.

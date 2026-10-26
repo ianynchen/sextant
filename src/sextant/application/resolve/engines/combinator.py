@@ -1764,11 +1764,15 @@ def _verbs_at(argument: dict[str, Any] | None, scope: _Scope) -> list[str]:
         return []
     if argument.get("kind") == "string" and isinstance(argument.get("value"), str):
         return [str(argument["value"])]
+    # The declared field table before an enum constant's own name: `HttpMethod.Get` is an
+    # `enum`-kind argument (a static field typed as its own owner, D00 §5), and its name
+    # `Get` is not the verb `GET` the table says it is.
+    field_verb = static_field_value(argument, scope.context.verb_fields)
+    if field_verb is not None:
+        return [field_verb]
     if argument.get("kind") == "enum" and argument.get("symbol") is not None:
         return [member_name(str(argument["symbol"]))]
-    verb = static_field_value(argument, scope.context.verb_fields) or _getter_value(
-        argument, scope, scope.context.verb_getters
-    )
+    verb = _getter_value(argument, scope, scope.context.verb_getters)
     return [] if verb is None else [verb]
 
 

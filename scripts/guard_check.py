@@ -4744,8 +4744,9 @@ GUARDS: dict[str, Guard] = {
     ),
     # --- a verb written as a static field (spec 2026-10-26 §3a) ------------
     "ktor.a-VERB-read-from-a-static-field": Guard(
-        what="a verb argument that is a `field`-kind static field is read through the "
-        "catalog's `verb_values.fields` table, in `combinator` and in `fluent`'s "
+        what="a verb argument that is a static field (`enum`-kind where the field is typed "
+        "as its own owner, as `HttpMethod.Get` is, `field`-kind otherwise) is read through "
+        "the catalog's `verb_values.fields` table, in `combinator` and in `fluent`'s "
         "`http_method: argN` capture",
         why="Ktor 3.6.0 compiles `HttpMethod.Get` to a `getstatic`, never a getter call. "
         "Ignoring `fields` reads that verb as nothing: `method(HttpMethod.Get) { get(...) }` "
@@ -4755,17 +4756,72 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_COMBINATOR,
-                find="    verb = static_field_value(argument, scope.context.verb_fields) or _getter_value(\n"
-                "        argument, scope, scope.context.verb_getters\n"
-                "    )\n",
-                replace="    verb = _getter_value(  # guard disabled by scripts/guard_check.py\n"
-                "        argument, scope, scope.context.verb_getters\n"
-                "    )\n",
+                find="    field_verb = static_field_value(argument, scope.context.verb_fields)\n",
+                replace="    field_verb = None  # guard disabled by scripts/guard_check.py\n",
             ),
             Edit(
                 path=_FLUENT,
                 find="        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)\n",
                 replace="        else _string_value(declared_verb)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    # --- the Ktor HTTP client, inlined (spec 2026-10-26 §3c) -------------------
+    "fluent.an-EXTENSION-step-joins-through-its-receiver-argument": Guard(
+        what="a step declaring `receiver_arg: N` joins the chain through argument N's value "
+        "id, not through its own `receiver`",
+        why="a Kotlin extension function compiles to a static method whose receiver is "
+        "argument 0 and whose own `receiver` is null. Joined by `receiver` alone, the walk "
+        'never reaches it: Ktor\'s `HttpRequestKt.url(builder, "…")` is never folded and '
+        "every inlined client call derives with `path` NULL at `unresolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            by_receiver.setdefault(_receiver_of(site, extension_steps), []).append(site)\n",
+                replace='            by_receiver.setdefault(site["receiver"], []).append(site)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "ktor.an-INLINED-client-call-is-an-outbound-row": Guard(
+        what="`ktor-client.yml`'s `url` step names `receiver_arg: 0`: the address of an "
+        "inlined client call is read off the static `HttpRequestKt.url(builder, …)`",
+        why="Kotlin inlines `client.get(u)` into a builder sequence whose address is set by "
+        "an extension call on the builder. Without the word that call is not part of the "
+        "chain, and every Ktor client call is an outbound row with no address",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-client.yml",
+                find="        receiver_arg: 0, captures: { url: arg1 } }\n",
+                replace="        captures: { url: arg1 } }\n",
+            ),
+        ),
+    ),
+    "ktor.the-url-step-reads-only-the-STRING-overload": Guard(
+        what="`ktor-client.yml`'s `url` step is narrowed by `descriptor` to "
+        "`url(HttpRequestBuilder, String)`",
+        why="`HttpRequestKt` declares three `url` overloads, and the parts form "
+        "`url(builder, scheme, host, port, path, block)` carries the SCHEME at argument 1. "
+        "Matched by name alone, a call built from parts publishes a request to `https`",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-client.yml",
+                find='        descriptor: "(Lio/ktor/client/request/HttpRequestBuilder;Ljava/lang/String;)V",\n',
+                replace="",
+            ),
+        ),
+    ),
+    "fluent.a-RELATIVE-address-off-a-client-base-is-unresolved": Guard(
+        what="under `relative_to_client_base`, a relative address read in full is "
+        "`unresolved`, its path kept and its peer NULL",
+        why="Ktor joins a relative address onto the client's `defaultRequest` base, or onto "
+        "`http://localhost`, and that base is not read. Published at `resolved`, "
+        '`client.get("relative/path")` claims the path it states is the whole address '
+        "the module calls",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        not context.relative_to_client_base\n",
+                replace="        True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

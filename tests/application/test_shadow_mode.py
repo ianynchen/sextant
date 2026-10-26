@@ -276,6 +276,10 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # bridges, one ask each — `receiver_arg` and `handler_arg` on every one, `path_arg` on the
 # eight that carry a path (+16 asks, +40 slots). Nothing was re-spelled; the reader reads
 # these positions as it reads `get`'s.
+# **`ktor-client` joined at (3, 4) on 2026-10-26** (spec 2026-10-26 §3c), a new catalog rather
+# than a moved one: its three steps each ask for one position — `url`'s address (`arg1`),
+# `setMethod`'s verb and `setBody`'s body (`arg0` each) — and `url` names a fourth slot,
+# `receiver_arg: 0`, the builder it extends.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -296,6 +300,7 @@ _ASKS_PER_CATALOG = {
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
     "kafka-streams-topology": (5, 5),
+    "ktor-client": (3, 4),
     "ktor-routing": (49, 111),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
@@ -350,8 +355,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # `createQueue` entries off each JMS catalog's `Topic`-typed rows, for the reason the
     # comment above `_ASKS_PER_CATALOG` measures. **+2 on 2026-10-17**: the two
     # `spring-integration-kafka` `Pattern` rows, same comment. **+16 on 2026-10-26**: the
-    # `ktor-routing` WebSocket and SSE rules, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 815
+    # `ktor-routing` WebSocket and SSE rules, same comment. **+3 on 2026-10-26**: the new
+    # `ktor-client` catalog's three steps, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 818
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

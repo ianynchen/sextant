@@ -1886,12 +1886,35 @@ matches:
 **A verb argument may be a static field** (spec 2026-10-26 §3a). A root or step that
 captures `http_method: argN` reads the argument as a string literal; where the library hands
 its builder a verb constant as a `getstatic` instead (Ktor 3.6.0's `setMethod(HttpMethod.Put)`),
-the argument is a `field`-kind one and the catalog names the fields in
+the argument is an `enum`-kind one (a field typed as its own owner, D00 §5; `field`-kind for a
+static field of another type) and the catalog names the fields in
 `matches.verb_values: { fields: { "<owner>#<field>": <verb> } }` — the same table, keys and
 reader `combinator`'s `vocabulary.verb_values.fields` uses (§2's `combinator` style). A field
 the table does not name is no verb: `method` NULL at `unresolved`, never the root's default. A
 `verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
 refused at load.
+
+**A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
+through argument N's value id instead of through its own `receiver`. A Kotlin extension
+function compiles to a STATIC method whose argument 0 is the receiver, so the call's own
+`receiver` is null and the value it extends arrives as an argument — Ktor's inlined
+`client.get(u)` sets its address with `HttpRequestKt.url(builder, "…")`, the builder an
+`instance` argument whose `source` is the builder's id — the same compiled shape, and the same
+word, a `combinator` rule uses for a static route builder (§2's `combinator`, "Where a body's
+chain starts"). The step's `owner`, name and `descriptor` still decide the match; only the value it joins through changes. An argument
+carrying no `source` joins nothing, as a null `receiver` does. It is the FORWARD walk's join:
+the backward prefix walk still follows each producer's own `receiver`, so it stops at an
+extension call as at any static call. `receiver_arg` is a non-negative integer and a step's
+word; anything else, and the word on a root, is refused at load.
+
+**`relative_to_client_base: true`** (spec 2026-10-26 §3c) says the library joins a relative
+address onto a base the executing CLIENT holds — Ktor's `defaultRequest` base, or
+`http://localhost` where the client has none (CP-54 rows 51-57). Where no capture of the chain
+reads that base, a relative address read in full is the path the code states and not the URL
+called: the row keeps the path, `peer` NULL, at `unresolved`. An absolute address is the whole
+address; a `${…}` expression, and a `partial` or `unresolved` address, read as they always do.
+A catalog not declaring it keeps a relative address at `resolved` with `peer` NULL, as before.
+A value other than a boolean is refused at load.
 
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is
@@ -1942,7 +1965,9 @@ happen to run close together.
 client library. It is the reason that capability matters. Catalogs on this engine:
 `spring-webclient.yml`, `spring-restclient.yml` (the synchronous twin), `okhttp.yml`
 (`Request$Builder` root, `url`/`post` steps, a `build` terminal joined to `newCall` through
-the argument `source` id — [D00](D00-fact-schema.md) §5's `arguments[].source`). A terminal
+the argument `source` id — [D00](D00-fact-schema.md) §5's `arguments[].source`), and
+`ktor-client.yml` (an `HttpRequestBuilder` `<init>` root that is its own terminal, joined to
+`HttpStatement`'s constructor; a `receiver_arg: 0` `url` step). A terminal
 entry's `terminal_via_argument` is ordinarily the bare flag `true`: any row carrying that
 argument link completes the chain. Where a builder's own value could reach more than one
 consumer — `Request r = builder.build(); log.debug("…", r);` alongside the real
@@ -2429,8 +2454,12 @@ framework:**
   one owner and one member are each refused at load. **`verb_values` also takes `fields:`**
   (spec 2026-10-26 §3a) — `"<owner>#<field>": <verb>` — for a verb that reaches a call site
   as a STATIC FIELD, not a getter's result: Ktor 3.6.0 declares `HttpMethod.Get … Query` as
-  public static fields and user code reads one with a `getstatic`, so the argument is a
-  `field`-kind one carrying the field's `symbol`, looked up on its `(owner, field name)`. The
+  public static fields and user code reads one with a `getstatic`, so the argument carries
+  the field's `symbol` and is looked up on its `(owner, field name)`. Its kind is `enum`,
+  because each field is typed as its own owner (D00 §5 reads that shape as `enum` whether or
+  not the type is a language enum; measured on the CP-54 probe module), and `field` for a
+  static field of any other type; the table reads both, and is consulted BEFORE an `enum`
+  argument's own member name, which for `HttpMethod.Get` is `Get`, not the verb. The
   two forms sit side by side, since Ktor 3.0.3 code still calls the getters; a field the
   table does not name reads as nothing, the same poisoned verb. The reader is one function
   shared with `fluent` (`shapes/member_values.py`). A `fields` key that is not one owner and

@@ -6259,6 +6259,42 @@ def test_a_ktor3_method_block_reads_its_verb_from_the_static_field(tmp_path: Pat
     ]
 
 
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_ktor3_verb_field_the_extractor_reads_as_an_enum_constant_is_read_through_the_table(
+    tmp_path: Path,
+):
+    """The same two scopes in the shape the extractor really emits. `HttpMethod.Get` is a
+    static field typed as its own owner, and D00 §5 reads such a `getstatic` as an
+    `enum`-kind argument, not a `field`-kind one (`MethodFlow.java`, measured on the CP-54
+    probe module: `{"kind": "enum", "symbol": "io/ktor/http/HttpMethod#Get."}`). The enum
+    branch alone reads the member's name, `Get`, which disagrees with the inner `get`'s
+    `GET` and drops the route; the declared table says the field is `GET`."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="enum", symbol=_HTTP_METHOD + "Get.")],
+            [("get", "/x"), ("post", "/never")],
+        ),
+        (
+            "route",
+            [
+                CallArgument(kind="string", value="/v"),
+                CallArgument(kind="enum", symbol=_HTTP_METHOD + "Put."),
+            ],
+            [("put", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/x", handler, "resolved"),
+        ("PUT", "/v/y", handler, "resolved"),
+    ]
+
+
 def test_the_ktor303_getter_form_still_reads(tmp_path: Path):
     """The same `method(HttpMethod.Get) { get("/x") }` on Ktor 3.0.3 — the Companion getter
     — reads `GET` exactly as before the field form was added: the two forms sit beside each

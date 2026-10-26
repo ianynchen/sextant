@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**89 of 104 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**90 of 105 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -831,6 +831,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams-topology` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
+| `ktor-client` | `io.ktor:ktor-client-core-jvm` | 3.6.0 |
+|  | `io.ktor:ktor-http-jvm` | 3.6.0 |
 | `ktor-routing` | `io.ktor:ktor-http-jvm` | 3.6.0 |
 |  | `io.ktor:ktor-server-core-jvm` | 3.0.3 |
 |  | `io.ktor:ktor-server-sse-jvm` | 3.6.0 |
