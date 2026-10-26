@@ -81,6 +81,28 @@ created at rank 90 *and* an `open_question` is written. Both explanations are in
 there may be a gateway transforming payloads, which the architecture should say; or the
 curation names the wrong endpoint. Silently accepting it would hide a typo forever.
 
+**A call a module makes to an endpoint it serves itself** (ruled 2026-10-25, spec
+`2026-10-25-quarkus-mutiny-grpc` rulings 1, 3 and 4). By default the analysis reads such a call
+as a hop to the module's own handler, not an outbound call. Where the call names an address
+that is not this module, it stays outbound. The evidence cannot always tell the two apart: a
+gateway serving `Greeter` may forward to another deployment of `Greeter`, and F5 §6.1's
+`self_exchange` question exists for the HTTP, SOAP and messaging cases. So a curation may
+settle the pair either way:
+
+```yaml
+links:
+  assert:   # this call reaches the module's own endpoint
+    - from: { service: orders, endpoint: "POST /v1/orders" }
+      to:   { service: orders, endpoint: "POST /v1/orders" }
+  delete:   # the hop is wrong: this call goes to another deployment
+    - from: { service: gateway, endpoint: "grpc helloworld.Greeter/SayHello" }
+      to:   { service: gateway, endpoint: "grpc helloworld.Greeter/SayHello" }
+```
+
+The pair must stay nameable under §1's rule even where the outbound row is not derived. The
+derived hop (`rpc_hops`, D01) is what such an entry names. As everywhere in this file, the
+curated statement sits beside the derived one and never overwrites it (FR-16).
+
 ---
 
 ## 4. `proposals` — written by Sextant, read by a person
@@ -207,3 +229,4 @@ identifier and hashing rules in section 5 are compulsory rather than advisable.
 | Whether a curation may assert an endpoint that no code declares, for a service Sextant cannot analyse | M06, and how external participants are modelled |
 | Whether `view` can apply to a class diagram as well as a trace | M07 |
 | How a curation survives a symbol being renamed | The curation lifecycle |
+| How a self pair is spelled: the same `service` on both sides (as §3 sketches), or a word of its own, and whether `from` names the call site or the wire path | Building §3's self case (Plane OI-197) |

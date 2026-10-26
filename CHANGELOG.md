@@ -41,6 +41,21 @@ here would restate those documents rather than add anything.
   `Mutiny<Service>Grpc.Mutiny<Service>Stub`, which the generated `<Service>Bean` fences and
   leaves silent) are not read yet (`quarkus-grpc-mutiny`, OI-192), so COVERAGE §2c's Quarkus
   gRPC cell stays ◐.
+- **Quarkus's Mutiny gRPC forms are read, and a call a module makes to a gRPC service it
+  serves is a hop to the handler, not an outbound row** (spec 2026-10-25-quarkus-mutiny-grpc,
+  rulings 1-2; probe CP-53). A `@GrpcService` class that `implements <Service>` (the generated
+  `MutinyService` interface) is the handler of the RPCs the generated `<Service>Bean` delegates
+  to (`grpc-quarkus.yml`). `@GrpcClient <Service>` and `@GrpcClient Mutiny<Service>Stub` resolve
+  to the service the generated classes delegate to (`grpc-quarkus-client.yml`): a generated
+  wrapper's identity is the one marked class its own code calls into. The generated bean no
+  longer fences a client. A gRPC client row for a service the module serves is dropped, and the
+  new derived table `rpc_hops` records where the stub's call into `ClientCalls` lands. The trace
+  follows it to the handler: the step carries `via grpc <path>`, and the document's arrow and
+  `Reaches` cell say so. **`GRAPH_SCHEMA_VERSION` moves 7 → 8** (a new table): re-analyse the
+  workspace. Measured on both `quarkus-quickstarts` gRPC modules: `helloworld.Greeter/SayHello`
+  is joined to its handler with no question, no gRPC outbound row is left, and both REST traces
+  reach the handler. `quarkus-grpc-mutiny` leaves the delivery register on this branch's CI
+  run.
 
 ### Fixed
 

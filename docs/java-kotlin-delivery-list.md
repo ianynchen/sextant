@@ -525,6 +525,9 @@ it on the real Quarkus modules found that both of them use the OTHER form, Quark
 classes, which nothing reads. That is a Java gap against a catalogued library, so it is named
 here. The ```scoped-out entry stays: once this id closes, the cell's remaining gaps are Go,
 Python, Rust and Swift again.
+`quarkus-grpc-mutiny` is built on branch `cov/quarkus-grpc-mutiny` (spec
+`docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md`, BUILT 2026-10-25) and closes on
+that branch's CI run.
 
 | # | issue |
 |---|---|

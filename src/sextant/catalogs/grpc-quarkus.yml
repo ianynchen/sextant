@@ -1,0 +1,71 @@
+id: grpc-quarkus
+displayName: gRPC (Quarkus Mutiny service implementations)
+style: supertype_derived
+protocol: grpc
+direction: inbound
+
+# Quarkus's own server forms, beside `grpc-java.yml`'s extends form rather
+# than inside it (spec 2026-10-25 §3a, §3b). `quarkus-grpc`'s code generation
+# compiles four more classes per service into the module next to grpc-java's
+# `<Service>Grpc` (spec §2a): a Mutiny service interface, a Mutiny ImplBase
+# that implements `BindableService` and makes no marker call of its own, a
+# generated `<Service>Bean` that extends that base, and a client. None of
+# them states the service identity; the Mutiny base delegates it to
+# `<Service>Grpc` (`bindService` calls `getServiceDescriptor`). Reading that
+# delegation is switched on by `service_supertype` below, and only here:
+# `grpc-java.yml` declares no `service_supertype`, so it never matches a
+# Mutiny base.
+#
+# The user's service is one of two shapes, and both are served here:
+#   - `@GrpcService class X implements Greeter`, the form both quickstarts
+#     write: `delegating_bean` below;
+#   - `@GrpcService class X extends MutinyGreeterGrpc.GreeterImplBase`: the
+#     extends form, through the delegated base.
+detect:
+  coordinates: ["io.quarkus:quarkus-grpc"]
+
+# CP-53: what `GrpcServerProcessor.processGeneratedBeans` does with a
+# generated bean (rows 8-11). CP-52 row 7: every Quarkus service bean must
+# carry `@GrpcService`, or the build fails. `io.quarkus.grpc.MutinyBean` and
+# `io.quarkus.grpc.GrpcService` are both in `quarkus-grpc-api`, which
+# `quarkus-grpc` declares (CP-52 row 3, CP-53 row 1).
+measured:
+  - { artifact: io.quarkus:quarkus-grpc-deployment, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp53_quarkus_mutiny_wiring.md }
+  - { artifact: io.quarkus:quarkus-grpc-api, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp52_quarkus_grpc_annotations.md }
+
+requires: [call_site, string_constants, superclass, implemented_interfaces, annotation_args, typed_signatures]
+
+matches:
+  # The marker calls and the member rule are `grpc-java.yml`'s, unchanged: the
+  # identity is still grpc-java's own `<Service>Grpc` stating it.
+  supertype_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+    method_name_call: { owner: io.grpc.MethodDescriptor, method: generateFullMethodName }
+  members: overridden_public_methods
+  # A supertype whose outer class makes no marker call still matches when it
+  # implements this type and its nest's code reaches exactly one class that
+  # does (spec §3a). Implementing `BindableService` is what keeps a user base
+  # class that merely calls `GreeterGrpc.newBlockingStub` from becoming a
+  # service.
+  service_supertype: io.grpc.BindableService
+  # CP-52 row 7, CP-53 row 9: Quarkus reads the annotation on the class
+  # itself (`ClassInfo.declaredAnnotation`), never an inherited one. The
+  # generated `<Service>Bean` carries none, which is why it is never a handler.
+  served_by_annotation: io.quarkus.grpc.GrpcService
+  # CP-53 rows 8-10: for each direct implementor of `MutinyBean`, the type of
+  # its `delegate` field; the implementor of that type carrying
+  # `@GrpcService` is the handler. The bean is skipped when its base has a
+  # second subclass, or when a module class extends a class nested in the
+  # marked class the base delegates to (Quarkus's "the base's name with
+  # `Mutiny` removed has a subclass", read structurally). Not mirrored: the
+  # `grpc.health.v1`/`io.grpc.reflection` name exclusions (CP-53 row 10), which
+  # name Quarkus's own built-in services, not a module's.
+  delegating_bean:
+    implements: io.quarkus.grpc.MutinyBean
+    delegate_field: delegate
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`/`format_fixed` —
+# `grpc-java.yml`'s own identical omission and reasoning: the payload comes
+# from `grpc-schema.yml`'s descriptor row at the same wire identity.

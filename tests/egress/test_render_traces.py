@@ -48,6 +48,7 @@ def _step(
     stop: TraceStop | None = None,
     returns: tuple[tuple[int, str], ...] = (),
     resolution: Resolution = Resolution.RESOLVED,
+    via: str | None = None,
 ) -> Step:
     return Step(
         depth=depth,
@@ -60,6 +61,7 @@ def _step(
         resolution=resolution,
         stop=stop,
         returns=returns,
+        via=via,
     )
 
 
@@ -446,6 +448,56 @@ def test_a_dynamic_step_says_the_body_is_created_not_called_there():
     assert "a0->>a0: lambda$list$0 (dynamic)" in _diagram(trace).mermaid
 
 
+@pytest.mark.pins(
+    "render_trace.a-HOP-arrow-names-the-wire-path",
+    "render_trace.a-HOP-step-reaches-its-wire-path",
+)
+def test_a_hop_arrow_names_the_wire_path():
+    """Spec 2026-10-25 §3d: a stub's call into `ClientCalls` that lands on this module's own
+    handler. The arrow ends at the handler, `(declared ClientCalls)` says what the code
+    called, and the wire path says how it got there — the diagram and the step table say
+    the same thing, one as a label and one in `Reaches`."""
+    trace = _trace(
+        _step(
+            invoke_kind="static",
+            target="io/grpc/stub/ClientCalls#blockingUnaryCall().",
+            callee="s maven c 1 a/HelloWorldService#sayHello().",
+            via="grpc helloworld.Greeter/SayHello",
+        )
+    )
+    assert (
+        "a0->>a1: blockingUnaryCall (declared ClientCalls) via grpc helloworld.Greeter/SayHello"
+        in _diagram(trace).mermaid
+    )
+    assert _step_table(trace).rows[0][-1] == (("text", "via grpc helloworld.Greeter/SayHello"),)
+
+
+@pytest.mark.pins(
+    "render_trace.a-HOP-arrow-passes-the-redactor",
+    "render_trace.a-HOP-reaches-cell-passes-the-redactor",
+)
+def test_a_hops_path_passes_the_redactor_exactly_as_an_endpoints_does():
+    """The hop's path is the inbound path the endpoint table masks, so a credential in it
+    is the same exposure at the render exit (2K design §1). The arrow label and the
+    `Reaches` cell both mask it, and the protocol, which no pattern here names, stays."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("s3cret",)))
+    trace = _trace(
+        _step(
+            invoke_kind="static",
+            target="io/grpc/stub/ClientCalls#blockingUnaryCall().",
+            callee="s maven c 1 a/HelloWorldService#sayHello().",
+            via="grpc s3cret.Greeter/SayHello",
+        )
+    )
+    sections = _trace_sections([trace], redactor)
+    [diagram] = [s for s in sections if isinstance(s, MachineDiagram)]
+    [table] = [e.table for s in sections if hasattr(s, "entries") for e in s.entries if e.table]
+    reaches = "".join(content for _kind, content in table.rows[0][-1])
+    assert "s3cret" not in diagram.mermaid, diagram.mermaid
+    assert "s3cret" not in reaches, reaches
+    assert reaches.startswith("via grpc "), reaches
+
+
 def test_an_ordinary_call_carries_no_dynamic_marker():
     """The near-miss: the marker means something only if most arrows do not
     carry it."""
@@ -604,7 +656,7 @@ def test_participants_and_messages_follow_the_walk_and_nothing_re_sorts_them():
         _step(ordinal=0, target="a/Zeta#one().", callee=None, stop=TraceStop.BOUNDARY),
         _step(ordinal=1, target="a/Alpha#two().", callee=None, stop=TraceStop.BOUNDARY),
     )
-    participants, messages = _sequence_view(trace)
+    participants, messages = _sequence_view(trace, REDACTOR)
 
     assert [p.label for p in participants] == ["Api", "Zeta", "Alpha"]
     assert [m.label for m in messages] == ["one [boundary]", "two [boundary]"]

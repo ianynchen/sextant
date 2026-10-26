@@ -23,6 +23,8 @@ from sextant.application.resolve.resolved_schedules import record_resolved_sched
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
+from sextant.application.resolve.rpc_hops import record_rpc_hops
+from sextant.application.resolve.self_calls import record_self_calls
 from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shadow import record_value_resolutions
@@ -229,6 +231,17 @@ def resolve(
     reset_open_questions(workspace)
     with _timed("derive_endpoints"):
         skipped, catalogs_run = derive_endpoints_with_runs(workspace, declared, capabilities)
+    # Spec 2026-10-25 §3c: a client of a gRPC service this module serves is a hop, not an
+    # outbound row. Directly after the engines, which minted every row it reads, and before
+    # `apply_path_prefixes` and the passes that key on a row (shapes, service-identity gaps).
+    with _timed("record_self_calls"):
+        record_self_calls(workspace)
+    # Spec 2026-10-25 §3d: where a stub call to a served RPC lands. Right after the pass
+    # above, for the same reason: it reads the inbound rows every engine minted, and
+    # `record_call_edges`, far above. Nothing below changes a gRPC row's path, and it
+    # resets its own table, being its only writer.
+    with _timed("record_rpc_hops"):
+        record_rpc_hops(workspace, declared)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the

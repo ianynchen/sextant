@@ -9,6 +9,7 @@ about what is reachable — cannot arise.
 
 from pathlib import Path
 
+import pytest
 from test_shapes import _MODULE, _document, _write
 
 from sextant.application.resolve.reachability import record_reachability
@@ -224,3 +225,43 @@ def test_a_second_analyze_over_one_workspace_does_not_double_the_table(tmp_path:
 
     assert len(rows) == 2, rows
     assert len({(row[0], row[1]) for row in rows}) == 2
+
+
+@pytest.mark.pins("trace.the-walk-CROSSES-a-hop-into-the-handler")
+def test_a_hop_records_the_handler_it_lands_on_and_not_the_client_call(tmp_path: Path):
+    """Spec 2026-10-25 §3d: the walk follows a stub's `ClientCalls` call into this module's
+    own handler, and this table is that walk written down. So the handler is reached one
+    edge past the stub, as an expanded body, and the `ClientCalls` method — a terminal
+    before the hop — is no longer a thing this root reaches."""
+    stub = _MODULE + "examples/GreeterGrpc$GreeterBlockingStub#sayHello()."
+    handler = _MODULE + "com/acme/HelloWorldService#sayHello()."
+    client_call = "io/grpc/stub/ClientCalls#blockingUnaryCall()."
+    workspace = _workspace(
+        tmp_path,
+        [(_API, "/hello")],
+        [
+            (_API, 0, "examples/GreeterGrpc$GreeterBlockingStub#sayHello().", stub),
+            (stub, 0, client_call, None),
+        ],
+    )
+    workspace.derive(
+        "rpc_hops_insert",
+        rows=[
+            {
+                "caller": stub,
+                "ordinal": 0,
+                "protocol": "grpc",
+                "path": "helloworld.Greeter/SayHello",
+                "handler": handler,
+                "evidence": "compiler",
+            }
+        ],
+    )
+
+    record_reachability(workspace)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert (_API, stub, 1, False) in rows
+    assert (_API, handler, 2, False) in rows
+    assert client_call not in {symbol for _, symbol, _, _ in rows}

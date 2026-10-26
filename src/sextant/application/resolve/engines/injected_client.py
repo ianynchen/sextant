@@ -49,6 +49,22 @@ through the same fence and the same identity read. A framework whose annotation
 cannot target a parameter simply never has one to match, so there is no
 per-catalog switch.
 
+**A wrapper's identity is the identity it delegates to** (spec 2026-10-25
+§3a). Where the injected type's outer class makes no marker call, the row is
+the one marked class its nest's code reaches (`delegated_outers`): a generated
+wrapper stub's constructor builds the generated service class's own stub.
+
+**Two optional `matches` keys** (spec 2026-10-25 §3b, CP-53) serve a
+framework that generates a client class around the stubs:
+- `interface_client: {implements}`: an injected interface is answered by the
+  one module class that implements `implements` and declares that interface
+  as its first other one. That class's identity is the row's. Two such classes
+  answer nothing, and the injected type keeps today's unresolved row.
+- `served_by_annotation`: an `extends` edge fences only when the subclass
+  declares this annotation itself. A generated bean extending a generated
+  base carries none, so it serves nothing and fences nothing.
+A catalog declaring neither reads exactly as before.
+
 **Bare `newBlockingStub(channel)` without `@GrpcClient`** is a stated
 boundary this task does not derive from: no engine here reads from a type
 reference alone, and the call's own argument is a `Channel` object, not an
@@ -60,14 +76,17 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.engines.supertype_derived import _served
 from sextant.application.resolve.shapes.identity_calls import (
+    calling_classes,
+    delegated_outers,
     first_string_arguments,
     nest_hosts,
     outer_of,
     parsed_call_sites,
     split_call,
 )
-from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.symbols import bare_descriptor
 
 _REQUIRED_MATCHES = ("field_annotation", "identity_marker")
@@ -154,7 +173,13 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
     service_names = first_string_arguments(call_sites, service_owner, service_method, 0)
     field_types = _field_types(workspace)
     hosts = nest_hosts(workspace)
-    fenced = _fenced_outer_classes(workspace)
+    # Spec §3a: an outer class making no marker call of its own -> the one
+    # marked class its nest's code reaches.
+    delegated = delegated_outers(
+        call_sites, calling_classes(call_sites, service_owner, service_method), hosts
+    )
+    clients = _interface_clients(workspace, catalog.matches.get("interface_client"))
+    fenced = _fenced_outer_classes(workspace, catalog.matches.get("served_by_annotation"))
 
     injected: list[tuple[str, str]] = []
     for annotation in workspace.query("annotations"):
@@ -177,10 +202,48 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
             # The fence: this module implements the very service the stub
             # would otherwise appear to call.
             continue
+        answered = sorted(clients.get(bare_descriptor(stub_type), ()))
+        if len(answered) == 1:
+            # The framework injects this class for the interface (CP-53
+            # row 6), so its identity is the row's.
+            outer = outer_of(answered[0], hosts)
         matches.append(
-            _FieldMatch(site=site, stub_type=stub_type, service_name=service_names.get(outer))
+            _FieldMatch(
+                site=site,
+                stub_type=stub_type,
+                service_name=service_names.get(delegated.get(outer, outer)),
+            )
         )
     return matches
+
+
+def _interface_clients(workspace: Workspace, rule: dict[str, Any] | None) -> dict[str, set[str]]:
+    """Each interface `interface_client` answers, mapped to every module class
+    answering it, both bare (CP-53 row 3).
+
+    The framework reads every class that DIRECTLY implements `rule.implements`
+    and keys it by the first other interface that class declares, reading no
+    further. Every class under one key is kept, so that `_matches` can refuse
+    two: the framework's map keeps one of them, in an order the facts do not
+    state."""
+    if rule is None:
+        return {}
+    implements = _catalog_symbol(rule["implements"])
+    known = {str(row["symbol"]) for row in workspace.query("declared_symbols")}
+    clients: dict[str, set[str]] = {}
+    for row in workspace.query("implementations"):
+        client = str(row["symbol"])
+        raw = row["interfaces"]
+        declared = [
+            bare_descriptor(str(entry))
+            for entry in (raw if isinstance(raw, list) else json.loads(str(raw)))
+        ]
+        if client not in known or implements not in declared:
+            continue
+        keyed = next((entry for entry in declared if entry != implements), None)
+        if keyed is not None:
+            clients.setdefault(keyed, set()).add(bare_descriptor(client))
+    return clients
 
 
 def _annotated_parameters(
@@ -235,7 +298,7 @@ def _field_types(workspace: Workspace) -> dict[str, str]:
     return result
 
 
-def _fenced_outer_classes(workspace: Workspace) -> set[str]:
+def _fenced_outer_classes(workspace: Workspace, annotation: str | None) -> set[str]:
     """Every outer class this module's own classes' `extends` edges name
     (capability 9.13's `superclass`), regardless of whether that target's
     own facts reached this workspace — the module docstring's own reason:
@@ -248,15 +311,42 @@ def _fenced_outer_classes(workspace: Workspace) -> set[str]:
     (`<Service>FileDescriptorSupplier` and `<Service>MethodDescriptorSupplier`
     each extend `<Service>BaseDescriptorSupplier`), and counting them fenced
     every stub a module compiles itself, so its client rows vanished with no
-    question."""
+    question.
+
+    Under a catalog naming `served_by_annotation`, an edge counts only when its
+    subclass, or a module class below it, declares that annotation itself: the
+    framework serves no other class (CP-52 row 7, CP-53 row 9). An abstract
+    base between the generated base and the annotated class is not a bean, so
+    the class below it is served through its edge."""
     hosts = nest_hosts(workspace)
+    edges = workspace.query("superclasses")
+    served = _served(workspace, annotation)
+    serving = _serving(served, edges) if served is not None else None
     fenced: set[str] = set()
-    for row in workspace.query("superclasses"):
+    for row in edges:
+        if serving is not None and bare_descriptor(str(row["symbol"])) not in serving:
+            continue
         target = outer_of(bare_descriptor(str(row["superclass"])), hosts)
         if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:
             continue
         fenced.add(target)
     return fenced
+
+
+def _serving(served: set[str], edges: list[dict[str, Any]]) -> set[str]:
+    """Every class declaring the serving annotation, and every class above one
+    of them through `superclasses`, bare."""
+    parent = {
+        bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
+        for row in edges
+    }
+    serving: set[str] = set()
+    for start in served:
+        current: str | None = bare_descriptor(start)
+        while current is not None and current not in serving:
+            serving.add(current)
+            current = parent.get(current)
+    return serving
 
 
 def _row(catalog: Catalog, path: str, resolution: str) -> dict[str, Any]:
@@ -305,6 +395,18 @@ def _validate_matches(catalog: Catalog) -> None:
     for key in _REQUIRED_MARKER:
         if key in marker:
             _validate_call(catalog, marker[key], key)
+    if "served_by_annotation" in matches and not isinstance(matches["served_by_annotation"], str):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `matches.served_by_annotation` must name one "
+            f"type, got {matches['served_by_annotation']!r} (spec 2026-10-25 §3b)"
+        )
+    if "interface_client" in matches:
+        rule = matches["interface_client"]
+        if not (isinstance(rule, dict) and isinstance(rule.get("implements"), str)):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `matches.interface_client` must be "
+                f"`{{implements}}`, got {rule!r} (spec 2026-10-25 §3b)"
+            )
 
 
 def _validate_call(catalog: Catalog, declared: Any, key: str) -> None:

@@ -1037,6 +1037,25 @@ _NAMED_QUERIES = {
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
     """,
+    # Spec 2026-10-25 §3d/§5: the `rpc_hops` pass reads the methods that make calls, picks
+    # the ones declared in a client stub class by the one symbol rule (`domain/symbols.py`,
+    # the rule it reads a callee's class by), and reads only their edges below — a handful
+    # of rows rather than every edge of the module.
+    "call_edge_callers": "SELECT DISTINCT caller FROM call_edges ORDER BY caller",
+    "stub_call_edges": """
+        SELECT caller, ordinal, target, callee
+        FROM call_edges
+        WHERE caller IN (SELECT unnest(?::VARCHAR[]))
+        ORDER BY caller, ordinal, target, callee
+    """,
+    # Spec 2026-10-25 §3d: a stub call to a served RPC, and the handler it lands on. Total
+    # (NFR-1): one (caller, ordinal) names one wire path, and a path with several handlers
+    # is one row per handler.
+    "rpc_hops": """
+        SELECT caller, ordinal, protocol, path, handler, evidence
+        FROM rpc_hops
+        ORDER BY caller, ordinal, handler
+    """,
     # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
     # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk
     # behind `impact` one read per hop of its frontier, never one per symbol it reaches.
@@ -1258,7 +1277,8 @@ _NAMED_QUERIES = {
 #
 #   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
 #                `endpoint_metadata.path`, `endpoint_conditions.path`,
-#                `scheduled_work.expression`, `resolved_schedules.expression`
+#                `scheduled_work.expression`, `resolved_schedules.expression`,
+#                `rpc_hops.path`
 #   schedules    `resolved_schedules.value` (`redact_schedule_value`: whole by the
 #                keys it was read through, else `redact_text`)
 #   candidates   `open_questions.candidates` (`redact_candidates`)
@@ -1530,6 +1550,17 @@ _EXPORT_QUERIES = {
     # value. There is nowhere in it for an address, a config value or a string
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
+    # Spec 2026-10-25 §3e. Symbols, an integer and closed-set words, plus `path`: the wire
+    # path of the inbound row the hop lands on, so it masks by that column's address map,
+    # as `roots.path` does for the same reason (D06 §3). Ordered on the table's own
+    # columns, the `endpoints` reasoning, so masking cannot reorder rows.
+    "rpc_hops": f"""
+        SELECT h.caller, h.ordinal, h.protocol, coalesce(a.masked, h.path) AS path,
+               h.handler, h.evidence
+        FROM rpc_hops h
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = h.path
+        ORDER BY h.caller, h.ordinal, h.handler
+    """,
     # F3 §4.2. Both carry only symbols, a closed-set value and an integer — no address,
     # config value or bytecode string — so redaction has nothing to reach here, the same
     # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
@@ -1802,6 +1833,10 @@ _NAMED_DERIVATIONS = {
     # but `resolve/resolved_schedules.py` writes here.
     "resolved_schedules_reset": "reset_resolved_schedules.sql",
     "resolved_schedules_insert": "insert_resolved_schedules.sql",
+    # Spec 2026-10-25 §3d. A reset/insert pair owned by its one writing pass, as above:
+    # nothing but `resolve/rpc_hops.py` writes here.
+    "rpc_hops_reset": "reset_rpc_hops.sql",
+    "rpc_hops_insert": "insert_rpc_hops.sql",
     # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
@@ -1816,6 +1851,8 @@ _NAMED_DERIVATIONS = {
     # — see the statement's own header for why that ordering is load-bearing.
     "borrowed_endpoints_drop": "drop_borrowed_endpoints.sql",
     "borrowed_error_handlers_drop": "drop_borrowed_error_handlers.sql",
+    # Spec 2026-10-25 §3c. Runs from `resolve/self_calls.py`, right after `derive_endpoints`.
+    "self_call_endpoints_drop": "drop_self_call_endpoints.sql",
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
     "type_hierarchy_reset": "reset_type_hierarchy.sql",
@@ -2557,6 +2594,8 @@ class DuckDbWorkspace:
         # A schedule's `expression` joins because it is the annotation literal
         # `annotations.args` masks (spec 2026-10-23-configured-schedules, final review):
         # one string, so `redact_text`'s map rather than the grammar's.
+        # `rpc_hops.path` joins for `roots`'s reason (spec 2026-10-25 §3e): it is the wire
+        # path of the inbound row a hop lands on, carried.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
@@ -2565,6 +2604,7 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM rpc_hops WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM resolved_schedules "
             "WHERE expression IS NOT NULL"

@@ -3727,6 +3727,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "grpc.a-WRAPPER-takes-the-one-identity-it-delegates-to": Guard(
+        what="an outer class whose nest reaches TWO different marked classes has no "
+        "delegated identity; only a nest that reaches exactly one takes it",
+        why="spec 2026-10-25 §3a: a facade over two generated services, or a base class "
+        "that calls both, does not state which service it is. Taking the first one "
+        "reached would file its RPCs under a service it only half belongs to — a "
+        "fabricated service identity, in the same place `_correlated` refuses a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/identity_calls.py",
+                find="        if len(reached) == 1:\n",
+                replace="        if reached:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "grpc.a-QUARKUS-client-field-is-an-outbound-service": Guard(
         what="a field annotated `io.quarkus.grpc.GrpcClient` derives the outbound service-"
         "level row of the stub it is declared as, and net.devh's annotation of the same "
@@ -3742,6 +3757,261 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/catalogs/grpc-quarkus-client.yml",
                 find="  field_annotation: io.quarkus.grpc.GrpcClient",
                 replace="  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient",
+            ),
+        ),
+    ),
+    "grpc.a-QUARKUS-service-implementing-its-interface-is-the-handler": Guard(
+        what="a `@GrpcService` class implementing the interface a generated Mutiny bean's "
+        "`delegate` field is declared as is the handler of that bean's RPCs, under the "
+        "identity the bean's base delegates to",
+        why="spec 2026-10-25 §3b, CP-53 rows 8-11: `@GrpcService class X implements Greeter` "
+        "is the form both Quarkus quickstarts write. Without the delegate form its RPCs keep "
+        "the `.proto`'s handler-less row plus a `service_identity` question, so the service "
+        "a Quarkus module serves has no handler in the document and no trace reaches it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find='    bean = catalog.matches.get("delegating_bean")\n',
+                replace="    bean = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.the-GENERATED-bean-is-never-a-handler": Guard(
+        what="under a catalog naming `served_by_annotation`, an implementer that does not "
+        "declare that annotation itself matches no form, so the generated Mutiny bean "
+        "(which carries none) is never a handler",
+        why="CP-52 row 7, CP-53 row 9: Quarkus serves only `@GrpcService` classes and reads "
+        "the annotation declared on the class. `GreeterBean` extends the delegating base and "
+        "declares every RPC method, so without the check it is published as the handler of "
+        "every RPC, ahead of the user's class, and a bean with no service behind it is "
+        "published as a served service",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        if served is not None and implementer not in served:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-user-base-calling-a-stub-is-not-a-SERVICE": Guard(
+        what="under `service_supertype`, a supertype whose outer class only DELEGATES to a "
+        "marked class matches only if it implements the named service type",
+        why="spec 2026-10-25 §3a: a user base class that calls `GreeterGrpc.newBlockingStub` "
+        "delegates to `GreeterGrpc` exactly as the Mutiny base does. Without the "
+        "`BindableService` conjunct every subclass of it overriding a method is published "
+        "as an inbound gRPC handler of a service it only calls — the C-1 fabrication again",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        if not _reaches(supertype, _catalog_symbol(self.service_supertype), "
+                "self.parents):\n            return None\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.the-DELEGATE-form-is-off-when-the-base-has-another-subclass": Guard(
+        what="a delegating bean whose base has a subclass other than the bean serves nothing",
+        why="CP-53 row 10: Quarkus skips such a bean, and the class extending the base "
+        "directly is the one served. Without the check the interface's implementor is "
+        "published as a second handler of the same RPC, one Quarkus never serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="    if subclasses != {bare_descriptor(bean_class)}:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.the-DELEGATE-form-is-off-when-a-module-extends-the-delegated-nest": Guard(
+        what="a delegating bean serves nothing when a module class outside the marked class "
+        "its base delegates to extends a class nested in that marked class",
+        why="CP-53 row 10's second condition: Quarkus skips the bean when the module extends "
+        "the plain generated base (the base's name with `Mutiny` removed), and that class is "
+        "served by the extends form. Without the check the interface's implementor is "
+        "published as a second handler of the same RPC, one Quarkus never serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="    return not any(\n"
+                "        outer_of(parent, hosts) == outer and outer_of(child, hosts) != outer\n"
+                "        for child, parent in superclass_of.items()\n"
+                "    )\n",
+                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.two-ANNOTATED-implementors-serve-neither": Guard(
+        what="two or more annotated implementors of a bean's delegate type name no handler; "
+        "the question names them all",
+        why="CP-53 row 9: Quarkus delegates to the first its index yields, an order nothing "
+        "in the facts fixes. Taking the first in sort order publishes a handler that is "
+        "right only by chance, with no question saying it was a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="            if len(handlers) > 1:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-UNANNOTATED-implementor-of-the-delegate-is-not-served": Guard(
+        what="a class implementing a bean's delegate type is its handler only if it declares "
+        "the catalog's serving annotation",
+        why="CP-53 row 9: Quarkus delegates only to an implementor carrying `@GrpcService`. "
+        "The generated `GreeterClient` implements the same interface, so without the filter "
+        "every Quarkus service is contended with its own client and loses its handler",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="        pool &= served\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-SELF-call-is-not-an-outbound-row": Guard(
+        what="an outbound `grpc` row for a service the module serves (an inbound row with a "
+        "handler) and whose peer is absent or this module is removed",
+        why="spec 2026-10-25 ruling 1: a service that calls its own inbound endpoints is a "
+        "traceable hop, not an outbound call. Without the pass, a Quarkus or Spring service "
+        "that injects a client of the service it serves publishes a call to a far end that "
+        "is itself",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="    if not served:\n        return\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
+            ),
+        ),
+    ),
+    "grpc.a-DESCRIPTOR-only-inbound-row-serves-nothing": Guard(
+        what="only an inbound `grpc` row with a handler names a service this module serves; a "
+        "row the `.proto` alone derives (handler NULL) serves nothing",
+        why="spec 2026-10-25 §3c: a client-only module compiles the `.proto` too, so it has "
+        "an inbound descriptor row for every RPC it calls. Counted as served, every client "
+        "row of such a module is dropped as a self-call, and the services it calls vanish "
+        "from the document",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='            or row["handler"] is None\n',
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.a-call-naming-ANOTHER-host-stays-outbound": Guard(
+        what="an outbound row whose peer names a host that is not this module is kept",
+        why="spec 2026-10-25 ruling 3: the same service name at another address is another "
+        "deployment's copy, and a pass that dropped every row would erase a real outbound "
+        "call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="    return host.lower() in _LOOPBACK\n",
+                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-SERVED-identity-matches-exactly": Guard(
+        what="an outbound row is dropped only when its path IS a served service identity, "
+        "not when it merely starts with one",
+        why="spec 2026-10-25 §3c: `helloworld.GreeterAdmin` and `helloworld.Greeter.v2` are "
+        "other services than `helloworld.Greeter`. A prefix match would erase a real "
+        "outbound call to a service this module does not serve",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='        and str(row["path"]) in served\n',
+                replace='        and any(str(row["path"]).startswith(k) for k in served)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "grpc.a-STUB-call-to-a-served-rpc-is-a-hop": Guard(
+        what="a generated client stub's call to an RPC this module serves is written as an "
+        "`rpc_hops` row naming the handler it lands on",
+        why="spec 2026-10-25 ruling 2: a self-call is a traceable hop. Without the row the "
+        "trace from a REST method through `GreeterBlockingStub#sayHello` stops at "
+        "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the call is "
+        "lost from the document altogether",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("rpc_hops_insert", rows=rows)\n',
+            ),
+        ),
+    ),
+    "grpc.only-a-STUB-method-gets-a-hop": Guard(
+        what="only a method of a class whose ancestry reaches `client_stub_supertype` is "
+        "read for a hop",
+        why="spec 2026-10-25 §3d: the caller is a client stub method. Without the filter, a "
+        "generated server-side `AsyncService` default method, or a hand-written method "
+        "calling `ClientCalls` with a generated accessor directly, gets a hop the stub "
+        "classes alone are evidence for",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find='        if caller_outer_class(str(row["caller"])) in stubs\n',
+                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-stub-naming-TWO-wire-methods-gets-no-hop": Guard(
+        what="a stub method whose accessors name more than one wire method gets no hop",
+        why="spec 2026-10-25 §3d: exactly one wire method, or no row. Taking the first would "
+        "land a call on the handler of an RPC it may not make, a hop the code does not take",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if len(named) != 1:\n",
+                replace="        if not named:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-stub-of-a-service-NOT-served-gets-no-hop": Guard(
+        what="a stub call gets a hop only when its service identity is one this module "
+        "serves, not whenever the module serves some service",
+        why="spec 2026-10-25 §3d: a module serving `Hello` that calls `Greeter` through its "
+        "stub makes an outbound call. A hop there lands on no handler and replaces the "
+        "`ClientCalls` boundary with a wire path into a service the module does not have",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if identity is None or identity not in served:\n",
+                replace="        if identity is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="served[identity].get(path, set())",
+                replace="served.get(identity, {}).get(path, set())",
+            ),
+        ),
+    ),
+    "grpc.no-CLIENT-CALL-site-means-no-hop": Guard(
+        what="a stub method gets a hop only at a call site whose target belongs to the "
+        "catalog's `client_call_owner`",
+        why="spec 2026-10-25 §3d: the hop is keyed by the call site where the call leaves for "
+        "the wire. A stub method that never calls `ClientCalls` has no such site, and a row "
+        "with no ordinal joins no `call_edges` row: a hop the walk can never take",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        if ordinal is None:\n            continue\n",
+                replace="",
+            ),
+        ),
+    ),
+    "grpc.an-UNHANDLED-rpc-of-a-served-service-gets-a-hop": Guard(
+        what="a stub call to an RPC of a served service that has no handler here still gets "
+        "one `rpc_hops` row, its handler NULL",
+        why="spec 2026-10-25 §3d: the outbound row of a served service is fenced, so without "
+        "the row the step carries no wire path and the call's destination is nowhere in the "
+        "document",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/rpc_hops.py",
+                find="        for handler in handlers or [None]:\n",
+                replace="        for handler in handlers:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3792,6 +4062,98 @@ GUARDS: dict[str, Guard] = {
                 find='        if outer_of(bare_descriptor(str(row["symbol"])), hosts) == target:\n'
                 "            continue\n",
                 replace="",
+            ),
+        ),
+    ),
+    "grpc.an-INTERFACE-client-resolves-through-the-generated-client": Guard(
+        what="under `interface_client`, an injected interface is read as the one module class "
+        "implementing it and the named client type, and takes that class's identity",
+        why="spec 2026-10-25 §3b, CP-53 rows 3, 6: `@GrpcClient Greeter` is the client form both "
+        "Quarkus quickstarts write, and Quarkus injects the generated `GreeterClient` for it. "
+        "Read as the interface itself, the row is `examples/Greeter#`, unresolved, with a "
+        "`service_identity` question, so the service the module calls is not named",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='    clients = _interface_clients(workspace, catalog.matches.get("interface_client"))\n',
+                replace="    clients = _interface_clients(workspace, None)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-UNANNOTATED-generated-bean-does-not-fence": Guard(
+        what="under `served_by_annotation`, an `extends` edge fences an injected stub's outer "
+        "class only when the subclass declares that annotation itself",
+        why="CP-52 row 7, CP-53 row 9: Quarkus serves only `@GrpcService` classes. Its generated "
+        "`GreeterBean` extends `MutinyGreeterGrpc$GreeterImplBase` in every module that "
+        "compiles the `.proto`, so counted, it fences the Mutiny stub and a client-only "
+        "module's Mutiny stub client vanishes with no row and no question",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find='    fenced = _fenced_outer_classes(workspace, catalog.matches.get("served_by_annotation"))\n',
+                replace="    fenced = _fenced_outer_classes(workspace, None)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-ANNOTATED-descendant-makes-its-base-a-fence": Guard(
+        what="under `served_by_annotation`, an `extends` edge fences when a module class "
+        "BELOW its subclass declares the annotation, not only the subclass itself",
+        why="CP-52 row 7: an abstract base is not a bean, so `abstract BaseGreeter extends "
+        "GreeterGrpc.GreeterImplBase` with `@GrpcService Impl extends BaseGreeter` serves the "
+        "service through BaseGreeter's edge, the only one naming `GreeterGrpc`. Read on the "
+        "subclass alone, the module's client of its own service is published as a resolved "
+        "outbound call, and no later pass removes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="            current = parent.get(current)\n",
+                replace="            current = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-injected-WRAPPER-stub-takes-the-identity-it-delegates-to": Guard(
+        what="an injected type whose outer class makes no marker call takes the identity of the "
+        "one marked class its nest's code reaches",
+        why="spec 2026-10-25 §3a: `MutinyGreeterGrpc` states no identity, and its stub's "
+        "constructor builds `GreeterGrpc`'s stub. Read on the injected type's own outer "
+        "class alone, every Mutiny stub client and every interface client is an unresolved "
+        "row plus a question, though the service it calls is in the module's own facts",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="                service_name=service_names.get(delegated.get(outer, outer)),\n",
+                replace="                service_name=service_names.get(outer),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "grpc.two-INTERFACE-clients-resolve-neither": Guard(
+        what="an injected interface answered by two or more client classes is read as no class",
+        why="CP-53 row 3: Quarkus's map keeps one of them, in an order nothing in the facts "
+        "fixes. Taking the first in sort order names a service that is right only by chance, "
+        "with no question saying it was a guess",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="        if len(answered) == 1:\n",
+                replace="        if answered:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.a-MUTINY-client-is-keyed-by-its-first-other-interface": Guard(
+        what="a class implementing `interface_client.implements` answers only the FIRST other "
+        "interface it declares",
+        why="CP-53 row 3: Quarkus keys the client by its first interface other than "
+        "`MutinyClient` and reads no further. Keyed by every interface, a client declaring a "
+        "second one answers an injection point Quarkus does not wire to it, and the row "
+        "names a service that injection point is never given",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/injected_client.py",
+                find="        keyed = next((entry for entry in declared if entry != implements), None)\n"
+                "        if keyed is not None:\n",
+                replace="        for keyed in [entry for entry in declared if entry != implements]:\n",
             ),
         ),
     ),
@@ -3940,6 +4302,35 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "trace.the-walk-CROSSES-a-hop-into-the-handler": Guard(
+        what="at a call site `rpc_hops` names, the walk steps into the hop's handler, with "
+        "the wire path in `via`, instead of stopping at the client-call library",
+        why="spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop "
+        "that is traceable. Ignoring the hops ends every trace through a gRPC stub at "
+        "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the handler the "
+        "call lands on is in no trace and the call in no section of the document",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find='        hops = index.hops.get((method, int(str(row["ordinal"]))))\n',
+                replace="        hops = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "trace.a-HOP-onto-a-handler-is-not-a-terminal": Guard(
+        what="a hop step that lands on a handler drops the `ClientCalls` row's "
+        "`terminal_kind` and `target_kind`",
+        why="D01: both are NULL on a row that is not a terminal. Kept, the step reads "
+        "`unresolved` for a library the walk no longer stops at, and a reader is told the "
+        "call ends somewhere it does not",
+        edits=(
+            Edit(
+                path=_TRACE,
+                find='                landed |= {"terminal_kind": None, "target_kind": None}\n',
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- 2Q, the shared dispatch rule --------------------------------------
     "dispatch.callee-descriptor-is-stripped-to-bare": Guard(
         what="the method a return flow joins TO is keyed by its BARE descriptor, because "
@@ -4071,6 +4462,60 @@ GUARDS: dict[str, Guard] = {
                 path=_DOCUMENT,
                 find='    if step.stop is not None:\n        label = f"{label} [{step.stop}]"\n',
                 replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-arrow-names-the-wire-path": Guard(
+        what="a step with `via` carries `via <protocol> <path>` on its arrow",
+        why="spec 2026-10-25 §3d: the arrow ends at this module's own handler while "
+        "`(declared ClientCalls)` says the code called a library. Without the wire path the "
+        "diagram shows a library call landing on a handler, with nothing saying how",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    if step.via is not None:\n"
+                '        label = f"{label} via {redactor.redact_text(step.via)}"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-step-reaches-its-wire-path": Guard(
+        what="a step with `via` reads `via <protocol> <path>` in the step table's `Reaches` column",
+        why="spec 2026-10-25 §3d: what a hop reaches is the wire path to this module's own "
+        "handler. Without it the column shows the `ClientCalls` classification, or nothing, "
+        "for a call the diagram draws into a handler",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="    if step.via is not None:\n"
+                '        return f"via {redactor.redact_text(step.via)}"\n',
+                replace="",
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-arrow-passes-the-redactor": Guard(
+        what="a hop's wire path passes the render redactor in the sequence-diagram arrow label",
+        why="2K design §1: it is the inbound path the endpoint table masks, so a credential "
+        "or a repo value pattern in it would be printed in clear in the trace's diagram "
+        "while the endpoint table hides it",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        label = f"{label} via {redactor.redact_text(step.via)}"\n',
+                replace='        label = f"{label} via {step.via}"  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "render_trace.a-HOP-reaches-cell-passes-the-redactor": Guard(
+        what="a hop's wire path passes the render redactor in the step table's `Reaches` cell",
+        why="2K design §1: it is the inbound path the endpoint table masks, so a credential "
+        "or a repo value pattern in it would be printed in clear in the trace's step table "
+        "while the endpoint table hides it",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        return f"via {redactor.redact_text(step.via)}"\n',
+                replace='        return f"via {step.via}"  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),

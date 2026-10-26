@@ -135,6 +135,62 @@ def calling_classes(call_sites: list[dict[str, Any]], owner: str, name: str) -> 
     }
 
 
+def delegated_outers(
+    call_sites: list[dict[str, Any]], marked: set[str], hosts: dict[str, str]
+) -> dict[str, str]:
+    """Each UNMARKED outer class whose nest's code reaches exactly one marked
+    outer class, mapped to that marked class (spec §3a).
+
+    A generated wrapper states no identity of its own: a wrapper's nested
+    base class calls the generated service class's `getServiceDescriptor`,
+    and a client calls the wrapper's stub, which calls `newStub` on that same
+    class. Every class is read as its outer class (the
+    nest host the class file states, `outer_of`), so a call made by a nested
+    type counts for the whole nest. A call reaches another outer when the
+    call's target owner belongs to it; the walk follows unmarked outers on,
+    and stops at a marked one.
+
+    An outer that reaches no marked class, or two different ones, is absent —
+    nothing is guessed between two. A marked class is never remapped, even
+    when it calls another marked class: it states an identity itself. A
+    visited set ends the walk on a cycle of unmarked outers.
+
+    `marked` is read as outer classes too: `calling_classes` gives the type
+    that DECLARES a marker call, which can be a nested one."""
+    marked = {outer_of(declaring, hosts) for declaring in marked}
+    calls: dict[str, set[str]] = {}
+    for site in call_sites:
+        caller = caller_outer_class(str(site["caller"]))
+        if caller is None:
+            continue
+        source = outer_of(caller, hosts)
+        target = outer_of(str(site["owner"]), hosts)
+        if source != target:
+            calls.setdefault(source, set()).add(target)
+    delegated: dict[str, str] = {}
+    for start in sorted(calls):
+        if start in marked:
+            continue
+        reached = _marked_reached(start, calls, marked)
+        if len(reached) == 1:
+            delegated[start] = next(iter(reached))
+    return delegated
+
+
+def _marked_reached(start: str, calls: dict[str, set[str]], marked: set[str]) -> set[str]:
+    reached: set[str] = set()
+    visited = {start}
+    pending = [start]
+    while pending:
+        for target in calls.get(pending.pop(), ()):
+            if target in marked:
+                reached.add(target)
+            elif target not in visited:
+                visited.add(target)
+                pending.append(target)
+    return reached
+
+
 def first_string_arguments(
     call_sites: list[dict[str, Any]], owner: str, name: str, index: int
 ) -> dict[str, str]:

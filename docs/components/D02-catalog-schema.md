@@ -3449,6 +3449,51 @@ overwritten. The merged row therefore carries BOTH halves: this style's handler 
 the descriptor's own contracts. Before the fix it carried strictly less than the descriptor
 row alone would have, which inverted the whole redundancy the two halves exist for.
 
+**Three optional keys serve a generated wrapper around the generated service class**
+(spec 2026-10-25 §3a, §3b; probe CP-53). The wrapper's own outer class makes no marker call,
+so without them the gate above refuses it. A catalog declaring none of them matches exactly as
+described above; `grpc-java.yml` declares none of these three, and `grpc-quarkus.yml` declares all three:
+
+```yaml
+matches:
+  # … supertype_marker and members as above …
+  service_supertype: io.grpc.BindableService
+  served_by_annotation: io.quarkus.grpc.GrpcService
+  delegating_bean: { implements: io.quarkus.grpc.MutinyBean, delegate_field: delegate }
+```
+
+| key | shape | what it changes |
+|---|---|---|
+| `service_supertype` | one dotted type | A supertype whose outer class is unmarked still matches when it implements this type (directly or through its supertypes) **and** its nest's code reaches exactly one marked outer class (`shapes/identity_calls.py`'s `delegated_outers`). The identity and wire names are that marked class's. Two marked classes reached is no match, no row and no question. |
+| `served_by_annotation` | one dotted annotation type | Every implementer, in every form, must declare this annotation on the class itself; an inherited one does not count (the framework reads the declared annotation, CP-53 row 9). |
+| `delegating_bean` | `{implements, delegate_field}`, both strings | For each module class B that directly implements `implements`, the declared type I of B's field named `delegate_field`. The module class implementing I (and carrying `served_by_annotation`) is the handler, under the identity and wire names of B's superclass; its candidate methods are the ones I declares, correlated as `members` correlates them. B's superclass must have no subclass but B, and no module class may extend a class nested in the marked class that superclass delegates to (CP-53 row 10, read structurally); otherwise the bean is skipped and the extends form applies. Two or more such implementors: no handler row (the unresolved fallback row at B's superclass), and one `service_identity` question naming all of them, because the framework takes the first in an order the bytecode does not fix. B itself is never a handler: it carries no `served_by_annotation`. |
+
+Each is shape-checked when present; a malformed value refuses the catalog.
+
+**Two more keys name the CLIENT side, and this style's engine does not read them**
+(spec 2026-10-25 §3d). `resolve/rpc_hops.py` does: a call from a generated client stub to an
+RPC the module serves lands on its handler (D01 §3, `rpc_hops`). They sit in this style's
+`matches` because the pass reads the same `supertype_marker` to find the wire method a stub
+calls. `grpc-java.yml` declares both:
+
+```yaml
+matches:
+  # … supertype_marker and members as above …
+  client_stub_supertype: io.grpc.stub.AbstractStub
+  client_call_owner: io.grpc.stub.ClientCalls
+```
+
+| key | shape | what it changes |
+|---|---|---|
+| `client_stub_supertype` | one dotted type | A class whose `type_hierarchy` ancestry reaches this type, through library rows too, is a client stub; its methods are the callers a hop is written for. |
+| `client_call_owner` | one dotted type | The type whose static methods send a stub's call (`ClientCalls#blockingUnaryCall`, `#asyncUnaryCall`); a stub method's first call into it is the hop's `ordinal`. |
+
+Both are required together, each one string, beside a `supertype_marker`; a malformed pair
+refuses the catalog as the keys above do (`supertype_derived.validate_client_keys`, which the
+pass also calls, since it reads a catalog the engine may have skipped). More than one
+declared catalog carrying them refuses the resolve, naming every file: two could name two
+different stubs, and the pass does not choose.
+
 ### `injected_client`
 
 A second, separate style from `supertype_derived` — injection is a different SHAPE of
@@ -3496,6 +3541,30 @@ class's own structure, not the module implementing it. protoc emits two in every
 full-protobuf `<Service>Grpc` (`<Service>FileDescriptorSupplier` and
 `<Service>MethodDescriptorSupplier` extend `<Service>BaseDescriptorSupplier`). Counted, they
 fenced every stub a module compiles itself, and its client rows vanished with no question.
+
+**A wrapper's identity is the identity it delegates to** (spec 2026-10-25 §3a). Where the
+injected type's outer class makes no marker call, the identity is that of the one marked outer
+class its nest's code reaches (`shapes/identity_calls.py`'s `delegated_outers`); two reached is
+no identity, so the unresolved row and its question. Quarkus's Mutiny stub is one: its
+constructor builds grpc-java's own stub on `<Service>Grpc`.
+
+**Two optional keys serve a framework that generates a client class around the stubs**
+(spec 2026-10-25 §3b; probe CP-53). A catalog declaring neither reads exactly as described
+above; `grpc-net-devh.yml` declares neither, and `grpc-quarkus-client.yml` declares both:
+
+```yaml
+matches:
+  # … field_annotation and identity_marker as above …
+  interface_client: { implements: io.quarkus.grpc.MutinyClient }
+  served_by_annotation: io.quarkus.grpc.GrpcService
+```
+
+| key | shape | what it changes |
+|---|---|---|
+| `interface_client` | `{implements}`, a dotted type | Every module class that directly implements `implements` is keyed by the FIRST other interface it declares, and by no later one (the framework reads no further, CP-53 row 3). An injected type that is such a key, with exactly one class under it, is read as that class, so the row takes that class's identity. Two or more classes under one key: the injected type is read as itself, which gives the unresolved row and its `service_identity` question, because the framework's map keeps one of them in an order the facts do not state. |
+| `served_by_annotation` | one dotted annotation type | An `extends` edge fences only when its subclass, or a module class below it through `superclasses`, declares this annotation on the class itself (CP-52 row 7, CP-53 row 9). An unannotated abstract base between the generated base and the annotated class is not a bean, so the class below it is served through its edge. A generated bean extending a generated base carries none and has nothing below it, so it fences nothing. |
+
+Each is shape-checked when present; a malformed value refuses the catalog.
 
 `direction` is always the catalog's own `outbound`; `handler`/`caller`/`peer` are all
 NULL — the injection names no calling method of its own (a field declaration, not a call

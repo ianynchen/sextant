@@ -148,6 +148,30 @@ rows, none picked.
   `return_flows`' reason: the bundle is a published surface, and freezing this shape into
   one before anything outside the workspace reads it makes every later change breaking.
 
+**`rpc_hops`** carries `caller`, `ordinal`, `protocol`, `path`, `handler` and `evidence`
+(spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
+call to an RPC this module serves lands. `call_edges` stops at the client-call API, a library
+whose body no workspace reads, so a trace through `GreeterBlockingStub#sayHello` ended at
+`ClientCalls#blockingUnaryCall` and never reached the module's own `HelloWorldService#sayHello`.
+`caller` is a method of a class whose `type_hierarchy` reaches the catalog's
+`client_stub_supertype` (library rows included); `ordinal` is its first call whose target
+belongs to `client_call_owner`, where the call leaves for the wire, so `(caller, ordinal)`
+joins the `call_edges` row; `path` is `<service identity>/<wire method>`, the wire method read
+off the one accessor the stub method calls in the generated class's nest
+(`getSayHelloMethod`, whose body names `SayHello`). Exactly one wire method and a client-call
+site, or no row.
+
+- **Only for a service the module serves** (§3c: an inbound `grpc` row with a handler). One
+  row per handler of the path; a served service's RPC with no handler here gets one row with
+  `handler` NULL, so the trace still carries the wire path when the outbound row is fenced.
+  A call to a service the module does not serve keeps its outbound row and gets no hop.
+- **`evidence` is `compiler`**, the endpoint rows' convention: a catalog's rule over
+  compiled facts. `call_edges` is untouched; the hop lives in its own table, which is also
+  what a curation names (ruling 4).
+- **Exported**, `path` through the address map, as `roots.path` is ([D06](D06-bundle-format.md)
+  §3). A derived table rather than a view, because the rule is Python
+  (`resolve/rpc_hops.py`); replaced whole per resolve by that one writing pass.
+
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
 accessors, which are already `calls`), and `contains` from class to method (the method's
@@ -741,8 +765,9 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 `cycle` as it goes, over the same tables at module scope and over the federation at system
 scope. A trace can never disagree with the edges it came from, because it is them.
 
-**Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots` and
-`return_flows`. Module scope only; the federation half is `Bundle`/`Link` work and unbuilt.
+**Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots`,
+`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link`
+work and unbuilt.
 
 **It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
 business logic and gets the same trace a request does, so the walk reads `Root.kind` for
@@ -758,6 +783,17 @@ with no children is a method that calls nothing):
 | `boundary` | The workspace read no body for the callee — the ruled third-party boundary, where a trace stops |
 | `cycle` | The callee is already on the path from the root. Recursion is real code: it is stated, not followed |
 | `revisited` | The callee was expanded elsewhere in this trace; its subtree is shown at its first occurrence |
+
+**A gRPC call to this module's own service is a hop, not a stop** (spec
+`2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2). At a `call_edges` row whose
+`(caller, ordinal)` has `rpc_hops` rows, the walk takes one step per hop instead of the
+`boundary` step: the row's `target`, `invoke_kind` and `resolution`, `callee` the hop's
+`handler`, and `via` the wire path (`grpc helloworld.Greeter/SayHello`). The handler is then
+any callee, so it is expanded, `revisited` or a `cycle` by the table above, and a hop whose
+`handler` is NULL is still `boundary`, carrying its wire path. The step leaves
+`Trace.terminals`, so a trace through a stub has one terminal fewer. The document's arrow ends
+at the handler's lifeline, labelled `blockingUnaryCall (declared ClientCalls) via grpc
+helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the wire path.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the
@@ -1331,6 +1367,7 @@ own cadence.
 | 5 | No table change: what `endpoints.peer` may hold. Before 2026-10-23 `split_url` kept a URL's userinfo in the peer (`svc:s3cret@billing.internal`), which no exit could tell from a Spring-WS `mailto:` peer, so a workspace of that vintage is refused rather than masked by a guess (user ruling) | `render`, `enrich`, `export` and `query` refuse it by its stamp; `system analyze` now refuses a participant by the same stamps, naming it and the command; `module diff` refuses two such sides unless the producer change is allowed, and then masks each scheme-less peer with an `@` whole (user ruling) |
 | 6 | No table change: condition verdicts a deployment can change are no longer decided (spec `2026-10-23-deployment-set-conditions-design.md`). A `profile` or `property` condition is `unresolved` unless the environment's own name decides it, and the module's own reading is its evidence | refused by its stamp exactly as at 5, so a workspace holding the older decided verdicts is re-analysed rather than read beside new ones (user ruling, spec §6) |
 | 7 | `resolved_schedules`, a new derived table: a scheduled job's placeholder expression per environment, read from the module's configuration through the one placeholder rule (spec `2026-10-23-configured-schedules-design.md`); `scheduled_work` keeps one row per job and its `unresolved` | refused by its stamp exactly as at 5 and 6, so a workspace without the table is re-analysed rather than read as one whose jobs have no configured values |
+| 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

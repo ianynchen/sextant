@@ -112,8 +112,8 @@ columnar need per fact kind is stated.
                                                           "error_handlers", "field_writes", "method_returns",
                                                           "open_questions", "raw_facts", "resolved_config",
                                                           "resolved_schedules", "return_flows", "roots",
-                                                          "scheduled_work", "shape_fields", "shapes",
-                                                          "symbols"],
+                                                          "rpc_hops", "scheduled_work", "shape_fields",
+                                                          "shapes", "symbols"],
                 "facts_files": 1283,
                 "render": ["architecture.md", "architecture.html"] },
   "gaps": ["call_graph_not_implemented"],
@@ -188,6 +188,7 @@ document field.
 | `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
 | `graph/endpoint_metadata.parquet` `path` | the same address map as `endpoints.path`: it carries its endpoint's path as the key it joins by, so a row masked differently would miss its endpoint (OI-169; `endpoint_conditions.path` takes the same map, below) |
 | `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |
+| `graph/rpc_hops.parquet` `path` | the same address map, for `roots`'s reason: it is the wire path of the inbound row a stub call lands on (spec 2026-10-25 §3d). Its other columns are symbols, an ordinal and closed-set words, and travel unmasked |
 | `graph/resolved_schedules.parquet` `value` | `redact_schedule_value`, staged on (`keys`, `value`): WHOLE where any key the row's `keys` names matches the key patterns — the schedule of `${app.token.cleanup.cron}` is that key's value, which `resolved_config` masks by the key — and otherwise URL userinfo + value patterns (`redact_text`). The document makes the same call (spec 2026-10-23-configured-schedules §3b). `keys` are configuration key names and travel unmasked, as `resolved_config.key` does. Its `expression` takes `scheduled_work.expression`'s map, below |
 | `graph/scheduled_work.parquet` `expression`, `graph/resolved_schedules.parquet` `expression` | URL userinfo + value patterns (`redact_text`), through the address map: the expression is the annotation literal `annotations.args` masks, so the two schedule tables mask it too (§5a-i). The document prints it through the render redactor, in the table and in a job's detail header |
 | `graph/config_entries.parquet` `value` | the raw half of `resolved_config`, masked by the same `redact_value` keyed on the entry's own `key_path` |

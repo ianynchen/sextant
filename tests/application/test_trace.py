@@ -18,7 +18,7 @@ walk having to be reopened the day it does.
 import pytest
 from fixture_module import write_fixture_module_fact
 
-from sextant.application.query.trace import _Index, _walk, trace_of, traces_of
+from sextant.application.query.trace import Trace, _Index, _traced, _walk, trace_of, traces_of
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.resolve.roots import Root, roots_of
@@ -223,6 +223,93 @@ def test_a_throw_with_no_target_stays_null_on_its_step():
     assert steps[0].target is None
     assert steps[0].invoke_kind == "throw"
     assert steps[0].stop == TraceStop.BOUNDARY
+
+
+# --- the hop: a stub call to a served RPC continues to its handler -----------
+#
+# Spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop that is
+# traceable. `rest` calls the stub method, whose `ClientCalls` call (ordinal 1) is a
+# boundary in `call_edges`; an `rpc_hops` row at that site names where it lands.
+
+_WIRE = "grpc helloworld.Greeter/SayHello"
+_CLIENT_CALL = "io/grpc/stub/ClientCalls#blockingUnaryCall()."
+
+
+def _edge(callee: str | None, ordinal: int, target: str) -> dict[str, object]:
+    return {
+        "callee": callee,
+        "ordinal": ordinal,
+        "invoke_kind": "static",
+        "target": target,
+        "result": None,
+        "resolution": "resolved",
+        "terminal_kind": None if callee else "unresolved",
+        "target_kind": None,
+    }
+
+
+def _hop(handler: str | None) -> dict[str, object]:
+    return {
+        "caller": "stub",
+        "ordinal": 1,
+        "protocol": "grpc",
+        "path": "helloworld.Greeter/SayHello",
+        "handler": handler,
+        "evidence": "compiler",
+    }
+
+
+def _hopped(root: str, handler: str | None) -> Trace:
+    edges = {
+        "stub": [
+            _edge(None, 0, "GreeterGrpc#getSayHelloMethod()."),
+            _edge(None, 1, _CLIENT_CALL),
+        ],
+        "handler": [_edge(None, 1, "java/lang/String#trim().")],
+    }
+    # The root's stub call first; where the root IS the handler, before its own call.
+    edges[root] = [_edge("stub", 0, "stub#sayHello()."), *edges.get(root, [])]
+    index = _Index(edges=edges, returns={}, responses={}, hops={("stub", 1): [_hop(handler)]})
+    return _traced(Root(handler=root, kind=RootKind.INBOUND_ENDPOINT), index)
+
+
+@pytest.mark.pins(
+    "trace.the-walk-CROSSES-a-hop-into-the-handler",
+    "trace.a-HOP-onto-a-handler-is-not-a-terminal",
+)
+def test_a_walk_crosses_a_hop_into_the_served_handler():
+    """Without the hop the walk ends at `ClientCalls#blockingUnaryCall`, a library body no
+    workspace reads, and the module's own handler is never reached — with the outbound row
+    fenced, the call to it is then nowhere in the document."""
+    trace = _hopped("rest", "handler")
+    landed = [step for step in trace.steps if step.via is not None]
+    assert [(step.callee, step.target, step.via, step.stop) for step in landed] == [
+        ("handler", _CLIENT_CALL, _WIRE, None)
+    ]
+    # Not a terminal, so not classified as one: the `ClientCalls` row's `unresolved` is
+    # about a library the walk no longer stops at.
+    assert (landed[0].terminal_kind, landed[0].target_kind) == (None, None)
+    after = trace.steps[trace.steps.index(landed[0]) + 1]
+    assert (after.caller, after.depth) == ("handler", landed[0].depth + 1)
+    assert _CLIENT_CALL not in [step.target for step in trace.terminals]
+
+
+def test_a_hop_with_no_handler_stays_a_boundary_with_its_wire_path():
+    """An RPC of a served service with no handler here: the walk stops where it did, but
+    the step still says where the call was going, because the outbound row is fenced."""
+    trace = _hopped("rest", None)
+    [landed] = [step for step in trace.steps if step.via is not None]
+    assert (landed.callee, landed.via, landed.stop) == (None, _WIRE, TraceStop.BOUNDARY)
+    assert landed.terminal_kind == "unresolved"
+    assert landed in trace.terminals
+
+
+def test_a_hop_into_a_method_already_on_the_path_is_a_cycle():
+    """The handler calling its own service through a stub is recursion through the wire:
+    `_stop` treats the handler as any callee, so it reads `cycle` and is not followed."""
+    trace = _hopped("handler", "handler")
+    [landed] = [step for step in trace.steps if step.via is not None]
+    assert (landed.callee, landed.stop) == ("handler", TraceStop.CYCLE)
 
 
 def test_a_terminal_is_where_the_workspace_stopped_and_not_where_the_walk_did(
