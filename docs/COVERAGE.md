@@ -49,13 +49,14 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (1B 3C) | ◐ (1B, 1 open) | ✅ | ✅ | ✅ | ✅ |
+| **Java / Kotlin** | ✅ ASM | ◐ (1B 3C) | ◐ (1B) | ✅ | ✅ | ✅ | ✅ |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
+| **C# / .NET** | none | · | · | · | · | · | · |
 
 ### 2b. Messaging and RPC
 
@@ -68,6 +69,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
 | **Rust** | 1A | 1A | 1A | 1B | 1B | 2A 1B |
 | **Swift** | 1A | 1A | — | 1B | — | 1B |
+| **C# / .NET** | · | · | · | · | · | · |
 
 ### 2c. Java / Kotlin — framework family × protocol
 
@@ -94,7 +96,7 @@ register.
 | **Netflix DGS** | — | — | — | ✅ | — | — | — | — | — | — | — | — |
 | **GraphQL Kotlin (Expedia)** | — | — | — | ✗ | — | — | — | — | — | — | — | — |
 | **Akka / Pekko (HTTP, Connectors, actors)** | ◐ (1 not shipped) | — | — | — | — | — | — | ✅ | — | — | — | ◐ (1 open, 1 not shipped) |
-| **Apache Camel** | — | ◐ (1 open, 1 not shipped) | — | — | — | — | — | — | — | — | — | — |
+| **Apache Camel** | — | ◐ (1 not shipped) | — | — | — | — | — | — | — | — | — | — |
 | **Temporal / Cadence** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 | **Quartz** | — | — | — | — | — | — | — | — | — | — | — | ◐ (1 open, 1 not shipped) |
 | **Play Framework** | ✗ | — | — | — | — | — | — | — | — | — | — | — |
@@ -712,6 +714,9 @@ Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5
 | **Python** | None — pyright has **no programmatic API**, only LSP | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
+| **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
+
+**C# / .NET was added on 2026-10-26, assessed but not measured, and not yet prioritized** (Plane OI-205). An assembly carries classes, attributes, signatures and every call instruction, as a class file does, so the JVM's design (a scanner over compiled output, catalogs, our own call graph) would carry over with the least redesign of any row here. Roslyn adds a compiler-grade source model where IL loses detail. The frameworks a first pass would cover are attribute- and registration-driven: ASP.NET Core controllers and minimal APIs, `Grpc.AspNetCore`, SignalR, MassTransit, NServiceBus, the Azure Service Bus SDK, Confluent.Kafka, `HttpClient` and Refit. None of this is measured against real assemblies yet, and §5 enumerates no C# rows, so the §2 cells read `·`.
 
 **Three findings worth stating outright.**
 
@@ -2635,7 +2640,7 @@ the `combinator` vocabulary can read a verb off an argument the way `fluent` now
 | JDK / Apache HttpClient | ✅ full | 1/1 | — |
 | Micronaut HTTP client | ✅ full | 1/1 | — |
 | MicroProfile REST Client | ✅ full | 1/1 | — |
-| Apache Camel | ◐ partial | 0/1 | not shipped: 1 at B; `apache-camel` |
+| Apache Camel | ◐ partial | 0/1 | not shipped: 1 at B |
 | Ktor HttpClient | ✗ unsupported | 0/0 | no row yet |
 | Vert.x WebClient | ✗ unsupported | 0/0 | no row yet |
 <!-- END GENERATED: frameworks 5.2 -->
@@ -2757,7 +2762,7 @@ can name a plain-string attribute and `path_from` can be declared per annotation
 | Java | JDK / Apache HttpClient | JDK `HttpClient`, Apache HttpClient | `fluent_chain` | ✅ **shipped** (`jdk-httpclient`; PR A2 Task 8, `jdk-httpclient.yml`/`apache-httpclient.yml`). `HttpRequest.newBuilder().uri(URI.create(…)).POST(…).build()` sent inline, the `newBuilder(URI)` overload, `.method("PATCH", …)`, and Apache's `new HttpGet(…)`/`ClassicRequestBuilder.get(…)` all derive through `send`/`execute`, a constructed Apache request handed straight to `execute` included. `fluent`'s own doctrine — a request built in one method and sent in another derives NOTHING, as `RestTemplate`/`OkHttp` already read — now literally governs these two catalogs too (spec §13 case 9). `url_via` gained an optional `arity` so a via form naming `java.net.URI`'s `<init>` cannot misread a multi-argument constructor's first argument as the URL. **Stated boundaries**: a `BodyPublisher` body leaves every JDK POST/PUT/PATCH row `unresolved` rather than reading through it to the payload type (`jdk-body-publisher`, Minor — open doctrine question: should an unreadable body shape poison the whole row?); `newBuilder(HttpRequest, BiPredicate)` carries the seeded verb of the COPIED request rather than the copy's own (`jdk-newbuilder-copy`, Minor); Apache's `execute(HttpHost, relativeRequest, …)` reads the request's own path only, the `HttpHost` peer unread (`apache-execute-httphost-peer`, Minor); `URL.openConnection()` is out — its verb is set by a LATER `setRequestMethod` statement on the same connection, a forward walk this design does not do (`url-openconnection`, Minor, spec §15) |
 | Java | Spring Cloud Gateway (forwarding) | **Spring Cloud Gateway** — the `uri(…)` target on each route's chain, `http://…`/`lb://…` via `channel_arg` | `single_call` | ✅ **shipped** (`G-30-outbound`; PR A2 Task 7, `spring-cloud-gateway-outbound.yml`, read through `lambda_steps`). The target is kept whole (`peer` NULL — a load-balanced `lb://…` target names no host) |
 | Java | Spring Cloud Gateway (forwarding) | **Spring Cloud Gateway** — the `routes[N].uri` of a route declared in configuration (`lb://orders`, `http://items.internal:8080`), read by the `peer: {field: uri, direction: outbound}` rule of `config_join`'s `indexed:` form on the same catalog that mints the served rows (§5.1) | `config_join` | ✅ **shipped** (2026-09-21, `gateway-properties-routes`; `spring-cloud-gateway-properties.yml`). The same rendering as the DSL row above: the URI verbatim as `path`, `peer` NULL, `caller` NULL; a `uri` resolved in no environment is a `path` NULL `unresolved` row, a route naming no `uri` mints no target row (the framework refuses such a definition at startup). Pinned by `test_gateway_property_routes_derive_their_inbound_and_outbound_rows` |
-| Java | Apache Camel | **Apache Camel** `from("kafka:orders").to("http://svc/api")` | `fluent_chain` over **URI strings** | **B — largest single payoff: protocol, direction and destination in one literal** |
+| Java | Apache Camel | **Apache Camel** `from("kafka:orders").to("http://svc/api")` | `fluent_chain` over **URI strings** | **B** — out of scope for this target (ruled 2026-10-26 on adoption; measured: 32 of Camel's 415 components map to an existing protocol, Plane SEXTANT-171). Protocol, direction and destination sit in one literal |
 | Go | net/http client | `http.Get(url)`, `http.NewRequest(m, url, b)` + `client.Do` | `registration_call` / `fluent_chain` | A |
 | TS | fetch, axios | `fetch(url, {method})`, `axios.get(url)` (+ instance `baseURL`) | `registration_call` | A |
 | Python | requests, httpx, aiohttp, urllib3 | `requests.get(url)`, `httpx`, `aiohttp`, `urllib3.request("GET", url)` | `registration_call` | **A — the easiest outbound form in any language** |

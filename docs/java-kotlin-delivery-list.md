@@ -49,7 +49,7 @@ feature's next spec touches the seam — never silently dropped, never a blocker
 
 ```delivery
 REST inbound       | REST in    |
-REST outbound      | REST out   | apache-camel
+REST outbound      | REST out   |
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
@@ -81,11 +81,17 @@ H, spec `docs/superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.m
 `docs/superpowers/plans/2026-10-22-boundary-vocabulary-and-diff.md`). It has no COVERAGE column,
 so no cell moves: the register's `—` says so, and its row empties because its ids did.
 
+**REST outbound joined this block on 2026-10-26**, when `apache-camel` — its last open id — was
+ruled out of scope for this target (user, on adoption: a specific integration framework that none
+of the 11 real corpora uses). The cell still reads `◐ (1B)` for Camel's own §5.2 row, which stays
+uncatalogued; every other REST outbound library is shipped.
+
 **SSE is NOT here any more.** Its gap is JAX-RS `@Produces(SERVER_SENT_EVENTS)`, which is
 Java — so it is real work, sequenced after Spring Boot, not something scoped away.
 
 ```scoped-out
 REST inbound
+REST outbound
 ```
 
 **Not blocking any feature** — tracked so "no open Critical or Major" can be claimed
@@ -98,7 +104,7 @@ OI-85
 **Out of scope for this target** — neither blocking nor tracked for delivery:
 
 ```out-of-scope
-GAP-2 G-10 G-71
+GAP-2 G-10 G-71 apache-camel
 ```
 
 **Intention test not yet written** — every feature needs one (`GUIDELINES.md` §4.1), and
@@ -476,13 +482,13 @@ blockers — each is either honest engine output or a shape real code rarely wri
   resolved route that both a statement and `build()` reach (spec §4, "identity dedup removes
   the routes both reach"), but an identity-unknown row carries no identity to dedup on.
 
-### REST outbound — NOT DELIVERED
+### REST outbound — DELIVERED (`apache-camel`, the last open id, ruled out of scope 2026-10-26; the matrix cell stays `◐ (1B)` for Camel's uncatalogued row — the ```scoped-out block names it)
 
 | # | issue |
 |---|---|
 | `G-30-outbound` | **shipped** (PR A2 Task 7, commit `3ca2219`) — `spring-cloud-gateway-outbound.yml` reads each route's `uri(…)` target via `lambda_steps`, `channel_arg` keeping `http://…`/`lb://…` whole (peer NULL by design — a load-balanced target names no host). Not yet in ```closed — awaiting this PR's CI |
 | `mp-rest-client` | **closed** — implemented, pinned by `test_a_microprofile_rest_client_interface_derives_its_outbound_operations` (`tests/e2e/test_rest_outbound_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `microprofile-rest-client.yml` (`declared_on: interface`) is `jakarta-jaxrs.yml` with the direction flipped, `peer_from: [baseUri, configKey]` read off `@RegisterRestClient` itself via the new `peer_annotation` word (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §3f). Was: **named 2026-09-13 (A2 register close)** — MicroProfile REST Client (`@RegisterRestClient` on an interface, `@GET`/`@Path` on its methods; Quarkus's standard outbound client) had no catalog. Costs a Quarkus/MicroProfile module its whole outbound surface |
-| `apache-camel` | **named 2026-09-13 (A2 register close)** — Apache Camel's route DSL (`from("kafka:orders").to("http://svc/api")`) has no catalog: protocol, direction and destination sit in one URI literal, tier B, `fluent` over URI strings. COVERAGE §5.2 calls it the largest single payoff. Needs a short spec (a URI-scheme→protocol table; `from`/`to`/`toD` as steps). Costs a Camel module its whole integration surface |
+| `apache-camel` | **out of scope, ruled 2026-10-26 (user)** — on adoption: a specific integration framework, used by none of the 11 real corpora; moved to ```out-of-scope. Measured the same day on Camel main (4.24.0-SNAPSHOT, `8e0ce2d2`): of 415 components, 32 map to an existing `Protocol` member, 33 run in-process (`direct`, `seda`, `timer`, `log`, `bean` …) and 351 reach something external with no member (databases, object storage, MQTT, NATS, mail, IoT, SaaS, AI) — so a catalog would need a question per unmapped component or new protocol members. The measurement and the corpora used (`camel-spring-boot-examples`, `camel-examples`, `camelinaction2`, `formula1-telemetry-kafka`, `unomi`) are on Plane SEXTANT-171. Was: **named 2026-09-13 (A2 register close)** — Apache Camel's route DSL (`from("kafka:orders").to("http://svc/api")`) has no catalog: protocol, direction and destination sit in one URI literal, tier B, `fluent` over URI strings. COVERAGE §5.2 calls it the largest single payoff. Needs a short spec (a URI-scheme→protocol table; `from`/`to`/`toD` as steps). Costs a Camel module its whole integration surface |
 | `jdk-httpclient` | **shipped** (PR A2 Task 8, commit `be46e52`) — `jdk-httpclient.yml` and `apache-httpclient.yml` are `fluent` catalogs: `HttpRequest.newBuilder().uri(URI.create(…)).POST(…).build()` sent inline, the `newBuilder(URI)` overload, `.method("PATCH", …)`, and Apache's `new HttpGet(…)`/`ClassicRequestBuilder.get(…)` all derive through `send`/`execute`, a constructed Apache request handed straight to `execute` included (fix round 2). `url_via` gained an optional `arity` so a via form naming `java.net.URI`'s `<init>` cannot misread a multi-argument constructor's first argument as the URL. `RestTemplate`/`RestClient`/`WebClient`/OkHttp's own `fluent` doctrine — a request built in one method and sent in another derives NOTHING — now literally governs these two catalogs too (spec §13 case 9). Not yet in ```closed — awaiting this PR's CI |
 | `url-openconnection` | **logged (PR A2 Task 9, spec §15, Minor)** — `URL.openConnection()`'s verb is set by a LATER statement on the same connection (`conn.setRequestMethod("POST")`), default GET if never set — a walk forward from a receiver, not backward to a root, and a new default-verb rule this design does not have; every module using the JDK's older client shape derives no outbound rows for it |
 | `jdk-body-publisher` | **logged (PR A2 Task 8, Minor)** — a `body` capture that reads a `BodyPublisher` leaves the row `unresolved` rather than reading through it to the payload type — `fluent`'s own rule, same shape as OkHttp's `RequestBody.create(x)`; every JDK POST/PUT/PATCH row through this fixture reads `unresolved` rather than `resolved`. Open doctrine question: should an unreadable body shape poison the whole ROW, or only the claim about its payload? |
@@ -717,7 +723,8 @@ none of them Critical or Major and none carrying a register severity:**
 ## 3. Out of scope for this target
 
 `GAP-2` the linking tier (FR-8, M05, M06 — phase L, never started) · `G-10` FR-11 to
-FR-14 unbuilt · `G-71` blast radius has no surface at all.
+FR-14 unbuilt · `G-71` blast radius has no surface at all · `apache-camel` Apache Camel's
+route DSL (ruled out 2026-10-26 on adoption; measurement on Plane SEXTANT-171).
 
 ---
 

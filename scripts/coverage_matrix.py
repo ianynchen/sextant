@@ -67,7 +67,16 @@ NON_PROTOCOL = {
 }
 
 # Row label in section 5 -> matrix rows it feeds.
-LANGUAGES = ["Java / Kotlin", "Go", "TypeScript", "JavaScript", "Python", "Rust", "Swift"]
+LANGUAGES = [
+    "Java / Kotlin",
+    "Go",
+    "TypeScript",
+    "JavaScript",
+    "Python",
+    "Rust",
+    "Swift",
+    "C# / .NET",
+]
 ALIASES = {
     "Java": ["Java / Kotlin"],
     "Kotlin": ["Java / Kotlin"],
@@ -76,6 +85,7 @@ ALIASES = {
     "Python": ["Python"],
     "Rust": ["Rust"],
     "Swift": ["Swift"],
+    "C#": ["C# / .NET"],
 }
 
 # The Java/Kotlin frameworks each protocol section MUST account for — the target list the
