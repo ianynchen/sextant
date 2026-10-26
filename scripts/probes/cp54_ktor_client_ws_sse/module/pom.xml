@@ -1,0 +1,35 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.sextant.probes</groupId>
+  <artifactId>cp54-ktor-client-ws-sse</artifactId>
+  <version>0</version>
+  <!-- CP-54's subject: one Kotlin file of Ktor call shapes, compiled against Ktor 3.6.0 (the
+       version the real corpora build with) and read with `javap`, plus a `main` that runs Ktor's
+       own `DefaultRequest` plugin over a mock engine. Compiled and run by the probe's harness,
+       never as an application. `ktor-client-mock-jvm` is a probe-only dependency: it gives the
+       client an engine that records the final URL instead of opening a socket. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <kotlin.version>2.4.20</kotlin.version>
+    <ktor.version>3.6.0</ktor.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-core-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-websockets-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-sse-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-core-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-cio-jvm</artifactId><version>${ktor.version}</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-client-mock-jvm</artifactId><version>${ktor.version}</version></dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <executions><execution><id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
