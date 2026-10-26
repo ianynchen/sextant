@@ -251,3 +251,93 @@
   - CHANGELOG.
   - A Plane item for manual SSE (spec §4): OI-213, its row added to the id map.
 - [ ] **Step 7:** Commit `feat(ktor): HTTP client, WebSockets and SSE delivered (orders-ktor at Ktor 3.6.0)`.
+
+---
+
+## Amendment 2026-10-26: reaching the client (user ruling "build both now")
+
+Task 5 found that the value walk cannot reach a Ktor client (`.superpowers` report, summarised here):
+
+- **Gap 1, no fact:** nothing records a field or a static field written from a call's RESULT. Examples:
+  - `val client = HttpClient { … }` at top level is `invokestatic …; putstatic` in `<clinit>`.
+  - `private val c = HttpClient { … }` is `aload_0; invoke…; putfield`.
+
+  These are CP-33 rows 6 and 7, open in D00 §5. `MethodFlow.fieldWrites` skips static methods and records only `aload_0; xLOAD|LDC; putfield`.
+- **Gap 2, no producer:** the walk answers values, never the call that built a value. So no construction can be found to read `defaultRequest` from.
+
+**Order of work:** Tasks 1–4, then the unblocked slice of Task 5 (`join_url`, the `client_base` key, the derived-client probe rows), then **Task 8**, **Task 9**, **Task 10**, then Tasks 6 and 7. Task 10 is the rest of Task 5. Task 6 consumes Task 10's reader.
+
+### Task 8: A field or static field written from a call's result is a fact
+
+**Files:**
+- Modify: `extractor-jvm/src/main/java/dev/sextant/extractor/MethodFlow.java` (and its tests), `docs/components/D00-fact-schema.md` §5 (the `field_write` entry and the CP-33 rows 6–7 text), `docs/superpowers/specs/2026-10-18-the-sixth-edge-design.md` §5 (mark rows 6–7 built), and the walk's binding crossing in `src/sextant/application/resolve/values.py` (`_binding`, around line 1860), so that a write whose value is a call result is followed in the writing method's frame.
+- Test: the extractor's Java tests beside MethodFlow, plus `tests/application/test_values*.py` (find with `grep -rln no_writer tests`).
+
+**Interfaces:**
+- Produces two new kinds of `field_write` fact:
+  - a write whose value is a call's result: `invoke…` followed by `putfield` on `this`, or by `putstatic` in any method, `<clinit>` included;
+  - a `putstatic` of a constant or parameter.
+- The value is an §5 argument-grammar entry carrying a `source` site in the WRITER's frame, in the same shape a call argument that is a call result already has. Both keys stay OPTIONAL, so old facts read as before. Only if the fact's shape changes in a way old readers can't skip does the schema version move with D00.
+- The walk's `_binding` crosses into the writer and resolves that value there. For a `field`-kind read of `Owner#name.`, a static field matches its `putstatic` writer, and no receiver check applies.
+- The three things D00 says the fact deliberately does not report keep their reasons, except that `PUTSTATIC` is now reported. A write overwritten later in the same basic block, and `other.f = …`, stay excluded.
+
+- [ ] **Step 1: Write the failing tests.**
+  - Extractor: a class whose constructor does `this.c = Factory.make()`, and a Kotlin-style `<clinit>` doing `putstatic FileKt.client` from an `invokestatic`. Both emit `field_write` with a value whose `source` is the factory call.
+  - A `putstatic` of a literal emits a constant value.
+  - A write followed in the same block by another write to the same field emits only the later one.
+  - Walk: `test_a_static_field_written_from_a_call_is_followed_to_that_call`. A read of `probe/ProbeKt#client.` resolves past `no_writer`, and with the factory unscanned answers `external`. That is the honest answer for a value; Task 9 reads the producer.
+  - Walk: `test_a_property_written_from_a_call_in_the_constructor_is_followed`.
+- [ ] **Step 2:** Run them. Expected: FAIL.
+- [ ] **Step 3:** Implement in the extractor and the walk. Rebuild the extractor the way `scripts/check.sh` and CI do.
+- [ ] **Step 4: Measure before and after,** in the D00 history paragraph's style:
+  - the number of `field_write` facts on the field pins (`scripts/field_check.py`'s corpora) and on the CP-54 probe module;
+  - the reads and rows per resolve (GUIDELINES §8.7).
+
+  `field_check.py` must stay six `ok`. A pin that moves is investigated. If more is read and the reads are correct, re-pin it with the reason; if it is a regression, fix it.
+- [ ] **Step 5:** Run the gate. Expected: PASS.
+- [ ] **Step 6: Guards:**
+  - `values.a-field-written-from-a-CALL-is-followed`;
+  - `extractor.a-PUTSTATIC-is-a-field-write`, if the guard harness reaches Java; otherwise pin it with a Java test and say so.
+
+  Measure each: killed.
+- [ ] **Step 7:** Commit `feat(values): a field or static field written from a call's result is followed (CP-33 rows 6–7)`.
+
+### Task 9: The walk answers the call that produced a value
+
+**Files:**
+- Modify: `src/sextant/application/resolve/values.py` (a new public reader beside `resolve_site`), and `docs/superpowers/specs/2026-09-22-value-resolution-design.md` (an "As built" note for the reader).
+- Test: `tests/application/test_values*.py`.
+
+**Interfaces:**
+- Produces `producers_of(index: ValueIndex, site: <the same site type resolve_site takes>, slot: <same>, declared: <a set of (owner, method) identities>) -> tuple[Producer, ...]`.
+  - `Producer` is a small frozen record: the producing call site's id and caller, and the identity it matched. The record is `None` when a path ends elsewhere, and then carries the walk's own reason (`external`, `no_writer`, …).
+  - It walks backwards with the SAME crossings `resolve_site` uses: locals, parameters (`bound_to_parameter`), returns, and bindings (Task 8). It stops at a call whose identity is in `declared`.
+  - There is no second distance rule and no per-catalog follow (spec 2026-09-22 §0a).
+- A lambda stays "not a value" (ruled 2026-09-22). This reader returns the CALL, and the caller reads that call's block argument itself.
+
+- [ ] **Step 1: Write the failing tests:**
+  - a value built by a declared factory in the same method returns that call;
+  - one passed as a parameter from such a method returns the caller's call;
+  - one read from a static field written in `<clinit>` (Task 8) returns the `<clinit>` call;
+  - a value from an undeclared call gives no producer, with reason `external`;
+  - a value with two writers gives two producers, one per path.
+- [ ] **Step 2:** Run them. Expected: FAIL.
+- [ ] **Step 3:** Implement by sharing the walk's crossing code. Do not copy it.
+- [ ] **Step 4:** Run the tests and the gate. Also run the shadow and measurement gate that walk changes go through (`tests/application/test_shadow_mode.py` and its inventory). Expected: PASS.
+- [ ] **Step 5: Guard** `values.the-PRODUCER-reader-stops-at-a-declared-call`. Measure: killed.
+- [ ] **Step 6:** Commit `feat(values): the walk answers the call that produced a value`.
+
+### Task 10: The client's base read through the declared ladder (the rest of Task 5)
+
+**Files:** those in Task 5, using Task 9's `producers_of` to find each client's construction.
+
+**Interfaces:**
+- Consumes `client_base`, `join_url` and the ladder declared in the Task 5 slice, and `producers_of` from Task 9.
+- `client_base(...)` is Task 5's signature. It asks `producers_of` for the client value's producers, with the ladder's first rung as `declared`. It then reads into the declared block argument for the next rung, as `fluent`'s lambda joins already do, and ends at the setter's string.
+
+Then follow:
+- the derived `config { }` rung, as CP-54's derived-client rows measure;
+- the no-base case: http://localhost per the ledger ruling;
+- the unreached case: relative, `unresolved`, with the reason.
+
+- [ ] **Steps:** Task 5's Steps 1–6, unchanged. Add the real-bytecode check: on the CP-54 probe, `client.get("relative/path")` gives peer `api.example.com`, path `/relative/path`, and `derivedClient` follows the measured inheritance.
