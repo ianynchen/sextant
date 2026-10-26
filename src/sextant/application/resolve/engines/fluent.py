@@ -75,7 +75,7 @@ from sextant.application.resolve.shapes.arguments import (
     valid_via_arity,
     with_authority,
 )
-from sextant.application.resolve.shapes.client_base import validated_client_base
+from sextant.application.resolve.shapes.client_base import client_base_of
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -435,16 +435,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     for step in steps:
         if step["receiver_arg"] is not None:
             extension_steps.setdefault(step["method"], []).append(step)
-    # The interim word Task 4 shipped, folded into `client_base`: declaring where the base is
-    # set is what says a relative address is relative to it. Refused rather than ignored, so a
-    # catalog still spelling it does not load as one whose relative rows read `resolved`.
-    if "relative_to_client_base" in matches:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `relative_to_client_base` is folded into "
-            f"`client_base` (D02 §2's `fluent` style), which declares where the client's base "
-            f"is set; declare that instead"
-        )
-    client_base = validated_client_base(matches.get("client_base"), catalog.source)
+    client_base = client_base_of(matches, catalog.source)
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -704,7 +695,7 @@ class _ChainContext:
     # catalog declaring none.
     verb_fields: dict[tuple[str, str], str]
     # Spec 2026-10-26 §3c: where the executing CLIENT's base address is set
-    # (`matches.client_base`, validated by `shapes.client_base`) — a relative address is
+    # (`matches.client_base`, read by `shapes.client_base.client_base_of`) — a relative address is
     # relative to it. None for every catalog not declaring it, whose relative address reads
     # as it always has.
     client_base: Mapping[str, Any] | None = None

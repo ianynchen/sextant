@@ -54,6 +54,46 @@ private fun merge(label: String, base: String?, relative: String) = runBlocking 
     println("MERGE\t$label\t${base ?: "(no defaultRequest)"}\t$relative\t$outcome")
 }
 
+// Row group (j): joins row group (g) does not cover, each a shape a reader of (g) would
+// otherwise have to predict — an address with a scheme and no host (`gemini-pro:generate`),
+// a protocol-relative address and an address starting with three slashes. Ktor may refuse
+// one; a refusal is recorded as what Ktor did (`Ktor threw …`), never as a probe failure,
+// and only an address the engine never saw AND Ktor never refused aborts the run.
+private fun join(label: String, base: String, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val client = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+        defaultRequest { url(base) }
+    }
+    val outcome = try {
+        client.get(relative)
+        seen
+    } catch (e: Throwable) {
+        "Ktor threw " + e.javaClass.name + ": " + e.message
+    }
+    client.close()
+    println("JOIN\t$label\t$base\t$relative\t$outcome")
+}
+
+// Row group (j), continued: ONE `defaultRequest` block calling `url(…)` twice — which address
+// the base is when a block sets it more than once.
+private fun setTwice(label: String, first: String, second: String, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val client = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+        defaultRequest {
+            url(first)
+            url(second)
+        }
+    }
+    val outcome = try {
+        client.get(relative)
+        seen
+    } catch (e: Throwable) {
+        "FAILED " + e.javaClass.name + ": " + e.message
+    }
+    client.close()
+    println("TWICE\t$label\t$first\t$second\t$relative\t$outcome")
+}
+
 // Row group (i): the base a DERIVED client sends to — `parent.config { … }`, koog's shape. The
 // parent carries a `defaultRequest` base; the derived client declares its own or none, and the
 // engine records where Ktor sent the request. Whether `config` keeps the parent's plugin block,
@@ -242,4 +282,12 @@ fun main() {
     // Last, so rows 1-78 keep their numbers.
     derived("its own defaultRequest base", "https://parent.example.com/p/", "https://child.example.com/c/", "orders")
     derived("no defaultRequest of its own", "https://parent.example.com/p/", null, "orders")
+
+    val models = "https://generativelanguage.googleapis.com/v1beta/models/"
+    join("a scheme and no host, base ending in /", models, "gemini-pro:generateContent")
+    join("a scheme and no host, base without trailing /", models.removeSuffix("/"), "gemini-pro:generateContent")
+    join("protocol-relative", "https://api.example.com/v1/", "//other.example.com/x/y")
+    join("three leading slashes", "https://api.example.com/v1/", "///x/y")
+    setTwice("two absolute addresses", "https://first.example.com/a/", "https://second.example.com/b/", "orders")
+    setTwice("an absolute then a relative address", "https://first.example.com/a/", "b/", "orders")
 }

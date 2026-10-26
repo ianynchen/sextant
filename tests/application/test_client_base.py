@@ -19,7 +19,11 @@ import pytest
 from test_call_engines import _EXTENSION_MATCHES, CATALOGS_DIR, _fluent_catalog, _resolve_fluent
 
 from sextant.application.ports.catalogs import CatalogError
-from sextant.application.resolve.shapes.client_base import REPLACE_LAST_SEGMENT, join_url
+from sextant.application.resolve.shapes.client_base import (
+    REPLACE_LAST_SEGMENT,
+    client_base_of,
+    join_url,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 
 
@@ -67,6 +71,32 @@ def test_join_url_follows_ktors_rule():
     )
     # Spec §3g item 1's own example, row 52's pattern.
     assert join_url("https://api.openai.com/v1/", "/chat", rule) == "https://api.openai.com/chat"
+    # Row 83: a protocol-relative address is sent with the base's scheme.
+    assert join_url("https://api.example.com/v1/", "//other.example.com/x/y", rule) == (
+        "https://other.example.com/x/y"
+    )
+    # Row 84: two or more leading slashes start an authority whatever their number, so
+    # `///x/y` is host `x` — not a path under the base's host.
+    assert join_url("https://api.example.com/v1/", "///x/y", rule) == "https://x/y"
+
+
+@pytest.mark.pins("ktor.a-SCHEME-without-a-host-is-not-joined")
+def test_join_url_declines_what_it_does_not_model():
+    """Where Ktor's result is not reproduced, `join_url` answers None and the caller keeps the
+    address unresolved — never the string a scheme-based rule would invent."""
+    rule = REPLACE_LAST_SEGMENT
+    models = "https://generativelanguage.googleapis.com/v1beta/models/"
+    # Row 81: Ktor keeps the request's scheme over the base's host and writes the base's port
+    # explicitly — `gemini-pro://generativelanguage.googleapis.com:443/v1beta/models/
+    # generateContent` — a URL no engine serves, built from `URLProtocol`'s port table.
+    assert join_url(models, "gemini-pro:generateContent", rule) is None
+    # Row 82: the same under a base without a trailing `/` (Ktor sent `…:443/v1beta/
+    # generateContent`).
+    assert join_url(models.removesuffix("/"), "gemini-pro:generateContent", rule) is None
+    # `findScheme` throws on an illegal character before the `:`, so Ktor sends nothing.
+    assert join_url(models, "a b:c", rule) is None
+    # An authority with no host.
+    assert join_url(models, "//", rule) is None
 
 
 def test_join_url_refuses_a_rule_it_does_not_know():
@@ -135,3 +165,14 @@ def test_a_well_formed_client_base_loads(tmp_path: Path):
     """The positive half of the refusals above: the same key, well formed, loads."""
     catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": _LADDER})
     _resolve_fluent(tmp_path, [], catalog)
+
+
+def test_the_shared_reader_refuses_the_retired_word_for_every_style():
+    """`client_base_of` is what `fluent` and `single_call` both call, so the retired
+    `relative_to_client_base` is refused once, for every style declaring the key."""
+    with pytest.raises(CatalogError, match="relative_to_client_base"):
+        client_base_of({"relative_to_client_base": True}, "tests/any.yml")
+    assert client_base_of({}, "tests/any.yml") is None
+    assert client_base_of({"client_base": _LADDER}, "tests/any.yml")["join"] == (
+        REPLACE_LAST_SEGMENT
+    )

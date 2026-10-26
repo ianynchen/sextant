@@ -106,6 +106,16 @@ matches:
   #                                          the address at argument 0 (rows 46, 49)
   # The client is argument 1 of `HttpStatement`'s constructor (row group (b)).
   #
+  # Every rung without `parent` is read the same way, whether it builds the client (the
+  # `HttpClient` factory) or sits inside another rung's block (`defaultRequest`): its
+  # `block_arg` is a block the next rung, or the setter, is looked for in. `parent: receiver`
+  # adds one thing: where its block sets no base, the base is the receiver client's.
+  #
+  # A block calling `url(…)` more than once applies each in order (CP-54 rows 85-86): the base
+  # is the LAST absolute address, and a relative `url(…)` after one moves it — `url("b/")`
+  # after `…/a/` is `…/a/b/`. The reader takes the last absolute one and declines a block
+  # where a relative `url(…)` follows it; that resolution is not modelled.
+  #
   # Not declared, because not measured: the engine-less `HttpClient { … }` and
   # `HttpClient(engine) { … }` factories, `defaultRequest(replace = true) { … }` (row 48's
   # second overload), and the `url { … }` and parts setters (row 46), which carry no string.

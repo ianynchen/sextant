@@ -4825,6 +4825,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "ktor.a-SCHEME-without-a-host-is-not-joined": Guard(
+        what="`join_url` declines an address with a scheme and no host (`gemini-pro:x`), "
+        "where Ktor's early return tests for a HOST",
+        why="Ktor sends `gemini-pro:generateContent` over a `…/models/` base as "
+        "`gemini-pro://…:443/v1beta/models/generateContent` (CP-54 rows 81-82). Returned "
+        "unchanged because it carries a scheme, the row publishes `gemini-pro:generateContent` "
+        "as an absolute address Ktor never sends",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    if scheme is not None:\n        return None\n",
+                replace="    if scheme is not None:  # guard disabled by scripts/guard_check.py\n"
+                "        return relative\n",
+            ),
+        ),
+    ),
     "ktor.the-join-follows-KTORS-rule-not-concatenation": Guard(
         what="`join_url`'s `replace_last_segment` is Ktor's `DefaultRequest` merge, not "
         "the base and the relative address concatenated",

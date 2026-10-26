@@ -6,7 +6,7 @@ relative call to the base JOINED with the call's own address, and the join is th
 rule, not ours (DR-6). Two halves live here, so the `fluent` client catalog and Task 6's
 `single_call` WebSocket and SSE catalogs share one copy of each:
 
-- **`validated_client_base`**, the key's shape, refused at load. It says where the client
+- **`client_base_of`**, the key read and its shape refused at load. It says where the client
   sits at the call that issues it (`client_arg`), the configuration calls a base is set
   through (`ladder`, each with the argument holding its block), the call inside the last
   block that sets the base (`setter`), and which join applies (`join`). All of it is catalog
@@ -45,9 +45,29 @@ _SETTER_KEYS = {"owner", "method", "value_arg", "descriptor"}
 _PARENTS = ("receiver",)
 
 
-def validated_client_base(declared: Any, source: object) -> Mapping[str, Any] | None:
-    """`matches.client_base`, refused unless every part is readable; None where the catalog
-    declares none. `source` names the catalog file in the refusal."""
+# The interim word Task 4 shipped, folded into `client_base`: declaring where the base is set
+# is what says a relative address is relative to it.
+_RETIRED = "relative_to_client_base"
+
+
+def client_base_of(matches: Mapping[str, Any], source: object) -> Mapping[str, Any] | None:
+    """A catalog's `matches.client_base`, validated, or None where it declares none — the one
+    reader every style declaring the key calls (`fluent` and `single_call`), so the refusals
+    are written once. `source` names the catalog file in a refusal.
+
+    The retired `relative_to_client_base` is refused rather than ignored, so a catalog still
+    spelling it does not load as one whose relative rows read `resolved`."""
+    if _RETIRED in matches:
+        raise CatalogError(
+            f"loading catalog {source}: `{_RETIRED}` is folded into `client_base` (D02 §2's "
+            f"`fluent` style), which declares where the client's base is set; declare that "
+            f"instead"
+        )
+    return _validated(matches.get("client_base"), source)
+
+
+def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
+    """`client_base`, refused unless every part is readable; None where it is absent."""
     if declared is None:
         return None
     where = f"loading catalog {source}: `client_base`"
@@ -101,8 +121,10 @@ def _index(value: Any, where: str) -> None:
         raise CatalogError(f"{where} is an argument index, a non-negative integer, got {value!r}")
 
 
-def join_url(base: str, relative: str, rule: str) -> str:
-    """`relative` sent from a client whose base is `base`, under the framework's `rule`.
+def join_url(base: str, relative: str, rule: str) -> str | None:
+    """`relative` sent from a client whose base is `base`, under the framework's `rule` — or
+    None where the join DECLINES: the address is one whose result is not modelled, and the
+    caller keeps it unresolved rather than publishing a string the framework never sends.
 
     Only `replace_last_segment` exists. A client with no base at all is the caller's case:
     Ktor's request builder then takes its origin, `http://localhost` (CP-54 rows 50, 57), and
@@ -112,14 +134,24 @@ def join_url(base: str, relative: str, rule: str) -> str:
     return _replace_last_segment(base, relative)
 
 
-def _replace_last_segment(base: str, relative: str) -> str:
+def _replace_last_segment(base: str, relative: str) -> str | None:
     """Ktor 3.6.0's `DefaultRequest$Plugin.mergeUrls(defaultUrl, requestUrl)`, read off the
     bytecode of `ktor-client-core` 3.6.0, with the parsing its two inputs went through
-    (`ktor-http` 3.6.0's `URLParserKt.takeFromUnsafe` and `URLBuilderKt.setEncodedPath`):
+    (`ktor-http` 3.6.0's `URLParserKt.takeFromUnsafe`, `findScheme` and
+    `URLBuilderKt.setEncodedPath`):
 
-    - a request carrying a host is returned as it is (`mergeUrls` bytecode 15-38): an
-      absolute address ignores the base (row 55). A request with no scheme takes the base's
-      first (0-12), which is what a `//host/…` address gets;
+    - **the early return is on a HOST, not a scheme** (`mergeUrls` bytecode 15-38): a request
+      carrying a host is left as Ktor parsed it. Here it is returned AS WRITTEN — Ktor
+      re-renders it (a default port dropped, say), which is not modelled. A request carrying
+      no scheme takes the base's first (0-12), so a protocol-relative `//host/x` is sent with
+      the base's scheme (CP-54 row 83). Two or more leading slashes start an authority
+      whatever their number (`takeFromUnsafe` 461-643), so `///x/y` is host `x` (row 84);
+    - **a scheme and no host DECLINES**: `gemini-pro:generateContent` keeps its own scheme
+      over the base's host, and Ktor writes the base's port explicitly because the new
+      scheme's default differs — `gemini-pro://…:443/v1beta/models/generateContent` (rows
+      81-82). Reproducing that needs `URLProtocol`'s default-port table, and the result is a
+      URL no engine serves, so it is not published. So does a scheme `findScheme` refuses
+      (an illegal character before the `:`; Ktor throws), and an authority with no host;
     - the path is `concatenatePath(base segments, request segments)` (75-91);
     - the fragment is the request's where it has one, the base's otherwise (94-124);
     - the query is the REQUEST's parameters, then each of the base's whose name the request
@@ -130,12 +162,22 @@ def _replace_last_segment(base: str, relative: str) -> str:
     (an address as the code writes it is kept as written), user info and port in the
     REQUEST (a relative address has neither), and a trailing `?` with no parameters.
     """
+    scheme, refused = _scheme_of(relative)
+    if refused:
+        return None
+    rest = relative if scheme is None else relative[len(scheme) + 1 :]
+    slashes = len(rest) - len(rest.lstrip("/"))
+    if slashes >= 2:
+        authority = rest[slashes:]
+        if not authority or authority[0] in "/?#":
+            return None
+        if scheme is not None:
+            return relative
+        return f"{urlsplit(base).scheme}://{authority}"
+    if scheme is not None:
+        return None
     request = urlsplit(relative)
-    if request.scheme:
-        return relative
     origin = urlsplit(base)
-    if request.netloc:
-        return urlunsplit((origin.scheme, *request[1:]))
     segments = _concatenate_path(
         _encoded_segments(origin.path),
         _request_segments(request.path, relative[len(request.path) : len(request.path) + 1]),
@@ -154,6 +196,26 @@ def _replace_last_segment(base: str, relative: str) -> str:
     )
 
 
+def _scheme_of(address: str) -> tuple[str | None, bool]:
+    """`URLParserKt.findScheme`, as `(scheme, refused)`: the text before the first `:`,
+    unless a `/`, `?` or the fragment's mark comes first (no scheme). A scheme starts with a
+    letter and continues with letters, digits, `+`, `-` or `.`; any other character before
+    the `:` makes Ktor throw `Illegal character in scheme`, answered `refused`."""
+    illegal = False
+    for position, character in enumerate(address):
+        if character == ":":
+            if illegal or position == 0:
+                return None, True
+            return address[:position], False
+        if character in "/?#":
+            return None, False
+        allowed = character.isascii() and (
+            character.isalpha() or (position and (character.isdigit() or character in "+-."))
+        )
+        illegal = illegal or not allowed
+    return None, False
+
+
 def _encoded_segments(path: str) -> list[str]:
     """`URLBuilderKt.setEncodedPath`, how the base's path becomes segments: blank is none,
     `/` is the root (`ROOT_PATH`, one empty segment), anything else splits on `/`."""
@@ -167,8 +229,9 @@ def _encoded_segments(path: str) -> list[str]:
 def _request_segments(path: str, follows: str) -> list[str]:
     """`URLParserKt.takeFromUnsafe` on a fresh request builder (no segments yet), how a
     relative address becomes segments; `follows` is the character after the path — `?`, the
-    fragment's mark, or empty at the end. The leading slashes are counted first: one `/`
-    roots the path (`ROOT_PATH` before the rest, bytecode 892-918), none leaves it relative.
+    fragment's mark, or empty at the end. Called with none or one leading slash only — two
+    or more start an authority (`_replace_last_segment`). One `/` roots the path (`ROOT_PATH`
+    before the rest, bytecode 892-918; CP-54 row 52), none leaves it relative.
     With no path text after them, an address that ends there is the root where it is slashes
     (646-673), and one a query or fragment follows is the root only for a `?` with no slash
     before it (943-989).
@@ -179,8 +242,7 @@ def _request_segments(path: str, follows: str) -> list[str]:
         if not follows:
             return [""] if slashes else []
         return [""] if not slashes and follows == "?" else []
-    chunks = [""] if rest == "/" else rest.split("/")
-    return ([""] if slashes == 1 else []) + chunks
+    return ([""] if slashes == 1 else []) + rest.split("/")
 
 
 def _concatenate_path(parent: list[str], child: list[str]) -> list[str]:

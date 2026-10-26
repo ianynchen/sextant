@@ -1929,12 +1929,25 @@ client_base:
 | `setter` | `{owner, method, value_arg, descriptor?}`: the call inside a block that sets the base, with the address at `value_arg` |
 | `join` | the framework's rule for joining a relative address onto the base, one of `shapes/client_base.py`'s rules. A rule is named for what it does, never for a framework: the code that implements it may not name one (`tests/architecture/test_source_rules.py`), and the catalog choosing it is where the framework is named |
 
+**How the ladder is read.** Every rung without `parent` is read the same way, whether it
+builds the client (Ktor's `HttpClient` factory) or sits inside another rung's block
+(`defaultRequest`): its `block_arg` is a block the next rung, or the setter, is looked for in.
+`parent: receiver` adds one thing: where its block sets no base, the base is the receiver
+client's (CP-54 row 80). A block calling the setter more than once applies each in order (rows
+85-86): the base is the LAST absolute address, and a relative one after it moves it, which is
+not modelled — the reader declines such a block rather than choosing one.
+
 **`replace_last_segment`** is the join Ktor 3.6.0's `DefaultRequest$Plugin.mergeUrls` makes, read off its
 bytecode and checked against every CP-54 row (g) join (rows 51-60), never concatenation: an
 absolute address ignores the base; a path starting with `/` replaces the base's path; any other
 path replaces the base's LAST segment, so `…/v1` plus `orders` is `…/orders` and `…/v1/` plus
 `orders` is `…/v1/orders`; the call's query comes first and each base parameter the call does
-not name follows it.
+not name follows it. Ktor's early return is on a HOST, not a scheme: two or more leading slashes
+start an authority (`//h/x` and `///x/y` take the base's scheme alone, rows 83-84), and an
+address with a scheme and no host (`gemini-pro:generateContent`) keeps its scheme over the
+base's host (rows 81-82). That last case, an address `findScheme` refuses, and an authority with
+no host all DECLINE: `join_url` answers None and the caller keeps the address unresolved. An
+absolute address is returned as written, where Ktor re-renders it.
 
 **What it does today.** Reading a client's construction through the ladder is not built: the
 value walk answers what a value is, never which call built it, and a client held in a field or a

@@ -521,7 +521,7 @@ def main(argv: list[str]) -> int:
                 f"the jar's manifest states {jars[key][1]!r}"
             )
     for entry in ran:
-        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH", "DERIVED") and (
+        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH", "DERIVED", "JOIN", "TWICE") and (
             entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")
         ):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
@@ -806,6 +806,26 @@ def main(argv: list[str]) -> int:
                 "client",
                 f"parent base `{parent}`, derived client's own base `{child}`, call "
                 f'`get("{relative}")` -> Ktor sent `{result}`',
+            )
+
+    # (j) joins (g) does not cover, and a block setting the base twice
+    for entry in ran:
+        if entry[0] == "JOIN":
+            _, label, base, relative, result = entry
+            sent = result if result.startswith("Ktor threw") else f"Ktor sent `{result}`"
+            emit(
+                f"`DefaultRequest` join: {label} (j)",
+                "client",
+                f'base `{base}`, call `get("{relative}")` -> {sent}',
+            )
+    for entry in ran:
+        if entry[0] == "TWICE":
+            _, label, first, second, relative, result = entry
+            emit(
+                f"`defaultRequest {{ url(…); url(…) }}`: {label} (j)",
+                "client",
+                f'`url("{first}")` then `url("{second}")`, call `get("{relative}")` -> '
+                f"Ktor sent `{result}`",
             )
     return 0
 
