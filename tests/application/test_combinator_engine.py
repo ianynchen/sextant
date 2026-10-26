@@ -7057,3 +7057,348 @@ def test_requirement_words_of_the_wrong_shape_are_refused(tmp_path: Path):
         matches["vocabulary"]["request_requirement"] = broken  # type: ignore[index]
         with pytest.raises(CatalogError):
             _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- WebSocket and SSE routes in the routing tree (spec 2026-10-26 §3b, §3g item 5) ------
+
+_WEBSOCKET_ROUTING = "io/ktor/server/websocket/RoutingKt#"
+_SSE_ROUTING = "io/ktor/server/sse/RoutingKt#"
+_JVM_STRING = "Ljava/lang/String;"
+_JVM_FN2 = "Lkotlin/jvm/functions/Function2;"
+# The `serialize` lambda of the SSE overloads that take one — a plain `Function2`, linked
+# as a `lambda` (CP-54 row 18); never the handler.
+_SERIALIZE = DECLARER + "orders$lambda$9(sig_z0)."
+
+
+def _session(
+    owner: str, name: str, between: list[tuple[str, CallArgument]], *, mask: int | None = None
+) -> tuple[str, str, list[tuple[str, CallArgument]], int | None]:
+    """One WebSocket or SSE route call as it is written inside a block: its owner and JVM
+    name, the `(type, argument)` pairs between the receiver and the handler, and — for a
+    `$default` bridge — the mask the compiler passes (CP-54 rows 19-27)."""
+    return (owner, name, between, mask)
+
+
+def _session_call(
+    body: str,
+    ordinal: int,
+    call: tuple[str, str, list[tuple[str, CallArgument]], int | None],
+) -> CallSiteFact:
+    """`invokestatic <owner>.<name>(this, …, handler[, mask, null])` on the block's own
+    parameter, the handler a `SuspendLambda` instance, the descriptor composed from the
+    declared types — a `$default` bridge adds the `int` mask and the `Object` marker the
+    Kotlin compiler always appends (CP-54 rows 19, 21, 23, 27)."""
+    owner, name, between, mask = call
+    types = "".join(jvm_type for jvm_type, _ in between) + _JVM_FN2
+    arguments = [
+        CallArgument(kind="parameter", value=0),
+        *(argument for _, argument in between),
+        CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50),
+    ]
+    if mask is not None:
+        types += "ILjava/lang/Object;"
+        arguments += [CallArgument(kind="int", value=mask), CallArgument(kind="null")]
+    return _site(
+        body,
+        ordinal,
+        owner,
+        name,
+        result=ordinal + 100,
+        descriptor=f"({_ROUTE}{types}){_ROUTE}",
+        arguments=arguments,
+    )
+
+
+def _sessions_under(*blocks: tuple[str, list[CallArgument], list]) -> list:
+    """`routing { <selector>(…) { <session calls> } … }` — `route3` is the plain
+    `route(path) { }`, every other name a `_SELECTOR_DESCS` selector."""
+    facts = _routing_entry()
+    for index, (name, between, calls) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        descriptor = _ROUTE_DESC if name == "route3" else _SELECTOR_DESCS[name]
+        facts.append(
+            _selector(
+                10 + index,
+                "route" if name == "route3" else name,
+                between,
+                body=body,
+                descriptor=descriptor,
+            )
+        )
+        facts.extend(_session_call(body, ordinal, call) for ordinal, call in enumerate(calls))
+    return facts
+
+
+def _protocol_identities(rows: list[dict]) -> list[tuple]:
+    """`_identities` with the row's protocol in front: these rows differ from the catalog's
+    own `http` rows in exactly that column."""
+    return [
+        (row["protocol"], row["method"], row["path"], row["handler"], row["resolution"])
+        for row in rows
+    ]
+
+
+def _web_socket_default(path: str) -> tuple:
+    """`webSocket("/x") { }` — `webSocket$default` with mask 2, the protocol left to its
+    default (CP-54 rows 19, 27)."""
+    return _session(
+        _WEBSOCKET_ROUTING,
+        "webSocket$default",
+        [(_JVM_STRING, _literal(path)), (_JVM_STRING, CallArgument(kind="null"))],
+        mask=2,
+    )
+
+
+@pytest.mark.pins("ktor.a-WEBSOCKET-route-is-a-verbless-inbound-row")
+def test_a_ktor_websocket_route_nests_under_its_prefix(tmp_path: Path):
+    """Spec 2026-10-26 §3b. `routing { route("/api") { webSocket("/chat") { } } }` is ONE
+    inbound `websocket` row at `/api/chat`, `method` NULL, resolved: the WebSocket verb
+    nests through the same `route` prefix every HTTP verb does, and its row carries the
+    rule's own protocol instead of the catalog's `http`. No verb is in scope under the
+    bare `route`, and the route is still one row — a verbless rule is never expanded
+    through `all_methods`, which would be seven HTTP-verbed WebSocket rows. The direct
+    four-argument `webSocket(path, protocol)` and `webSocketRaw(path)` read the same way
+    (CP-54 rows 16, 17, 20, 23)."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _web_socket_default("/chat"),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket",
+                    [(_JVM_STRING, _literal("/proto")), (_JVM_STRING, _literal("chat"))],
+                ),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw$default",
+                    [(_JVM_STRING, _literal("/raw")), (_JVM_STRING, CallArgument(kind="null"))],
+                    mask=2,
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api/chat", handler, "resolved"),
+        ("websocket", None, "/api/proto", handler, "resolved"),
+        ("websocket", None, "/api/raw", handler, "resolved"),
+    ]
+    assert {row["direction"] for row in rows} == {"inbound"}
+
+
+@pytest.mark.pins("ktor.an-SSE-route-is-a-get-sse-row")
+def test_a_ktor_sse_route_is_a_get_sse_row(tmp_path: Path):
+    """Spec 2026-10-26 §3b, §3g item 5. `routing { route("/api") { sse("/events") { } } }`
+    is one inbound `sse` row, `GET /api/events`: `sse(path, handler)` is
+    `route(path, HttpMethod.Get) { … }` (read off the 3.6.0 jar), so the row carries GET as
+    the JAX-RS SSE rows do. The serializer overload with a path, `sse(path, serialize,
+    handler)`, is the same route; its handler is argument 3, never the serializer at 2
+    (CP-54 rows 18, 25, 27)."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _session(_SSE_ROUTING, "sse", [(_JVM_STRING, _literal("/events"))]),
+                _session(
+                    _SSE_ROUTING,
+                    "sse",
+                    [
+                        (_JVM_STRING, _literal("/typed")),
+                        (_JVM_FN2, CallArgument(kind="lambda", symbol=_SERIALIZE, captures=0)),
+                    ],
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("sse", "GET", "/api/events", handler, "resolved"),
+        ("sse", "GET", "/api/typed", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.a-websocket-under-a-verb-scope-is-NOT-expanded")
+def test_a_websocket_route_under_a_verb_scope_stays_one_verbless_row(tmp_path: Path):
+    """Spec 2026-10-26 §3g item 5. A verbless route never takes the verb of the scope it
+    is written in: `method(HttpMethod.Post) { webSocket("/ws") { } }` is ONE `websocket`
+    row with `method` NULL — not `POST`, not dropped as a verb that disagrees with the
+    scope (the A2 silence is for two verbs, and a WebSocket route has none). The four-
+    argument `route("/v", HttpMethod.Put) { webSocket("/in") { } }` is the same, and so is
+    a scope whose verb could not be read (`method(Constants.WEIRD)`): the scope's verb,
+    read or unread, is not the row's."""
+    facts = _sessions_under(
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Post.")],
+            [_web_socket_default("/ws")],
+        ),
+        (
+            "route",
+            [_literal("/v"), CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Put.")],
+            [_web_socket_default("/in")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_UNKNOWN_GETTERS + "WEIRD.")],
+            [_web_socket_default("/odd")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/odd", handler, "resolved"),
+        ("websocket", None, "/v/in", handler, "resolved"),
+        ("websocket", None, "/ws", handler, "resolved"),
+    ]
+
+
+def test_the_websocket_protocol_overload_is_not_read_as_a_path(tmp_path: Path):
+    """CP-54 rows 16-17, 21-22. In the three-argument `webSocket(Route, String, Function2)`
+    argument 1 is the PROTOCOL, not a path: `webSocket(protocol = "chat") { }` under
+    `route("/api")` serves `/api` itself, never `/api/chat`. The same holds for its
+    `$default` bridge (`webSocket { }`, mask 1), for `webSocketRaw(protocol) { }`, and for
+    `webSocketRaw(protocol, negotiateExtensions)`, which shares arity 4 with
+    `webSocketRaw(path, protocol)` and is told apart by the `boolean` at argument 2."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _session(_WEBSOCKET_ROUTING, "webSocket", [(_JVM_STRING, _literal("chat"))]),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket$default",
+                    [(_JVM_STRING, CallArgument(kind="null"))],
+                    mask=1,
+                ),
+                _session(_WEBSOCKET_ROUTING, "webSocketRaw", [(_JVM_STRING, _literal("raw"))]),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw",
+                    [
+                        (_JVM_STRING, _literal("ext")),
+                        ("Z", CallArgument(kind="boolean", value=True)),
+                    ],
+                ),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw",
+                    [(_JVM_STRING, _literal("/pathed")), (_JVM_STRING, _literal("chat"))],
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api", handler, "resolved"),
+        ("websocket", None, "/api/pathed", handler, "resolved"),
+    ]
+    assert len(rows) == 2
+
+
+def test_a_pathless_sse_route_is_the_handle_it_compiles_to(tmp_path: Path):
+    """`sse { }` carries no path and, read off the 3.6.0 jar, no verb either: it is
+    `processSSE`, which installs the plugin and calls `handle { }` on the receiver itself —
+    no `route(path, HttpMethod.Get)` around it, unlike `sse(path)`. So it reads as the
+    verb-less terminal `handle` does: under `method(HttpMethod.Get)` it is `GET /`, and
+    under a bare `route("/stream")` it serves every verb `all_methods` lists, one `sse` row
+    each. The serializer overload `sse(serialize, handler)`, arity 3 like `sse(path,
+    handler)`, is told apart by argument 1's type (CP-54 row 18)."""
+    facts = _sessions_under(
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Get.")],
+            [_session(_SSE_ROUTING, "sse", [])],
+        ),
+        (
+            "route3",
+            [_literal("/stream")],
+            [
+                _session(
+                    _SSE_ROUTING,
+                    "sse",
+                    [(_JVM_FN2, CallArgument(kind="lambda", symbol=_SERIALIZE, captures=0))],
+                )
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("sse", "DELETE", "/stream", handler, "resolved"),
+        ("sse", "GET", "/", handler, "resolved"),
+        ("sse", "GET", "/stream", handler, "resolved"),
+        ("sse", "HEAD", "/stream", handler, "resolved"),
+        ("sse", "OPTIONS", "/stream", handler, "resolved"),
+        ("sse", "PATCH", "/stream", handler, "resolved"),
+        ("sse", "POST", "/stream", handler, "resolved"),
+        ("sse", "PUT", "/stream", handler, "resolved"),
+    ]
+
+
+def test_http_routes_are_unchanged(tmp_path: Path):
+    """The HTTP verbs beside the new ones keep their protocol and their verbs: in one
+    `route("/api") { get("/orders"); webSocket("/chat"); sse("/events"); get("/events") }`
+    the two `get`s are `http` GET rows, and the `http` and `sse` rows at the SAME
+    `GET /api/events` are two endpoints — the protocol is part of the identity the batch
+    deduplicates on, so neither swallows the other."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _web_socket_default("/chat"),
+                _session(_SSE_ROUTING, "sse", [(_JVM_STRING, _literal("/events"))]),
+            ],
+        ),
+    )
+    body = _selector_body(0)
+    facts.append(_verb_in(body, 2, "get", "/orders"))
+    facts.append(_verb_in(body, 3, "get", "/events"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("http", "GET", "/api/events", handler, "resolved"),
+        ("http", "GET", "/api/orders", handler, "resolved"),
+        ("sse", "GET", "/api/events", handler, "resolved"),
+        ("websocket", None, "/api/chat", handler, "resolved"),
+    ]
+
+
+def test_a_verb_rules_protocol_is_validated(tmp_path: Path):
+    """A verb rule's `protocol` is one of D00's protocols — a misspelt one would publish
+    rows under a protocol nothing links — and sits on a verb rule alone: a prefix or an
+    entry registers no route of its own to carry it."""
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verbs"][0]["protocol"] = "web-socket"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="protocol"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["prefixes"][0]["protocol"] = "websocket"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="protocol"):
+        _resolve(tmp_path, [], _catalog(matches))

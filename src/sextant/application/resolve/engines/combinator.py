@@ -38,7 +38,13 @@ is therefore a fold over that tree rather than a walk along a line.
   A verb rule may read its verb off the call instead — `verb_arg`, an enum
   member's name, a string literal as written, or an array of those, one
   branch per element — and any path position may hold an array of string
-  literals, likewise one branch per element (spec §12 words 4–5). A PREFIX may set
+  literals, likewise one branch per element (spec §12 words 4–5). A verb rule
+  may also name the `protocol` its rows carry, where the framework registers
+  another protocol through the same tree (spec 2026-10-26 §3b: a WebSocket or
+  SSE route under the HTTP prefixes), and `verb: none` for a route that has no
+  verb at all: a VERBLESS route never takes the verb of the scope it sits in,
+  is never dropped as disagreeing with it, and is never expanded through
+  `all_methods` (§3g item 5). A PREFIX may set
   more than a path (spec 2026-09-19 §4b): `verb_arg` sets the verb of every route
   beneath it — a route beneath carrying a DIFFERENT verb is a node the framework
   registers and never dispatches, and derives NOTHING (A2) — `media_arg` + `fills`
@@ -188,6 +194,7 @@ from sextant.application.resolve.shapes.member_values import (
     static_field_value,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.domain.closed_sets import Protocol
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -222,6 +229,10 @@ _STATIC = "static"
 # misspelling is refused at load rather than read as absent — which would leave the
 # thread-local builder's helpers silently unfollowed, the outcome the word prevents.
 _FOLLOW_ALL = "all"
+# `verb: none` (spec 2026-10-26 §3g item 5): a verb rule whose route carries NO verb — a
+# WebSocket route — as opposed to `verb: null`, a rule that names none of its own and takes
+# what its predicate or scope supplies. Named so the two are never confused in the fold.
+_NO_VERB = "none"
 # How many helper calls deep a walk follows before it stops and asks (§4a): a bound,
 # not a budget — the frameworks' own documented structures nest three or four deep,
 # and a chain this long is where a walk that never returns is stopped. Exhausting it
@@ -233,6 +244,10 @@ _ROUTING_DEPTH = "routing_depth"
 # discovered at derive time: a typo here silently mislabels every media value
 # a catalog reads (`ports/catalogs.py`'s own discipline).
 _MEDIA_FIELDS = ("consumes", "produces")
+# The values a verb rule's `protocol` may name (spec 2026-10-26 §3b) — D00's closed set,
+# checked at load for the reason `_MEDIA_FIELDS` is: a misspelt protocol files every row
+# the rule derives under a word nothing links.
+_PROTOCOLS = frozenset(member.value for member in Protocol)
 
 # A `request_requirement`'s two closed sets (spec 2026-09-19 §5a): what KIND of thing a
 # route demands, and what the framework enforces about it. Validated at load for the
@@ -341,6 +356,13 @@ class _Route:
     # written per emitted row to the `route_requirements` stash (`run`) — never part of
     # the route's identity, so two routes differing only here are still one address.
     requirements: tuple["_Requirement", ...] = ()
+    # The protocol the declaring verb rule names (spec 2026-10-26 §3b), None for the
+    # catalog's own: a WebSocket or SSE route folds through the same prefixes as an HTTP
+    # one and differs from it in this column of its row alone.
+    protocol: str | None = None
+    # A route from a `verb: none` rule (§3g item 5): it has no verb, so a scope's verb is
+    # never merged into it, never disagrees with it, and `all_methods` never fans it out.
+    verbless: bool = False
 
 
 @dataclass(frozen=True)
@@ -1674,16 +1696,22 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     string case-sensitively and otherwise keeps it as handed, so a spelling this
     engine changed would be one the framework never matches; or an array of
     those, a vararg, one branch per element. Anything else there — a variable, an
-    array holding one, an empty array — poisons `method` alone."""
+    array holding one, an empty array — poisons `method` alone. A rule declaring
+    `verb: none` is VERBLESS (spec 2026-10-26 §3g item 5) — a WebSocket route — and
+    one declaring `protocol` stamps it on every branch (§3b)."""
     if not _receiver_argument_is_the_origin(site, rule, scope):
         return [_Route(poisons=_IDENTITY_POISON)]
     arguments = site["arguments"]
     if "verb_arg" in rule:
         verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]), scope)
         branches = [_Route(verb=verb) for verb in verbs] or [_Route(poisons=(_METHOD,))]
+    elif rule.get("verb") == _NO_VERB:
+        branches = [_Route(verbless=True)]
     else:
         verb = rule.get("verb")
         branches = [_Route(verb=None if verb is None else str(verb))]
+    if "protocol" in rule:
+        branches = [replace(branch, protocol=str(rule["protocol"])) for branch in branches]
     if "path" in rule:
         branches = [_merged(branch, _Route(path_parts=(str(rule["path"]),))) for branch in branches]
     if "path_arg" in rule:
@@ -1965,9 +1993,18 @@ def _merged(left: _Route, right: _Route) -> _Route:
     against the predicate's, and `GET` and `GET` is `GET`. (`or` never reaches
     here: its branches stay separate routes, which is precisely how two verbs
     on one path are expressed.)
+
+    A VERBLESS route (`verb: none`, spec 2026-10-26 §3g item 5) has no verb for a
+    scope to give it or to disagree with: whatever verb the other side carries —
+    read, or poisoned unreadable — is not its own, so the merge keeps `method`
+    NULL and unpoisoned. The other columns fold as they always do.
     """
     poisons = _union(left.poisons, right.poisons)
-    if _METHOD in poisons or (
+    verbless = left.verbless or right.verbless
+    if verbless:
+        verb = None
+        poisons = tuple(poison for poison in poisons if poison != _METHOD)
+    elif _METHOD in poisons or (
         left.verb is not None and right.verb is not None and left.verb != right.verb
     ):
         verb = None
@@ -1982,6 +2019,8 @@ def _merged(left: _Route, right: _Route) -> _Route:
         handler=left.handler if left.handler is not None else right.handler,
         poisons=poisons,
         requirements=_appended(left.requirements, right.requirements),
+        protocol=left.protocol if left.protocol is not None else right.protocol,
+        verbless=verbless,
     )
 
 
@@ -2025,7 +2064,7 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
     """One folded route as an endpoint row, media still held as lists — the
     union below needs them comparable before they become JSON text."""
     return {
-        "protocol": catalog.protocol,
+        "protocol": route.protocol or catalog.protocol,
         "direction": catalog.direction,
         "method": None if _METHOD in route.poisons else route.verb,
         "path": _path_of(route, catalog),
@@ -2052,8 +2091,10 @@ def _fanned(route: _Route, context: _TreeContext) -> list[_Route]:
     requirements. On a catalog declaring no `all_methods` the route is itself, `method`
     NULL and resolved, exactly as the builder's `route(predicate, handler)` has always
     read; a poisoned route is itself too — its verb was written and could not be read,
-    and fanning it out would present the poison as seven facts."""
-    if route.verb is not None or route.poisons or not context.all_methods:
+    and fanning it out would present the poison as seven facts. A VERBLESS route
+    (`verb: none`) is itself too: it read no verb because it has none, which is not a
+    route that serves every verb (spec 2026-10-26 §3g item 5)."""
+    if route.verb is not None or route.verbless or route.poisons or not context.all_methods:
         return [route]
     return [replace(route, verb=verb) for verb in context.all_methods]
 
@@ -2091,10 +2132,12 @@ def _path_of(route: _Route, catalog: Catalog) -> str | None:
     (ruling R8: a client's slashless mapping is resolved against its base
     address's path, so prefixing one rewrites an address rather than
     normalizing a spelling), and the gate is the CATALOG's protocol and
-    direction rather than the row's: both are still the catalog's at this
-    point (`protocol_hint` reclassifies later, which is how an SSE row
-    inherits this without naming `sse` here, and D02 §3's merge mints `both`
-    later still).
+    direction rather than the row's (`protocol_hint` reclassifies later, which
+    is how an SSE row inherits this without naming `sse` here, and D02 §3's
+    merge mints `both` later still). A verb rule's own `protocol` (spec
+    2026-10-26 §3b) does not move the gate either: a Ktor WebSocket or SSE
+    route is registered through the same routing tree as the catalog's HTTP
+    routes, at a URL the same server serves, so it is spelled as they are.
 
     A route that folded NO path part and was not poisoned is a catch-all — a
     verb with only a handler, or a media-only predicate — and it serves EVERY
@@ -2145,7 +2188,7 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
     for row in _media_unioned(rows):
         if row["path"] is not None:
             key = (
-                catalog.protocol,
+                row["protocol"],
                 catalog.direction,
                 row["method"] or "",
                 row["path"],
@@ -2325,6 +2368,15 @@ def _validate_matches(catalog: Catalog) -> None:
                     f"continuation (D02 §2's `combinator` style)"
                 )
             _validate_requirement(rule["request_requirement"], rule, name, catalog)
+        # Spec 2026-10-26 §3b: a verb rule may name the protocol its rows carry. Only a
+        # verb rule registers a route of its own; a prefix, an entry or a continuation
+        # scopes or carries routes and has no row to stamp.
+        if "protocol" in rule and (role != "verbs" or rule["protocol"] not in _PROTOCOLS):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{name}` declares "
+                f"`protocol: {rule.get('protocol')!r}` — one of {sorted(_PROTOCOLS)}, on a "
+                f"verb rule alone (D02 §2's `combinator` style)"
+            )
         if "terminal" in rule and role != "verbs":
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares `terminal` — a "

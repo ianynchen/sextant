@@ -2465,6 +2465,26 @@ framework:**
   receiver node itself, `/` at the routing root, never `/**`. **Every OTHER verb rule must
   say its verb**: a non-terminal rule with neither `verb` nor `verb_arg` is refused at load,
   where it used to be read silently as `verb: null`.
+- **A verb rule may name its own `protocol`, and `verb: none`** (spec 2026-10-26 §3b, §3g
+  item 5). A framework that registers another protocol through the SAME routing tree — Ktor's
+  `webSocket`, `webSocketRaw` and `sse`, static extensions on `Route` written inside the same
+  blocks as `get` — declares those calls as `verbs` rules carrying **`protocol:`**, one of
+  [D00](D00-fact-schema.md)'s protocols: the rows they derive carry it in place of the
+  catalog's own, and they nest through the catalog's one `entries` and `prefixes` list, never
+  a copy per protocol. The protocol is part of the identity the batch deduplicates on, so an
+  `sse` and an `http` `GET /x` are two rows. **`verb: none`** — distinct from `verb: null`,
+  which takes what the predicate or scope supplies — is a VERBLESS route, as a WebSocket
+  route is (every shipped WebSocket catalog is verbless, `all_methods: []`): it never takes
+  the verb of the scope it sits in, is never dropped as disagreeing with it (the A2 silence
+  is for two verbs), keeps `method` NULL and unpoisoned under a scope whose verb could not be
+  read, and is never fanned out through `all_methods`. So `method(HttpMethod.Post) {
+  webSocket("/ws") { } }` is one verbless `websocket` row, and a `webSocket` under a bare
+  `route` is one row, not seven. A rule naming a fixed `verb` with a `protocol` (`sse(path)`,
+  `verb: GET`) folds as any verb does, the A2 silence included; a `terminal` may carry a
+  `protocol` too (the path-less `sse { }`, which is `handle { }`). The path canonicalisation
+  stays gated on the CATALOG's protocol (ruling R8): those routes are URLs the same server
+  serves. `protocol` on anything but a verb rule, or naming no D00 protocol, is refused at
+  load.
 - **Helper following and `follow_calls`** (spec 2026-09-19 §4a). A call inside a linked
   body that no catalog word claims, whose target is a module-local method with a body, is
   FOLLOWED when the body's origin flows into it as an ARGUMENT `{kind: parameter, value:

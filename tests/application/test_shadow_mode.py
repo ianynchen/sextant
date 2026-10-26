@@ -271,6 +271,11 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # real topic names" — so the two rows were aligned with the rule rather than the rule bent
 # to them. One fixture row converts, `unresolved` -> `resolved`; the other row's overload
 # no fixture exercises.
+# **`ktor-routing` moved (33, 71) -> (49, 111) on 2026-10-26** (spec 2026-10-26 §3b): sixteen
+# verb rules for Ktor's `webSocket`, `webSocketRaw` and `sse` routes and their `$default`
+# bridges, one ask each — `receiver_arg` and `handler_arg` on every one, `path_arg` on the
+# eight that carry a path (+16 asks, +40 slots). Nothing was re-spelled; the reader reads
+# these positions as it reads `get`'s.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -291,7 +296,7 @@ _ASKS_PER_CATALOG = {
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
     "kafka-streams-topology": (5, 5),
-    "ktor-routing": (33, 71),
+    "ktor-routing": (49, 111),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
     "spring-cloud-gateway": (14, 20),
@@ -344,8 +349,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # accounts for, three catalogs at two rows each. **-16 on 2026-10-16**: eight
     # `createQueue` entries off each JMS catalog's `Topic`-typed rows, for the reason the
     # comment above `_ASKS_PER_CATALOG` measures. **+2 on 2026-10-17**: the two
-    # `spring-integration-kafka` `Pattern` rows, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 799
+    # `spring-integration-kafka` `Pattern` rows, same comment. **+16 on 2026-10-26**: the
+    # `ktor-routing` WebSocket and SSE rules, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 815
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
