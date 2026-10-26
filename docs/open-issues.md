@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-205 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-206 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -196,7 +196,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-188 | [SEXTANT-49](https://app.plane.so/portolan/browse/SEXTANT-49/) | an `@GrpcClient` on a METHOD (net.devh setter injection) joins no stub type and derives nothing |
 | OI-189 | [SEXTANT-51](https://app.plane.so/portolan/browse/SEXTANT-51/) | an empty `connector=` on a SmallRye channel is a question where Quarkus likely sees an orphan |
 | OI-190 | [SEXTANT-65](https://app.plane.so/portolan/browse/SEXTANT-65/) | under the POM-reading fallback, a test-scoped in-memory connector counts toward the sole one |
-| OI-192 | [SEXTANT-66](https://app.plane.so/portolan/browse/SEXTANT-66/) | Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined |
+| OI-192 | [SEXTANT-66](https://app.plane.so/portolan/browse/SEXTANT-66/) | Quarkus's Mutiny gRPC forms reach no service identity: the client is unresolved, the service unjoined · **CLOSED 2026-10-26** (PR #70, CI run 40253274692) |
 | OI-194 | [SEXTANT-67](https://app.plane.so/portolan/browse/SEXTANT-67/) | an UNTABLED SmallRye connector beside a tabled one leaves the tabled one looking sole |
 | OI-195 | [SEXTANT-68](https://app.plane.so/portolan/browse/SEXTANT-68/) | a Quarkus `%profile.`-prefixed key is read as a literal key, not as that profile's value |
 | OI-196 | [SEXTANT-189](https://app.plane.so/portolan/browse/SEXTANT-189/) | a call through an injected client interface stays narrowed to every implementor, not the bean the framework injects |
@@ -208,6 +208,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-202 | [SEXTANT-195](https://app.plane.so/portolan/browse/SEXTANT-195/) | a gRPC service reaching the generated ImplBase through an intermediate class is not named as its RPC's handler |
 | OI-203 | [SEXTANT-196](https://app.plane.so/portolan/browse/SEXTANT-196/) | a grpc-kotlin coroutine stub's self-call is fenced but gets no hop, so its trace ends at a library boundary |
 | OI-204 | [SEXTANT-197](https://app.plane.so/portolan/browse/SEXTANT-197/) | an unknown key inside a catalog's delegating_bean block is not refused |
+| OI-205 | [SEXTANT-198](https://app.plane.so/portolan/browse/SEXTANT-198/) | C#/.NET has no scanner (assessed, not measured, not prioritized) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

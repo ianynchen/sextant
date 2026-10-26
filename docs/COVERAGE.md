@@ -61,7 +61,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1 open) | ✅ | ✅ | ✅ | ✅ | ◐ (1A 1C, 2 open) |
+| **Java / Kotlin** | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1A 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -82,7 +82,7 @@ register.
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (1 not shipped) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ◐ (1 open) | ✅ | ✅ | ✅ | — | ✅ |
+| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ✅ | ✅ | — |
 | **Ktor** | ✅ | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ✅ | — | — | — | — | — | — | — | — | — | — | — |
@@ -3280,7 +3280,7 @@ Boundaries, each verified against the shipped code:
 | grpc-java | ✅ full | 1/1 | — |
 | Spring gRPC | ✅ full | 1/1 | — |
 | net.devh grpc-spring-boot-starter | ✅ full | 2/2 | — |
-| Quarkus gRPC | ◐ partial | 2/2 | `quarkus-grpc-mutiny` |
+| Quarkus gRPC | ✅ full | 2/2 | — |
 <!-- END GENERATED: frameworks 5.7 -->
 
 **The schema half shipped in Phase 2O Task 4; the JVM bytecode half shipped in Task 5.**
