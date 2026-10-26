@@ -544,11 +544,11 @@ class MethodReturnFact(BaseModel):
 
 
 class FieldWriteFact(BaseModel):
-    """An INSTANCE METHOD assigns parameter N directly to field F (D00 §5), and
-    `written_by` names the method that did it. A computed assignment —
-    concatenation, a default expression, anything but a bare parameter load —
-    emits no fact at all, and both consumers degrade honestly rather than
-    guessing a source.
+    """A method assigns a parameter, a constant or a call's result directly to field F
+    (D00 §5) — a `PUTFIELD` on `this`, or since 2026-10-26 a `PUTSTATIC` — and
+    `written_by` names the method that did it. A computed assignment — concatenation,
+    a default expression, a value built with `new` — emits no fact at all, and both
+    consumers degrade honestly rather than guessing a source.
 
     **Constructors only until 2026-10-18**, and the guard was never a soundness
     rule: a setter's assignment is the same `ALOAD 0; ALOAD k; PUTFIELD` triple,
@@ -574,8 +574,11 @@ class FieldWriteFact(BaseModel):
     # 2026-10-18 (`OI-138` cause 2): `private String f = "literal"`, which javac compiles
     # into the constructor as `ALOAD 0; LDC; PUTFIELD`. That write has no parameter to point
     # at, so it emitted NO fact and the walk answered `no_writer` about a literal one line
-    # above the read. Both are optional, so a fact written before either reads exactly as it
-    # did and no schema version moves.
+    # above the read. Since 2026-10-26 `value` also carries a CALL'S RESULT — `this.c =
+    # Factory.make()`, or a file-level `val client = HttpClient(CIO) { … }` stored in
+    # `<clinit>` — as the entry a call argument fed by a call already is: `unresolved` with the
+    # call's `source`, a value id in the WRITER's frame. Both are optional, so a fact written
+    # before either reads exactly as it did and no schema version moves.
     from_parameter: int | None = None
     value: CallArgument | None = None
     # The writing method's own symbol, in the form `call_sites.caller` carries, so a write
@@ -596,7 +599,7 @@ class FieldWriteFact(BaseModel):
         if (self.from_parameter is None) == (self.value is None):
             raise ValueError(
                 "field_write names exactly one source: `from_parameter` for "
-                "`this.f = parameter`, or `value` for `this.f = <constant>`"
+                "`this.f = parameter`, or `value` for `this.f = <constant or call result>`"
             )
         return self
 

@@ -90,14 +90,12 @@ common case rather than a corner: MEASURED on `mall-admin`, 1,411 of 2,065 value
 call sites are the third-party boundary, which `call_edges` records with a NULL callee.
 A reader tracing this module's inputs finds four, and this is why.
 
-**The sixth edge is missing and its absence is an answer.** `written_by` — a binding
-assigned anywhere but an initialiser — is specified as a scanner capability (§4, D00 9.19)
-and no backend reports it yet, so `value_edges` emits no such row. Every binding read
-therefore ends at `no_writer`, which today means *no writer edge exists to follow* and not
-*this binding is never written* — `NO_WRITER` below says so where the reason is defined.
-`_binding` is the one place that will follow the edge the day it exists. The walk does NOT
-re-derive it from the constructor-only `field_writes` fact: that would be a second spelling
-of an edge the design gives one home, which is the disease §0a records.
+**The sixth edge, `written_by`, is a binding's writer** (spec 2026-10-18, D00 §5's
+`field_write`). `value_edges` carries a write from a PARAMETER; a write from a constant or a
+call's result carries its value in the fact itself and is read straight off `field_writes`
+(`ValueIndex.constants` and `.produced`), because there is no parameter for an edge to land
+on. `_binding` is the one place that follows any of them, and a binding with no reported write
+ends at `no_writer` — `NO_WRITER` below says what that does and does not mean.
 
 **It names no framework and no language.** `identified_by` (§2) is catalog data, handed in
 by the caller as `identities` and never held here: the walk finds the producing call
@@ -142,10 +140,11 @@ NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"
 # **What this means TODAY, said where the reason is defined.** §1d reads "a binding nothing
-# in this module writes", and that is what it will mean once capability 9.19 lands and
-# `value_edges` grows its `written_by` arm. Until then no writer edge exists at all, so the
-# answer is *nothing was found to follow* — NOT *this binding is never written*. A reader
-# acting on today's answer is reading a missing capability, not a property of the code.
+# in this module writes", and the facts now report a write from a parameter, a constant or a
+# call's result (`_binding` has the history). A write of any other shape — a value built with
+# `new`, one parked in a local first, a container's reflective injection — is still not
+# reported, so the answer is *no reported write was found to follow* — NOT *this binding is
+# never written*. A reader acting on it is reading the fact's reach, not a property of the code.
 NO_WRITER = "no_writer"
 EXTERNAL = "external"
 CYCLE = "cycle"
@@ -362,6 +361,11 @@ class ValueIndex:
     # to make: the value is in the fact, and `_binding` answers with it rather than
     # resolving a parameter in another method's frame.
     constants: dict[str, tuple[Mapping[str, Any], ...]]
+    # `field_writes.value` again, for a write whose value is a CALL'S RESULT (CP-33 rows 6-7,
+    # 2026-10-26): a binding -> (the writing method, the entry), because the entry's `source`
+    # is a value id in THAT method's frame and means nothing anywhere else. `_binding`
+    # resolves it there, as it would the same entry at a call site in that method.
+    produced: dict[str, tuple[tuple[str, Mapping[str, Any]], ...]]
     # `written_by`: a binding -> the method that wrote it and the PARAMETER it wrote from,
     # one entry per writer. Several entries is several possible values, which §4 of spec
     # 2026-10-18 rules is the exact answer where every writer is in this module rather than
@@ -549,6 +553,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
     }
     dead = private - called
     constants: dict[str, list[Mapping[str, Any]]] = {}
+    produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     for row in workspace.query("field_writes"):
         written = row.get("value")
         if written is None or row["field"] is None:
@@ -556,7 +561,16 @@ def value_index(workspace: Workspace) -> ValueIndex:
         if row.get("written_by") is not None and str(row["written_by"]) in dead:
             continue
         entry = json.loads(str(written)) if isinstance(written, str) else written
-        if isinstance(entry, dict):
+        if not isinstance(entry, dict):
+            continue
+        # **A `source` makes the entry a value of the WRITER's frame**, which is the one
+        # thing that separates the two maps: a constant is a value anywhere, a call's result
+        # is a value id that only the method that produced it can resolve. A write naming no
+        # method cannot be resolved there, so it stays with the constants and reads as the
+        # unreadable entry it is.
+        if entry.get("source") is not None and row.get("written_by") is not None:
+            produced.setdefault(str(row["field"]), []).append((str(row["written_by"]), entry))
+        else:
             constants.setdefault(str(row["field"]), []).append(entry)
 
     returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
@@ -583,6 +597,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         callers={key: tuple(value) for key, value in callers.items()},
         parameters=parameters,
         constants={key: tuple(value) for key, value in constants.items()},
+        produced={key: tuple(value) for key, value in produced.items()},
         writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
         reached=reached,
@@ -1881,11 +1896,21 @@ class _Walk:
         `spring-petclinic-microservices`, where it cost an outbound host and left the row with
         no address at all.
 
+        **A write from a CALL'S RESULT is resolved in the writing method** (CP-33 rows 6-7,
+        2026-10-26). A file-level `val client = HttpClient(CIO) { … }` compiles to
+        `invokestatic; putstatic` in `<clinit>`, and the fact carries the value as the
+        argument entry a call result already is — `unresolved` with its `source` — so the
+        answer is that entry resolved in `<clinit>`'s frame by the same `_entry` a call
+        argument there would get: through an in-module callee's returns, an identity entry,
+        or `external` for a factory nobody scanned. A STATIC field needs nothing extra: its
+        read and its `putstatic` carry the same symbol, and no receiver is compared for any
+        binding.
+
         **`no_writer` still means something, and it is narrower again:** no write of this
-        binding was REPORTED. The remaining shapes are a call's result and a static
-        initialiser (CP-33 rows 2, 6, 7), plus a container writing the field reflectively,
-        which no bytecode can show (`@Autowired` field injection, §8.2's territory, and the
-        reason `mall-admin` answers nothing here).
+        binding was REPORTED. The remaining shapes are a value built with `new`, a value
+        parked in a local before the write, a computed assignment, plus a container writing
+        the field reflectively, which no bytecode can show (`@Autowired` field injection,
+        §8.2's territory, and the reason `mall-admin` answers nothing here).
 
         **The frame travels with the hop.** A binding write is resolved in the WRITING
         method's frame, which is not this read's: the parameter index means something only
@@ -1894,7 +1919,8 @@ class _Walk:
         """
         written = self._index.writers.get(symbol, ())
         constants = self._index.constants.get(symbol, ())
-        if not written and not constants:
+        produced = self._index.produced.get(symbol, ())
+        if not written and not constants and not produced:
             return _only(trail, _unresolved(NO_WRITER))
         reached: list[_Reached] = []
         for entry in constants:
@@ -1920,6 +1946,11 @@ class _Walk:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
+        for method, entry in produced:
+            # The origin names the write and has no ordinal, so `_through`'s `escapes` window
+            # is the whole of the writing method after the call: a call made on the stored
+            # object anywhere there changes what every later reader of the field sees.
+            reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
         return tuple(dict.fromkeys(reached))
 
 

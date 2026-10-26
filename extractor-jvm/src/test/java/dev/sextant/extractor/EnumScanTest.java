@@ -34,10 +34,18 @@ class EnumScanTest {
     /** {@code $VALUES} is compiler machinery, not a declaration: nobody wrote
      *  it, so there is no fact to emit about it. A modifier would be the wrong
      *  answer — that says "a field somebody declared, kept off the wire" — and
-     *  the symbol graph would carry a member no source file contains. */
+     *  the symbol graph would carry a member no source file contains.
+     *
+     *  <p>**The one fact that does name it is the WRITE**, and that is a fact about an
+     *  instruction rather than a declaration: {@code <clinit>} stores {@code $values()}'s
+     *  result into the field, which D00 §5's {@code field_write} reports since 2026-10-26
+     *  (CP-33 row 6). A write into a compiler-made field was a fact before that too — a
+     *  Kotlin lambda class's captured {@code $seen} is {@code ACC_SYNTHETIC}, and the walk
+     *  reads its write — so the write is left out of this assertion, not refused there. */
     @Test
     void emits_no_fact_at_all_for_a_compiler_synthesized_field() throws Exception {
-        assertFalse(scanVerb().stream().anyMatch(line -> line.contains("VALUES")));
+        assertFalse(scanVerb().stream().anyMatch(line -> line.contains("VALUES")
+            && !line.contains("\"kind\":\"field_write\"")));
     }
 
     /** The constants themselves are declarations, and they are bound to the

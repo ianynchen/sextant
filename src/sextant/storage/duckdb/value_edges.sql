@@ -30,10 +30,10 @@
 -- landed together (spec `2026-10-18-the-sixth-edge-design.md`): the extractor's
 -- `<init>` guard lifted, which roughly tripled the facts on real code, and the
 -- writing METHOD recorded, without which several writers of one field cannot be
--- told apart. What stays unreported is a write whose VALUE is not a bare
--- parameter load — a literal, a call's result, a static initialiser (CP-33 rows
--- 2, 6, 7, 8) — and a binding written any of those ways still answers
--- `no_writer`.
+-- told apart. A write whose VALUE is not a bare parameter load — a literal, a
+-- call's result, either into a static field too (CP-33 rows 2, 6, 7, 8) — has no
+-- parameter for this arm to land on, so it carries its value in the fact and the
+-- walk reads it straight off `field_writes` instead.
 --
 -- **Its own file rather than a string literal in `workspace.py`.** Five arms,
 -- each carrying the fact and the projection behind it, is the value of this

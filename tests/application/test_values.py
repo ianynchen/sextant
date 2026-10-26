@@ -96,6 +96,21 @@ _CLOSING = _PKG + "Closing#"
 # assembled from an object has (`OI-138` cause 3, CP-39).
 _RENDERED = _PKG + "Rendered#"
 _UNREADABLE = _PKG + "Unreadable#"
+# Bindings written from a CALL'S RESULT (CP-33 rows 6-7, 2026-10-26). `ProbeKt` is Kotlin's
+# file class for a top-level `val client = HttpClient(CIO) { … }` — spelled exactly as the
+# CP-54 probe module's bytecode spells it — whose `<clinit>` stores an unscanned factory's
+# result with `putstatic`. `Property` is a class whose constructor stores an IN-MODULE call's
+# result into its own property with `putfield`.
+_PROBE_KT = "probe/ProbeKt#"
+_HTTP_CLIENT = (
+    "io/ktor/client/HttpClientKt#",
+    "HttpClient",
+    (
+        "(Lio/ktor/client/engine/HttpClientEngineFactory;Lkotlin/jvm/functions/Function1;)"
+        "Lio/ktor/client/HttpClient;"
+    ),
+)
+_PROPERTY = _PKG + "Property#"
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -251,6 +266,8 @@ def _facts() -> list[Fact]:
             _WRITTEN,
             _RENDERED,
             _UNREADABLE,
+            _PROBE_KT,
+            _PROPERTY,
             _CLOSING,
             _ENTRY,
             _OUTSIDE,
@@ -745,6 +762,47 @@ def _facts() -> list[Fact]:
             field=_UNREADABLE + "held.",
             value=CallArgument(kind="class", symbol="com/acme/orders/values/Order#"),
             written_by=_symbol(_UNREADABLE, "<init>", "()V"),
+        ),
+        # A STATIC field written from a call's result in the static initialiser: `<clinit>`
+        # stores `HttpClient(...)`'s result (value id 11) with `putstatic`, and a function
+        # elsewhere in the file reads the field as a call argument.
+        _declared(_PROBE_KT, "<clinit>", "()V"),
+        _site(_symbol(_PROBE_KT, "<clinit>", "()V"), 0, _HTTP_CLIENT, result=11),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_PROBE_KT + "client.",
+            value=CallArgument(kind="unresolved", source=11),
+            written_by=_symbol(_PROBE_KT, "<clinit>", "()V"),
+        ),
+        _declared(_PROBE_KT, "clientGet", "()V"),
+        _site(
+            _symbol(_PROBE_KT, "clientGet", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_PROBE_KT + "client.")],
+        ),
+        # A PROPERTY written from an in-module call's result in the constructor: value id 5 in
+        # `<init>` is `Names#one()`, which returns `solo`. The READER holds a value id 5 of its
+        # own — `Names#pick()`, which returns `orders` and `orders-fast` — so a walk that
+        # resolved the write's `source` in the reader's frame instead of the writer's would
+        # answer those.
+        _declared(_PROPERTY, "<init>", "()V"),
+        _site(_symbol(_PROPERTY, "<init>", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=5),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_PROPERTY + "made.",
+            value=CallArgument(kind="unresolved", source=5),
+            written_by=_symbol(_PROPERTY, "<init>", "()V"),
+        ),
+        _declared(_PROPERTY, "send", "()V"),
+        _site(_symbol(_PROPERTY, "send", "()V"), 0, (_NAMES, "pick", _MAKES_STRING), result=5),
+        _site(
+            _symbol(_PROPERTY, "send", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_PROPERTY + "made.")],
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1602,6 +1660,39 @@ def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site
     bindings = _bindings(walked, _symbol(_UNREADABLE, "read", "()V"), 0)
     assert len(bindings) == 1, bindings
     assert _reasons(bindings) == ["not_readable"]
+
+
+@pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")
+def test_a_static_field_written_from_a_call_is_followed_to_that_call(walked):
+    """**A binding written from a CALL'S RESULT is followed to that call** (CP-33 rows 6
+    and 7, ruled 2026-10-26: "build both now"). Kotlin's top-level `val client =
+    HttpClient(CIO) { … }` compiles to `invokestatic HttpClientKt.HttpClient; putstatic
+    ProbeKt.client` in `<clinit>`, and a read anywhere in the file arrives as `{kind: field,
+    symbol: probe/ProbeKt#client.}`. Measured on the CP-54 probe module, the walk answered
+    `no_writer` there: no fact said the field was written at all.
+
+    The write's value is the call argument a call result already is — `unresolved` with the
+    call's `source` in the WRITER's frame — so the walk crosses into `<clinit>` and finds the
+    factory. That factory is a jar nobody scanned, so the honest answer for a VALUE is
+    `external`; which call produced it is the producer reader's question, not this one's.
+    A static field matches its `putstatic` writer by symbol alone: no receiver is checked,
+    because a static field has none.
+    """
+    bindings = _bindings(walked, _symbol(_PROBE_KT, "clientGet", "()V"), 0)
+    assert _reasons(bindings) == ["external"]
+
+
+@pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")
+def test_a_property_written_from_a_call_in_the_constructor_is_followed(walked):
+    """`private val made = Names.one()` — `aload_0; invokestatic; putfield` in the
+    constructor. The write's `source` is value id 5 IN THE CONSTRUCTOR, where it is the call
+    to `Names#one`, which returns `solo`; the reading method happens to hold a value id 5 of
+    its own, `Names#pick`, returning `orders` and `orders-fast`. One answer, `solo`, is what
+    resolving in the writer's frame gives, and the other two are what reading the id in the
+    wrong method would publish — a wrong value at `resolved`.
+    """
+    bindings = _bindings(walked, _symbol(_PROPERTY, "send", "()V"), 1)
+    assert [binding.slots[0].value for binding in bindings] == ["solo"]
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):

@@ -1864,6 +1864,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-field-written-from-a-CALL-is-followed": Guard(
+        what="a binding written from a call's result is resolved in the WRITING method's "
+        "frame, through the call that produced it",
+        why="Kotlin's top-level `val client = HttpClient(CIO) { … }` is `invokestatic; "
+        "putstatic` in `<clinit>`, and a class property `private val c = HttpClient { … }` "
+        "is `aload_0; invoke…; putfield` — measured on the CP-54 probe module, every read of "
+        "such a client answered `no_writer`, so the walk could not reach the client a Ktor "
+        "call is made on. Reading the write's value as a constant instead answers "
+        "`not_readable` about a value whose producer is a fact, and reading its `source` in "
+        "the READER's frame would answer whatever that id names there — a wrong value at "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if entry.get("source") is not None and row.get("written_by") is not None:',
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "

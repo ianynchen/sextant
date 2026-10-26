@@ -241,53 +241,53 @@ public final class MethodFlow {
         return JsonOut.object(fact);
     }
 
-    /** D00 §5's {@code field_write}: constructors only, direct traces only. A
-     *  {@code <init>} body's {@code ALOAD 0; xLOAD k; PUTFIELD} — with nothing
-     *  in between — assigns parameter N straight to a field, and that triple
-     *  is the whole rule. No dataflow pass is needed for it, unlike {@link
-     *  #callSites}: the shape is syntactic, and a computed assignment
-     *  (concatenation, a default expression, anything but the bare load)
-     *  simply never presents the triple, so it emits nothing and the
-     *  resolution that would have followed it degrades honestly rather than
-     *  guessing a source.
+    /** D00 §5's {@code field_write}: any method, direct traces only. A {@code PUTFIELD} on
+     *  {@code this} or a {@code PUTSTATIC}, whose value is a bare parameter load, an
+     *  {@code LDC} constant, or a CALL'S RESULT with nothing but a cast in between — and
+     *  each of those is the whole rule. A computed assignment (concatenation, a default
+     *  expression, a value parked in a local first) never presents one of them, so it
+     *  emits nothing and the resolution that would have followed it degrades honestly
+     *  rather than guessing a source.
      *
      *  <p>Scanned against the instruction list with label/line-number/frame
      *  pseudo-instructions filtered out first — they carry no opcode and are
-     *  not computation, so their presence between the three real instructions
+     *  not computation, so their presence between the real instructions
      *  must not count as "something intervened". */
     public static List<String> fieldWrites(
             String documentId, String methodSymbol, MethodNode method) {
-        // **ANY INSTANCE METHOD, not constructors only** (spec
-        // 2026-10-18-the-sixth-edge-design.md §0). The `<init>` guard that stood here was
-        // never a soundness rule: a setter's assignment is the same instruction sequence as
-        // a constructor's, which CP-33 row 1 measured — `aload_0; aload_1; putfield`,
-        // "the triple, unchanged". Lifting it was measured too, by building this change and
-        // re-scanning: `spring-petclinic-rest` 86 field writes becomes 237 and
-        // `apollo-portal` 553 becomes 1,638, so the guard was hiding about two thirds of the
-        // writes on real code. `OI-136` had always described capability 9.19 as exactly
-        // this: "a write OUTSIDE an initialiser and a method-filter change".
+        // **ANY METHOD, not constructors only** (spec 2026-10-18-the-sixth-edge-design.md §0).
+        // The `<init>` guard that stood here was never a soundness rule: a setter's
+        // assignment is the same instruction sequence as a constructor's, which CP-33 row 1
+        // measured — `aload_0; aload_1; putfield`, "the triple, unchanged". Lifting it was
+        // measured too, by building this change and re-scanning: `spring-petclinic-rest` 86
+        // field writes becomes 237 and `apollo-portal` 553 becomes 1,638, so the guard was
+        // hiding about two thirds of the writes on real code. `OI-136` had always described
+        // capability 9.19 as exactly this: "a write OUTSIDE an initialiser and a
+        // method-filter change".
         //
-        // **Static methods stay out, and that is a soundness rule rather than a filter.**
-        // Slot 0 holds `this` for an instance method, which is what `ALOAD 0` below reads
-        // and what `parameterSlotsOf(desc, 1)` counts from; in a static method slot 0 is the
-        // FIRST PARAMETER, so the same instructions mean something else and `PUTSTATIC` is a
-        // different opcode anyway (CP-33 row 6, still unreported).
-        if ((method.access & Opcodes.ACC_STATIC) != 0) return List.of();
-        int[] parameterSlots = parameterSlotsOf(method.desc, 1);
+        // **A static method's PUTFIELD stays out, and that is a soundness rule rather than a
+        // filter.** Slot 0 holds `this` for an instance method, which is what the `ALOAD 0`
+        // below reads; in a static method slot 0 is the FIRST PARAMETER, so the same
+        // instructions write another object's field. Static methods are scanned now only for
+        // `PUTSTATIC` (CP-33 row 6, 2026-10-26), whose parameters count from slot 0.
+        boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
+        int[] parameterSlots = parameterSlotsOf(method.desc, isStatic ? 0 : 1);
         List<AbstractInsnNode> real = new ArrayList<>();
         for (AbstractInsnNode insn : method.instructions) {
             if (insn.getOpcode() >= 0) real.add(insn);
         }
         int[] block = basicBlocks(method, real);
+        // The dataflow pass, run only for the one shape that needs it — a call's result
+        // written into a field, whose receiver load can sit any distance below the value —
+        // and at most once per method. Every other shape is syntactic.
+        Frame<SourceValue>[] frames = null;
+        boolean analysed = false;
         List<String> lines = new ArrayList<>();
-        for (int i = 0; i + 2 < real.size(); i++) {
-            if (!(real.get(i) instanceof VarInsnNode receiverLoad)
-                    || receiverLoad.getOpcode() != Opcodes.ALOAD || receiverLoad.var != 0) {
-                continue;
-            }
-            if (!(real.get(i + 2) instanceof FieldInsnNode put) || put.getOpcode() != Opcodes.PUTFIELD) {
-                continue;
-            }
+        for (int p = 0; p < real.size(); p++) {
+            if (!(real.get(p) instanceof FieldInsnNode put)) continue;
+            boolean onThis = put.getOpcode() == Opcodes.PUTFIELD;
+            if (!onThis && put.getOpcode() != Opcodes.PUTSTATIC) continue;
+            if (onThis && isStatic) continue;
             // **A write the SAME BASIC BLOCK overwrites never happens, and reporting it
             // publishes a value nothing can read.** `private String topic = "default";`
             // plus `this.topic = topic;` in the one constructor puts both writes in one
@@ -301,21 +301,29 @@ public final class MethodFlow {
             // still over-reports is an initialiser overwritten on EVERY branch of an
             // if/else, which needs post-dominance rather than a block comparison; the
             // register carries it rather than this comment pretending otherwise.
-            if (overwrittenInBlock(real, block, i, put)) continue;
-            AbstractInsnNode written = real.get(i + 1);
-            // **Two kinds of write, and the second was invisible until 2026-10-18**
-            // (`OI-138` cause 2). `this.f = parameter` loads the value from a local slot;
-            // `private String f = "literal"` loads it from the CONSTANT POOL, which javac
-            // compiles into the constructor as `ALOAD 0; LDC; PUTFIELD`. The fact could only
-            // say "from parameter N", so a constant write had nothing to point at and no
-            // fact was emitted — the walk then answered `no_writer` about a literal one line
-            // above the read. Measured on `spring-petclinic-microservices`, where an outbound
-            // HOST is held that way and the published row carried no address at all.
-            if (written instanceof VarInsnNode valueLoad && isLoad(valueLoad.getOpcode())) {
+            if (overwrittenInBlock(real, block, p, put)) continue;
+            AbstractInsnNode written = p > 0 ? real.get(p - 1) : null;
+            // `PUTFIELD` needs its receiver to be `this`, which the triple reads as the
+            // `ALOAD 0` right below the value; `PUTSTATIC` has no receiver at all, so the
+            // value load alone is the pair.
+            boolean direct = !onThis
+                || (p >= 2 && real.get(p - 2) instanceof VarInsnNode receiverLoad
+                    && receiverLoad.getOpcode() == Opcodes.ALOAD && receiverLoad.var == 0);
+            // **Three kinds of write, and the last two were invisible until 2026-10-18 and
+            // 2026-10-26.** `this.f = parameter` loads the value from a local slot; `private
+            // String f = "literal"` loads it from the CONSTANT POOL, which javac compiles into
+            // the constructor as `ALOAD 0; LDC; PUTFIELD` (`OI-138` cause 2); and `this.c =
+            // Factory.make()` stores a call's result. The fact could only say "from parameter
+            // N", so the other two had nothing to point at and no fact was emitted — the walk
+            // then answered `no_writer` about a value one line above the read. Measured on
+            // `spring-petclinic-microservices`, where an outbound HOST is held as a literal
+            // and the published row carried no address at all; and on the CP-54 probe, where
+            // every read of a Ktor client held in a top-level `val` answered the same.
+            if (direct && written instanceof VarInsnNode valueLoad && isLoad(valueLoad.getOpcode())) {
                 int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
                 if (parameterIndex < 0) continue;
                 lines.add(fieldWriteJson(documentId, methodSymbol, put, parameterIndex, null));
-            } else if (written instanceof LdcInsnNode constant) {
+            } else if (direct && written instanceof LdcInsnNode constant) {
                 // The declared type is handed over for the shared mapping's sake; for a
                 // FIELD write it never decides anything, because javac has no `LDC` for an
                 // int small enough to be a boolean. It is the call-site caller that needs
@@ -335,24 +343,71 @@ public final class MethodFlow {
                 if (value != null) {
                     lines.add(fieldWriteJson(documentId, methodSymbol, put, -1, value));
                 }
+            } else {
+                // **A CALL'S RESULT** (CP-33 row 7; ruled "build both now", 2026-10-26). The
+                // value is the argument-grammar entry a call argument fed by a call already
+                // carries — `unresolved` with the call's `source` — so the walk resolves it in
+                // the WRITER's frame exactly as it would that argument. Only an invoke with a
+                // result qualifies: an `<init>` returns nothing (the value a `NEW` built is
+                // the `NEW`'s, and stays unreported), and an `invokedynamic` is either a
+                // concatenation — computed — or a lambda, which names a body and not a value.
+                MethodInsnNode call = callBefore(real, p);
+                if (call == null) continue;
+                if (onThis) {
+                    if (!analysed) {
+                        frames = analyze(methodSymbol, method);
+                        analysed = true;
+                    }
+                    if (!writesThis(frames, method.instructions, put)) continue;
+                }
+                lines.add(fieldWriteJson(documentId, methodSymbol, put, -1,
+                    producerJson(call, Type.getType(put.desc), method.instructions,
+                                 parameterSlots, null, -1)));
             }
         }
         return lines;
     }
 
+    /** The invoke whose result is the value a write at {@code p} stores, or null. The value
+     *  is the top of the stack, so the instruction right below the write produced it — with
+     *  a {@code CHECKCAST} looked through, because a cast re-labels the same reference (the
+     *  rule {@link CopyTransparentSourceInterpreter} already applies), and CP-33 row 7
+     *  measured javac putting one there for a generic call's erased result. */
+    private static MethodInsnNode callBefore(List<AbstractInsnNode> real, int p) {
+        int at = p - 1;
+        while (at >= 0 && real.get(at).getOpcode() == Opcodes.CHECKCAST) at--;
+        if (at < 0 || !(real.get(at) instanceof MethodInsnNode call)) return null;
+        return Type.getReturnType(call.desc).getSort() == Type.VOID ? null : call;
+    }
+
+    /** Whether the object a {@code PUTFIELD} writes into is {@code this} — read off the
+     *  frame, because a call's arguments sit between the receiver load and the write
+     *  ({@code aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield}, CP-33 row
+     *  7), so no fixed distance finds it. {@code this} is slot 0's initial value, which the
+     *  interpreter tags with its parameter marker; {@code other.f = …} loads something else
+     *  and is refused, exactly as the triple's {@code ALOAD 0} refuses it. */
+    private static boolean writesThis(Frame<SourceValue>[] frames, InsnList instructions,
+                                      FieldInsnNode put) {
+        if (frames == null) return false;
+        Frame<SourceValue> frame = frames[instructions.indexOf(put)];
+        if (frame == null || frame.getStackSize() < 2) return false;
+        return singleSource(frame.getStack(frame.getStackSize() - 2))
+            instanceof VarInsnNode receiver && receiver.var == 0;
+    }
+
     /** Whether a LATER write to the same field sits in the same basic block as the write at
-     *  {@code i}, which makes that write dead.
+     *  {@code p}, which makes that write dead.
      *
-     *  <p>Same field means same owner and name: a write to another object's field of the
-     *  same name is a different field, and the {@code ALOAD 0} check above has already
-     *  established that both of these write {@code this}.
+     *  <p>Same field means same opcode, owner and name. A later {@code PUTFIELD} of the same
+     *  name may write another object's field ({@code other.f = …}), and skipping the earlier
+     *  write then under-reports — the sound direction, the one the branch rule takes too.
      */
     private static boolean overwrittenInBlock(
-            List<AbstractInsnNode> real, int[] block, int i, FieldInsnNode put) {
-        for (int j = i + 3; j < real.size(); j++) {
-            if (block[j] != block[i + 2]) return false;
+            List<AbstractInsnNode> real, int[] block, int p, FieldInsnNode put) {
+        for (int j = p + 1; j < real.size(); j++) {
+            if (block[j] != block[p]) return false;
             if (real.get(j) instanceof FieldInsnNode later
-                    && later.getOpcode() == Opcodes.PUTFIELD
+                    && later.getOpcode() == put.getOpcode()
                     && later.owner.equals(put.owner)
                     && later.name.equals(put.name)) {
                 return true;
