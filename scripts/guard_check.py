@@ -4742,6 +4742,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- a verb written as a static field (spec 2026-10-26 §3a) ------------
+    "ktor.a-VERB-read-from-a-static-field": Guard(
+        what="a verb argument that is a `field`-kind static field is read through the "
+        "catalog's `verb_values.fields` table, in `combinator` and in `fluent`'s "
+        "`http_method: argN` capture",
+        why="Ktor 3.6.0 compiles `HttpMethod.Get` to a `getstatic`, never a getter call. "
+        "Ignoring `fields` reads that verb as nothing: `method(HttpMethod.Get) { get(...) }` "
+        "poisons `method` and every route inside it is one unresolved row (the shipped "
+        "routing gap, `ktor-samples`' `Login.kt:50`), and a client `setMethod(HttpMethod.Put)` "
+        "reads `unresolved` with `method` NULL, where the evidence says PUT",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    verb = static_field_value(argument, scope.context.verb_fields) or _getter_value(\n"
+                "        argument, scope, scope.context.verb_getters\n"
+                "    )\n",
+                replace="    verb = _getter_value(  # guard disabled by scripts/guard_check.py\n"
+                "        argument, scope, scope.context.verb_getters\n"
+                "    )\n",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)\n",
+                replace="        else _string_value(declared_verb)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
 }
 
 

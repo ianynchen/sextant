@@ -10,6 +10,8 @@ detect:
 measured:
   - { artifact: io.ktor:ktor-server-core-jvm, versions: ["3.0.3"],
       identity: reported, by: scripts/probes/w19_catalog_surface.md }
+  - { artifact: io.ktor:ktor-http-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
 
 requires: [call_site, string_constants, chain_reconstruction]
 
@@ -78,6 +80,8 @@ requires: [call_site, string_constants, chain_reconstruction]
 #     RESULT, and `verb_values.getters` below maps each getter to the literal its field
 #     was built from. A getter the table does not name poisons `method`: the verb was
 #     written and is unreadable, an unresolved row and not a phantom.
+#     On Ktor 3.x the verb is a STATIC FIELD instead — a `getstatic`, no getter call — read
+#     through `verb_values.fields` the same way (spec 2026-10-26 §3a).
 #   * `accept(Route, ContentType[], Function1)` fills `produces` and `contentType(Route,
 #     ContentType, Function1)` fills `consumes` (`media_arg` + `fills`; `accept` is a
 #     VARARG, one array slot whose elements the media reader already walks). `ContentType.
@@ -218,7 +222,25 @@ matches:
     # `ContentType$Application` members declared here. One measured member at a time, as the
     # Spring `media_values` table is: a getter this table does not name reads as nothing —
     # NULL media, a poisoned verb — never as its own name.
+    #
+    # `fields` is the other spelling of the same verbs (spec 2026-10-26 §2d, §3a): Ktor 3.6.0
+    # declares `Get … Query` as public static fields of `HttpMethod`, and user code reads one
+    # with a `getstatic` — no getter call — so the verb reaches the call site as a `field`-kind
+    # argument carrying the field's symbol. Both forms stay: 3.0.3 code calls the getters. All
+    # NINE fields, each built from the upper-case word of its name (CP-54 row (a), rows 1–2).
+    # `Trace` and `Query` are fields only — the Companion has no `getQuery`, and `DefaultMethods`
+    # (the seven `all_methods` lists) holds neither — and a verb is a plain word the rows carry.
     verb_values:
+      fields:
+        "io.ktor.http.HttpMethod#Get": GET
+        "io.ktor.http.HttpMethod#Post": POST
+        "io.ktor.http.HttpMethod#Put": PUT
+        "io.ktor.http.HttpMethod#Patch": PATCH
+        "io.ktor.http.HttpMethod#Delete": DELETE
+        "io.ktor.http.HttpMethod#Head": HEAD
+        "io.ktor.http.HttpMethod#Options": OPTIONS
+        "io.ktor.http.HttpMethod#Trace": TRACE
+        "io.ktor.http.HttpMethod#Query": QUERY
       getters:
         "io.ktor.http.HttpMethod$Companion#getGet": GET
         "io.ktor.http.HttpMethod$Companion#getPost": POST

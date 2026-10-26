@@ -182,6 +182,11 @@ from sextant.application.resolve.shapes.arguments import (
     _array_elements,
     _expanded_arguments,
 )
+from sextant.application.resolve.shapes.member_values import (
+    member_table,
+    names_members,
+    static_field_value,
+)
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import (
@@ -407,6 +412,11 @@ class _TreeContext:
     # `verb_values.getters`, owners converted as every rule owner is.
     media_getters: dict[tuple[str, str], str]
     verb_getters: dict[tuple[str, str], str]
+    # The STATIC-FIELD form of the verb table (spec 2026-10-26 §3a): Ktor 3.x compiles
+    # `HttpMethod.Get` to a `getstatic`, so the verb arrives as a `field`-kind argument
+    # carrying the field's symbol, keyed on its `(owner, field name)`.
+    # `verb_values.fields`, converted as the getters are.
+    verb_fields: dict[tuple[str, str], str]
     # `matches.all_methods` (spec 2026-09-19 §4c): the verbs a RESOLVED route that read no
     # verb at all fans out to, one row each — the framework's own default-methods list,
     # measured. Empty where the catalog declares none, and such a route then publishes
@@ -570,8 +580,9 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
             else None
         ),
         media_values=dict(media_values.get("values", {})),
-        media_getters=_getters_of(media_values.get("getters", {})),
-        verb_getters=_getters_of(vocabulary.get("verb_values", {}).get("getters", {})),
+        media_getters=member_table(media_values.get("getters", {})),
+        verb_getters=member_table(vocabulary.get("verb_values", {}).get("getters", {})),
+        verb_fields=member_table(vocabulary.get("verb_values", {}).get("fields", {})),
         all_methods=tuple(str(verb) for verb in matches.get("all_methods", [])),
         request_requirements=request_requirements,
         requirement_names=frozenset(
@@ -648,26 +659,6 @@ def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
         )
         for entry in declared
     )
-
-
-def _getters_of(declared: dict[str, Any]) -> dict[tuple[str, str], str]:
-    """A `getters:` table — `"<owner>#<method>": <value>` — keyed as the facts key a
-    call: the dotted spelling converted to the descriptor form (`type_descriptor`'s own
-    conversion, so the owner half compares as every rule owner does), then split by the
-    symbol seam into the owner's descriptor and the member's name. Only ever called on
-    a table `_validate_matches` already passed."""
-    getters: dict[tuple[str, str], str] = {}
-    for key, value in declared.items():
-        descriptor = _getter_descriptor(str(key))
-        getters[(str(owner_of(descriptor)), member_name(descriptor))] = str(value)
-    return getters
-
-
-def _getter_descriptor(key: str) -> str:
-    """A `getters:` key in the descriptor form the facts carry: the dotted owner becomes
-    the slashed one, the `#` and the member name stay as written — exactly what
-    `type_descriptor` does to a rule owner, applied to a member spelling."""
-    return key.replace(".", "/")
 
 
 def _by_owner_method(rules: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -1715,8 +1706,9 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
 
 def _verbs_at(argument: dict[str, Any] | None, scope: _Scope) -> list[str]:
     """The verbs one `verb_arg` argument names, in the order written — empty for
-    anything that is not an enum member, a string literal, a getter-valued constant the
-    catalog's `verb_values.getters` table names, or an array of those. A getter the
+    anything that is not an enum member, a string literal, a constant the catalog's
+    `verb_values` tables name — as a getter's result (`getters`) or a static field
+    (`fields`) — or an array of those. A getter the
     table does not name reads as nothing, and the caller poisons `method`: the verb was
     written and is unreadable, which is an unresolved row and not a phantom."""
     elements = _array_elements(argument)
@@ -1729,7 +1721,9 @@ def _verbs_at(argument: dict[str, Any] | None, scope: _Scope) -> list[str]:
         return [str(argument["value"])]
     if argument.get("kind") == "enum" and argument.get("symbol") is not None:
         return [member_name(str(argument["symbol"]))]
-    verb = _getter_value(argument, scope, scope.context.verb_getters)
+    verb = static_field_value(argument, scope.context.verb_fields) or _getter_value(
+        argument, scope, scope.context.verb_getters
+    )
     return [] if verb is None else [verb]
 
 
@@ -2471,24 +2465,24 @@ def _validate_matches(catalog: Catalog) -> None:
             f"list of upper-case verbs (D02 §2's `combinator` style)"
         )
     # Spec 2026-09-19 §4b: the getter form of the two value tables. `verb_values` holds
-    # `getters` alone (a verb constant is never an enum member on the frameworks measured);
-    # `media_values.getters` sits beside `owner`/`values`. Every key is `<owner>#<method>`.
+    # `getters` and, since spec 2026-10-26 §3a, `fields` — a verb constant is never an enum
+    # member on the frameworks measured; `media_values.getters` sits beside `owner`/`values`.
+    # Every key is `<owner>#<member>`.
     verb_values = vocabulary.get("verb_values", {})
-    if not isinstance(verb_values, dict) or set(verb_values) - {"getters"}:
+    if not isinstance(verb_values, dict) or set(verb_values) - {"getters", "fields"}:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `verb_values` holds `getters` alone, got "
-            f"{verb_values!r} (D02 §2's `combinator` style)"
+            f"loading catalog {catalog.source}: `verb_values` holds `getters` and `fields` "
+            f"alone, got {verb_values!r} (D02 §2's `combinator` style)"
         )
-    for table, getters in (
-        ("verb_values", verb_values.get("getters", {})),
-        ("media_values", vocabulary.get("media_values", {}).get("getters", {})),
+    for table, declared in (
+        ("verb_values.getters", verb_values.get("getters", {})),
+        ("verb_values.fields", verb_values.get("fields", {})),
+        ("media_values.getters", vocabulary.get("media_values", {}).get("getters", {})),
     ):
-        if not isinstance(getters, dict) or not all(
-            isinstance(key, str) and _names_a_member(_getter_descriptor(key)) for key in getters
-        ):
+        if not names_members(declared):
             raise CatalogError(
-                f"loading catalog {catalog.source}: `{table}.getters` is a mapping of "
-                f"`<owner>#<method>` to a value, got {getters!r} (D02 §2's `combinator` "
+                f"loading catalog {catalog.source}: `{table}` is a mapping of "
+                f"`<owner>#<member>` to a value, got {declared!r} (D02 §2's `combinator` "
                 f"style)"
             )
     for origin in catalog.matches.get("origins", []):
@@ -2515,14 +2509,6 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"`fills: {rule.get('fills')!r}` — a media rule fills `consumes` or "
                 f"`produces` (D02 §2's `combinator` style)"
             )
-
-
-def _names_a_member(descriptor: str) -> bool:
-    """Whether a converted `getters:` key is exactly one owner and one member name — the
-    seam's owner, the seam's member, and nothing between or after them."""
-    owner = owner_of(descriptor)
-    member = member_name(descriptor)
-    return owner is not None and bool(member) and owner + member == descriptor
 
 
 def _position_inside(position: Any, rule: dict[str, Any]) -> bool:

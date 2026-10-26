@@ -5509,6 +5509,64 @@ def test_a_verb_argument_nothing_can_read_derives_no_verb_rather_than_the_roots_
     ]
 
 
+# --- `verb_values.fields` (spec 2026-10-26 §3a): a verb read from a static field ---
+
+_KTOR_VERB_MATCHES = {
+    "verb_values": {"fields": {"io.ktor.http.HttpMethod#Put": "PUT"}},
+    "roots": [
+        {
+            "owner": "okhttp3.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [
+        {"method": "url", "captures": {"url": "arg0"}},
+        {"method": "method", "captures": {"http_method": "arg0"}},
+    ],
+    "terminal": [{"method": "build", "terminal_via_argument": True}],
+}
+
+
+def _verb_rows(tmp_path: Path, verb_argument: CallArgument) -> list:
+    facts = _okhttp_generic_method_chain("com/acme/http/Client#put().", verb_argument)
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_KTOR_VERB_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["path"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_fluent_verb_capture_reads_a_static_field(tmp_path: Path):
+    """Ktor 3.6.0 passes `HttpMethod.Put` to `setMethod` as a `getstatic` — a `field`-kind
+    argument with the field's symbol. Under a catalog declaring `verb_values.fields` the
+    `http_method: arg0` capture reads it, the same table `combinator` reads, where it read
+    `unresolved` (and `method` NULL) before."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Put.")
+    ) == [("PUT", "/orders/1", "resolved")]
+
+
+def test_a_fluent_static_field_the_table_does_not_name_is_no_verb(tmp_path: Path):
+    """The near-miss: any other static field handed as the verb stays today's honest
+    answer, `method` NULL at `unresolved`, never the root's `GET` default."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Post.")
+    ) == [(None, "/orders/1", "unresolved")]
+
+
+def test_a_fluent_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path):
+    """A `fluent` catalog's `verb_values` holds `fields` alone, each key `<owner>#<field>`;
+    anything else is a broken file, refused at load."""
+    for broken in (
+        {"fields": {"io.ktor.http.HttpMethod.Put": "PUT"}},
+        {"getters": {"io.ktor.http.HttpMethod$Companion#getPut": "PUT"}},
+    ):
+        catalog = _fluent_catalog({**_KTOR_VERB_MATCHES, "verb_values": broken})
+        with pytest.raises(CatalogError, match="verb_values"):
+            _resolve_fluent(tmp_path, [], catalog)
+
+
 # --- `A-M3`/`A-M4` (principles sweep §3.3): the two Spring HTTP clients ------
 #
 # Both catalogs were built from the five verbs the fixture happened to use.

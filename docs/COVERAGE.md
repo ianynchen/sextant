@@ -831,7 +831,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams-topology` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
-| `ktor-routing` | `io.ktor:ktor-server-core-jvm` | 3.0.3 |
+| `ktor-routing` | `io.ktor:ktor-http-jvm` | 3.6.0 |
+|  | `io.ktor:ktor-server-core-jvm` | 3.0.3 |
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
 | `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |

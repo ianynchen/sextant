@@ -76,6 +76,11 @@ from sextant.application.resolve.shapes.arguments import (
     with_authority,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.member_values import (
+    member_table,
+    names_members,
+    static_field_value,
+)
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
@@ -333,6 +338,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     undeclared_owners, undeclared_poisons = _undeclared_steps(matches, catalog)
     _validate_poisons([*roots, *bean_roots], steps, undeclared_poisons, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []), catalog)
+    verb_fields = _verb_fields(matches, catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -475,6 +481,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             roots=roots,
             all_parameters=caller_parameters,
             annotations=annotations,
+            verb_fields=verb_fields,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -659,6 +666,10 @@ class _ChainContext:
     # §4's `method_annotation`: every annotation by target, or empty where no
     # root declares the word.
     annotations: dict[str, list[tuple[str, dict[str, Any]]]]
+    # Spec 2026-10-26 §3a: the static fields that name a verb (`verb_values.fields`),
+    # keyed on `(owner, field name)` — what an `http_method: argN` capture reads when
+    # its argument is a `field`-kind one. Empty for a catalog declaring none.
+    verb_fields: dict[tuple[str, str], str]
     # Where a walk records each chain END's captures instead of deriving a row
     # — the collecting context `_bean_chain_capture` builds. None on the
     # deriving walk.
@@ -1043,7 +1054,11 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # string, and None where nothing could read it — the honest gap, not the
     # root's default.
     declared_verb = captures.get("http_method")
-    verb = declared_verb if isinstance(declared_verb, str) else _string_value(declared_verb)
+    verb = (
+        declared_verb
+        if isinstance(declared_verb, str)
+        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)
+    )
     # A chain whose root (and every step it folded through) never captured
     # `http_method` is verbless by declaration — mirroring single_call's D02
     # §2 `verbless` row (a topic has no verb, precondition commit, 2E-prep
@@ -2363,6 +2378,27 @@ def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
         for _, path, resolution in found
     ]
     return elements[0] if len(elements) == 1 else {"kind": "array", "elements": elements}
+
+
+def _verb_fields(matches: dict[str, Any], catalog: Catalog) -> dict[tuple[str, str], str]:
+    """`matches.verb_values.fields` as the table `static_field_value` reads (spec
+    2026-10-26 §3a): the static fields that name a verb, `"<owner>#<field>": <verb>`, for a
+    library whose builder is handed `HttpMethod.Put` as a `getstatic` and not a string.
+    Empty for a catalog declaring none. A block holding anything but `fields`, or a key
+    that is not one owner and one field, is a broken file (D02 §2's `fluent` style)."""
+    declared = matches.get("verb_values", {})
+    if not isinstance(declared, dict) or set(declared) - {"fields"}:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `verb_values` holds `fields` alone, got "
+            f"{declared!r} (D02 §2's `fluent` style)"
+        )
+    fields = declared.get("fields", {})
+    if not names_members(fields):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `verb_values.fields` is a mapping of "
+            f"`<owner>#<field>` to a verb, got {fields!r} (D02 §2's `fluent` style)"
+        )
+    return member_table(fields)
 
 
 def _undeclared_steps(

@@ -6221,6 +6221,100 @@ def test_an_unknown_verb_getter_poisons_the_method_alone(tmp_path: Path):
     assert _identities(rows) == [(None, "/x", _MODULE + _SUSPEND_BODY, "unresolved")]
 
 
+_HTTP_METHOD = "io/ktor/http/HttpMethod#"
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_ktor3_method_block_reads_its_verb_from_the_static_field(tmp_path: Path):
+    """Spec 2026-10-26 §2d/§3a. Ktor 3.6.0 compiles `HttpMethod.Get` to a `getstatic` of a
+    static field, so the selector is handed a `field`-kind argument carrying the field's
+    symbol and no getter call at all (CP-54 row (a) rows 1-2). Before `verb_values.fields`
+    the verb read as nothing, `method` was poisoned and the route inside was one
+    unresolved row; now the scope is `GET` and `post` disagreeing with it is silence, as
+    on 3.0.3. The four-argument `route(path, HttpMethod.Put)` reads the field the same
+    way."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_HTTP_METHOD + "Get.")],
+            [("get", "/x"), ("post", "/never")],
+        ),
+        (
+            "route",
+            [
+                CallArgument(kind="string", value="/v"),
+                CallArgument(kind="field", symbol=_HTTP_METHOD + "Put."),
+            ],
+            [("put", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/x", handler, "resolved"),
+        ("PUT", "/v/y", handler, "resolved"),
+    ]
+
+
+def test_the_ktor303_getter_form_still_reads(tmp_path: Path):
+    """The same `method(HttpMethod.Get) { get("/x") }` on Ktor 3.0.3 — the Companion getter
+    — reads `GET` exactly as before the field form was added: the two forms sit beside each
+    other in `verb_values`, neither replacing the other."""
+    facts = _selector_tree(("method", [_by_source(9)], [("get", "/x")]))
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/x", _MODULE + _SUSPEND_BODY, "resolved")]
+
+
+def test_an_undeclared_field_is_no_verb(tmp_path: Path):
+    """A static field the table does not name — `method(Constants.WEIRD)`, or a field of
+    `HttpMethod` that is not a verb word — is no verb: `method` is poisoned, the row is
+    unresolved with its path intact, exactly as an undeclared getter reads. The field
+    form reads one declared member at a time and never a name guessed to be its value."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_UNKNOWN_GETTERS + "WEIRD.")],
+            [("get", "/x")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_HTTP_METHOD + "DefaultMethods.")],
+            [("get", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        (None, "/x", handler, "unresolved"),
+        (None, "/y", handler, "unresolved"),
+    ]
+
+
+def test_a_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path):
+    """`verb_values.fields` is validated at load as `getters` is: a key without its `#` (no
+    field named), or a `verb_values` block holding a key besides `getters` and `fields`,
+    is a broken file, not a degraded run."""
+    for broken in (
+        {"fields": {"io.ktor.http.HttpMethod.Get": "GET"}},
+        {"fields": ["io.ktor.http.HttpMethod#Get"]},
+        {"owner": "io.ktor.http.HttpMethod"},
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["verb_values"] = broken  # type: ignore[index]
+        with pytest.raises(CatalogError, match="verb_values"):
+            _resolve(tmp_path, [], _catalog(matches))
+
+
 def test_media_selectors_read_their_getter_valued_constants_and_an_unknown_one_reads_nothing(
     tmp_path: Path,
 ):

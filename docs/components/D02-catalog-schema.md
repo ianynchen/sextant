@@ -1883,6 +1883,16 @@ matches:
   terminal: [retrieve, exchange]
 ```
 
+**A verb argument may be a static field** (spec 2026-10-26 §3a). A root or step that
+captures `http_method: argN` reads the argument as a string literal; where the library hands
+its builder a verb constant as a `getstatic` instead (Ktor 3.6.0's `setMethod(HttpMethod.Put)`),
+the argument is a `field`-kind one and the catalog names the fields in
+`matches.verb_values: { fields: { "<owner>#<field>": <verb> } }` — the same table, keys and
+reader `combinator`'s `vocabulary.verb_values.fields` uses (§2's `combinator` style). A field
+the table does not name is no verb: `method` NULL at `unresolved`, never the root's default. A
+`verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
+refused at load.
+
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is
 LAST-WINS — a repeated step overwrites its own earlier value — which is right for a url and
@@ -2416,7 +2426,15 @@ framework:**
   verb — never as its own name. `verb_arg` on a prefix, `media_arg` without `fills` or
   outside a prefix, `request_requirement` on anything but a prefix or a `pass_through`
   continuation, a `verb_values` holding anything but `getters`, and a getter key that is not
-  one owner and one member are each refused at load.
+  one owner and one member are each refused at load. **`verb_values` also takes `fields:`**
+  (spec 2026-10-26 §3a) — `"<owner>#<field>": <verb>` — for a verb that reaches a call site
+  as a STATIC FIELD, not a getter's result: Ktor 3.6.0 declares `HttpMethod.Get … Query` as
+  public static fields and user code reads one with a `getstatic`, so the argument is a
+  `field`-kind one carrying the field's `symbol`, looked up on its `(owner, field name)`. The
+  two forms sit side by side, since Ktor 3.0.3 code still calls the getters; a field the
+  table does not name reads as nothing, the same poisoned verb. The reader is one function
+  shared with `fluent` (`shapes/member_values.py`). A `fields` key that is not one owner and
+  one field is refused at load, as a getter key is.
 - **A verb rule may set a media column instead of a verb — the media-guarded route**
   (spec 2026-09-21 §7a; `dsl-media-route`). `accept(MediaType, Function1)` /
   `contentType(MediaType, Function1)` on the Spring Kotlin router DSLs declare a route under a
