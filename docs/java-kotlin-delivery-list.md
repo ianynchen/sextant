@@ -54,7 +54,7 @@ SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
 SSE                | SSE        |
-gRPC               | gRPC       | quarkus-grpc-mutiny
+gRPC               | gRPC       |
 Kafka              | Kafka      |
 JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
@@ -64,9 +64,9 @@ Async              | Async      | quartz akka-pekko-actors
 ```
 
 **Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
-the only remaining gaps are in languages this target does not cover. gRPC's are Go, Python,
-Rust and Swift, plus, since 2026-10-24, one Java gap: `quarkus-grpc-mutiny`, which blocks the
-row until it closes (§1).
+the only remaining gaps are in languages this target does not cover. **gRPC left this block on
+2026-10-26**, when `quarkus-grpc-mutiny`, its one Java gap, closed on CI run 40253274692: the
+§2b cell is the Java/Kotlin row's, and it reads `✅`.
 
 **REST inbound joined this block on 2026-10-22**, when `conditional-controllers` — its last open
 id — closed. The cell still reads `◐ (1B 3C)` for four §5.1 rows that were never on this
@@ -85,7 +85,6 @@ so no cell moves: the register's `—` says so, and its row empties because its 
 Java — so it is real work, sequenced after Spring Boot, not something scoped away.
 
 ```scoped-out
-gRPC
 REST inbound
 ```
 
@@ -359,6 +358,7 @@ run that closed them.
 `35800079998` (PR #36) is the green run that closed them.
 
 ```closed
+quarkus-grpc-mutiny | tests/e2e/test_grpc_quarkus_delivered.py::test_a_self_call_is_a_hop_to_its_handler | https://github.com/ianynchen/sextant/actions/runs/40253274692
 temporal-cadence | tests/e2e/test_async_delivered.py::test_temporal_shapes_nine_rows | https://github.com/ianynchen/sextant/actions/runs/35800079998
 vertx-eventbus | tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows | https://github.com/ianynchen/sextant/actions/runs/35800079998
 pubsub-channel-adapter | tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows | https://github.com/ianynchen/sextant/actions/runs/35663682722
@@ -517,21 +517,20 @@ run 34669970510; the cell reads `✅`.
 |---|---|
 | `jaxrs-sse` | **closed** — implemented, pinned by `test_a_jaxrs_sse_endpoint_is_classified_as_sse` and `test_quarkus_element_type_alone_makes_a_stream_sse` (`tests/e2e/test_rest_inbound_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `jakarta-jaxrs.yml`/`javax-jaxrs.yml` carry `protocol_hint.hint_media` on `@Produces(SERVER_SENT_EVENTS)`; `quarkus-rest.yml` adds a second, presence-only evidence kind, `protocol_hint.hint_annotations`, for `@RestStreamElementType`/`@RestSseElementType` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §3c). Was: JAX-RS `@Produces(SERVER_SENT_EVENTS)` — an attribute on a sibling annotation of the verb's method, the same engine form as `quarkus-jaxrs` (§0, "Moved to engine work") |
 
-### gRPC — NOT DELIVERED (`quarkus-grpc-mutiny`, named 2026-10-24 at the Quarkus gRPC close)
+### gRPC — DELIVERED (`quarkus-grpc-mutiny`, the last open id, closed 2026-10-26; matrix `✅`)
 
 The row had no blocker, and its cell read `◐` only for languages this target does not cover.
 Quarkus gRPC shipped on 2026-10-24 for grpc-java's generated `ImplBase`/`…Stub` forms. Measuring
 it on the real Quarkus modules found that both of them use the OTHER form, Quarkus's own Mutiny
 classes, which nothing reads. That is a Java gap against a catalogued library, so it is named
-here. The ```scoped-out entry stays: once this id closes, the cell's remaining gaps are Go,
-Python, Rust and Swift again.
-`quarkus-grpc-mutiny` is built on branch `cov/quarkus-grpc-mutiny` (spec
-`docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md`, BUILT 2026-10-25) and closes on
-that branch's CI run.
+here. `quarkus-grpc-mutiny` closed with spec
+`docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md` (PR #70) on CI run
+40253274692. gRPC left ```scoped-out with it: the §2b cell is the Java/Kotlin row's, and it
+reads `✅`.
 
 | # | issue |
 |---|---|
-| `quarkus-grpc-mutiny` | **named 2026-10-24** (Task 4 field measurement of spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md`; `OI-192`). Quarkus generates a `MutinyService` interface per service (`examples.Greeter`) beside grpc-java's classes. Its quickstarts write the service as `@GrpcService public class HelloWorldService implements Greeter` and the client as `@GrpcClient("hello") Greeter helloService`. Neither reaches the identity, which only `GreeterGrpc`'s `ServiceDescriptor.newBuilder("helloworld.Greeter")` states, through the generated `GreeterClient`/`GreeterBean` → `MutinyGreeterGrpc` → `GreeterGrpc.getServiceDescriptor()`. **Real input:** `quarkus-quickstarts` @ `81a5844`, `grpc-plain-text-quickstart` and `grpc-tls-quickstart`. Each derives an `unresolved` outbound row at `examples/Greeter#` plus a `service_identity` question for the client, and a `service_identity` question on the service class, whose inbound row `helloworld.Greeter/SayHello` comes from the `.proto` alone with handler NULL. Costs a Quarkus module written the documented way its gRPC client's identity and its service's handler link — and without the `.proto` in the module, its inbound row too |
+| `quarkus-grpc-mutiny` | **closed 2026-10-26** (spec `docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md`, PR #70; probe CP-53; pinned by `tests/e2e/test_grpc_quarkus_delivered.py::test_a_quarkus_grpc_service_derives_and_is_corroborated` and `::test_a_self_call_is_a_hop_to_its_handler`; CI run 40253274692) — `grpc-quarkus.yml`'s delegating bean and `grpc-quarkus-client.yml`'s interface client read the Mutiny forms; a call to a served service is a hop (`rpc_hops`), not an outbound row. Measured on both quickstart gRPC modules: handler joined, no question, no gRPC outbound row, both REST traces reach the handler. Was: **named 2026-10-24** (Task 4 field measurement of spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md`; `OI-192`). Quarkus generates a `MutinyService` interface per service (`examples.Greeter`) beside grpc-java's classes. Its quickstarts write the service as `@GrpcService public class HelloWorldService implements Greeter` and the client as `@GrpcClient("hello") Greeter helloService`. Neither reaches the identity, which only `GreeterGrpc`'s `ServiceDescriptor.newBuilder("helloworld.Greeter")` states, through the generated `GreeterClient`/`GreeterBean` → `MutinyGreeterGrpc` → `GreeterGrpc.getServiceDescriptor()`. **Real input:** `quarkus-quickstarts` @ `81a5844`, `grpc-plain-text-quickstart` and `grpc-tls-quickstart`. Each derives an `unresolved` outbound row at `examples/Greeter#` plus a `service_identity` question for the client, and a `service_identity` question on the service class, whose inbound row `helloworld.Greeter/SayHello` comes from the `.proto` alone with handler NULL. Costs a Quarkus module written the documented way its gRPC client's identity and its service's handler link — and without the `.proto` in the module, its inbound row too |
 
 ### Kafka — DELIVERED (`smallrye-reactive-messaging`, the last open id, closed 2026-10-24; matrix `✅`)
 

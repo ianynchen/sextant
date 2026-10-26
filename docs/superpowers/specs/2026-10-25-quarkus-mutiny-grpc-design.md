@@ -3,7 +3,8 @@
 **Status: BUILT 2026-10-25** ("As built" below). Closes register item `quarkus-grpc-mutiny` (Plane SEXTANT-176)
 and `OI-192` (SEXTANT-66), and moves COVERAGE §2c's Quarkus gRPC cell from `◐` to `✅`, which
 makes Quarkus's row read `✅` everywhere it is scored — both in the commit after this branch's
-CI run (As built). Until then the cell reads `◐ (1 open)`.
+CI run (As built). *Closed 2026-10-26:* PR #70 passed CI run 40253274692, and the follow-up
+commit moved the register entry to ```closed; the cell reads `✅`.
 
 ## 1. The rulings (2026-10-25)
 
