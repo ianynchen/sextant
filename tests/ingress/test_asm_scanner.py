@@ -537,11 +537,12 @@ def test_no_fact_is_written_for_a_compiler_synthesized_field(tmp_path: Path):
     # 2026-10-26 (CP-33 row 6). It is a fact about an instruction, not a
     # declaration, and a write into a compiler-made field was already one: a
     # lambda class's captured `$seen` is synthetic too and the walk reads its write.
-    assert not [
-        line
-        for line in written.splitlines()
-        if "$VALUES" in line and '"kind":"field_write"' not in line
-    ]
+    naming = [json.loads(line) for line in written.splitlines() if "$VALUES" in line]
+    assert naming, "the fixture's enums no longer write `$VALUES` — this pin measures nothing"
+    for fact in naming:
+        assert fact["kind"] == "field_write", fact
+        assert fact["field"].endswith("#$VALUES."), fact
+        assert "#<clinit>(" in fact["written_by"], fact
 
 
 def test_a_nested_class_is_scanned_under_the_outer_sources_path_and_its_own_id(

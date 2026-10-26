@@ -7601,6 +7601,83 @@ def test_rung_two_follows_a_field_write_to_the_annotated_constructor_parameter(
     assert endpoint["resolution"] == "resolved"
 
 
+def _annotated_constructor() -> SymbolFact:
+    """`Client(@Value("${billing.url}") String url)` — a constructor whose parameter 0
+    carries the expression rung 2 reads."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + CLIENT + "<init>(sig_96735f85).",
+        construct_kind="constructor",
+        enclosing=_MODULE + CLIENT,
+        signature=Signature(
+            parameters=[
+                Parameter(
+                    name="url",
+                    type=TypeRef(symbol="java/lang/String#"),
+                    annotations=[
+                        AnnotationUse(annotation=VALUE_ANNOTATION, args={"value": "${billing.url}"})
+                    ],
+                )
+            ]
+        ),
+    )
+
+
+def test_rung_two_reads_the_annotation_of_the_constructor_that_wrote_the_field(
+    tmp_path: Path,
+):
+    """Rung 2 with the writer NAMED: the `field_write` says `Client#<init>` wrote the field
+    from its parameter 0, and that constructor's parameter 0 carries the expression."""
+    caller = "com/acme/http/Client#constructorNamed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "constructorUrl.")),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + CLIENT + "constructorUrl.", construct_kind="field"
+        ),
+        _annotated_constructor(),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=CLIENT + "constructorUrl.",
+            from_parameter=0,
+            written_by=_MODULE + CLIENT + "<init>(sig_96735f85).",
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/invoices"
+    assert endpoint["resolution"] == "resolved"
+
+
+@pytest.mark.pins("shapes.a-field-borrows-an-annotation-only-from-its-CONSTRUCTOR-write")
+def test_rung_two_lends_no_constructor_annotation_to_a_field_a_SETTER_wrote(tmp_path: Path):
+    """`OI-214`. `static void setHost(String h) { Client.host = h; }` writes the field from
+    ITS parameter 0, and the type also has a constructor whose parameter 0 carries
+    `@Value("${billing.url}")`. Nothing ties the two: the setter's own parameter is what the
+    field holds. Lending the constructor's annotation published `${billing.url}` as this
+    address at `resolved`. Real input reaches it since `PUTSTATIC` became a field write
+    (2026-10-26), and an instance setter beside an annotated constructor reached it before."""
+    caller = "com/acme/http/Client#setterFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "host.")),
+        SymbolFact(document_id="doc_1", symbol=_MODULE + CLIENT + "host.", construct_kind="field"),
+        _annotated_constructor(),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=CLIENT + "host.",
+            from_parameter=0,
+            written_by=_MODULE + CLIENT + "setHost(sig_5c2e1a01).",
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert "${billing.url}" not in str(endpoint["path"])
+    assert endpoint["resolution"] != "resolved"
+
+
 def test_rung_three_synthesises_the_key_from_a_properties_field_read_directly(
     tmp_path: Path,
 ):

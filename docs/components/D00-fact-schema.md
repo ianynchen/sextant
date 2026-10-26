@@ -1192,14 +1192,24 @@ facts on the five field pins that gained any, 123 are `PUTSTATIC` from a call (m
 static logger — `LoggerFactory.getLogger`), 7 more are an enum's compiler-made `$VALUES`, 93
 are `PUTFIELD` from a call (among them `spring-petclinic-genai-service`'s `webClient`,
 `restClient` and `chatClient`, each built from a builder), and 5 are `PUTSTATIC` from a
-constant or a parameter; on the probe, 41 of the 43 are Kotlin coroutines saving a call's
-result into their continuation (`L$0`, `L$1`, …) and 2 are `ProbeKt#client` and
-`ProbeKt#derivedClient`. The
+constant or a parameter. On the probe, 2 of the 43 are `ProbeKt#client` and
+`ProbeKt#derivedClient`, and the other 41 are a coroutine's continuation fields (`L$0`,
+`L$1`, …) written with `SpillingKt.nullOutSpilledVariable(x)` — a library function whose
+body is `aconst_null; areturn`, so each stores NULL into a spill slot that is dead from then
+on. They stay reported: telling them apart would mean modelling a library method's body, or
+naming that one helper, and both are ruled out ("one rule, not one parser per method"). The
+answer they give stays honest — such a read resolves to the helper's result, which is
+`external`, never to a value. The
 walk's cost barely moved (`scripts/measure_value_walk.py`'s reader, every position a shipped
 catalog asks about): `apollo-portal` 28,801 → 28,817 positions visited and 7,949 → 7,952
 paths over 259 positions, `no_writer` 16 → 13, with no other pin's figures changing beyond one
 visit; over EVERY slot of the probe, 3,362 → 3,395 visits and `no_writer` 69 → 36, the 33
-reads now answering `external` — a factory in a jar nobody scanned. No published row moved
+reads now answering `external`. 23 of them read `ProbeKt#client` or `derivedClient` and reach
+the factory, a jar nobody scanned. The other 10 read a continuation's `L$0` — among them the
+`HttpClient` argument of `ws$default`, `wss$default` and `webSocketSession$default` in
+`MainKt$main$1/2/3` — and reach only the null-out write: the slot's real value is written in
+the continuation's `create()` as `other.L$0 = p`, a write into ANOTHER object, which stays
+excluded. Those reads stay unresolved, which is true. No published row moved
 and all six field pins still pass. Every key is OPTIONAL, so a fact written before any of
 these reads exactly as it did and no schema version moved.
 

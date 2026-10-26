@@ -111,6 +111,16 @@ _HTTP_CLIENT = (
     ),
 )
 _PROPERTY = _PKG + "Property#"
+# A coroutine continuation's spill slot, as kotlinc 2.2 compiles it (CP-54 probe,
+# `MainKt$main$1`): `invokeSuspend` writes `this.L$0 = SpillingKt.nullOutSpilledVariable(x)` —
+# a library helper whose body is `aconst_null; areturn` — and the slot's REAL value is written
+# in `create()` as `other.L$0 = p`, a write into another object that no fact reports.
+_SPILL = _PKG + "Spill$1#"
+_NULL_OUT = (
+    "kotlin/coroutines/jvm/internal/SpillingKt#",
+    "nullOutSpilledVariable",
+    "(Ljava/lang/Object;)Ljava/lang/Object;",
+)
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -268,6 +278,7 @@ def _facts() -> list[Fact]:
             _UNREADABLE,
             _PROBE_KT,
             _PROPERTY,
+            _SPILL,
             _CLOSING,
             _ENTRY,
             _OUTSIDE,
@@ -803,6 +814,28 @@ def _facts() -> list[Fact]:
             _ONE_TARGET,
             kind="virtual",
             arguments=[CallArgument(kind="field", symbol=_PROPERTY + "made.")],
+        ),
+        # The spill slot: the only REPORTED write is the null-out helper's result (value id 9
+        # in `invokeSuspend`); `create` is where the real value comes from — `Names#one()`,
+        # which returns `solo` — and it stores it with `other.L$0 = …`, so no fact says so.
+        _declared(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+        _site(_symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT), 0, _NULL_OUT, result=9),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SPILL + "L$0.",
+            value=CallArgument(kind="unresolved", source=9),
+            written_by=_symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+        ),
+        _site(
+            _symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_SPILL + "L$0.")],
+        ),
+        _declared(_SPILL, "create", _MAKES_OBJECT),
+        _site(
+            _symbol(_SPILL, "create", _MAKES_OBJECT), 0, (_NAMES, "one", _MAKES_STRING), result=4
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1693,6 +1726,24 @@ def test_a_property_written_from_a_call_in_the_constructor_is_followed(walked):
     """
     bindings = _bindings(walked, _symbol(_PROPERTY, "send", "()V"), 1)
     assert [binding.slots[0].value for binding in bindings] == ["solo"]
+
+
+def test_a_slot_whose_only_reported_writer_stores_a_helpers_result_stays_unresolved(walked):
+    """**The honest answer where the reported write is not the one that matters.** Measured
+    on the CP-54 probe: all 41 continuation `L$N` writes the call-result widening added are
+    `this.L$N = SpillingKt.nullOutSpilledVariable(x)`, which stores NULL into a slot that is
+    dead from then on, and the slot's real value is written in `create()` as `other.L$0 = p`
+    — a write into another object, which the fact excludes. Ten probe reads of `L$0`, the
+    `HttpClient` argument of `ws$default` among them, reach only the null-out write.
+
+    They stay reported (ruled 2026-10-26): telling the helper apart would mean modelling a
+    library method's body or naming it, "one rule, not one parser per method". What makes
+    that safe is this answer — the helper is a jar nobody scanned, so the read is `external`
+    and never a value; above all never `solo`, the value `create` really stores.
+    """
+    bindings = _bindings(walked, _symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT), 1)
+    assert [binding.slots[0].kind for binding in bindings] == ["unresolved"]
+    assert _reasons(bindings) == ["external"]
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):

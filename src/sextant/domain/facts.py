@@ -554,9 +554,9 @@ class FieldWriteFact(BaseModel):
     rule: a setter's assignment is the same `ALOAD 0; ALOAD k; PUTFIELD` triple,
     measured as CP-33 row 1, and lifting it roughly TRIPLED the writes found on
     real code — `spring-petclinic-rest` 86 to 237, `apollo-portal` 553 to 1,638
-    (spec `2026-10-18-the-sixth-edge-design.md` §0). A static method is still
-    refused, which IS a soundness rule: slot 0 is its first parameter rather than
-    `this`.
+    (spec `2026-10-18-the-sixth-edge-design.md` §0). A static method's `PUTFIELD`
+    is still refused, which IS a soundness rule: slot 0 is its first parameter rather
+    than `this`, so it writes another object's field.
 
     `written_by` is OPTIONAL and absent by default, so a fact written before it
     reads exactly as it did and no schema version moves — the property

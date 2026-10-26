@@ -10,8 +10,8 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
 
-/** D00 §5's {@code field_write}: an INSTANCE METHOD assigns parameter N directly to field
- *  F, and the fact names which method did it. {@code ConstructorSample.java} is compiled by
+/** D00 §5's {@code field_write}: a method assigns a parameter, a constant or a call's result
+ *  directly to field F, and the fact names which method did it. {@code ConstructorSample.java} is compiled by
  *  Gradle's own test compilation, like {@code CallSample.java} beside it, so every assertion
  *  here is about the bytecode javac actually emits.
  *

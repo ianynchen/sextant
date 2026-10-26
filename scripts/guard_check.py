@@ -693,6 +693,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "shapes.a-field-borrows-an-annotation-only-from-its-CONSTRUCTOR-write": Guard(
+        what="field-ladder rung 2 lends a constructor parameter's annotation to a field only "
+        "where that constructor wrote the field from that parameter",
+        why="`OI-214`: a field written by a SETTER from its own parameter N — `static void "
+        "setHost(String h) { Client.host = h; }`, a field write since `PUTSTATIC` became one "
+        'on 2026-10-26 — beside a constructor whose parameter N carries `@Value("${…}")` '
+        "published that constructor's expression as the address at `resolved`. Nothing ties "
+        "the setter's value to the constructor's parameter; trying every constructor whatever "
+        "the writer is the mistake this guard writes back",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="        if writer is None:\n"
+                "            candidates = facts.constructor_parameters.get(owner, [])",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            candidates = facts.constructor_parameters.get(owner, [])",
+            ),
+        ),
+    ),
     "shapes.an-INEXACT-address-publishes-at-partial": Guard(
         what="`url_of_answer` publishes an inexact literal at `partial`, never `resolved`",
         why="`partial` is the word D00 §4 has for 'part of this address was read'; `resolved` "

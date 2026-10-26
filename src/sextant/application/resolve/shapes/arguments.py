@@ -37,7 +37,7 @@ from sextant.application.resolve.values import (
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.redaction import authority_without_userinfo
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
 
 # The scheme is OPTIONAL, which admits RFC 3986 §4.2's scheme-relative reference
 # (`//authority/path`) beside an absolute URL. The walk writes that form when it joined
@@ -793,8 +793,9 @@ class FieldFacts:
 
     - `value_expressions` — the expression the `value_annotation` carries on
       one field (rung 1);
-    - `written_from_parameter` — D00 §5's `field_write`, the constructor
-      parameter index a field was assigned straight from (rung 2);
+    - `written_from_parameter` — D00 §5's `field_write`: every write of a field
+      straight from a parameter, as (the writing method, the parameter index) —
+      the method `None` on a fact older than `written_by` (rung 2);
     - `constructor_parameters` — each type's constructors' own parameter
       lists, where a parameter's annotations live and nowhere else (Task 6
       checkpoint (3): the `annotations` view never carries them);
@@ -816,7 +817,7 @@ class FieldFacts:
 
     sources: FieldSources
     value_expressions: dict[str, str]
-    written_from_parameter: dict[str, int]
+    written_from_parameter: dict[str, list[tuple[str | None, int]]]
     constructor_parameters: dict[str, list[list[dict[str, Any]]]]
     prefixes: dict[str, str]
     declared_fields: dict[str, list[str]]
@@ -871,7 +872,7 @@ class FieldDeclarations:
     every `FieldFacts` built after: read, never written into. The two maps that read
     the catalog's own annotation names stay with `field_facts`."""
 
-    written_from_parameter: dict[str, int]
+    written_from_parameter: dict[str, list[tuple[str | None, int]]]
     constructor_parameters: dict[str, list[list[dict[str, Any]]]]
     declared_parameters: dict[str, list[dict[str, Any]]]
     declared_fields: dict[str, list[str]]
@@ -880,7 +881,7 @@ class FieldDeclarations:
 def field_declarations(workspace: Workspace) -> FieldDeclarations:
     """`FieldDeclarations` over `field_writes`, `constructor_declarations`,
     `method_declarations` and `fields` — the builder `Workspace.once` keys on."""
-    written_from_parameter: dict[str, int] = {}
+    written_from_parameter: dict[str, list[tuple[str | None, int]]] = {}
     for row in workspace.query("field_writes"):
         # **A write from a CONSTANT carries no parameter** (`OI-138` cause 2), and this rung
         # is about parameters alone: it joins a `field`-kind argument back to the constructor
@@ -890,11 +891,13 @@ def field_declarations(workspace: Workspace) -> FieldDeclarations:
         # resolve, which is how this line came to be guarded.
         if row["from_parameter"] is None:
             continue
-        # First write wins, in the query's own (field, from_parameter) order:
-        # two constructors assigning one field from different positions are
-        # two candidate answers, and a deterministic first is the only honest
-        # pick without a fact linking a write to its constructor.
-        written_from_parameter.setdefault(str(row["field"]), int(str(row["from_parameter"])))
+        # Every write, in the query's own (field, from_parameter) order, WITH its writer:
+        # rung 2 reads only the ones a constructor made (`_constructor_expression`), and
+        # a deterministic first among those is its pick.
+        writer = row.get("written_by")
+        written_from_parameter.setdefault(str(row["field"]), []).append(
+            (None if writer is None else str(writer), int(str(row["from_parameter"])))
+        )
     constructor_parameters: dict[str, list[list[dict[str, Any]]]] = {}
     declared_parameters: dict[str, list[dict[str, Any]]] = {}
     for row in workspace.query("constructor_declarations"):
@@ -1125,24 +1128,38 @@ def _parameter_expression(
 
 def _constructor_expression(field: str, facts: FieldFacts) -> str | None:
     """Rung 2: the field was assigned straight from constructor parameter N
-    (D00 §5's `field_write`), and that parameter carries the expression. The
-    `field_write` fact names the position but not WHICH constructor wrote it,
-    so every constructor the owning type declares is tried in symbol order and
-    the first carrying the annotation at that position answers — deterministic
+    (D00 §5's `field_write`), and that parameter carries the expression.
+
+    **Only a write a CONSTRUCTOR made lends its parameter's annotation** (`OI-214`).
+    Since 2026-10-18 a field's writer may be any method, and since 2026-10-26 a static
+    one: `static void setHost(String h) { Client.host = h; }` writes `host` from the
+    SETTER's parameter 0, and lending the annotation on a constructor's parameter 0
+    beside it published that constructor's `${…}` as the address at `resolved`. The
+    fact names its writer (`written_by`), so the writing constructor's own parameter
+    list is read, and a write by anything else lends nothing. A fact older than
+    `written_by` was a constructor's by construction — the extractor reported nothing
+    else then — and still names no constructor, so every one the owning type declares
+    is tried in symbol order, as before. The first answer wins — deterministic
     (NFR-1), and silent rather than a guess where none does."""
-    index = facts.written_from_parameter.get(field)
     owner = owner_of(field)
-    if index is None or owner is None:
+    if owner is None:
         return None
-    for parameters in facts.constructor_parameters.get(owner, []):
-        if index >= len(parameters):
+    for writer, index in facts.written_from_parameter.get(field, []):
+        if writer is None:
+            candidates = facts.constructor_parameters.get(owner, [])
+        elif method_name(bare_descriptor(writer)) == "<init>":
+            candidates = [facts.declared_parameters.get(writer, [])]
+        else:
             continue
-        for use in parameters[index].get("annotations") or []:
-            if use.get("annotation") != facts.sources.value_annotation:
+        for parameters in candidates:
+            if index >= len(parameters):
                 continue
-            expression = (use.get("args") or {}).get(_ANNOTATION_VALUE_ARG)
-            if isinstance(expression, str):
-                return expression
+            for use in parameters[index].get("annotations") or []:
+                if use.get("annotation") != facts.sources.value_annotation:
+                    continue
+                expression = (use.get("args") or {}).get(_ANNOTATION_VALUE_ARG)
+                if isinstance(expression, str):
+                    return expression
     return None
 
 

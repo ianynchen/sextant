@@ -1,6 +1,6 @@
 package dev.sextant.extractor;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
@@ -41,11 +41,15 @@ class EnumScanTest {
      *  result into the field, which D00 §5's {@code field_write} reports since 2026-10-26
      *  (CP-33 row 6). A write into a compiler-made field was a fact before that too — a
      *  Kotlin lambda class's captured {@code $seen} is {@code ACC_SYNTHETIC}, and the walk
-     *  reads its write — so the write is left out of this assertion, not refused there. */
+     *  reads its write — so that one write is the only line allowed to name it, and it is
+     *  asserted exactly: one {@code field_write}, by {@code <clinit>}. */
     @Test
     void emits_no_fact_at_all_for_a_compiler_synthesized_field() throws Exception {
-        assertFalse(scanVerb().stream().anyMatch(line -> line.contains("VALUES")
-            && !line.contains("\"kind\":\"field_write\"")));
+        List<String> naming = scanVerb().stream().filter(line -> line.contains("VALUES")).toList();
+        assertEquals(1, naming.size(), String.join("\n", naming));
+        assertTrue(naming.get(0).contains("\"kind\":\"field_write\"")
+            && naming.get(0).contains("\"field\":\"dev/sextant/extractor/Verb#$VALUES.\"")
+            && naming.get(0).contains("#<clinit>("), naming.get(0));
     }
 
     /** The constants themselves are declarations, and they are bound to the
