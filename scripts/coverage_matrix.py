@@ -110,9 +110,8 @@ FRAMEWORKS: dict[str, list[str]] = {
         "Javalin",
         "Vert.x Web",
         "Akka HTTP",
-        "Helidon SE",
-        "Spark Java",
-        "Play Framework",
+        # Helidon SE, Spark Java and Play Framework left the target list on 2026-10-26: the
+        # user dropped them on adoption (docs/COVERAGE.md "Priority order").
     ],
     "REST outbound": [
         "Spring RestTemplate",
@@ -138,7 +137,7 @@ FRAMEWORKS: dict[str, list[str]] = {
         "Netflix DGS",
         "MicroProfile GraphQL",
         "graphql-java (schema-first)",
-        "GraphQL Kotlin (Expedia)",
+        # GraphQL Kotlin (Expedia) left on 2026-10-26, dropped on adoption with the three above.
     ],
     "WebSocket": [
         "Spring WebSocket",
@@ -294,10 +293,6 @@ FAMILIES: dict[str, list[str]] = {
     "Ktor": ["Ktor", "Ktor HttpClient", "Ktor WebSockets", "Ktor SSE"],
     "Javalin": ["Javalin"],
     "Vert.x": ["Vert.x Web", "Vert.x WebClient", "Vert.x EventBus"],
-    "Helidon (MP via JAX-RS; SE)": [
-        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
-        "Helidon SE",
-    ],
     "Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)": [
         "Jakarta / javax Servlet",
         "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
@@ -317,7 +312,6 @@ FAMILIES: dict[str, list[str]] = {
     ],
     "Kafka Streams": ["Kafka Streams"],
     "Netflix DGS": ["Netflix DGS"],
-    "GraphQL Kotlin (Expedia)": ["GraphQL Kotlin (Expedia)"],
     "Akka / Pekko (HTTP, Connectors, actors)": [
         "Akka HTTP",
         "Pekko / Alpakka Connectors Kafka",
@@ -326,8 +320,6 @@ FAMILIES: dict[str, list[str]] = {
     "Apache Camel": ["Apache Camel"],
     "Temporal / Cadence": ["Temporal / Cadence"],
     "Quartz": ["Quartz"],
-    "Play Framework": ["Play Framework"],
-    "Spark Java": ["Spark Java"],
 }
 
 _ESCAPED_PIPE = re.compile(r"(?<!\\)\|")

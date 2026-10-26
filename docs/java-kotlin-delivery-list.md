@@ -649,6 +649,11 @@ Rust, Swift), so its cell reads `◐` correctly and forever — the ```scoped-ou
 
 ---
 
+**Order of work (ruled 2026-10-26).** The Java/Kotlin frameworks still open are taken in this
+order: Ktor, Quartz, Vert.x, Akka / Pekko. Helidon SE, Play Framework, Spark Java and GraphQL
+Kotlin are dropped, and Apache Camel is out of scope. The full order, languages included, is in
+`docs/COVERAGE.md`, "Priority order".
+
 ## 2. Open Criticals and Majors that block no single feature
 
 These are real and they are not on the path to any cell above. They are listed so that

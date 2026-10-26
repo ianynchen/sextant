@@ -89,18 +89,14 @@ register.
 | **Ktor** | ✅ | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ✅ | — | — | — | — | — | — | — | — | — | — | — |
 | **Vert.x** | ◐ (1 not shipped) | ✗ | — | — | — | — | — | — | — | — | — | ✅ |
-| **Helidon (MP via JAX-RS; SE)** | ◐ (1 line unsupported) | — | — | — | — | ✅ | — | — | — | — | — | — |
 | **Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)** | ◐ (1 not shipped) | — | ✅ | — | ✅ | ✅ | — | — | ✅ | — | — | — |
 | **Raw clients and SDKs (JDK/Apache HTTP, kafka-clients, grpc-java, AWS, GCP, graphql-java)** | — | ✅ | — | ✅ | — | — | ✅ | ✅ | — | ✅ | ✅ | — |
 | **Kafka Streams** | — | — | — | — | — | — | — | ✅ | — | — | — | — |
 | **Netflix DGS** | — | — | — | ✅ | — | — | — | — | — | — | — | — |
-| **GraphQL Kotlin (Expedia)** | — | — | — | ✗ | — | — | — | — | — | — | — | — |
 | **Akka / Pekko (HTTP, Connectors, actors)** | ◐ (1 not shipped) | — | — | — | — | — | — | ✅ | — | — | — | ◐ (1 open, 1 not shipped) |
 | **Apache Camel** | — | ◐ (1 not shipped) | — | — | — | — | — | — | — | — | — | — |
 | **Temporal / Cadence** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 | **Quartz** | — | — | — | — | — | — | — | — | — | — | — | ◐ (1 open, 1 not shipped) |
-| **Play Framework** | ✗ | — | — | — | — | — | — | — | — | — | — | — |
-| **Spark Java** | ✗ | — | — | — | — | — | — | — | — | — | — | — |
 
 Everything below is the detail behind these three tables: how to read them (§1), what a run produces today (§2), the language and version gate (§3), wire formats (§4), and the per-protocol work list they are generated from (§5).
 
@@ -702,6 +698,24 @@ Three residual cases need more than a shape, and are recorded rather than smooth
 Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5.
 
 ---
+
+## Priority order — what is worked on next (ruled 2026-10-26)
+
+Set by the user, with adoption as a factor beside which cell an item moves. The adoption
+measurement it rests on is `docs/research/2026-10-26-adoption.md`. Work is taken in this order.
+
+| Scope | Order |
+|---|---|
+| **Languages** | 1. Java / Kotlin (finish) · 2. Python · 3. JavaScript / TypeScript · 4. Go · 5. Rust · 6. Swift · 7. C# / .NET |
+| **Java / Kotlin frameworks still open** | 1. Ktor (HTTP client, WebSocket, SSE) · 2. Quartz · 3. Vert.x (Web row, WebClient) · 4. Akka / Pekko (HTTP row, actors) |
+| **Python frameworks** | 1. FastAPI · 2. Flask · 3. Django |
+| **JavaScript / TypeScript frameworks** | 1. Node.js (core `http`) · 2. Express · 3. NestJS |
+
+**Dropped the same day:** Helidon SE, Play Framework, Spark Java and GraphQL Kotlin (Expedia)
+left the generated target lists (`scripts/coverage_matrix.py`), so §2c and the §5 rollups no longer
+show them as gaps. None had a shipped row or a register entry. Helidon MP is still read through
+the JAX-RS line. Apache Camel was ruled out of scope earlier that day, and the delivery list's
+```out-of-scope block records it.
 
 ## 3. Language readiness — the gate on every row
 
@@ -2373,9 +2387,6 @@ arrive there.
 | Javalin | ✅ full | 2/2 | — |
 | Vert.x Web | ◐ partial | 0/1 | not shipped: 1 at B |
 | Akka HTTP | ◐ partial | 0/1 | not shipped: 1 at C |
-| Helidon SE | ✗ unsupported | 0/0 | no row yet |
-| Spark Java | ✗ unsupported | 0/0 | no row yet |
-| Play Framework | ✗ unsupported | 0/0 | no row yet |
 <!-- END GENERATED: frameworks 5.1 -->
 
 | Language | Framework | Library | Form | Shape | Tier |
@@ -2487,9 +2498,6 @@ arrive there.
 | Java | Javalin | **Request requirements** — `ctx.queryParam(String)`, `ctx.header(String)`, `ctx.cookie(String)`, `ctx.queryParamAsClass(…).get()`, `ctx.headerAsClass(…).get()` in an `ApiBuilder` handler body | a bare read is NULL; `Validator.get()` throws `ValidationException` on an absent value (CP-25 row 15), so the `…AsClass` read is `required` exactly when its result is the receiver of a `get` (`then`), NULL under `getOrDefault`/`allowNullable()`; ARITY tells a read from a set — `header(String)` reads, `header(String, String)` sets a response header (row 14) | `single_call` (`request_reads`, applied by handler) | ✅ **shipped** (2026-09-20, `inbound-request-requirements`; declared once in `javalin.yml`, the `javalin-apibuilder.yml` rows read it by handler). Pinned by `test_javalin_handler_reads_reach_endpoint_metadata`. **Stated boundary**: a FLAT row's lambda reads are invisible — its `handler` is the registering method (`OI-102`) |
 | Java | Vert.x Web | **Request requirements** | — | — | **Not recorded** — no catalog on this line declares `request_params`, `request_requirement` or `request_reads`, so its rows carry no `endpoint_metadata` requirement entries |
 | Java | Akka HTTP | **Request requirements** | — | — | **Not recorded** — no catalog on this line declares `request_params`, `request_requirement` or `request_reads`, so its rows carry no `endpoint_metadata` requirement entries |
-| Java | Helidon SE | **Request requirements** | — | — | **Not recorded** — no catalog on this line declares `request_params`, `request_requirement` or `request_reads`, so its rows carry no `endpoint_metadata` requirement entries |
-| Java | Spark Java | **Request requirements** | — | — | **Not recorded** — no catalog on this line declares `request_params`, `request_requirement` or `request_reads`, so its rows carry no `endpoint_metadata` requirement entries |
-| Java | Play Framework | **Request requirements** | — | — | **Not recorded** — no catalog on this line declares `request_params`, `request_requirement` or `request_reads`, so its rows carry no `endpoint_metadata` requirement entries |
 | Go | net/http (1.22+ patterns) | `net/http` 1.22+ `mux.HandleFunc("GET /items/{id}", h)` | **verb and path in one literal** | `registration_call` | A |
 | Go | gin, echo, chi, fiber | `gin`, `echo`, `chi`, `fiber` | `r.GET("/p", h)`, groups nest a prefix | `registration_call` | A |
 | Go | gorilla/mux | `gorilla/mux` `r.HandleFunc(p, h).Methods("GET")` | verb is a sibling call | `fluent_chain` | B |
@@ -2947,7 +2955,6 @@ than about correctness:
 | Netflix DGS | ✅ full | 1/1 | — |
 | MicroProfile GraphQL | ✅ full | 2/2 | — |
 | graphql-java (schema-first) | ✅ full | 1/1 | — |
-| GraphQL Kotlin (Expedia) | ✗ unsupported | 0/0 | no row yet |
 <!-- END GENERATED: frameworks 5.4 -->
 
 Better than expected: **A in almost every language.** Every ecosystem either declares

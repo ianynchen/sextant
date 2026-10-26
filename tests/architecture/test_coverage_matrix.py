@@ -318,7 +318,9 @@ def test_the_grid_cell_rule():
     counts = {("SOAP", "Spring Web Services"): Counter({"shipped": 3})}
     assert matrix.grid_cell("SOAP", ["Ktor"], counts, {}) == "—"
     assert matrix.grid_cell("SOAP", ["Spring Web Services"], counts, {}) == "✅"
-    assert matrix.grid_cell("REST inbound", ["Play Framework"], {}, {}) == "✗"
+    # Ktor HttpClient: still on the target list with nothing shipped (Play Framework, the
+    # earlier example, left the list on 2026-10-26).
+    assert matrix.grid_cell("REST outbound", ["Ktor HttpClient"], {}, {}) == "✗"
     assert (
         matrix.grid_cell(
             "Kafka",
