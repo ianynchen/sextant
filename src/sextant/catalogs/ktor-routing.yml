@@ -145,17 +145,27 @@ requires: [call_site, string_constants, chain_reconstruction]
 # the `protocol` its rows carry instead of the catalog's `http`. One prefix list for all
 # three protocols; a sibling catalog would have needed a copy of it.
 #   * WebSocket rows are VERBLESS (`verb: none`), as every shipped WebSocket catalog's are
-#     (`all_methods: []`). The general rule, the engine's: a route from a `verb: none` rule
-#     never takes the verb of the scope it is written in, is never dropped as disagreeing
-#     with it (`method(HttpMethod.Post) { webSocket("/ws") { } }` is one verbless row), and
-#     is never expanded through `all_methods` (a `webSocket` under a bare `route` is one
-#     row, not seven).
-#   * SSE rows carry GET where Ktor registers GET: `sse(path, …)` is `route(path,
-#     HttpMethod.Get) { … }`, read off the 3.6.0 jar (`javap -c io.ktor.server.sse.
-#     RoutingKt`). The path-less `sse { }` is NOT — it is `processSSE`, which installs the
-#     plugin and calls `handle { }` on the receiver itself, no verb — so it is declared as
-#     `handle` is, a `terminal` with no `verb`: the scope's verb, or one row per
-#     `all_methods` member.
+#     (`all_methods: []`): a route from a `verb: none` rule never takes the verb of the
+#     scope it is written in and is never expanded through `all_methods` (a `webSocket`
+#     under a bare `route` is one row, not seven). WHETHER IT EXISTS under a verb scope is
+#     Ktor's, read off the 3.6.0 jar (`javap -c io.ktor.server.websocket.RoutingKt__RoutingKt`,
+#     and `RoutingKt__RoutingBackwardCompatibleKt`, whose hidden old forms delegate to the
+#     current ones): every form WITH a path ends in `webSocketRaw(Route, String, String,
+#     boolean, Function2)`, which is `route(path, HttpMethod.Get) { … }` — so those rules
+#     declare `registered_verb: GET`, and `method(HttpMethod.Post) { webSocket("/ws") { } }`
+#     is a GET node under a POST selector that Ktor never dispatches: NO row, the A2 silence
+#     `get("/ws")` gets there. Under `method(HttpMethod.Get)` or no verb scope it is one
+#     verbless row. The PATH-LESS forms end in `webSocketRaw(Route, String, boolean,
+#     Function2)`, which is `header(Connection, Upgrade) { header(Upgrade, websocket) {
+#     … handle { } } }` and no verb selector at all: no `registered_verb`, one verbless row
+#     under any scope, never dropped.
+#   * SSE rows carry GET where Ktor registers GET: `sse(path, …)` (both overloads with a
+#     path, CP-54 row 18) is `route(path, HttpMethod.Get) { … }`, read off the 3.6.0 jar
+#     (`javap -c io.ktor.server.sse.RoutingKt`), so `verb: GET` — it agrees and disagrees as
+#     `get` does. The path-less `sse { }` (and `sse(serialize) { }`) is NOT — it is
+#     `processSSE`, which installs the plugin and calls `handle { }` on the receiver itself,
+#     no verb selector — so it is declared as `handle` is, a `terminal` with no `verb`: the
+#     scope's verb, or one row per `all_methods` member.
 #   * WHICH ARGUMENT IS THE PATH (CP-54 rows 16-18). In the three-argument `webSocket(Route,
 #     String, Function2)` argument 1 is the PROTOCOL, never a path; a call with a path always
 #     lands on the four-argument form (`webSocket("/x") { }` is `webSocket$default`, mask 2;
@@ -169,10 +179,6 @@ requires: [call_site, string_constants, chain_reconstruction]
 #     appends the `int` mask and an `Object` marker (two more arguments, so its own
 #     arities). `sse` has no bridge (row 18). The hidden old binary forms (`void` return,
 #     rows 16-17) share each current form's parameter types, so the same rule reads them.
-#   One stated boundary of the verbless rule: Ktor wraps a path-carrying `webSocket` in
-#   `route(path, HttpMethod.Get)` as it does `sse(path)`, so under a non-GET `method` scope
-#   it is a node the framework never dispatches — the A2 silence above — and this catalog
-#   publishes the verbless row there anyway (spec §3g item 5 as ruled).
 matches:
   path_join: leading_slash
   # HANDLER-BODY READS (spec 2026-09-19 §5d, mechanism 3). What a handler reads off the
@@ -320,19 +326,21 @@ matches:
       # `all_methods`; `path: ""` — the receiver node itself.
       - { owner: io.ktor.server.routing.Route, method: handle, arity: 1, terminal: true, path: "", handler_arg: 0 }
       # WebSocket routes (spec 2026-10-26 §3b; CP-54 rows 16-17, 19-24): `verb: none`, every
-      # one. The `$default` bridges carry the mask and the marker after the handler.
+      # one; `registered_verb: GET` on the six with a path, which Ktor wraps in
+      # `route(path, HttpMethod.Get)`. The `$default` bridges carry the mask and the marker
+      # after the handler.
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket, protocol: websocket, verb: none, arity: 3, receiver_arg: 0, path: "", handler_arg: 2 }   # (Route, protocol, handler)
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket, protocol: websocket, verb: none, arity: 4, receiver_arg: 0, path_arg: 1, handler_arg: 3 }   # (Route, path, protocol, handler)
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket, protocol: websocket, verb: none, registered_verb: GET, arity: 4, receiver_arg: 0, path_arg: 1, handler_arg: 3 }   # (Route, path, protocol, handler)
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket$default, protocol: websocket, verb: none, arity: 5, receiver_arg: 0, path: "", handler_arg: 2 }
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket$default, protocol: websocket, verb: none, arity: 6, receiver_arg: 0, path_arg: 1, handler_arg: 3 }
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocket$default, protocol: websocket, verb: none, registered_verb: GET, arity: 6, receiver_arg: 0, path_arg: 1, handler_arg: 3 }
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, arity: 3, receiver_arg: 0, path: "", handler_arg: 2 }   # (Route, protocol, handler)
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, arity: 4, arg_types: { 2: java.lang.String }, receiver_arg: 0, path_arg: 1, handler_arg: 3 }   # (Route, path, protocol, handler)
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, registered_verb: GET, arity: 4, arg_types: { 2: java.lang.String }, receiver_arg: 0, path_arg: 1, handler_arg: 3 }   # (Route, path, protocol, handler)
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, arity: 4, arg_types: { 2: boolean }, receiver_arg: 0, path: "", handler_arg: 3 }   # (Route, protocol, negotiateExtensions, handler)
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, arity: 5, receiver_arg: 0, path_arg: 1, handler_arg: 4 }   # (Route, path, protocol, negotiateExtensions, handler)
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw, protocol: websocket, verb: none, registered_verb: GET, arity: 5, receiver_arg: 0, path_arg: 1, handler_arg: 4 }   # (Route, path, protocol, negotiateExtensions, handler)
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, arity: 5, receiver_arg: 0, path: "", handler_arg: 2 }
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, arity: 6, arg_types: { 2: java.lang.String }, receiver_arg: 0, path_arg: 1, handler_arg: 3 }
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, registered_verb: GET, arity: 6, arg_types: { 2: java.lang.String }, receiver_arg: 0, path_arg: 1, handler_arg: 3 }
       - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, arity: 6, arg_types: { 2: boolean }, receiver_arg: 0, path: "", handler_arg: 3 }
-      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, arity: 7, receiver_arg: 0, path_arg: 1, handler_arg: 4 }
+      - { owner: io.ktor.server.websocket.RoutingKt, method: webSocketRaw$default, protocol: websocket, verb: none, registered_verb: GET, arity: 7, receiver_arg: 0, path_arg: 1, handler_arg: 4 }
       # SSE routes (spec 2026-10-26 §3b; CP-54 rows 18, 25-26): GET where a path is given; the
       # path-less two are `handle`, a terminal taking the scope's verb.
       - { owner: io.ktor.server.sse.RoutingKt, method: sse, protocol: sse, verb: GET, arity: 3, arg_types: { 1: java.lang.String }, receiver_arg: 0, path_arg: 1, handler_arg: 2 }   # (Route, path, handler)

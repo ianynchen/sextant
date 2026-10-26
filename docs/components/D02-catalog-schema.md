@@ -2474,17 +2474,24 @@ framework:**
   a copy per protocol. The protocol is part of the identity the batch deduplicates on, so an
   `sse` and an `http` `GET /x` are two rows. **`verb: none`** — distinct from `verb: null`,
   which takes what the predicate or scope supplies — is a VERBLESS route, as a WebSocket
-  route is (every shipped WebSocket catalog is verbless, `all_methods: []`): it never takes
-  the verb of the scope it sits in, is never dropped as disagreeing with it (the A2 silence
-  is for two verbs), keeps `method` NULL and unpoisoned under a scope whose verb could not be
-  read, and is never fanned out through `all_methods`. So `method(HttpMethod.Post) {
-  webSocket("/ws") { } }` is one verbless `websocket` row, and a `webSocket` under a bare
-  `route` is one row, not seven. A rule naming a fixed `verb` with a `protocol` (`sse(path)`,
-  `verb: GET`) folds as any verb does, the A2 silence included; a `terminal` may carry a
-  `protocol` too (the path-less `sse { }`, which is `handle { }`). The path canonicalisation
-  stays gated on the CATALOG's protocol (ruling R8): those routes are URLs the same server
-  serves. `protocol` on anything but a verb rule, or naming no D00 protocol, is refused at
-  load.
+  route is (every shipped WebSocket catalog is verbless, `all_methods: []`): its rows carry
+  `method` NULL, it never takes the verb of the scope it sits in, and it is never fanned out
+  through `all_methods` — a `webSocket` under a bare `route` is one row, not seven. **Whether
+  it exists under a verb scope is the framework's** (DR-6). Where the framework registers it
+  under a verb all the same, **`registered_verb:`** names that verb, and the route agrees or
+  disagrees with a scope's verb exactly as a route of that verb would: Ktor wraps every
+  WebSocket route that has a path in `route(path, HttpMethod.Get)` (read off the 3.6.0 jar),
+  so those rules declare `registered_verb: GET`, and `method(HttpMethod.Post) {
+  webSocket("/ws") { } }` publishes NOTHING — the A2 silence `get("/ws")` gets there — while
+  under `method(HttpMethod.Get)` or no verb scope it is one verbless row, and under a scope
+  whose verb could not be read it is unresolved, as `get` is. Without `registered_verb` (Ktor's
+  path-less WebSocket forms, which register no verb selector) the route is never dropped and
+  an unreadable scope verb is not its poison. A rule naming a fixed `verb` with a `protocol`
+  (`sse(path)`, `verb: GET`) folds as any verb does; a `terminal` may carry a `protocol` too
+  (the path-less `sse { }`, which is `handle { }`). The path canonicalisation stays gated on
+  the CATALOG's protocol (ruling R8): those routes are URLs the same server serves.
+  `protocol` on anything but a verb rule, or naming no D00 protocol, and `registered_verb`
+  anywhere but beside `verb: none`, or not an upper-case verb, are refused at load.
 - **Helper following and `follow_calls`** (spec 2026-09-19 §4a). A call inside a linked
   body that no catalog word claims, whose target is a module-local method with a body, is
   FOLLOWED when the body's origin flows into it as an ARGUMENT `{kind: parameter, value:

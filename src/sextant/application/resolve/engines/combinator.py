@@ -41,10 +41,14 @@ is therefore a fold over that tree rather than a walk along a line.
   literals, likewise one branch per element (spec §12 words 4–5). A verb rule
   may also name the `protocol` its rows carry, where the framework registers
   another protocol through the same tree (spec 2026-10-26 §3b: a WebSocket or
-  SSE route under the HTTP prefixes), and `verb: none` for a route that has no
-  verb at all: a VERBLESS route never takes the verb of the scope it sits in,
-  is never dropped as disagreeing with it, and is never expanded through
-  `all_methods` (§3g item 5). A PREFIX may set
+  SSE route under the HTTP prefixes), and `verb: none` for a route whose rows
+  carry no verb: a VERBLESS route never takes the verb of the scope it sits in
+  and is never expanded through `all_methods`. Where the framework registers it
+  under a verb all the same — Ktor wraps a WebSocket route that has a path in
+  `route(path, HttpMethod.Get)` — `registered_verb` names that verb, and the
+  route then AGREES or DISAGREES with a scope's verb exactly as a route of that
+  verb would (a disagreeing scope drops it, A2), while its rows still carry
+  none; without `registered_verb` it is never dropped. A PREFIX may set
   more than a path (spec 2026-09-19 §4b): `verb_arg` sets the verb of every route
   beneath it — a route beneath carrying a DIFFERENT verb is a node the framework
   registers and never dispatches, and derives NOTHING (A2) — `media_arg` + `fills`
@@ -360,9 +364,14 @@ class _Route:
     # catalog's own: a WebSocket or SSE route folds through the same prefixes as an HTTP
     # one and differs from it in this column of its row alone.
     protocol: str | None = None
-    # A route from a `verb: none` rule (§3g item 5): it has no verb, so a scope's verb is
-    # never merged into it, never disagrees with it, and `all_methods` never fans it out.
+    # A route from a `verb: none` rule: its rows carry no verb, so a scope's verb is never
+    # merged into it and `all_methods` never fans it out.
     verbless: bool = False
+    # The verb the framework registers a VERBLESS route under, where it registers one (the
+    # rule's `registered_verb`): what the route agrees or disagrees with a scope's verb by
+    # (`_verbs_disagree`), never a column of its row. None: a verbless route no scope's
+    # verb can disagree with.
+    registered_verb: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1229,8 +1238,11 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
 
 def _verbs_disagree(prefix: _Route, route: _Route) -> bool:
     """Whether a prefix sets one verb and the route beneath it carries another — the
-    subtree the framework can never dispatch (`_nested_routes`)."""
-    return prefix.verb is not None and route.verb is not None and prefix.verb != route.verb
+    subtree the framework can never dispatch (`_nested_routes`). A verbless route is
+    compared by the verb the framework registers it under (`registered_verb`), and one
+    registered under none disagrees with nothing."""
+    own = route.registered_verb if route.verbless else route.verb
+    return prefix.verb is not None and own is not None and prefix.verb != own
 
 
 def _prefix_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
@@ -1697,8 +1709,9 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     engine changed would be one the framework never matches; or an array of
     those, a vararg, one branch per element. Anything else there — a variable, an
     array holding one, an empty array — poisons `method` alone. A rule declaring
-    `verb: none` is VERBLESS (spec 2026-10-26 §3g item 5) — a WebSocket route — and
-    one declaring `protocol` stamps it on every branch (§3b)."""
+    `verb: none` is VERBLESS — a WebSocket route — carrying the `registered_verb` it
+    declares, if any; one declaring `protocol` stamps it on every branch (spec
+    2026-10-26 §3b)."""
     if not _receiver_argument_is_the_origin(site, rule, scope):
         return [_Route(poisons=_IDENTITY_POISON)]
     arguments = site["arguments"]
@@ -1706,7 +1719,10 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
         verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]), scope)
         branches = [_Route(verb=verb) for verb in verbs] or [_Route(poisons=(_METHOD,))]
     elif rule.get("verb") == _NO_VERB:
-        branches = [_Route(verbless=True)]
+        registered = rule.get("registered_verb")
+        branches = [
+            _Route(verbless=True, registered_verb=None if registered is None else str(registered))
+        ]
     else:
         verb = rule.get("verb")
         branches = [_Route(verb=None if verb is None else str(verb))]
@@ -1994,16 +2010,24 @@ def _merged(left: _Route, right: _Route) -> _Route:
     here: its branches stay separate routes, which is precisely how two verbs
     on one path are expressed.)
 
-    A VERBLESS route (`verb: none`, spec 2026-10-26 §3g item 5) has no verb for a
-    scope to give it or to disagree with: whatever verb the other side carries —
-    read, or poisoned unreadable — is not its own, so the merge keeps `method`
-    NULL and unpoisoned. The other columns fold as they always do.
+    A VERBLESS route (`verb: none`, spec 2026-10-26 §3b) keeps `method` NULL: the
+    other side's verb is never its own. Where the framework registers it under a verb
+    (`registered_verb`), that verb meets the other side's exactly as a route's own
+    would — a different one, or one poisoned unreadable, poisons `method`, as the
+    same merge of two verbs does. Registered under none, nothing the other side
+    carries can disagree with it, and an unreadable verb there is not its poison. The
+    other columns fold as they always do.
     """
     poisons = _union(left.poisons, right.poisons)
     verbless = left.verbless or right.verbless
+    registered = left.registered_verb if left.registered_verb is not None else right.registered_verb
     if verbless:
         verb = None
-        poisons = tuple(poison for poison in poisons if poison != _METHOD)
+        other = right.verb if left.verbless else left.verb
+        if registered is None:
+            poisons = tuple(poison for poison in poisons if poison != _METHOD)
+        elif other is not None and other != registered:
+            poisons = _union(poisons, (_METHOD,))
     elif _METHOD in poisons or (
         left.verb is not None and right.verb is not None and left.verb != right.verb
     ):
@@ -2021,6 +2045,7 @@ def _merged(left: _Route, right: _Route) -> _Route:
         requirements=_appended(left.requirements, right.requirements),
         protocol=left.protocol if left.protocol is not None else right.protocol,
         verbless=verbless,
+        registered_verb=registered,
     )
 
 
@@ -2092,8 +2117,8 @@ def _fanned(route: _Route, context: _TreeContext) -> list[_Route]:
     NULL and resolved, exactly as the builder's `route(predicate, handler)` has always
     read; a poisoned route is itself too — its verb was written and could not be read,
     and fanning it out would present the poison as seven facts. A VERBLESS route
-    (`verb: none`) is itself too: it read no verb because it has none, which is not a
-    route that serves every verb (spec 2026-10-26 §3g item 5)."""
+    (`verb: none`) is itself too: it read no verb because its rows carry none, which is
+    not a route that serves every verb (spec 2026-10-26 §3b)."""
     if route.verb is not None or route.verbless or route.poisons or not context.all_methods:
         return [route]
     return [replace(route, verb=verb) for verb in context.all_methods]
@@ -2376,6 +2401,20 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: `{name}` declares "
                 f"`protocol: {rule.get('protocol')!r}` — one of {sorted(_PROTOCOLS)}, on a "
                 f"verb rule alone (D02 §2's `combinator` style)"
+            )
+        # `registered_verb` names the verb a VERBLESS route is registered under — so it sits
+        # only beside `verb: none`, an upper-case verb word as `all_methods`' members are.
+        registered = rule.get("registered_verb")
+        if "registered_verb" in rule and (
+            role != "verbs"
+            or rule.get("verb") != _NO_VERB
+            or not isinstance(registered, str)
+            or not registered.isupper()
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{name}` declares "
+                f"`registered_verb: {registered!r}` — an upper-case verb, on a verb rule "
+                f"declaring `verb: {_NO_VERB}` (D02 §2's `combinator` style)"
             )
         if "terminal" in rule and role != "verbs":
             raise CatalogError(

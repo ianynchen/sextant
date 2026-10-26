@@ -7229,25 +7229,38 @@ def test_a_ktor_sse_route_is_a_get_sse_row(tmp_path: Path):
     ]
 
 
-@pytest.mark.pins("ktor.a-websocket-under-a-verb-scope-is-NOT-expanded")
-def test_a_websocket_route_under_a_verb_scope_stays_one_verbless_row(tmp_path: Path):
-    """Spec 2026-10-26 §3g item 5. A verbless route never takes the verb of the scope it
-    is written in: `method(HttpMethod.Post) { webSocket("/ws") { } }` is ONE `websocket`
-    row with `method` NULL — not `POST`, not dropped as a verb that disagrees with the
-    scope (the A2 silence is for two verbs, and a WebSocket route has none). The four-
-    argument `route("/v", HttpMethod.Put) { webSocket("/in") { } }` is the same, and so is
-    a scope whose verb could not be read (`method(Constants.WEIRD)`): the scope's verb,
-    read or unread, is not the row's."""
+@pytest.mark.pins("ktor.a-GET-bound-websocket-under-a-disagreeing-scope-is-dropped")
+def test_a_websocket_route_under_a_disagreeing_verb_scope_is_dropped_like_get(tmp_path: Path):
+    """DR-6, read off the 3.6.0 jar: every `webSocket`/`webSocketRaw` form WITH a path is
+    `route(path, HttpMethod.Get) { … }`, so `method(HttpMethod.Post) { webSocket("/ws") { } }`
+    is a GET node under a POST selector that Ktor never dispatches — NO row, the A2
+    silence `get("/ws")` gets there; `route("/v", HttpMethod.Put) { webSocket("/in") }` the
+    same. Under `method(HttpMethod.Get)` it agrees and is one row, verbless. Under a scope
+    whose verb could not be read it is unresolved, as `get` is: whether it is dispatched
+    is what could not be read. The PATH-LESS `webSocket { }` has no verb selector in Ktor
+    (header selectors and `handle`), so under the POST scope it is still one verbless
+    row."""
+    pathless = _session(
+        _WEBSOCKET_ROUTING,
+        "webSocket$default",
+        [(_JVM_STRING, CallArgument(kind="null"))],
+        mask=1,
+    )
     facts = _sessions_under(
         (
             "method",
             [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Post.")],
-            [_web_socket_default("/ws")],
+            [_web_socket_default("/ws"), pathless],
         ),
         (
             "route",
             [_literal("/v"), CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Put.")],
             [_web_socket_default("/in")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Get.")],
+            [_web_socket_default("/ok")],
         ),
         (
             "method",
@@ -7261,9 +7274,41 @@ def test_a_websocket_route_under_a_verb_scope_stays_one_verbless_row(tmp_path: P
 
     handler = _MODULE + _SUSPEND_BODY
     assert _protocol_identities(rows) == [
-        ("websocket", None, "/odd", handler, "resolved"),
-        ("websocket", None, "/v/in", handler, "resolved"),
-        ("websocket", None, "/ws", handler, "resolved"),
+        ("websocket", None, "/", handler, "resolved"),
+        ("websocket", None, "/odd", handler, "unresolved"),
+        ("websocket", None, "/ok", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.a-websocket-under-a-verb-scope-is-NOT-expanded")
+def test_a_websocket_route_under_a_bare_route_is_one_verbless_row(tmp_path: Path):
+    """`route("/api") { webSocket("/ws") { } }`: no verb is in scope, and the route is ONE
+    `websocket` row with `method` NULL — never fanned out through `all_methods` into seven
+    HTTP-verbed WebSocket rows, as a verb-less `handle { }` there would be. The path-less
+    `webSocket { }` under `route("/b")` is one row at `/b` the same way."""
+    facts = _sessions_under(
+        ("route3", [_literal("/api")], [_web_socket_default("/ws")]),
+        (
+            "route3",
+            [_literal("/b")],
+            [
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket$default",
+                    [(_JVM_STRING, CallArgument(kind="null"))],
+                    mask=1,
+                )
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api/ws", handler, "resolved"),
+        ("websocket", None, "/b", handler, "resolved"),
     ]
 
 
@@ -7390,10 +7435,11 @@ def test_http_routes_are_unchanged(tmp_path: Path):
     ]
 
 
-def test_a_verb_rules_protocol_is_validated(tmp_path: Path):
+def test_a_verb_rules_protocol_and_registered_verb_are_validated(tmp_path: Path):
     """A verb rule's `protocol` is one of D00's protocols — a misspelt one would publish
     rows under a protocol nothing links — and sits on a verb rule alone: a prefix or an
-    entry registers no route of its own to carry it."""
+    entry registers no route of its own to carry it. `registered_verb` is an upper-case
+    verb beside `verb: none` and nowhere else."""
     matches = copy.deepcopy(_matches())
     matches["vocabulary"]["verbs"][0]["protocol"] = "web-socket"  # type: ignore[index]
     with pytest.raises(CatalogError, match="protocol"):
@@ -7402,3 +7448,12 @@ def test_a_verb_rules_protocol_is_validated(tmp_path: Path):
     matches["vocabulary"]["prefixes"][0]["protocol"] = "websocket"  # type: ignore[index]
     with pytest.raises(CatalogError, match="protocol"):
         _resolve(tmp_path, [], _catalog(matches))
+    # `registered_verb` names the verb a VERBLESS route is registered under: beside
+    # `verb: none` alone, and an upper-case verb word.
+    for verb, registered in (("GET", "GET"), ("none", "get"), ("none", 7)):
+        matches = copy.deepcopy(_matches())
+        rule = matches["vocabulary"]["verbs"][0]  # type: ignore[index]
+        rule["verb"] = verb
+        rule["registered_verb"] = registered
+        with pytest.raises(CatalogError, match="registered_verb"):
+            _resolve(tmp_path, [], _catalog(matches))

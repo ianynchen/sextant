@@ -4771,22 +4771,16 @@ GUARDS: dict[str, Guard] = {
     ),
     # --- WebSocket and SSE routes in Ktor's routing tree (spec 2026-10-26 §3b) ------
     "ktor.a-WEBSOCKET-route-is-a-verbless-inbound-row": Guard(
-        what="a `combinator` row carries its verb rule's own `protocol`, and a route from a "
-        "`verb: none` rule is never fanned out through `all_methods`",
+        what="a `combinator` row carries its verb rule's own `protocol`",
         why="Ktor's `webSocket` routes nest through the same prefixes as its HTTP verbs. "
         'Without the rule\'s protocol, `route("/api") { webSocket("/chat") }` publishes an '
-        "`http` row, and without the fan-out exception it is seven HTTP-verbed rows "
-        "(`GET` … `OPTIONS`) at `/api/chat` where one verbless WebSocket row is the truth",
+        "`http` row at `/api/chat`, and a WebSocket client calling it is matched against an "
+        "HTTP endpoint",
         edits=(
             Edit(
                 path=_COMBINATOR,
                 find='        "protocol": route.protocol or catalog.protocol,\n',
                 replace='        "protocol": catalog.protocol,  # guard disabled by scripts/guard_check.py\n',
-            ),
-            Edit(
-                path=_COMBINATOR,
-                find="    if route.verb is not None or route.verbless or route.poisons or not context.all_methods:\n",
-                replace="    if route.verb is not None or route.poisons or not context.all_methods:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -4805,12 +4799,32 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "ktor.a-websocket-under-a-verb-scope-is-NOT-expanded": Guard(
-        what="`_merged` keeps a verbless route's `method` NULL whatever verb the scope it is "
-        "folded into carries, read or poisoned",
-        why='`method(HttpMethod.Post) { webSocket("/ws") { } }`: without it the WebSocket row '
-        "takes the scope's verb and is published as `POST /ws`, and under a scope whose verb "
-        "could not be read it is an unresolved row where its whole identity was read",
+        what="a route from a `verb: none` rule is never fanned out through `all_methods`",
+        why='`route("/api") { webSocket("/ws") { } }` reads no verb because a WebSocket route '
+        "has none. Fanned out like a verb-less `handle { }`, it is seven HTTP-verbed rows "
+        "(`GET` … `OPTIONS`) at `/api/ws` where one verbless WebSocket row is the truth",
         edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    if route.verb is not None or route.verbless or route.poisons or not context.all_methods:\n",
+                replace="    if route.verb is not None or route.poisons or not context.all_methods:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-GET-bound-websocket-under-a-disagreeing-scope-is-dropped": Guard(
+        what="a verbless route meets a scope's verb by its `registered_verb` and never takes "
+        "the scope's verb: `_verbs_disagree` compares the registered verb, and `_merged` "
+        "keeps `method` NULL",
+        why="Ktor wraps a WebSocket route with a path in `route(path, HttpMethod.Get)`, so "
+        '`method(HttpMethod.Post) { webSocket("/ws") { } }` is a node Ktor never dispatches. '
+        "Comparing nothing publishes a row for it; taking the scope's verb publishes "
+        "`GET`/`POST` WebSocket rows, and the path-less form under POST as `POST /`",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    own = route.registered_verb if route.verbless else route.verb\n",
+                replace="    own = route.verb  # guard disabled by scripts/guard_check.py\n",
+            ),
             Edit(
                 path=_COMBINATOR,
                 find="    if verbless:\n        verb = None\n",
