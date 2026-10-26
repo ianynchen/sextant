@@ -56,6 +56,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
+| **C# / .NET** | none | · | · | · | · | · | · |
 
 ### 2b. Messaging and RPC
 
@@ -68,6 +69,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Python** | 1A | 2A | 1A | 1C | 1B | 2A |
 | **Rust** | 1A | 1A | 1A | 1B | 1B | 2A 1B |
 | **Swift** | 1A | 1A | — | 1B | — | 1B |
+| **C# / .NET** | · | · | · | · | · | · |
 
 ### 2c. Java / Kotlin — framework family × protocol
 
@@ -712,6 +714,9 @@ Run `python scripts/coverage_matrix.py --check` to confirm §2 still matches §5
 | **Python** | None — pyright has **no programmatic API**, only LSP | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
+| **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
+
+**C# / .NET was added on 2026-10-26, assessed but not measured, and not yet prioritized** (Plane OI-205). An assembly carries classes, attributes, signatures and every call instruction, as a class file does, so the JVM's design (a scanner over compiled output, catalogs, our own call graph) would carry over with the least redesign of any row here. Roslyn adds a compiler-grade source model where IL loses detail. The frameworks a first pass would cover are attribute- and registration-driven: ASP.NET Core controllers and minimal APIs, `Grpc.AspNetCore`, SignalR, MassTransit, NServiceBus, the Azure Service Bus SDK, Confluent.Kafka, `HttpClient` and Refit. None of this is measured against real assemblies yet, and §5 enumerates no C# rows, so the §2 cells read `·`.
 
 **Three findings worth stating outright.**
 
