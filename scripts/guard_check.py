@@ -4811,17 +4811,32 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "fluent.a-RELATIVE-address-off-a-client-base-is-unresolved": Guard(
-        what="under `relative_to_client_base`, a relative address read in full is "
+        what="under a declared `client_base`, a relative address read in full is "
         "`unresolved`, its path kept and its peer NULL",
         why="Ktor joins a relative address onto the client's `defaultRequest` base, or onto "
-        "`http://localhost`, and that base is not read. Published at `resolved`, "
+        "`http://localhost`, and that base is not read yet. Published at `resolved`, "
         '`client.get("relative/path")` claims the path it states is the whole address '
         "the module calls",
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        not context.relative_to_client_base\n",
+                find="        context.client_base is None\n",
                 replace="        True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.the-join-follows-KTORS-rule-not-concatenation": Guard(
+        what="`join_url`'s `replace_last_segment` is Ktor's `DefaultRequest` merge, not "
+        "the base and the relative address concatenated",
+        why="Ktor replaces a base's last segment unless it ends in `/`, lets a path starting "
+        "with `/` replace the whole base path, and puts the call's query before the base's "
+        "(CP-54 rows 51-60). Concatenated, `https://api.example.com/v1` plus `orders` "
+        "publishes `/v1orders`, an address the module never calls",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    return _replace_last_segment(base, relative)\n",
+                replace="    return base + relative  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

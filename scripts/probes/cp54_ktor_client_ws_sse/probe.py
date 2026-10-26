@@ -521,7 +521,7 @@ def main(argv: list[str]) -> int:
                 f"the jar's manifest states {jars[key][1]!r}"
             )
     for entry in ran:
-        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH") and (
+        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH", "DERIVED") and (
             entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")
         ):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
@@ -795,6 +795,17 @@ def main(argv: list[str]) -> int:
                 f"{label} sent `{request}` (h)",
                 key,
                 f"the server received `{received}`; {route}; {outcome}",
+            )
+
+    # (i) the base a client derived by `config { … }` sends to
+    for entry in ran:
+        if entry[0] == "DERIVED":
+            _, label, parent, child, relative, result = entry
+            emit(
+                f"`DefaultRequest` join on a client derived by `config`: {label} (i)",
+                "client",
+                f"parent base `{parent}`, derived client's own base `{child}`, call "
+                f'`get("{relative}")` -> Ktor sent `{result}`',
             )
     return 0
 

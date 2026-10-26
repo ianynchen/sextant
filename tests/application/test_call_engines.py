@@ -5687,12 +5687,16 @@ def test_a_receiver_arg_that_is_not_an_argument_position_is_refused(tmp_path: Pa
         _resolve_fluent(tmp_path, [], catalog)
 
 
-def test_a_relative_to_client_base_that_is_not_a_boolean_is_refused(tmp_path: Path):
-    """`relative_to_client_base` is `true` or `false`; a string such as `"yes"` would read
-    as set in one place and unset in another, so it is refused at load."""
-    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "relative_to_client_base": "yes"})
-    with pytest.raises(CatalogError, match="relative_to_client_base"):
-        _resolve_fluent(tmp_path, [], catalog)
+def test_the_retired_relative_to_client_base_word_is_refused(tmp_path: Path):
+    """`relative_to_client_base` was Task 4's interim word, folded into `client_base` (spec
+    2026-10-26 §3c): declaring where the base is set says a relative address is relative to
+    it. A catalog still spelling the old word is refused at load, never read as a catalog
+    whose relative rows are `resolved`. `client_base`'s own refusals are in
+    `test_client_base.py`."""
+    for declared in (True, "yes"):
+        catalog = _fluent_catalog({**_EXTENSION_MATCHES, "relative_to_client_base": declared})
+        with pytest.raises(CatalogError, match="relative_to_client_base"):
+            _resolve_fluent(tmp_path, [], catalog)
 
 
 # --- `A-M3`/`A-M4` (principles sweep §3.3): the two Spring HTTP clients ------

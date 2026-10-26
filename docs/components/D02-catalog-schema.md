@@ -1907,14 +1907,46 @@ the backward prefix walk still follows each producer's own `receiver`, so it sto
 extension call as at any static call. `receiver_arg` is a non-negative integer and a step's
 word; anything else, and the word on a root, is refused at load.
 
-**`relative_to_client_base: true`** (spec 2026-10-26 §3c) says the library joins a relative
-address onto a base the executing CLIENT holds — Ktor's `defaultRequest` base, or
-`http://localhost` where the client has none (CP-54 rows 51-57). Where no capture of the chain
-reads that base, a relative address read in full is the path the code states and not the URL
-called: the row keeps the path, `peer` NULL, at `unresolved`. An absolute address is the whole
-address; a `${…}` expression, and a `partial` or `unresolved` address, read as they always do.
-A catalog not declaring it keeps a relative address at `resolved` with `peer` NULL, as before.
-A value other than a boolean is refused at load.
+**`client_base`** (spec 2026-10-26 §3c, §3g items 1-3) says the library joins a relative
+address onto a base the executing CLIENT holds, and declares where that base is set:
+
+```yaml
+client_base:
+  client_arg: 1                      # the client, an argument of the call that issues it
+  ladder:                            # the configuration calls a base is set through
+    - { owner: io.ktor.client.HttpClientKt, method: HttpClient, block_arg: 1, descriptor: "…" }
+    - { owner: io.ktor.client.HttpClient, method: config, block_arg: 0, parent: receiver, descriptor: "…" }
+    - { owner: io.ktor.client.plugins.DefaultRequestKt, method: defaultRequest, block_arg: 1, descriptor: "…" }
+  setter: { owner: io.ktor.client.plugins.DefaultRequest$DefaultRequestBuilder, method: url,
+            descriptor: "(Ljava/lang/String;)V", value_arg: 0 }
+  join: replace_last_segment
+```
+
+| key | what it is |
+|---|---|
+| `client_arg` | the argument position the client sits at in the call that issues the request (Ktor: `HttpStatement#<init>`'s argument 1) |
+| `ladder` | a non-empty list of `{owner, method, block_arg, descriptor?, parent?}`: each call whose `block_arg` is a configuration block the base may be set in. `parent: receiver` marks a call that DERIVES a client from the one it is made on, which inherits that client's base where its own block sets none (CP-54 rows 79-80) |
+| `setter` | `{owner, method, value_arg, descriptor?}`: the call inside a block that sets the base, with the address at `value_arg` |
+| `join` | the framework's rule for joining a relative address onto the base, one of `shapes/client_base.py`'s rules. A rule is named for what it does, never for a framework: the code that implements it may not name one (`tests/architecture/test_source_rules.py`), and the catalog choosing it is where the framework is named |
+
+**`replace_last_segment`** is the join Ktor 3.6.0's `DefaultRequest$Plugin.mergeUrls` makes, read off its
+bytecode and checked against every CP-54 row (g) join (rows 51-60), never concatenation: an
+absolute address ignores the base; a path starting with `/` replaces the base's path; any other
+path replaces the base's LAST segment, so `…/v1` plus `orders` is `…/orders` and `…/v1/` plus
+`orders` is `…/v1/orders`; the call's query comes first and each base parameter the call does
+not name follows it.
+
+**What it does today.** Reading a client's construction through the ladder is not built: the
+value walk answers what a value is, never which call built it, and a client held in a field or a
+top-level `val` has no write fact (D00 §5, CP-33 rows 6-7). So a relative address read in full
+keeps its path, `peer` NULL, at `unresolved`, as the address the code states and not the URL
+called. An absolute address is the whole address; a `${…}` expression, and a `partial` or
+`unresolved` address, read as they always do. A catalog not declaring the key keeps a relative
+address at `resolved` with `peer` NULL, as before. Every part is refused at load where
+malformed: a key other than the four, a position that is not a non-negative integer, an empty
+ladder, a call naming no `owner` or `method`, a `parent` other than `receiver`, and a `join` no
+rule implements. The interim word `relative_to_client_base` is folded into this key and refused
+at load.
 
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is

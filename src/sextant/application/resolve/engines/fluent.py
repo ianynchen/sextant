@@ -37,7 +37,7 @@ positional slot.
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -75,6 +75,7 @@ from sextant.application.resolve.shapes.arguments import (
     valid_via_arity,
     with_authority,
 )
+from sextant.application.resolve.shapes.client_base import validated_client_base
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -434,7 +435,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     for step in steps:
         if step["receiver_arg"] is not None:
             extension_steps.setdefault(step["method"], []).append(step)
-    relative_to_client_base = _validated_relative_to_client_base(matches, catalog)
+    # The interim word Task 4 shipped, folded into `client_base`: declaring where the base is
+    # set is what says a relative address is relative to it. Refused rather than ignored, so a
+    # catalog still spelling it does not load as one whose relative rows read `resolved`.
+    if "relative_to_client_base" in matches:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `relative_to_client_base` is folded into "
+            f"`client_base` (D02 §2's `fluent` style), which declares where the client's base "
+            f"is set; declare that instead"
+        )
+    client_base = validated_client_base(matches.get("client_base"), catalog.source)
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -495,7 +505,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             all_parameters=caller_parameters,
             annotations=annotations,
             verb_fields=verb_fields,
-            relative_to_client_base=relative_to_client_base,
+            client_base=client_base,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -693,10 +703,11 @@ class _ChainContext:
     # its argument is a static field (`enum`- or `field`-kind, D00 §5). Empty for a
     # catalog declaring none.
     verb_fields: dict[tuple[str, str], str]
-    # Spec 2026-10-26 §3c: whether a relative address is relative to a base the executing
-    # CLIENT holds (`matches.relative_to_client_base`) — False for every catalog not
-    # declaring it, whose relative address reads as it always has.
-    relative_to_client_base: bool = False
+    # Spec 2026-10-26 §3c: where the executing CLIENT's base address is set
+    # (`matches.client_base`, validated by `shapes.client_base`) — a relative address is
+    # relative to it. None for every catalog not declaring it, whose relative address reads
+    # as it always has.
+    client_base: Mapping[str, Any] | None = None
     # Where a walk records each chain END's captures instead of deriving a row
     # — the collecting context `_bean_chain_capture` builds. None on the
     # deriving walk.
@@ -1673,20 +1684,22 @@ def _against_client_base(
     address: tuple[str | None, str | None, str], context: _ChainContext
 ) -> tuple[str | None, str | None, str]:
     """`address` where the catalog says a relative address is relative to a base the
-    executing CLIENT holds (`relative_to_client_base`, spec 2026-10-26 §3c): Ktor joins
+    executing CLIENT holds (`client_base`, spec 2026-10-26 §3c): Ktor joins
     `get("relative/path")` onto the client's `defaultRequest` base, and onto
-    `http://localhost` where it has none (CP-54 rows 51-57). No capture of the chain reads
-    that base, so the address the code states is a PATH and not the URL called: it keeps
-    the path, peer NULL, at `unresolved`.
+    `http://localhost` where it has none (CP-54 rows 51-57). The client's construction is
+    not read yet — the value walk answers what a value is, never which call built it, and a
+    client held in a field or a top-level `val` has no write fact at all (D00 §5, CP-33 rows
+    6-7) — so the address the code states is a PATH and not the URL called: it keeps the
+    path, peer NULL, at `unresolved`.
 
     Only a relative address read in full moves. An absolute one is the whole address (Ktor
     ignores the base for it, CP-54 row 55); a `${…}` expression is configuration that may be
     absolute, read where the configuration join reads it; and a `partial` or `unresolved`
-    address already says it was not read in full. Every catalog not declaring the word
+    address already says it was not read in full. Every catalog not declaring the key
     keeps its relative address as it always has."""
     peer, path, resolution = address
     if (
-        not context.relative_to_client_base
+        context.client_base is None
         or peer is not None
         or path is None
         or resolution != str(Resolution.RESOLVED)
@@ -1969,17 +1982,6 @@ def _validated_receiver_arg(step: dict[str, Any], catalog: Catalog) -> int | Non
             f"`receiver_arg: {declared!r}`, which is not an argument index — it names the "
             f"argument the step's receiver arrives as, a non-negative integer (spec "
             f"2026-10-26 §3c)"
-        )
-    return declared
-
-
-def _validated_relative_to_client_base(matches: dict[str, Any], catalog: Catalog) -> bool:
-    """`matches.relative_to_client_base`, a boolean when declared (spec 2026-10-26 §3c)."""
-    declared = matches.get("relative_to_client_base", False)
-    if not isinstance(declared, bool):
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `relative_to_client_base` is `true` or "
-            f"`false`, got {declared!r} (D02 §2's `fluent` style)"
         )
     return declared
 

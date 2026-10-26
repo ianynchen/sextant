@@ -54,6 +54,29 @@ private fun merge(label: String, base: String?, relative: String) = runBlocking 
     println("MERGE\t$label\t${base ?: "(no defaultRequest)"}\t$relative\t$outcome")
 }
 
+// Row group (i): the base a DERIVED client sends to — `parent.config { … }`, koog's shape. The
+// parent carries a `defaultRequest` base; the derived client declares its own or none, and the
+// engine records where Ktor sent the request. Whether `config` keeps the parent's plugin block,
+// and which `url` wins when both declare one, is exactly what this answers.
+private fun derived(label: String, parentBase: String, childBase: String?, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val parent = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+        defaultRequest { url(parentBase) }
+    }
+    val child = parent.config {
+        if (childBase != null) defaultRequest { url(childBase) }
+    }
+    val outcome = try {
+        child.get(relative)
+        seen
+    } catch (e: Throwable) {
+        "FAILED " + e.javaClass.name + ": " + e.message
+    }
+    child.close()
+    parent.close()
+    println("DERIVED\t$label\t$parentBase\t${childBase ?: "(no defaultRequest)"}\t$relative\t$outcome")
+}
+
 // The WebSocket and SSE calls resolve a relative address through the same plugin; the engine only
 // records the URL the request carries and refuses to open a connection.
 private fun resolveWith(label: String, base: String, relative: String, call: suspend (HttpClient) -> Unit) =
@@ -215,4 +238,8 @@ fun main() {
     testHostSse("`sse(\"/e\") { }`", listOf(get to "/e", post to "/e")) { sse("/e") { } }
     testHostSse("`route(\"/q\") { sse { } }`", listOf(get to "/q", post to "/q")) { route("/q") { sse { } } }
     testHostWebSocket("test host client, `webSocket(\"/ws\") { }`", post, "/ws") { webSocket("/ws") { } }
+
+    // Last, so rows 1-78 keep their numbers.
+    derived("its own defaultRequest base", "https://parent.example.com/p/", "https://child.example.com/c/", "orders")
+    derived("no defaultRequest of its own", "https://parent.example.com/p/", null, "orders")
 }

@@ -92,10 +92,40 @@ matches:
   terminal:
     - { method: <init>, terminal_via_argument: { owner: io.ktor.client.statement.HttpStatement, method: <init> } }
   # A relative address is joined onto the client's `defaultRequest` base, or onto
-  # `http://localhost` where the client has none (CP-54 rows 51-57). No step of this chain
-  # reads the client, so a relative call keeps the path it states, peer NULL, at
-  # `unresolved`; an absolute one is the whole address, as Ktor treats it (row 55).
-  relative_to_client_base: true
+  # `http://localhost` where the client has none (CP-54 rows 51-57), by Ktor's own rule
+  # (`replace_last_segment`, `shapes/client_base.py`). An absolute one is the whole address,
+  # as Ktor treats it (row 55).
+  #
+  # Where the base is set, as CP-54 row group (e) and (i) measure it:
+  #   HttpClient(engineFactory) { … }        `HttpClientKt.HttpClient`, the block argument 1
+  #   parent.config { … }                    a derived client, block argument 0; it inherits
+  #                                          the parent's base where its block sets none
+  #                                          (row 80) and its own base wins (row 79)
+  #   defaultRequest { … }                   `DefaultRequestKt.defaultRequest(config, block)`
+  #   url("…")                               the MEMBER `DefaultRequestBuilder.url(String)`,
+  #                                          the address at argument 0 (rows 46, 49)
+  # The client is argument 1 of `HttpStatement`'s constructor (row group (b)).
+  #
+  # Not declared, because not measured: the engine-less `HttpClient { … }` and
+  # `HttpClient(engine) { … }` factories, `defaultRequest(replace = true) { … }` (row 48's
+  # second overload), and the `url { … }` and parts setters (row 46), which carry no string.
+  #
+  # Reading a client's construction through this ladder waits on the value walk: it answers
+  # what a value is, never which call built it, and a client held in a field or a top-level
+  # `val` has no write fact (D00 §5, CP-33 rows 6-7). Until then a relative call keeps the
+  # path it states, peer NULL, at `unresolved`.
+  client_base:
+    client_arg: 1
+    ladder:
+      - { owner: io.ktor.client.HttpClientKt, method: HttpClient, block_arg: 1,
+          descriptor: "(Lio/ktor/client/engine/HttpClientEngineFactory;Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;" }
+      - { owner: io.ktor.client.HttpClient, method: config, block_arg: 0, parent: receiver,
+          descriptor: "(Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;" }
+      - { owner: io.ktor.client.plugins.DefaultRequestKt, method: defaultRequest, block_arg: 1,
+          descriptor: "(Lio/ktor/client/HttpClientConfig;Lkotlin/jvm/functions/Function1;)V" }
+    setter: { owner: io.ktor.client.plugins.DefaultRequest$DefaultRequestBuilder, method: url,
+              descriptor: "(Ljava/lang/String;)V", value_arg: 0 }
+    join: replace_last_segment
 
 # Shared verbatim across every outbound catalog on purpose — `okhttp.yml` carries the
 # reason: shape expansion is a global insert-if-absent pass keyed on the type symbol
