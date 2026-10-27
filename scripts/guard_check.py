@@ -4959,9 +4959,9 @@ GUARDS: dict[str, Guard] = {
         what="under a declared `client_base`, a relative address read in full is "
         "`unresolved`, its path kept and its peer NULL",
         why="Ktor joins a relative address onto the client's `defaultRequest` base, or onto "
-        "`http://localhost`, and that base is not read yet. Published at `resolved`, "
-        '`client.get("relative/path")` claims the path it states is the whole address '
-        "the module calls",
+        "`http://localhost`, and where the client's construction is not reached that base "
+        'cannot be read. Published at `resolved`, `client.get("relative/path")` claims the '
+        "path it states is the whole address the module calls",
         edits=(
             Edit(
                 path=_FLUENT,
@@ -5072,9 +5072,76 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="                if address is None or not _has_host(address):\n",
+                find="                if address is None or not (_has_host(address) or carries_expression(address)):\n",
                 replace="                if address is None:  # guard disabled by "
                 "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-client-with-NO-base-sends-to-the-builders-origin": Guard(
+        what="a client whose construction is reached and whose blocks set no base sends a "
+        "relative call to the catalog's `default_base`",
+        why="Ktor sends a relative call on a client with no `defaultRequest` to its request "
+        "builder's origin, `http://localhost` (CP-54 rows 50, 57). Answered as no base, the "
+        "row publishes a bare path for a call whose destination the code fixes",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        return self._default, None\n",
+                replace="        return None, UNTRACED  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-rung-or-setter-under-ANOTHER-descriptor-declines": Guard(
+        what="a call in a reached block that matches a rung or the setter on owner and name "
+        "under an undeclared descriptor declines the block",
+        why="`defaultRequest(replace = true) { … }` and `url { … }` set a base through an "
+        "overload the ladder does not read (CP-54 rows 46, 48). Skipped, the block reads as "
+        "setting none and the row publishes `localhost` for a call Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.any-other-call-on-the-SETTERS-owner-declines": Guard(
+        what="any call on the setter's owner type other than the declared setter declines "
+        "the block it is in",
+        why="`defaultRequest { host = … }` and `url.takeFrom(…)` move the base through members "
+        "of `DefaultRequestBuilder` the reader does not model. Skipped, the block reads as "
+        "setting none and the row publishes `localhost`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if site.get("owner") == self._setter["owner"]:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-LISTED-call-that-may-set-the-base-declines": Guard(
+        what="a call the catalog's `may_set_base` lists declines the block it is in",
+        why="`install(DefaultRequest) { url(…) }` sets the base as `defaultRequest { }` does "
+        "(CP-54 rows 92-93), through a generic installer. Unlisted, the client reads as having "
+        "no base and the row publishes `localhost` for a call Ktor sends to the installed base",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        return any(_listed(site, entry) for entry in self._may_set)\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-executed-TWICE-holds-no-client": Guard(
+        what="a built request is held against a client only where exactly one call executes it",
+        why="a builder handed to two `HttpStatement`s on two clients has two bases; holding "
+        "the first publishes that client's service for a row that may be the other's",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if len(executing) != 1:\n",
+                replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

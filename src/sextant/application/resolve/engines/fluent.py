@@ -1710,7 +1710,7 @@ def _against_client_base(
     by CP-2 as a written one is. Where the base cannot be read — the client's construction
     is not reached, or the code setting the base is not read — or the join declines, the
     address the code states is a PATH and not the URL called: it keeps the path, peer NULL,
-    at `unresolved`.
+    at `unresolved`. A configuration base is carried, not joined (below).
 
     Only a relative address read in full moves. An absolute one is the whole address (Ktor
     ignores the base for it, CP-54 row 55); a `${…}` expression is configuration that may be
@@ -1730,6 +1730,12 @@ def _against_client_base(
     base = None
     if client is not None and context.workspace is not None:
         base, _ = client_base(context.workspace, context.values, client, context.client_base)
+    if base is not None and carries_expression(base):
+        # A configuration base (`${pricing.url}`), carried as the configuration convention
+        # carries a `${…}` base — the whole address in `path`, peer NULL, for the
+        # per-environment join to read — and `partial`, never joined: Ktor's join depends on
+        # whether the base ends in `/`, which the key does not say.
+        return None, f"{base.rstrip('/')}/{path.lstrip('/')}", str(Resolution.PARTIAL)
     joined = None if base is None else join_url(base, path, str(context.client_base["join"]))
     if joined is None:
         return None, path, str(Resolution.UNRESOLVED)

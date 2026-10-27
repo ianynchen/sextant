@@ -9,9 +9,9 @@ rule, not ours (DR-6). Three parts live here, so the `fluent` client catalog and
 - **`client_base_of`**, the key read and its shape refused at load. It says where the client
   sits at the call that issues it (`client_arg`), the configuration calls a base is set
   through (`ladder`, each with the argument holding its block), the call inside the last
-  block that sets the base (`setter`), which join applies (`join`), and where a client
-  nothing sets a base on sends (`default_base`). All of it is catalog data: nothing here
-  names a framework.
+  block that sets the base (`setter`), which join applies (`join`), where a client
+  nothing sets a base on sends (`default_base`), and which other calls may move the base
+  (`may_set_base`). All of it is catalog data: nothing here names a framework.
 - **`join_url`**, the join itself, one rule per behaviour measured. A rule is named for what
   it does, never for the framework that does it (the source rules keep framework names out of
   code); the catalog that declares the join is where the framework is named.
@@ -21,16 +21,20 @@ rule, not ours (DR-6). Three parts live here, so the `fluent` client catalog and
   copy.
 """
 
+import json
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from weakref import WeakKeyDictionary
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.arguments import call_site_index
+from sextant.application.resolve.shapes.arguments import call_site_index, carries_expression
+from sextant.application.resolve.shapes.member_values import static_field_value
 from sextant.application.resolve.values import (
     CYCLE,
+    EXPRESSION,
     LITERAL,
     NON_ENUMERABLE,
     NOT_READABLE,
@@ -50,9 +54,13 @@ from sextant.domain.symbols import type_descriptor, with_descriptor
 REPLACE_LAST_SEGMENT = "replace_last_segment"
 _JOINS = (REPLACE_LAST_SEGMENT,)
 
-_KEYS = {"client_arg", "ladder", "setter", "join", "default_base"}
+_KEYS = {"client_arg", "ladder", "setter", "join", "default_base", "may_set_base"}
 _RUNG_KEYS = {"owner", "method", "block_arg", "descriptor", "parent"}
 _SETTER_KEYS = {"owner", "method", "value_arg", "descriptor"}
+# One `may_set_base` entry: an owner, optionally narrowed to a method and a descriptor, and
+# optionally to a call whose argument `arg` reads the static field `field` (`{owner, name}`)
+# — a plugin handed to a generic installer (`install(DefaultRequest)`, CP-54 row 92).
+_MAY_SET_KEYS = {"owner", "method", "descriptor", "arg", "field"}
 # A rung that DERIVES a client from another (`HttpClient.config { … }`) inherits the other's
 # base where its own block sets none (CP-54 row 80). `receiver` is the one place the parent
 # can be: the call is made on it.
@@ -114,7 +122,40 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
             f"{where}'s `default_base` is the absolute address a client with no base sends "
             f"to, got {declared['default_base']!r}"
         )
+    may = declared["may_set_base"]
+    if not isinstance(may, list):
+        raise CatalogError(f"{where}'s `may_set_base` is a list of calls, got {may!r}")
+    for entry in may:
+        _may_set_entry(entry, f"{where}'s `may_set_base` entry {entry!r}")
     return MappingProxyType(declared)
+
+
+def _may_set_entry(entry: Any, where: str) -> None:
+    """One `may_set_base` entry: an `owner`, and optional `method`, `descriptor`, and an
+    `arg`/`field` pair, each of its own type."""
+    if not isinstance(entry, dict):
+        raise CatalogError(f"{where} is a mapping of {sorted(_MAY_SET_KEYS)}")
+    unknown = sorted(set(entry) - _MAY_SET_KEYS)
+    if unknown:
+        raise CatalogError(
+            f"{where} declares unknown {unknown}; it may declare {sorted(_MAY_SET_KEYS)}"
+        )
+    if not isinstance(entry.get("owner"), str) or not entry["owner"]:
+        raise CatalogError(f"{where} names no `owner`")
+    for word in ("method", "descriptor"):
+        if word in entry and (not isinstance(entry[word], str) or not entry[word]):
+            raise CatalogError(f"{where}'s `{word}` is a non-empty string")
+    if ("arg" in entry) != ("field" in entry):
+        raise CatalogError(f"{where} declares `arg` and `field` together or neither")
+    if "arg" in entry:
+        _index(entry["arg"], f"{where}'s `arg`")
+        field = entry["field"]
+        if (
+            not isinstance(field, dict)
+            or set(field) != {"owner", "name"}
+            or not all(isinstance(part, str) and part for part in field.values())
+        ):
+            raise CatalogError(f"{where}'s `field` is `{{owner, name}}`, got {field!r}")
 
 
 def _call(entry: Any, keys: set[str], position: str, where: str) -> None:
@@ -149,6 +190,14 @@ UNTRACED = "computed_base_addresses_not_traced"
 # the key `fluent._captured_at` writes, and what the walk names a position by.
 _READ_AT = "captured_at"
 
+# The base each construction answers, per workspace for one resolve: `N` calls on one client
+# read its construction once. Keyed on the workspace weakly, as `values._INDEX_BY_WORKSPACE`
+# is, and tied to the value index it was computed against — a new resolve builds a new index,
+# so a stale entry is never read. Inside, keyed on the ladder declared (two catalogs may
+# declare two) and the construction's `(caller, ordinal)`.
+_Answers = dict[tuple[str, str, int], tuple[str | None, str | None]]
+_BUILT: "WeakKeyDictionary[Workspace, tuple[ValueIndex, _Answers]]" = WeakKeyDictionary()
+
 
 def client_base(
     workspace: Workspace,
@@ -159,10 +208,14 @@ def client_base(
     """The base the client in `client_value` sends a relative address to, as `(base,
     None)`, or `(None, reason)` where it cannot be read.
 
-    `client_value` is the client argument of the call that issues the request, carrying
-    where it was read (`captured_at`, `(caller, ordinal, slot)`); `declared` is the
-    catalog's `client_base`. The client's construction is found by the value walk's
-    producer reader, with every ladder rung declared as a stop, and read like this:
+    `client_value` is the client argument of the call that issues the request, and **the
+    caller must stamp where it read it**: `captured_at`, `(caller, ordinal, slot)`, the
+    position the walk starts from. `fluent` stamps it with `_captured_at`; a `single_call`
+    catalog whose client is argument 0 of the call site passes
+    `{**argument, "captured_at": (site["caller"], site["ordinal"], 0)}`. An argument with no
+    stamp answers `not_readable`. `declared` is the catalog's `client_base`. The client's
+    construction is found by the value walk's producer reader, with every ladder rung
+    declared as a stop, and read like this:
 
     - **a rung's block is read for the base** — the setter called in it, or in the block of
       a rung called in it, in order; the LAST absolute address wins (CP-54 row 85), and a
@@ -170,7 +223,16 @@ def client_base(
     - **a derived client (`parent: receiver`) whose block sets none inherits** its
       receiver's base (row 80), the receiver walked the same way;
     - **a client whose construction is reached and sets no base sends to `default_base`**
-      (Ktor: `http://localhost`, rows 50, 57).
+      (Ktor: `http://localhost`, rows 50, 57) — but only where nothing in a reached block
+      MAY have set one: a call matching a rung or the setter on owner and name under
+      another descriptor, any other call on the setter's owner type, or a call the catalog
+      lists in `may_set_base` (`install(DefaultRequest) { … }`, row 92) declines the block
+      instead. Silence is "no base" only where it is silence.
+
+    A base may be a configuration expression (`${pricing.url}`): the setter's value
+    resolves to text carrying a `${…}` key. It is answered as it is, and the caller
+    renders it as the configuration convention does, never joining it — Ktor's join
+    depends on whether the base ends in `/`, which the key does not say.
 
     A setter handed anything but a string literal is resolved by the walk at the setter —
     a captured parameter of the method that built the client crosses to that method's
@@ -189,16 +251,26 @@ def client_base(
     site = values.sites.get((str(caller), int(str(ordinal))))
     if site is None:
         return None, NOT_READABLE
-    return _Ladder(workspace, values, declared).base_of(site, slot, ())
+    held = _BUILT.get(workspace)
+    if held is None or held[0] is not values:
+        held = (values, {})
+        _BUILT[workspace] = held
+    return _Ladder(workspace, values, declared, held[1]).base_of(site, slot, ())
 
 
 class _Ladder:
     """One reading of a catalog's `client_base` ladder over one workspace's facts."""
 
     def __init__(
-        self, workspace: Workspace, values: ValueIndex, declared: Mapping[str, Any]
+        self,
+        workspace: Workspace,
+        values: ValueIndex,
+        declared: Mapping[str, Any],
+        built: _Answers,
     ) -> None:
         self._workspace = workspace
+        self._built = built
+        self._ladder_key = json.dumps(dict(declared), sort_keys=True, default=str)
         self._values = values
         self._by_caller = workspace.once(call_site_index).by_caller
         self._rungs = [
@@ -207,6 +279,25 @@ class _Ladder:
         setter = declared["setter"]
         self._setter = {**setter, "owner": type_descriptor(str(setter["owner"]))}
         self._default = str(declared["default_base"])
+        self._may_set = [
+            {
+                **entry,
+                "owner": type_descriptor(str(entry["owner"])),
+                **(
+                    {
+                        "fields": {
+                            (
+                                type_descriptor(str(entry["field"]["owner"])),
+                                str(entry["field"]["name"]),
+                            ): "declared"
+                        }
+                    }
+                    if "field" in entry
+                    else {}
+                ),
+            }
+            for entry in declared["may_set_base"]
+        ]
         self._stops = frozenset((rung["owner"], str(rung["method"])) for rung in self._rungs)
 
     def base_of(
@@ -235,7 +326,21 @@ class _Ladder:
     def _built_by(
         self, built: tuple[str, int], seen: tuple[tuple[str, int], ...]
     ) -> tuple[str | None, str | None]:
-        """The base of the client one declared call built."""
+        """The base of the client one declared call built, read once per construction per
+        resolve (`_BUILT`). A `cycle` answer depends on the path that met it, so it is not
+        kept."""
+        key = (self._ladder_key, *built)
+        held = self._built.get(key)
+        if held is not None:
+            return held
+        answer = self._read_construction(built, seen)
+        if answer[1] != CYCLE:
+            self._built[key] = answer
+        return answer
+
+    def _read_construction(
+        self, built: tuple[str, int], seen: tuple[tuple[str, int], ...]
+    ) -> tuple[str | None, str | None]:
         site = self._values.sites[built]
         rung = self._rung_of(site)
         if rung is None:
@@ -266,10 +371,12 @@ class _Ladder:
         for inner in self._by_caller.get(body, []):
             if _matches(inner, self._setter):
                 address, reason = self._setter_value(inner)
-                if address is None or not _has_host(address):
+                if address is None or not (_has_host(address) or carries_expression(address)):
                     return None, reason or UNTRACED
                 base = address
                 continue
+            if self._may_move_base(inner):
+                return None, UNTRACED
             nested = self._rung_of(inner)
             if nested is None or nested.get("parent") is not None:
                 continue
@@ -292,7 +399,11 @@ class _Ladder:
         for answer in answers:
             if answer.kind == UNRESOLVED:
                 return None, answer.reason or NOT_READABLE
-            if answer.kind != LITERAL or answer.literal_kind != STRING:
+            # A string the code states, or a configuration expression carrying a `${…}` key;
+            # an assembled value with no key (`https://{}/`) is not read.
+            stated = answer.kind == LITERAL and answer.literal_kind == STRING
+            keyed = answer.kind == EXPRESSION and carries_expression(str(answer.value))
+            if not (stated or keyed):
                 return None, UNTRACED
             texts.append(str(answer.value))
         distinct = list(dict.fromkeys(texts))
@@ -305,6 +416,21 @@ class _Ladder:
     def _rung_of(self, site: Mapping[str, Any]) -> Mapping[str, Any] | None:
         return next((rung for rung in self._rungs if _matches(site, rung)), None)
 
+    def _may_move_base(self, site: Mapping[str, Any]) -> bool:
+        """A call in a reached block that may set the base although it is not the declared
+        setter or a declared rung — so the block's silence is not "no base":
+        - a rung or the setter's owner and name under another descriptor (Ktor's
+          `url { … }`, `defaultRequest(replace = true) { … }`, rows 46, 48);
+        - any other call on the setter's owner type (`host = …`, `url.takeFrom(…)`);
+        - a call `may_set_base` lists (`install(DefaultRequest) { … }`, row 92)."""
+        if self._rung_of(site) is not None:
+            return False
+        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):
+            return True
+        if site.get("owner") == self._setter["owner"]:
+            return True
+        return any(_listed(site, entry) for entry in self._may_set)
+
 
 def _matches(site: Mapping[str, Any], call: Mapping[str, Any]) -> bool:
     """`site` is the declared call: owner and method, and the descriptor where one is
@@ -314,6 +440,27 @@ def _matches(site: Mapping[str, Any], call: Mapping[str, Any]) -> bool:
         and site.get("name") == call["method"]
         and ("descriptor" not in call or site.get("descriptor") == call["descriptor"])
     )
+
+
+def _same_name(site: Mapping[str, Any], call: Mapping[str, Any]) -> bool:
+    return bool(site.get("owner") == call["owner"] and site.get("name") == call["method"])
+
+
+def _listed(site: Mapping[str, Any], entry: Mapping[str, Any]) -> bool:
+    """`site` is the `may_set_base` entry's call: its owner, and its method, descriptor and
+    field argument where the entry names them."""
+    if site.get("owner") != entry["owner"]:
+        return False
+    if "method" in entry and site.get("name") != entry["method"]:
+        return False
+    if "descriptor" in entry and site.get("descriptor") != entry["descriptor"]:
+        return False
+    if "fields" not in entry:
+        return True
+    arguments = site["arguments"] or []
+    position = int(entry["arg"])
+    argument = arguments[position] if position < len(arguments) else None
+    return static_field_value(argument, entry["fields"]) is not None
 
 
 def _has_host(address: str) -> bool:

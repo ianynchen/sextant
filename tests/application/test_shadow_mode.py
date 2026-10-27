@@ -288,6 +288,9 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **`ktor-client` moved (7, 8) -> (8, 9) on 2026-10-26** (Task 10): one more ladder rung, the
 # engine-less `HttpClient { … }` factory (CP-54 rows 87-88), whose `block_arg` is one more
 # position read the same way.
+# **`ktor-client` moved (8, 9) -> (10, 11) on 2026-10-26** (Task 10 fix round 1): two
+# `may_set_base` entries name an argument position (`install`'s and `install$default`'s
+# plugin, `arg: 0` and `arg: 1`), read by shape as every argument position is.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -308,7 +311,7 @@ _ASKS_PER_CATALOG = {
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
     "kafka-streams-topology": (5, 5),
-    "ktor-client": (8, 9),
+    "ktor-client": (10, 11),
     "ktor-routing": (49, 111),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
@@ -366,8 +369,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # `ktor-routing` WebSocket and SSE rules, same comment. **+3 on 2026-10-26**: the new
     # `ktor-client` catalog's three steps, same comment. **+4 on 2026-10-26**: its
     # `client_base` ladder and setter, same comment. **+1 on 2026-10-26**: the engine-less
-    # factory's rung, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 823
+    # factory's rung, same comment. **+2 on 2026-10-26**: its two `may_set_base` plugin
+    # positions, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 825
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

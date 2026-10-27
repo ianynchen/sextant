@@ -146,6 +146,26 @@ matches:
               descriptor: "(Ljava/lang/String;)V", value_arg: 0 }
     join: replace_last_segment
     default_base: "http://localhost"
+    # Calls that MAY move the base and are not rungs, so a block holding one is not read as
+    # setting none: the reader then declines rather than answer `default_base`. Beside
+    # these, any call on the setter's owner (`host = …`, `url { … }`, `url.takeFrom(…)`,
+    # `url$default`) and a rung's or the setter's name under an undeclared descriptor
+    # (`defaultRequest(replace = true) { … }`, row 48) decline by rule. Calls that set no
+    # base (`install(WebSockets)`, `expectSuccess = …`) are not listed and stay allowed.
+    may_set_base:
+      # The DefaultRequest plugin installed directly (CP-54 rows 92-93): `install(plugin,
+      # block)` with the plugin at argument 0, or `install$default(config, plugin, …)`
+      # where no block is given, the plugin read by `getstatic DefaultRequest.Plugin`.
+      - { owner: io.ktor.client.HttpClientConfig, method: install, arg: 0,
+          field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
+      - { owner: io.ktor.client.HttpClientConfig, method: install$default, arg: 1,
+          field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
+      # Every other function `DefaultRequestKt` declares: the `defaultRequest$default`
+      # bridge and the `replace` overload (row 48).
+      - { owner: io.ktor.client.plugins.DefaultRequestKt }
+      # The URL builder `DefaultRequestBuilder` exposes (`getUrl()`, `url { … }`'s
+      # receiver, row 46).
+      - { owner: io.ktor.http.URLBuilder }
 
 # Shared verbatim across every outbound catalog on purpose — `okhttp.yml` carries the
 # reason: shape expansion is a global insert-if-absent pass keyed on the type symbol
