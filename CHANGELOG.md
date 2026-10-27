@@ -70,8 +70,9 @@ here would restate those documents rather than add anything.
     no verb. An SSE route is GET.
   - **WebSocket and SSE client calls** are outbound rows that join the same base. A relative
     WebSocket call takes the scheme of the function called, not one derived from the base:
-    `wss(…)` is `wss`, the others are `ws`. The base's port is written where it differs from
-    that scheme's default, so `ws("/feed")` over an `https` base is `ws://…:443/feed`.
+    `wss(…)` is `wss`, the others are `ws`. The port is the call's own where the call sets one
+    (`wss(…)` sets 443), and the base's otherwise; it is written only where it differs from the
+    call's scheme's default, so `ws("/feed")` over an `https` base is `ws://…:443/feed`.
 - **Two additions under these rows.** The value walk finds a client through two things that
   are new:
   - **Wider `field_write` facts.** These now record a field or top-level `val` written from a
@@ -79,7 +80,9 @@ here would restate those documents rather than add anything.
     value two branches join at the write (`PROD ? "https://prod…" : "https://staging…"`,
     Kotlin's `?:` and `if`) records nothing, because neither branch's value is the field's
     only one (CP-33 row 9). Before this rule, a `RestTemplate` reading such a field published
-    the staging address as `resolved`.
+    the staging address as `resolved`. Nor is a parameter reported once the method stores to
+    its slot (`if (…) host = fallback; HOST = host;`, `u = u.trim(); this.u = u;`): the slot
+    no longer holds only the caller's argument.
   - **A producer reader.** It names the call that built a value, so the client's
     construction, and the `defaultRequest` inside it, can be read.
 - **A client with no declared base is not assumed to send to `http://localhost`.** That is

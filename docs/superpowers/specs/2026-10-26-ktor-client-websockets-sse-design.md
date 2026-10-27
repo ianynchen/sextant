@@ -335,8 +335,9 @@ exercises them yet.
 - **`ktor-websocket-client.yml` and `ktor-sse-client.yml`** are `single_call` catalogs.
   - `request_url: {scheme, port?}` is the **WebSocket scheme rewrite**. A relative address takes
     the call's own scheme (`ws` or `wss` by function, never derived from the base's), and the
-    base's port is written only where it differs from that scheme's default, so `ws("/feed")`
-    over an `https` base is `ws://…:443/feed` (CP-54 rows 94-113).
+    call's own port where it sets one (`wss` sets 443), the base's otherwise; the port is
+    written only where it differs from the call's scheme's default, so `ws("/feed")` over an
+    `https` base is `ws://…:443/feed` (CP-54 rows 94-113).
   - `address_parts` keeps the host/port/path form's path `unresolved`, unassembled (§3g item 4).
 - **The parts-form path is a path.** Ktor hands it to `setEncodedPath` and never parses it, so
   `ws(path = "//x/y")` is a path under the base, not a host `x` (CP-54 rows 124-134).
@@ -347,7 +348,11 @@ exercises them yet.
     that a value two branches join at the write was recorded as the last branch's alone
     (`PROD ? prod : staging` published the staging host as `resolved`, outside Ktor too). The
     fix wave added one rule: the value's producer must be in the write's own basic block
-    (CP-33 row 9). No fact moved on the six field pins.
+    (CP-33 row 9). No fact moved on the six field pins. The re-review then found the same
+    class through a parameter: a load of a parameter's slot was reported even where the
+    method stores to that slot. A third rule refuses it (any `xSTORE` or `IINC` to the slot);
+    one pinned fact went, `spring-petclinic-api-gateway`'s `PetDetails#visits`, a null-default
+    in a record constructor.
   - **Task 9:** a producer reader, `values.producers_of`, names the call that built a value.
   - **Task 10** read the ladder through both. It added `receiver_field` for a `getstatic`
     receiver (a derived client's top-level parent) and the engine-less `HttpClient { }` rung
