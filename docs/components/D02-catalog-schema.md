@@ -654,7 +654,7 @@ must therefore check that the producer it names really hands something back — 
 not, that it is genuinely a constructor rather than an ordinary void call.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
-other three directories: it is knowledge a run was produced with.
+other four directories: it is knowledge a run was produced with.
 
 ## 1g. `client_model` — a client's base address, declared once
 
@@ -1701,13 +1701,22 @@ keeps the row's shape — whole in `path` for a `channel_arg` row, split by CP-2
   client base's `default_ports` (§2's `fluent`); a row declaring `request_url` on a catalog with
   no `client_base`, or naming a scheme `default_ports` does not, is refused at load. An absolute
   address is sent as written; a protocol-relative one declines (CP-54 row 113 measured one
-  call only).
+  call only). A configuration-key base (`${chat.url}`) is carried as `fluent`'s is,
+  `${chat.url}/chat` at `partial`, WITHOUT the scheme rewrite: the deployed value's scheme and
+  port are unknown.
 - **`address_parts: [i, …]`** names the positions of a call's OTHER address parts — a scheme,
   a host, a port — beside the one `url_arg`/`channel_arg` reads (Ktor's `webSocket(method,
   host, port, path)`, `sse(scheme, host, port, path)`). Where any of them is given (anything
   but a `null` argument), the address is assembled from parts, which no rule here does: the
   part read is kept, `unresolved`, and never joined to the base, which a given host replaces
-  (CP-54 row 109). With every part `null`, the address joins as any relative one does.
+  (CP-54 row 109). With every part `null`, the address joins the base — **as a PATH, never
+  parsed as an address**: Ktor hands it to `setEncodedPath`, not `takeFrom` (CP-54 rows
+  124-134), so the text the code states is split on `/` into segments and joined as a relative
+  address's segments are (`join_url`'s `path_only`). `//x/y` is the path `//x/y` on the base's
+  host, a whole URL replaces the base's last segment like any path without a leading `/`, and
+  the base's query follows. A path carrying `?` or `#` is kept, `unresolved` (Ktor writes it
+  as it stands; how a base's query follows it is not measured), and so is one the code does
+  not state as text.
 
 **`channel_via` reads a destination the consuming call's own argument position never names
 directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on

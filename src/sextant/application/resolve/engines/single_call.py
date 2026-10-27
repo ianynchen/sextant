@@ -1082,21 +1082,44 @@ def _sent_to(
     no shipped rule puts a scheme, host, port and path together. The part read stays, at
     `unresolved`.
 
+    **And a parts row's address is a PATH, never an address**: Ktor hands it to
+    `setEncodedPath` and does not parse it (CP-54 rows 124-134), so it is read as the text
+    the code states — `sse(path = "https://e/s")` is not an absolute URL, `//x/y` not an
+    authority — and joined as segments (`against_client_base`'s `path_only`). A parts path
+    the code does not state as text is never the whole address either: what was read of it
+    stays, `unresolved`.
+
     The joined URL keeps the row's shape: whole in `path` for a `channel_arg` row (a
     WebSocket's), split into peer and path by CP-2 for a `url_arg` row (an SSE stream's)."""
     peer, path, resolution = destination
-    if (
+    arguments = site["arguments"] or []
+    path_only = _ADDRESS_PARTS in method
+    if path_only:
+        # The text at the row's own position, never `destination`, which CP-2 may already
+        # have split as if it were an address.
+        stated = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
+        if not (
+            isinstance(stated, dict)
+            and stated.get("kind") == "string"
+            and isinstance(stated.get("value"), str)
+        ):
+            if resolution != str(Resolution.RESOLVED):
+                return destination
+            return None, path, str(Resolution.UNRESOLVED)
+        path = str(stated["value"])
+        if carries_expression(path):
+            return destination
+        if any(_given(_arg_at(arguments, position)) for position in method[_ADDRESS_PARTS]):
+            return None, path, str(Resolution.UNRESOLVED)
+    elif (
         peer is not None
         or path is None
         or resolution != str(Resolution.RESOLVED)
         or carries_expression(path)
     ):
         return destination
-    arguments = site["arguments"] or []
-    if any(_given(_arg_at(arguments, position)) for position in method.get(_ADDRESS_PARTS, ())):
-        return None, path, str(Resolution.UNRESOLVED)
     if declared is None:
-        return destination
+        return destination if not path_only else (None, path, resolution)
     slot = int(declared["client_arg"])
     argument = _arg_at(arguments, slot)
     client = (
@@ -1105,7 +1128,7 @@ def _sent_to(
         else {**argument, "captured_at": (site["caller"], site["ordinal"], slot)}
     )
     address, resolution = against_client_base(
-        workspace, values, client, declared, path, method.get(_REQUEST_URL)
+        workspace, values, client, declared, path, method.get(_REQUEST_URL), path_only
     )
     if resolution == str(Resolution.RESOLVED) and not _channel_declared(method):
         return url_of({"kind": "string", "value": address})

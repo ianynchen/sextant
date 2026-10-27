@@ -42,7 +42,9 @@ client_model: ktor
 #   wss(path = …), the parts form       scheme `wss`, no port (row 106: `wss://h:80/parts`)
 # and the port is written only where it differs from the scheme's default (row 94). An
 # absolute address is sent as written, whatever the call (rows 110-112); a
-# protocol-relative one declines (row 113 measured `ws` alone).
+# protocol-relative one declines (row 113 measured `ws` alone). A base that is a
+# configuration key (`url("${chat.url}")`) is carried as the HTTP client's is, `${chat.url}/chat`
+# at `partial`, WITHOUT the scheme rewrite: the deployed value's scheme and port are unknown.
 #
 # **Every overload with an address, both JVM names each** — the direct call and the
 # `$default` bridge a call leaving any argument to its default compiles to (rows 28-31).
@@ -78,7 +80,9 @@ matches:
     # 37): the path at 4. A host or port given at 2 or 3 replaces the base's (row 109), and
     # the parts are not assembled (spec §3g item 4): the row keeps the path, `unresolved`.
     # With both left to their defaults (`null`), the path joins as the address form's does
-    # (rows 105-108).
+    # (rows 105-108) — but as a PATH: Ktor hands it to `setEncodedPath` and never parses it,
+    # so `//x/y` is a path on the base's host and a whole URL a path segment (rows 124-128); a
+    # path carrying `?` or `#` stays `unresolved`.
     - { name: webSocket, arity: 8, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },
         descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
     - { name: webSocket$default, arity: 10, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },

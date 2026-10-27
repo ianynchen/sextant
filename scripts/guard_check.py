@@ -5219,10 +5219,12 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_SINGLE_CALL,
                 find="    address, resolution = against_client_base(\n"
-                "        workspace, values, client, declared, path, method.get(_REQUEST_URL)\n",
+                "        workspace, values, client, declared, path, method.get(_REQUEST_URL), "
+                "path_only\n",
                 replace="    address, resolution = against_client_base(  # guard disabled by "
                 "scripts/guard_check.py\n"
-                "        workspace, values, None, declared, path, method.get(_REQUEST_URL)\n",
+                "        workspace, values, None, declared, path, method.get(_REQUEST_URL), "
+                "path_only\n",
             ),
         ),
     ),
@@ -5236,8 +5238,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="    if request is None:\n        return _replace_last_segment(base, relative)\n"
-                "    return _with_request_scheme(base, relative, request, default_ports or {})\n",
+                find="    if request is None:\n        if path_only:\n"
+                "            return _path_onto(base, relative)\n"
+                "        return _replace_last_segment(base, relative)\n"
+                "    return _with_request_scheme(base, relative, request, default_ports or {}, "
+                "path_only)\n",
                 replace="    return _replace_last_segment(base, relative)  # guard disabled by "
                 "scripts/guard_check.py\n",
             ),
@@ -5253,10 +5258,85 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SINGLE_CALL,
-                find="    if any(_given(_arg_at(arguments, position)) for position in "
-                "method.get(_ADDRESS_PARTS, ())):\n"
-                "        return None, path, str(Resolution.UNRESOLVED)\n",
-                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+                find="        if any(_given(_arg_at(arguments, position)) for position in "
+                "method[_ADDRESS_PARTS]):\n"
+                "            return None, path, str(Resolution.UNRESOLVED)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-PARTS-path-is-a-path-never-an-address": Guard(
+        what="a parts-form row reads its `path` as the text the code states and joins it as "
+        "segments, never as an address",
+        why="Ktor hands the parts form's `path` to `setEncodedPath` and never parses it: "
+        '`sse(path = "https://e.example.com/s")` over `https://api.example.com/v1/` is sent '
+        "to `https://api.example.com/v1/https://e.example.com/s` (CP-54 row 130). Read as an "
+        "address, the row publishes `e.example.com` `/s`, a service the call never reaches",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    path_only = _ADDRESS_PARTS in method\n",
+                replace="    path_only = False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-PROTOCOL-RELATIVE-address-under-a-call-scheme-declines": Guard(
+        what="under a call's `request_url`, an address with two or more leading slashes "
+        "declines the join",
+        why="it takes the CALL's scheme (CP-54 row 113, measured for `ws` alone), where the "
+        "HTTP join gives it the base's. Joined by the HTTP rule and rewritten, "
+        '`ws("//other.example.com/x")` publishes `ws://other.example.com:443/x`, a port '
+        "Ktor never writes for it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if len(relative) - len(relative.lstrip("/")) >= 2:\n'
+                "            return None\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-base-carrying-USER-INFO-under-a-call-scheme-declines": Guard(
+        what="under a call's `request_url`, a base whose authority carries user info declines",
+        why="the scheme rewrite rebuilds the authority from the base's host and port, and "
+        "Ktor's handling of user info there is not measured. Rebuilt as written, the row "
+        "publishes `ws://user@api.example.com:443/chat` as a fact",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='    if joined is None or "@" in origin.netloc:\n',
+                replace="    if joined is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.a-malformed-request-url-or-address-parts-is-refused": Guard(
+        what="`_validate_client_rows` refuses a `request_url` with no base or no default port, "
+        "a malformed `request_url`, and `address_parts` that names no positions",
+        why="each loads silently otherwise: a `request_url` nothing can render, or "
+        "`address_parts: 2`, which reads no part and so joins a host-bearing call onto the "
+        "base — the base's service published for a call Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    for row in rows:\n"
+                "        where = f\"loading catalog {catalog.source}: `{row['name']}`\"\n",
+                replace="    for row in []:  # guard disabled by scripts/guard_check.py\n"
+                "        where = f\"loading catalog {catalog.source}: `{row['name']}`\"\n",
+            ),
+        ),
+    ),
+    "ktor.a-client-model-key-cannot-be-COPIED-into-a-catalog": Guard(
+        what="a catalog naming `client_model` may not declare a `client_base` key the model "
+        "declares",
+        why="the merge would let the catalog's copy win silently, so a ladder, join or "
+        "`may_set_base` edited in the model would stop reaching the catalog that copied it — "
+        "the drift one declaration exists to end",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="    twice = sorted(set(own) & set(shared))\n    if twice:\n",
+                replace="    twice = sorted(set(own) & set(shared))\n"
+                "    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

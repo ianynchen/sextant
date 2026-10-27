@@ -41,7 +41,9 @@ client_model: ktor
 # written (row 119).
 #
 # **The parts form** (`scheme, host, port, path`, the path at 4) joins its path where no
-# other part is given (row 122); a scheme, host or port given is not assembled (spec §3g item
+# other part is given (row 122), as a PATH that Ktor never parses: `//x/y` is a path on the
+# base's host and a whole URL a path segment (rows 129-130, 132, 134); a path carrying `?` or
+# `#` stays `unresolved`; a scheme, host or port given is not assembled (spec §3g item
 # 4, and row 123 shows a scheme kept over the base's host with the base's port written): the
 # row keeps the path, `unresolved`.
 #

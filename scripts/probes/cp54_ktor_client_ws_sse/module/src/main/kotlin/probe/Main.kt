@@ -487,4 +487,21 @@ fun main() {
     sseJoin("`sse(scheme = \"http\", path = \"/parts\")`, the parts form with a scheme", https, "/parts") {
         it.sse(scheme = "http", path = "/parts") { }
     }
+
+    // Row group (o): the parts form's `path` given text an ADDRESS form would parse — two
+    // leading slashes, a whole URL, a query, a fragment, no leading slash. The parts form
+    // hands `path` to `URLBuilder.setEncodedPath` and never to `takeFrom`, so what Ktor sends
+    // for each is measured here rather than predicted from the address form's rows.
+    for (path in listOf("//x/y", "https://e.example.com/s", "/chat?room=1", "/chat#top", "parts")) {
+        wsJoin("`ws(path = \"$path\")`, the parts form, https base (o)", https, path) { it.ws(path = path) { } }
+    }
+    for (path in listOf("//x/y", "https://e.example.com/s", "/stream?x=1", "stream")) {
+        sseJoin("`sse(path = \"$path\")`, the parts form (o)", https, path) { it.sse(path = path) { } }
+    }
+    wsJoin("`ws(path = \"/parts\")`, the parts form, https base with a query (o)", "$https?key=1", "/parts") {
+        it.ws(path = "/parts") { }
+    }
+    sseJoin("`sse(path = \"/parts\")`, the parts form, base with a query (o)", "$https?key=1", "/parts") {
+        it.sse(path = "/parts") { }
+    }
 }

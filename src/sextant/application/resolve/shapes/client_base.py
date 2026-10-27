@@ -558,9 +558,16 @@ def against_client_base(
     declared: Mapping[str, Any],
     address: str,
     request: Mapping[str, Any] | None = None,
+    path_only: bool = False,
 ) -> tuple[str, str]:
     """What `address`, read in full as the code states it, is sent to by a client that may
     hold a base: `(address, resolution)`, for the caller to render in its own row shape.
+
+    `path_only` says the text is a PATH handed to the request as it stands — the parts form,
+    `ws(path = …)`, whose `path` Ktor gives `URLBuilder.setEncodedPath` and never parses
+    (CP-54 rows 124-134). It is then never an absolute address, and a path carrying `?` or
+    `#` is kept, `unresolved`: Ktor writes it as it stands, and what an engine makes of that
+    text and how a base's own query follows it is not measured.
 
     - **an absolute address is the whole address** (CP-54 rows 55, 110-112, 119), `resolved`;
     - **a relative one joins the base** of `client_value` (`client_base`, stamped as it says)
@@ -571,7 +578,9 @@ def against_client_base(
     - **otherwise the address is a path, not the URL called**: no base is read (the client is
       not reached, or no setter is) or the join declines, so it is kept, `unresolved`.
     """
-    if _has_host(address):
+    if path_only and _marks_query_or_fragment(address):
+        return address, str(Resolution.UNRESOLVED)
+    if not path_only and _has_host(address):
         return address, str(Resolution.RESOLVED)
     base = None
     if client_value is not None and workspace is not None:
@@ -581,7 +590,14 @@ def against_client_base(
     joined = (
         None
         if base is None
-        else join_url(base, address, str(declared["join"]), request, declared.get(_DEFAULT_PORTS))
+        else join_url(
+            base,
+            address,
+            str(declared["join"]),
+            request,
+            declared.get(_DEFAULT_PORTS),
+            path_only,
+        )
     )
     if joined is None:
         return address, str(Resolution.UNRESOLVED)
@@ -594,6 +610,7 @@ def join_url(
     rule: str,
     request: Mapping[str, Any] | None = None,
     default_ports: Mapping[str, int] | None = None,
+    path_only: bool = False,
 ) -> str | None:
     """`relative` sent from a client whose base is `base`, under the framework's `rule` — or
     None where the join DECLINES: the address is one whose result is not modelled, and the
@@ -606,16 +623,23 @@ def join_url(
     `request` is what the CALL sets on its request's URL before the address is read (a
     WebSocket call's scheme, and its port where it sets one, `request_url` on its row), and
     `default_ports` the scheme's default port each is rendered against: see
-    `_with_request_scheme`."""
+    `_with_request_scheme`. `path_only` reads `relative` as a path handed over as it stands,
+    never parsed as an address: see `_path_onto`."""
     if rule != REPLACE_LAST_SEGMENT:
         raise ValueError(f"no join rule {rule!r}; the rules are {list(_JOINS)}")
     if request is None:
+        if path_only:
+            return _path_onto(base, relative)
         return _replace_last_segment(base, relative)
-    return _with_request_scheme(base, relative, request, default_ports or {})
+    return _with_request_scheme(base, relative, request, default_ports or {}, path_only)
 
 
 def _with_request_scheme(
-    base: str, relative: str, request: Mapping[str, Any], ports: Mapping[str, int]
+    base: str,
+    relative: str,
+    request: Mapping[str, Any],
+    ports: Mapping[str, int],
+    path_only: bool = False,
 ) -> str | None:
     """The join for a call that sets its own scheme on the request before its address is
     read, as Ktor 3.6.0 sends it (CP-54 rows 61-62, 94-113; `ktor-client-core`'s
@@ -635,14 +659,17 @@ def _with_request_scheme(
       for `ws` alone), a scheme with no host (as for the HTTP join), a base carrying user info,
       and a scheme the port table does not name.
     """
-    scheme, refused = _scheme_of(relative)
-    if refused:
-        return None
-    if scheme is not None:
-        return relative if _has_host(relative) else None
-    if len(relative) - len(relative.lstrip("/")) >= 2:
-        return None
-    joined = _replace_last_segment(base, relative)
+    if path_only:
+        joined = _path_onto(base, relative)
+    else:
+        scheme, refused = _scheme_of(relative)
+        if refused:
+            return None
+        if scheme is not None:
+            return relative if _has_host(relative) else None
+        if len(relative) - len(relative.lstrip("/")) >= 2:
+            return None
+        joined = _replace_last_segment(base, relative)
     origin = urlsplit(base)
     if joined is None or "@" in origin.netloc:
         return None
@@ -660,6 +687,32 @@ def _with_request_scheme(
     sent = urlsplit(joined)
     authority = host if port == default else f"{host}:{port}"
     return urlunsplit((called, authority, sent.path, sent.query, sent.fragment))
+
+
+def _path_onto(base: str, path: str) -> str | None:
+    """`path` joined onto `base` where it is a PATH handed to the request as it stands — Ktor's
+    parts form, `url(scheme, host, port, path)`, which calls `URLBuilderKt.set` and so
+    `setEncodedPath(path)`, never `takeFrom` (CP-54 rows 124-134). Nothing in the text is
+    parsed: it is split on `/` into segments as `setEncodedPath` splits it, and those join the
+    base's by `concatenatePath`, as a relative address's do. So `//x/y` is the path `//x/y` on
+    the base's host (rows 124, 129), not an authority; a whole URL replaces the base's last
+    segment like any path without a leading `/` (rows 125, 130); and the base's query follows
+    the path (rows 133-134), the request carrying none of its own. A `?` or `#` in the text
+    declines — Ktor writes it as it stands (rows 126-127, 131), and how a base's query follows
+    it is not measured."""
+    if _marks_query_or_fragment(path):
+        return None
+    origin = urlsplit(base)
+    segments = _concatenate_path(_encoded_segments(origin.path), _encoded_segments(path))
+    return urlunsplit(
+        (origin.scheme, origin.netloc, _join_path(segments), origin.query, origin.fragment)
+    )
+
+
+def _marks_query_or_fragment(text: str) -> bool:
+    """Whether a path the request is handed as it stands carries the mark that, in an
+    address, starts a query or a fragment."""
+    return any(mark in text for mark in "?#")
 
 
 def _replace_last_segment(base: str, relative: str) -> str | None:

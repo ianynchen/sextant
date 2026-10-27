@@ -923,7 +923,7 @@ def main(argv: list[str]) -> int:
         "; ".join(f"`{name}` {port}" for name, port in ports.items()),
     )
     for entry in ran:
-        if entry[0] == "WSJOIN":
+        if entry[0] == "WSJOIN" and not entry[1].endswith("(o)"):
             _, label, base, address, result = entry
             emit(
                 f"`DefaultRequest` join through a WebSocket call: {label} (m)",
@@ -933,13 +933,29 @@ def main(argv: list[str]) -> int:
 
     # (n) an SSE call's address joined onto the base, on an engine declaring `SSECapability`
     for entry in ran:
-        if entry[0] == "SSEJOIN":
+        if entry[0] == "SSEJOIN" and not entry[1].endswith("(o)"):
             _, label, base, address, capabilities, result = entry
             emit(
                 f"`DefaultRequest` join through an SSE call: {label} (n)",
                 "client",
                 f"engine capabilities {capabilities}; base `{base}`, address `{address}` -> "
                 f"the engine received `{result}`",
+            )
+
+    # (o) the parts form's `path`, given text an address form would parse
+    for entry in ran:
+        if entry[0] in ("WSJOIN", "SSEJOIN") and entry[1].endswith("(o)"):
+            label, base, address, result = (
+                entry[1].removesuffix(" (o)"),
+                entry[2],
+                entry[3],
+                entry[-1],
+            )
+            kind = "a WebSocket" if entry[0] == "WSJOIN" else "an SSE"
+            emit(
+                f"`DefaultRequest` join through {kind} call: {label} (o)",
+                "client",
+                f"base `{base}`, path `{address}` -> the engine received `{result}`",
             )
     return 0
 

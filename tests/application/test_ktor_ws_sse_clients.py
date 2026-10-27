@@ -362,6 +362,80 @@ def test_the_host_port_path_form_is_not_assembled(tmp_path: Path):
     ]
 
 
+_SSE_PARTS = (
+    f"({_CLIENT}{_STRING}{_STRING}Ljava/lang/Integer;{_STRING}{_F1}{_SSE_OPTIONS}{_F2}{_CONT}"
+    f"{_DEFAULTS})Ljava/lang/Object;"
+)
+
+
+def _sse_parts_call(caller: str, path: str) -> CallSiteFact:
+    """`client.sse(path = "<path>") { }`: the `sse-tL6_L-A$default` bridge, every part but
+    the path left to its default (`null`, CP-54 rows 43, 122)."""
+    return _call(
+        caller,
+        0,
+        (SSE_KT, "sse-tL6_L-A$default", _SSE_PARTS),
+        [
+            _CLIENT_FIELD,
+            _NULL,
+            _NULL,
+            _NULL,
+            CallArgument(kind="string", value=path),
+            _NULL,
+            _NULL,
+            _NULL,
+            _NULL,
+            CallArgument(kind="instance", source=12, symbol="com/acme/kt/ClientsKt$p$2#"),
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="int", value=495),
+            _NULL,
+        ],
+    )
+
+
+@pytest.mark.pins("ktor.a-PARTS-path-is-a-path-never-an-address")
+def test_a_parts_path_is_read_as_a_path_never_as_an_address(tmp_path: Path):
+    """`sse(path = "https://e.example.com/s")` and `sse(path = "//x/y")` over
+    `https://api.example.com/v1/`: Ktor never parses the parts form's path (CP-54 rows
+    129-130), so neither names `e.example.com` or `x`. Both are paths on the base's host. A
+    path carrying a query is kept, `unresolved` (row 131 not modelled)."""
+    facts = [
+        *_top_level("client", 1, [_base("https://api.example.com/v1/")]),
+        _sse_parts_call(_fn("whole"), "https://e.example.com/s"),
+        _sse_parts_call(_fn("slashes"), "//x/y"),
+        _sse_parts_call(_fn("query"), "/stream?x=1"),
+    ]
+    assert _rows(tmp_path, facts, _SSE) == [
+        (_fn("query"), "sse", "outbound", "GET", None, "/stream", "unresolved"),
+        (_fn("slashes"), "sse", "outbound", "GET", "api.example.com", "//x/y", "resolved"),
+        (
+            _fn("whole"),
+            "sse",
+            "outbound",
+            "GET",
+            "api.example.com",
+            "/v1/https://e.example.com/s",
+            "resolved",
+        ),
+    ]
+
+
+def test_a_configuration_key_base_under_a_websocket_call_is_carried_without_the_rewrite(
+    tmp_path: Path,
+):
+    """`defaultRequest { url("${chat.url}") }` and `client.ws("/chat")`: the base is carried
+    as the HTTP client's configuration base is, `${chat.url}/chat` at `partial`, and the
+    `ws` scheme is NOT written into it — the deployed value's scheme and port are unknown, so
+    the rewrite has nothing it could rewrite."""
+    facts = [
+        *_top_level("client", 1, [_base("${chat.url}")]),
+        _ws_address_call(_fn("chat"), "ws", "/chat"),
+    ]
+    assert _rows(tmp_path, facts, _WS) == [
+        (_fn("chat"), "websocket", "outbound", None, None, "${chat.url}/chat", "partial")
+    ]
+
+
 # --- The WebSocket join, one assertion per CP-54 row (m) -----------------------------------
 _PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
 _WS_REQUEST = {"scheme": "ws"}
@@ -481,9 +555,6 @@ def test_the_websocket_join_is_ktors(row, base, address, request_url, sent):
 @pytest.mark.parametrize(
     ("base", "address", "ports"),
     [
-        # A protocol-relative address takes the CALL's scheme (row 113), measured for `ws`
-        # alone: declined rather than predicted for the calls that set a port.
-        ("https://api.example.com/v1/", "//other.example.com/x", _PORTS),
         # A base whose scheme has no default port in the table: its port is not known.
         ("ftp://api.example.com/v1/", "/chat", _PORTS),
         # A scheme and no host, as for `get` (rows 81-82).
@@ -492,6 +563,97 @@ def test_the_websocket_join_is_ktors(row, base, address, request_url, sent):
 )
 def test_the_websocket_join_declines_what_it_does_not_model(base, address, ports):
     assert join_url(base, address, REPLACE_LAST_SEGMENT, _WS_REQUEST, ports) is None
+
+
+@pytest.mark.pins("ktor.a-PROTOCOL-RELATIVE-address-under-a-call-scheme-declines")
+def test_a_protocol_relative_address_under_a_call_scheme_declines():
+    """`ws("//other.example.com/x")` takes the CALL's scheme (CP-54 row 113), where `get`'s
+    takes the base's (row 83), and the port a call setting one would write is not measured:
+    declined rather than predicted."""
+    assert (
+        join_url(
+            "https://api.example.com/v1/",
+            "//other.example.com/x",
+            REPLACE_LAST_SEGMENT,
+            _WS_REQUEST,
+            _PORTS,
+        )
+        is None
+    )
+
+
+@pytest.mark.pins("ktor.a-base-carrying-USER-INFO-under-a-call-scheme-declines")
+def test_a_base_carrying_user_info_under_a_call_scheme_declines():
+    """The scheme rewrite rebuilds the authority from the base's host and port; a base with
+    user info in it is not measured, so the join declines rather than write it back."""
+    assert (
+        join_url(
+            "https://user@api.example.com/v1/", "/chat", REPLACE_LAST_SEGMENT, _WS_REQUEST, _PORTS
+        )
+        is None
+    )
+
+
+# --- The parts form's path, one assertion per CP-54 row (o) -------------------------------
+
+
+@pytest.mark.parametrize(
+    ("row", "base", "path", "request_url", "sent"),
+    [
+        (124, "https://api.example.com/v1/", "//x/y", _WS_REQUEST, "ws://api.example.com:443//x/y"),
+        (
+            125,
+            "https://api.example.com/v1/",
+            "https://e.example.com/s",
+            _WS_REQUEST,
+            "ws://api.example.com:443/v1/https://e.example.com/s",
+        ),
+        (
+            128,
+            "https://api.example.com/v1/",
+            "parts",
+            _WS_REQUEST,
+            "ws://api.example.com:443/v1/parts",
+        ),
+        (129, "https://api.example.com/v1/", "//x/y", None, "https://api.example.com//x/y"),
+        (
+            130,
+            "https://api.example.com/v1/",
+            "https://e.example.com/s",
+            None,
+            "https://api.example.com/v1/https://e.example.com/s",
+        ),
+        (132, "https://api.example.com/v1/", "stream", None, "https://api.example.com/v1/stream"),
+        (
+            133,
+            "https://api.example.com/v1/?key=1",
+            "/parts",
+            _WS_REQUEST,
+            "ws://api.example.com:443/parts?key=1",
+        ),
+        (
+            134,
+            "https://api.example.com/v1/?key=1",
+            "/parts",
+            None,
+            "https://api.example.com/parts?key=1",
+        ),
+    ],
+)
+def test_a_parts_path_joins_as_segments_never_as_an_address(row, base, path, request_url, sent):
+    """The parts form hands `path` to `setEncodedPath`, never to `takeFrom` (CP-54 rows
+    124-134): the text is split on `/` as it stands, so `//x/y` is no authority and a whole
+    URL no absolute address."""
+    assert (
+        join_url(base, path, REPLACE_LAST_SEGMENT, request_url, _PORTS, path_only=True) == sent
+    ), row
+
+
+@pytest.mark.parametrize("path", ["/chat?room=1", "/chat#top"])
+def test_a_parts_path_carrying_a_query_or_fragment_declines(path):
+    """Ktor writes `?` and `#` in a parts path as they stand (CP-54 rows 126-127, 131); how a
+    base's own query follows them is not measured."""
+    assert join_url(_API, path, REPLACE_LAST_SEGMENT, _WS_REQUEST, _PORTS, path_only=True) is None
 
 
 # --- One ladder, three catalogs -------------------------------------------------------------
@@ -552,20 +714,19 @@ def test_a_catalog_naming_a_client_model_takes_its_ladder(tmp_path: Path):
     assert catalog.matches["client_base"]["join"] == REPLACE_LAST_SEGMENT
 
 
-@pytest.mark.parametrize(
-    ("client_base", "named"),
-    [
-        # The model's ladder declared again in the catalog: two copies of one key.
-        ("client_base: { client_arg: 0, join: replace_last_segment }", "join"),
-        # No statement of where this catalog's client sits.
-        ("other: 1", "client_arg"),
-    ],
-)
-def test_a_catalog_cannot_copy_or_omit_its_half_of_the_client_model(
-    tmp_path: Path, client_base: str, named: str
-):
-    _write_catalog(tmp_path, client_base)
-    with pytest.raises(CatalogError, match=named):
+@pytest.mark.pins("ktor.a-client-model-key-cannot-be-COPIED-into-a-catalog")
+def test_a_catalog_cannot_copy_a_key_of_its_client_model(tmp_path: Path):
+    """The model's `join` declared again in the catalog: two copies of one key, which the
+    merge would let the catalog's win silently."""
+    _write_catalog(tmp_path, "client_base: { client_arg: 0, join: replace_last_segment }")
+    with pytest.raises(CatalogError, match="join"):
+        YamlCatalogSource(tmp_path).load()
+
+
+def test_a_catalog_cannot_omit_its_half_of_the_client_model(tmp_path: Path):
+    """No statement of where this catalog's client sits."""
+    _write_catalog(tmp_path, "other: 1")
+    with pytest.raises(CatalogError, match="client_arg"):
         YamlCatalogSource(tmp_path).load()
 
 
@@ -606,24 +767,34 @@ _ROW = '{ name: ws, arity: 2, descriptor: "(Lcom/acme/Client;Ljava/lang/String;)
             _ROW + ", request_url: { scheme: ws, port: true } }",
             "request_url",
         ),
-        # `default_ports` that is not a mapping of schemes to ports.
-        (
-            "  default_ports: { ws: eighty }\n",
-            "client_base: { client_arg: 0 }",
-            _ROW + " }",
-            "default_ports",
-        ),
         # `address_parts` that is not a list of positions.
         ("", "client_base: { client_arg: 0 }", _ROW + ", address_parts: 2 }", "address_parts"),
         ("", "", _ROW + ", address_parts: [] }", "address_parts"),
     ],
 )
-def test_a_malformed_call_row_or_port_table_is_refused_at_load(
+@pytest.mark.pins("single_call.a-malformed-request-url-or-address-parts-is-refused")
+def test_a_malformed_call_row_is_refused_at_load(
     tmp_path: Path, model_extra: str, client_base: str, row: str, named: str
 ):
-    """Every new word is checked before any call is matched: a `request_url` nothing can
+    """Every new row word is checked before any call is matched: a `request_url` nothing can
     render, or `address_parts` naming no positions, would otherwise load and silently publish
     an address the call never reaches."""
+    _refused(tmp_path, model_extra, client_base, row, named)
+
+
+def test_a_malformed_port_table_is_refused_at_load(tmp_path: Path):
+    """`default_ports` that is not a mapping of schemes to ports, refused by the client base's
+    own reader."""
+    _refused(
+        tmp_path,
+        "  default_ports: { ws: eighty }\n",
+        "client_base: { client_arg: 0 }",
+        _ROW + " }",
+        "default_ports",
+    )
+
+
+def _refused(tmp_path: Path, model_extra: str, client_base: str, row: str, named: str) -> None:
     (tmp_path / "client-models").mkdir()
     (tmp_path / "client-models" / "acme.yml").write_text(
         "id: acme\n"
