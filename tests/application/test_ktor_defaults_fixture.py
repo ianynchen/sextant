@@ -3,7 +3,8 @@ module-local DSL function with a default parameter in `fixtures/orders-ktor`'s
 `KtorRoutes.kt` (`kotlin-default-bridge-calls`), called with and without the argument.
 
 `fun Route.mount(path, version = "v1", build)` is a top-level extension, so kotlinc (2.2.0
-when measured; the fixture is on 2.4.20 since OI-219, and these pins hold there) compiles it to a STATIC `KtorRoutesKt.mount(Route, String, String, Function1)` and, for the
+when measured; the fixture is on 2.4.20 since OI-219, and these pins hold there) compiles
+it to a STATIC `KtorRoutesKt.mount(Route, String, String, Function1)` and, for the
 call that omits `version`, emits `mount$default(this, "/d", null, build, 2, null)` — a
 different name and a six-slot descriptor no rule for `mount` can match (`javap -c -p
 fixtures/orders-ktor/target/classes/com/acme/kt/KtorRoutesKt.class`, 2026-09-20). The

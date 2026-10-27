@@ -42,8 +42,8 @@ class KotlinMetadataVersionTest {
         }
     }
 
-    /** The class with its {@code @Metadata mv} replaced by {@code {2, minor, 0}}. */
-    private static byte[] withMetadataVersion(byte[] original, int minor) {
+    /** The class with its {@code @Metadata mv} replaced by {@code {major, minor, 0}}. */
+    private static byte[] withMetadataVersion(byte[] original, int major, int minor) {
         ClassReader reader = new ClassReader(original);
         ClassWriter writer = new ClassWriter(0);
         reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
@@ -56,7 +56,7 @@ class KotlinMetadataVersionTest {
                 return new AnnotationVisitor(Opcodes.ASM9, next) {
                     @Override
                     public void visit(String name, Object value) {
-                        super.visit(name, name.equals("mv") ? new int[] {2, minor, 0} : value);
+                        super.visit(name, name.equals("mv") ? new int[] {major, minor, 0} : value);
                     }
                 };
             }
@@ -86,9 +86,10 @@ class KotlinMetadataVersionTest {
         // Past the declared ceiling deliberately: a bump that raises it must fail
         // here rather than pass by being untested above the old value.
         for (int minor = 0; minor <= READS_THROUGH_MINOR + 3; minor++) {
-            (unreadable(withMetadataVersion(sample, minor)).isEmpty() ? read : refused).add(minor);
+            (unreadable(withMetadataVersion(sample, 2, minor)).isEmpty() ? read : refused).add(minor);
         }
-        assertEquals(0, read.get(0), "Kotlin 2.0 metadata is no longer read");
+        assertEquals(List.of(), refused.stream().filter(m -> m <= READS_THROUGH_MINOR).toList(),
+            "a Kotlin 2.x minor below the ceiling is refused");
         assertEquals(READS_THROUGH_MINOR, read.get(read.size() - 1),
             "the ceiling this build actually reads is 2." + read.get(read.size() - 1)
                 + ", not the declared 2." + READS_THROUGH_MINOR);
@@ -97,11 +98,22 @@ class KotlinMetadataVersionTest {
     }
 
     @Test
+    void the_floor_is_kotlin_1_0_metadata_version_1_1() throws IOException {
+        // Kotlin 1.0 wrote mv 1.1; nothing older exists. Kotlin 1.x code is common in
+        // the field (kotlinx-coroutines 1.8.0 is mv 1.9), so the floor is pinned too: a
+        // library that dropped 1.x would make every such class `partial`.
+        byte[] sample = sampleClassBytes();
+        assertEquals(List.of(), unreadable(withMetadataVersion(sample, 1, 1)));
+        assertEquals(List.of(), unreadable(withMetadataVersion(sample, 1, 9)));
+        assertEquals(1, unreadable(withMetadataVersion(sample, 1, 0)).size());
+    }
+
+    @Test
     void metadata_past_the_ceiling_is_named_not_dropped_silently() throws IOException {
         // The class is still scanned; the refusal is what makes it `partial`, and its
         // reason names the version, so a document says why its Kotlin facts are missing.
         List<String> reasons =
-            unreadable(withMetadataVersion(sampleClassBytes(), READS_THROUGH_MINOR + 1));
+            unreadable(withMetadataVersion(sampleClassBytes(), 2, READS_THROUGH_MINOR + 1));
         assertEquals(1, reasons.size());
         assertTrue(reasons.get(0).contains("2." + (READS_THROUGH_MINOR + 1)), reasons.get(0));
     }

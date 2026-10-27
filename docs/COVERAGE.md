@@ -768,11 +768,12 @@ each catalog's rules were measured against.
 | | Range | Bounded by | How it fails outside the range |
 |---|---|---|---|
 | **Java** | class-file majors **45–71** — Java 1.1 through **JDK 27** | the pinned ASM (`org.ow2.asm:asm:9.10.1`) | **JDK 28** (major 72) and later: the class is skipped, its document marked `partial` with ASM's own refusal, and the scan continues |
-| **Kotlin** | the same bytecode range for structure; **Kotlin 2.0–2.5** for metadata | `kotlin-metadata-jvm:2.4.20`, which reads one minor past its own release; pinned on a real class by `extractor-jvm/.../KotlinMetadataVersionTest.java` | **Kotlin 2.6** and later: the class is still scanned and still yields facts, but its `@Metadata` is not decoded, and the document is marked `partial` with the library's refusal, which names the version. What is lost is everything metadata supplies: nullability (Java's rule applies instead), suspend return types, parameter types and defaults, and the extension-receiver mark, so a module extension's `$default` call is mis-projected. Measured on the library this replaced (2.2.0, through Kotlin 2.3) with kotlinc 2.4.20: every class of `ktor-samples/client-tools` and `kotlin-ktor-exposed-starter` was `partial`, and none is now (OI-219) |
+| **Kotlin** | the same bytecode range for structure; **Kotlin 1.0–2.5** for metadata (`mv` 1.1 through 2.5) | `kotlin-metadata-jvm:2.4.20`, which reads one minor past its own release; pinned on a real class by `extractor-jvm/.../KotlinMetadataVersionTest.java` | **Kotlin 2.6** and later: the class is still scanned and still yields facts, but its `@Metadata` is not decoded, and the document is marked `partial` with the library's refusal, which names the version. What is lost is everything metadata supplies: nullability (Java's rule applies instead), suspend return types, parameter types and defaults, and the extension-receiver mark, so a module extension's `$default` call is mis-projected. Measured on the library this replaced (2.2.0, through Kotlin 2.3) with kotlinc 2.4.20: every class of `ktor-samples/client-tools` and `kotlin-ktor-exposed-starter` was `partial`, and none is now (OI-219) |
 
 `verify: java -jar src/sextant/extractor-jvm/sextant-extractor.jar --capabilities` ·
 the range itself is asserted against real bytes by
-`extractor-jvm/src/test/java/dev/sextant/extractor/ClassFileVersionTest.java`.
+`extractor-jvm/src/test/java/dev/sextant/extractor/ClassFileVersionTest.java` (the class-file
+majors) and `KotlinMetadataVersionTest.java` beside it (the Kotlin metadata versions).
 
 **The mapping is `major = JDK release + 44`**, measured at six release targets (8→52, 11→55,
 17→61, 21→65, 25→69, 26→70). Nothing here is taken from ASM's own constant set, which runs
