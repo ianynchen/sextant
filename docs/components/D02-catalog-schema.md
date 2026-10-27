@@ -2058,15 +2058,16 @@ makes. The reader answers ONE base or none:
   (Ktor's `url { … }`, `defaultRequest(replace = true) { … }`), any other call on the setter's
   owner type (`host = …`, `url.takeFrom(…)`), a call `may_set_base` lists, or a call handing the
   block's receiver to a method of THIS module (`configure(this)`: a body scanned and not
-  followed — the walk's `reached` test), or a call handing the receiver to code SUPPLIED from
-  outside the block: a call made on a value the block captured or on another of its
-  parameters, never on the receiver itself. `fun mk(block: HttpClientConfig<*>.() -> Unit) =
-  HttpClient(CIO) { defaultRequest { url("https://a/") }; block() }` is that shape —
-  `block()` is `invoke(block, receiver)` on the captured `block`, and the caller's block may
-  set its own base, so the client's base is not read. The rule names no method. A static
-  library call handed the receiver is made on no value, so it is governed by `may_set_base`
-  alone, and the compiler's null check and `install(WebSockets)` stay allowed beside a
-  declared base;
+  followed — the walk's `reached` test), or an INSTANCE call handing the receiver to another
+  object's method: a call made on any value other than the receiver itself — a captured
+  value, another parameter, a field read, a local. `fun mk(block: HttpClientConfig<*>.() ->
+  Unit) = HttpClient(CIO) { defaultRequest { url("https://a/") }; block() }` is that shape —
+  `block()` is `invoke(block, receiver)` on the caller's `block`, and the caller's block may
+  set its own base, so the client's base is not read; a `block` held in a property and read
+  with `getfield` is the same call on a value. The rule names no method. A static library
+  call handed the receiver is made on no value, and a call made ON the receiver is the
+  library's own method on its own object, so both are governed by `may_set_base` alone: the
+  compiler's null check and `install(WebSockets)` stay allowed beside a declared base;
 - **the setter is handed a configuration key** (`url("${pricing.base-url}")`, a value carrying
   a `${…}` key): the key is the base, rendered exactly as a configuration-fed `base` capture is
   (`fluent._composed_address`: base and path concatenated as written, `peer` NULL —

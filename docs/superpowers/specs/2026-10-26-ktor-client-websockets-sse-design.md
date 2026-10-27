@@ -370,9 +370,9 @@ exercises them yet.
   - OI-213: the requirements store has no protocol column;
   - OI-215: last setter under a branch;
   - OI-216: four ladder shapes. Its item 1, a caller-supplied block overriding a declared
-    base, is FIXED in the final-review fix wave: a block handing its receiver to a call made
-    on a value it captured or on another of its parameters declines (D02 §2's `client_base`
-    reader). The other three stay open;
+    base, is FIXED in the final-review fix wave: a block handing its receiver to an instance
+    call made on any value other than the receiver itself (a captured `block`, a parameter, a
+    property, a local) declines (D02 §2's `client_base` reader). The other three stay open;
   - OI-217: the catalog hash omits two model directories.
 - **COVERAGE.** §5.2, §5.5 and §5.6 carry the three Ktor rows at ✅. §2c's Ktor family line
   reads ✅ on REST in, REST out, WebSocket and SSE.

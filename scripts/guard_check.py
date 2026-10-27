@@ -5181,8 +5181,9 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "ktor.a-block-handing-its-receiver-to-SUPPLIED-code-declines": Guard(
-        what="a block that hands its receiver to a call made on a value it captured or on "
-        "another of its parameters declines",
+        what="a block that hands its receiver to an instance call made on any value other "
+        "than the receiver itself (a captured value, a parameter, a field read, a local) "
+        "declines",
         why="`fun mk(block) = HttpClient(CIO) { defaultRequest { url(a) }; block() }` runs "
         "the caller's `block` on the configuration, and the caller's block may set its own "
         "base. Skipped, the row publishes `a` at `resolved` for a call Ktor sends wherever "

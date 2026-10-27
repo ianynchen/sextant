@@ -510,17 +510,25 @@ class _Ladder:
         return any(_listed(site, entry) for entry in self._may_set)
 
 
+# The invoke kinds made on no value: a static call, and an `invokedynamic` (a lambda or a
+# concatenation being built, D00 §5) — neither runs another object's method.
+_NOT_ON_A_VALUE = ("static", "dynamic")
+
+
 def _hands_to_supplied_code(site: Mapping[str, Any], receiver: int) -> bool:
-    """Whether `site` hands the block's receiver to code SUPPLIED from outside the block: a
-    call made on a value the block captured or on another of its parameters, never on the
-    receiver itself. `block()` in `HttpClient(CIO) { defaultRequest { … }; block() }` is
-    `invoke(block, receiver)` on the captured `block`, and what that does is the caller's
-    code, which the walk never sees; it may replace the base. A static call is made on no
-    value at all (the compiler's null check on the receiver, `install$default(config, …)`),
-    so it is not this question, and a call on the captured value not handed the receiver
-    cannot configure it."""
+    """Whether `site` hands the block's receiver to code the walk cannot see: an INSTANCE
+    call made on any value other than the receiver itself — a captured value, another
+    parameter, a field read, a local. `block()` in `HttpClient(CIO) { defaultRequest { … };
+    block() }` is `invoke(block, receiver)` on the caller's `block`, wherever it is held, and
+    what that does is code the walk never sees; it may replace the base. A static call is
+    made on no value at all (the compiler's null check on the receiver, `install$default(
+    config, …)`), so it is not this question; nor is a call made ON the receiver, which is the
+    library's own method on its own object; and a call not handed the receiver cannot
+    configure it."""
+    if site.get("invoke_kind") in _NOT_ON_A_VALUE:
+        return False
     on = site.get("receiver_parameter")
-    if on is None or int(str(on)) == receiver:
+    if on is not None and int(str(on)) == receiver:
         return False
     return _hands_receiver(site, receiver)
 

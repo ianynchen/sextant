@@ -89,7 +89,9 @@ here would restate those documents rather than add anything.
 - **A client whose block runs code its caller supplied has no base read.** In `fun
   mk(block) = HttpClient(CIO) { defaultRequest { url("https://a/") }; block() }`, the caller's
   `block` may set its own base, so a relative call on that client stays `unresolved` rather
-  than joining `https://a/` (OI-216 item 1, D02).
+  than joining `https://a/` (OI-216 item 1, D02). The same holds wherever the block is held
+  (a parameter, a property, a local): any instance call on another value that is handed the
+  configuration declines.
 - **`method(HttpMethod.Get) { … }` and `route(path, HttpMethod.Put) { … }` now read their verb
   on Ktor 3.x.** Before, they read it only on 3.0.3. `fixtures/orders-ktor` moves to Ktor
   3.6.0, and its 28 routing rows are unchanged.

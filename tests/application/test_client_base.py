@@ -1302,6 +1302,43 @@ def test_a_block_handing_its_receiver_to_a_captured_block_declines(tmp_path: Pat
     assert _client_rows(tmp_path, facts) == [_DECLINED_ROW]
 
 
+@pytest.mark.declines("ktor-client")
+@pytest.mark.pins("ktor.a-block-handing-its-receiver-to-SUPPLIED-code-declines")
+def test_a_block_handing_its_receiver_to_a_block_held_in_a_field_declines(tmp_path: Path):
+    """`class F(private val block: HttpClientConfig<*>.() -> Unit) { val client =
+    HttpClient(CIO) { defaultRequest { url(…) }; block() } }`: the lambda captures `this`
+    and reads `block` with a `getfield`, so `invoke`'s receiver is a VALUE (`"receiver":
+    12`), not a parameter. It is still another object's method handed the configuration —
+    code the walk cannot see — and measured on kotlinc 2.2's output before the rule was
+    widened: `GET held.example.com /h resolved`. A block held in a local reads the same."""
+    facts = _client_with_a_captured_block(
+        [
+            (
+                _INVOKE,
+                [CallArgument(kind="parameter", value=1)],
+                {"invoke_kind": "interface", "receiver": 12},
+            )
+        ]
+    )
+    assert _client_rows(tmp_path, facts) == [_DECLINED_ROW]
+
+
+def test_a_call_made_on_the_blocks_own_receiver_keeps_the_base(tmp_path: Path):
+    """The other near-miss: an instance call made ON the configuration itself is the
+    library's own method on its own object, not code handed the configuration from
+    outside, so it does not decline even where the receiver is also an argument."""
+    facts = _client_with_a_captured_block(
+        [
+            (
+                (_CONFIG_KT, "plusAssign", "(Lio/ktor/client/HttpClientConfig;)V"),
+                [CallArgument(kind="parameter", value=1)],
+                {"invoke_kind": "virtual", "receiver_parameter": 1},
+            )
+        ]
+    )
+    assert _client_rows(tmp_path, facts) == [_BASED_ROW]
+
+
 def test_a_static_call_or_one_not_handed_the_receiver_keeps_the_base(tmp_path: Path):
     """The near-misses, in the same capturing body. Kotlin's null check on the receiver is a
     STATIC call on no captured value, and a call on the captured value that is not handed the
