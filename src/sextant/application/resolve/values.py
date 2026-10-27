@@ -813,7 +813,8 @@ def _slots_of(site: Mapping[str, Any]) -> list[int | str]:
     """Which positions this site HAS. The arguments by index, and the receiver where the
     facts name one — `receiver` is the value id it came from and `receiver_parameter` the
     enclosing method's parameter index when it is one (D00 §5); a call that names neither
-    has no receiver to resolve, and a static call never does."""
+    has no receiver to resolve, and a static call never does. A `getstatic` receiver carries
+    both its id and `receiver_field`, so it needs no test of its own here."""
     arguments = site["arguments"] or []
     slots: list[int | str] = list(range(len(arguments)))
     if site.get("receiver") is not None or site.get("receiver_parameter") is not None:
@@ -965,6 +966,12 @@ class _Walk:
     ) -> tuple[_Reached, ...]:
         method, ordinal = str(site["caller"]), int(str(site["ordinal"]))
         if slot == RECEIVER:
+            # A receiver read from a static field is that field (D00 §5's
+            # `receiver_field`), resolved as the same field read as an ARGUMENT is: the
+            # read's own value id names nothing any other fact joins to.
+            field = site.get("receiver_field")
+            if field is not None:
+                return self._resolve((_BINDING, str(field)), trail, frames)
             receiver = site.get("receiver")
             if receiver is not None:
                 return self._through(method, int(str(receiver)), ordinal, trail, frames)

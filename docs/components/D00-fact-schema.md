@@ -350,7 +350,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so `owner_not_scanned` is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
-| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
@@ -1003,6 +1003,17 @@ for a parameter, a field and an unreadable receiver alike (combinator spec §10a
 into a lambda body can then tell "this call is on the lambda's own parameter" from "this
 receiver could not be read". Strictly additive: an engine that does not read it sees the
 site it always saw.
+
+**`receiver_field`** names the static field a receiver was read from, where the receiver is
+a `getstatic`: `owner#name.`, the symbol a call ARGUMENT read the same way already carries
+(the `field` and `enum` kinds below). `receiver` keeps the read's own value id, so every
+within-method join is unchanged; but no other fact names that id, so a walk from the
+receiver reached nothing before this key. Kotlin's file-level `val client = …` followed by
+`client.config { … }` is the shape it exists for (2026-10-26): the `config` call's receiver
+is now the binding `client`, which the walk follows to its writer as it follows the same
+field read as an argument. A receiver read by `getfield` gets no key — only the static read
+was ruled in, so an instance field's receiver is a stated boundary. Absent everywhere else,
+and strictly additive in the same way.
 
 **`arguments`** carries one entry per argument slot, resolved by walking the frame back to
 each slot's source instruction. Without it, every endpoint path is unresolved — this is why

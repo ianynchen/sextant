@@ -468,6 +468,11 @@ class CallSiteFact(BaseModel):
     # that answer the argument grammar has carried as `{"kind": "parameter"}` since 9.8,
     # for the receiver slot. Absent everywhere else.
     receiver_parameter: int | None = None
+    # The static field the receiver was read from, as the argument grammar's `field` kind
+    # names one (`owner#name.`), where it is a `getstatic` (D00 §5). `receiver` still
+    # carries the read's own value id, which no other fact names, so without this a call on
+    # a file-level `val` joins to nothing. Absent everywhere else.
+    receiver_field: str | None = None
     result: int | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM

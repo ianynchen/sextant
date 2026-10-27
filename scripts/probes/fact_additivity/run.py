@@ -57,7 +57,10 @@ OUT = Path("/tmp/a1-proof")
 # `receiver_parameter`-style strip would hide a real difference inside a call site's
 # arguments; `without_the_new_keys` strips by key NAME at every depth, which is why the two
 # halves of this proof are read together — the identical count must stay as high as it was.
-NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by", "value"})
+#
+# `receiver_field` (2026-10-26) is of the first kind again: a key on call sites the before jar
+# already wrote, naming the static field a `getstatic` receiver was read from.
+NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by", "value", "receiver_field"})
 
 
 def scan(jar: Path, classes: Path, out: Path) -> None:

@@ -132,9 +132,18 @@ public final class MethodFlow {
             Integer receiverParameter = target.hasReceiver()
                 ? parameterIndex(frame.getStack(base - 1), parameterSlots)
                 : null;
+            // A third thing `sourceId` cannot say: a receiver read by GETSTATIC keeps the
+            // read's own id, which no other fact names, so nothing joined it to the field.
+            // The field's symbol is what an argument read the same way already carries
+            // (`field`/`enum`), so a walk can reach the field's writer from the receiver
+            // too — Kotlin's file-level `val client = …` followed by `client.config { … }`.
+            String receiverField = target.hasReceiver()
+                ? staticFieldOf(frame.getStack(base - 1))
+                : null;
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
             lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver,
-                                   receiverParameter, result, implementationOf(insns[i]), arguments));
+                                   receiverParameter, receiverField, result,
+                                   implementationOf(insns[i]), arguments));
         }
         return lines;
     }
@@ -1253,6 +1262,18 @@ public final class MethodFlow {
         return index < 0 ? null : index;
     }
 
+    /** The static field a value was read from, as the argument grammar spells a field
+     *  (`owner#name.`), or null: one producer, and that producer a GETSTATIC. A receiver
+     *  read by GETFIELD gets no key: only the static read was ruled in (2026-10-26), so
+     *  an instance field's receiver is a stated boundary (D00 §5). */
+    private static String staticFieldOf(SourceValue value) {
+        AbstractInsnNode producer = singleSource(value);
+        if (!(producer instanceof FieldInsnNode field) || field.getOpcode() != Opcodes.GETSTATIC) {
+            return null;
+        }
+        return field.owner + "#" + field.name + ".";
+    }
+
     private static AbstractInsnNode singleSource(SourceValue value) {
         // Exactly one producer, or nothing. A parameter counts as one of them
         // — it carries the marker CopyTransparentSourceInterpreter gave its
@@ -1267,7 +1288,8 @@ public final class MethodFlow {
 
     private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
                                        int ordinal, Integer receiver, Integer receiverParameter,
-                                       Integer result, String implementation, List<String> arguments) {
+                                       String receiverField, Integer result, String implementation,
+                                       List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -1297,6 +1319,8 @@ public final class MethodFlow {
         // Absent rather than null on every site whose receiver is not a parameter — the
         // rule `implementation` follows two lines up, for the same reason.
         if (receiverParameter != null) fact.put("receiver_parameter", String.valueOf(receiverParameter));
+        // Absent on every site whose receiver is not a GETSTATIC, by the same rule.
+        if (receiverField != null) fact.put("receiver_field", JsonOut.string(receiverField));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
         return JsonOut.object(fact);

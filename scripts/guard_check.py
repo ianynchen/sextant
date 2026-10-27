@@ -1918,6 +1918,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-STATIC-FIELD-receiver-is-followed-to-its-writer": Guard(
+        what="a call receiver read by `getstatic` is resolved as the field D00 §5's "
+        "`receiver_field` names",
+        why="the receiver's own value id is the `getstatic` instruction, which no other fact "
+        "names, so `val derived = client.config { }` at file level reaches no parent: the "
+        "derived client's relative call loses the base Ktor sends it to (CP-54 row 80)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='            field = site.get("receiver_field")\n',
+                replace="            field = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-declared-CONSTRUCTOR-is-a-producer": Guard(
         what="a value BUILT by a declared constructor ends the producer reader's path at that "
         "construction, as a declared factory call does",

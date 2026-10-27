@@ -130,6 +130,13 @@ _CLIENTS = _PKG + "Clients#"
 _POOLED = _PKG + "Pooled#"
 _TAKES_CLIENT = "(Lio/ktor/client/HttpClient;)V"
 _FACTORY_IDENTITY = (_HTTP_CLIENT[0], _HTTP_CLIENT[1])
+# `val derivedClient = client.config { … }` in the same `<clinit>`: the receiver is a
+# `getstatic` of `client`, whose own value id no other fact names (CP-54 probe).
+_CONFIG = (
+    "io/ktor/client/HttpClient#",
+    "config",
+    "(Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;",
+)
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -228,6 +235,7 @@ def _site(
     result: int | None = None,
     receiver: int | None = None,
     receiver_parameter: int | None = None,
+    receiver_field: str | None = None,
 ) -> Fact:
     owner, name, jvm = target
     return CallSiteFact(
@@ -239,6 +247,7 @@ def _site(
         result=result,
         receiver=receiver,
         receiver_parameter=receiver_parameter,
+        receiver_field=receiver_field,
         arguments=arguments or [],
     )
 
@@ -795,6 +804,28 @@ def _facts() -> list[Fact]:
             field=_PROBE_KT + "client.",
             value=CallArgument(kind="unresolved", source=11),
             written_by=_symbol(_PROBE_KT, "<clinit>", "()V"),
+        ),
+        # `client.config { … }` right after it, on the field read back with `getstatic`
+        # (value id 9, the read's own index): `receiver_field` names the field.
+        _site(
+            _symbol(_PROBE_KT, "<clinit>", "()V"),
+            1,
+            _CONFIG,
+            kind="virtual",
+            receiver=9,
+            receiver_field=_PROBE_KT + "client.",
+            result=12,
+        ),
+        # The same call where the facts name only the read's id — what every scan wrote
+        # before `receiver_field`.
+        _declared(_PROBE_KT, "unnamed", "()V"),
+        _site(
+            _symbol(_PROBE_KT, "unnamed", "()V"),
+            0,
+            _CONFIG,
+            kind="virtual",
+            receiver=9,
+            result=12,
         ),
         _declared(_PROBE_KT, "clientGet", "()V"),
         _site(
@@ -1863,6 +1894,24 @@ def test_a_static_field_written_in_the_static_initialiser_answers_that_call(walk
         Producer(
             caller=_symbol(_PROBE_KT, "<clinit>", "()V"), ordinal=0, identity=_FACTORY_IDENTITY
         ),
+    )
+
+
+@pytest.mark.pins("values.a-STATIC-FIELD-receiver-is-followed-to-its-writer")
+def test_a_receiver_read_from_a_static_field_answers_the_fields_writer(walked):
+    """`val derivedClient = client.config { … }` at file level: `config`'s receiver is a
+    `getstatic` of `client`, and `receiver_field` names it, so the receiver is the binding
+    `client` — written in `<clinit>` from the factory call — exactly as the same field read
+    as an ARGUMENT is. Without the key the read's value id is all the facts carry, and no
+    other fact names it: the walk can say nothing (`not_readable`)."""
+    clinit = _symbol(_PROBE_KT, "<clinit>", "()V")
+    assert _producers(walked, clinit, 1, RECEIVER, {_FACTORY_IDENTITY}) == (
+        Producer(caller=clinit, ordinal=0, identity=_FACTORY_IDENTITY),
+    )
+    assert _reasons(_bindings(walked, clinit, 1), RECEIVER) == ["external"]
+    unnamed = _symbol(_PROBE_KT, "unnamed", "()V")
+    assert _producers(walked, unnamed, 0, RECEIVER, {_FACTORY_IDENTITY}) == (
+        Producer(reason="not_readable"),
     )
 
 

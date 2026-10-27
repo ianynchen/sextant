@@ -649,6 +649,27 @@ class MethodFlowTest {
         assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
     }
 
+    /** A receiver read by {@code GETSTATIC} is named by its field's symbol
+     *  (`receiver_field`), as an argument read the same way is, so a walk can follow it
+     *  to the field's writer: without it `client.config { … }` on a file-level client
+     *  reaches nothing. The value id stays, so every within-method join is unchanged. */
+    @Test
+    void names_the_static_field_a_receiver_was_read_from() throws Exception {
+        String line = callSites("staticFieldReceiver").get(0);
+        assertTrue(line.contains("\"name\":\"third\""), line);
+        assertTrue(line.contains("\"receiver_field\":\"dev/sextant/extractor/CallSample#shared.\""), line);
+        assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
+    }
+
+    /** The key is written for a {@code GETSTATIC} receiver only: an instance field's
+     *  read, a call's result and a parameter carry none. */
+    @Test
+    void writes_no_receiver_field_for_an_instance_field_a_result_or_a_parameter() throws Exception {
+        assertFalse(callSites("getfieldSourcedReceiver").get(0).contains("receiver_field"));
+        assertFalse(last(callSites("chain")).contains("receiver_field"));
+        assertFalse(callSites("parameterReceiver").get(0).contains("receiver_field"));
+    }
+
     /** The v1 control-flow position: assigned in instruction order, so two
      *  calls in one method are never the same call site. */
     @Test
