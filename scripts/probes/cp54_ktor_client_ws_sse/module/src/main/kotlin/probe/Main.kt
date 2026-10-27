@@ -3,7 +3,9 @@ package probe
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respondOk
+import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.plugins.plugin
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket as clientWebSocket
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -115,6 +117,49 @@ private fun derived(label: String, parentBase: String, childBase: String?, relat
     child.close()
     parent.close()
     println("DERIVED\t$label\t$parentBase\t${childBase ?: "(no defaultRequest)"}\t$relative\t$outcome")
+}
+
+// Row group (k): the engine-less factory, `HttpClient { … }`. It takes the first engine the
+// classpath registers, a real one, so the request is stopped inside Ktor's `HttpSend`, after
+// `DefaultRequest` has merged the address and before any engine runs: the URL is read there
+// and the call refused, so nothing reaches the network. The engine the factory chose is
+// recorded with it.
+private object Recorded : RuntimeException("recorded")
+
+private fun engineless(label: String, base: String, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val client = HttpClient { defaultRequest { url(base) } }
+    client.plugin(HttpSend).intercept { request ->
+        seen = request.url.buildString()
+        throw Recorded
+    }
+    try {
+        client.get(relative)
+    } catch (e: Recorded) {
+        // the URL was recorded; no engine ran
+    } catch (e: Throwable) {
+        seen = "FAILED " + e.javaClass.name + ": " + e.message
+    }
+    val engine = client.engine.javaClass.name
+    client.close()
+    println("ENGINELESS\t$label\t$base\t$relative\t$engine\t$seen")
+}
+
+// Row group (k), continued: an address that is a query and nothing else, over a base with and
+// without a trailing `/` — whether the base's path survives.
+private fun queryOnly(label: String, base: String, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val client = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+        defaultRequest { url(base) }
+    }
+    val outcome = try {
+        client.get(relative)
+        seen
+    } catch (e: Throwable) {
+        "FAILED " + e.javaClass.name + ": " + e.message
+    }
+    client.close()
+    println("QUERY\t$label\t$base\t$relative\t$outcome")
 }
 
 // The WebSocket and SSE calls resolve a relative address through the same plugin; the engine only
@@ -290,4 +335,9 @@ fun main() {
     join("three leading slashes", "https://api.example.com/v1/", "///x/y")
     setTwice("two absolute addresses", "https://first.example.com/a/", "https://second.example.com/b/", "orders")
     setTwice("an absolute then a relative address", "https://first.example.com/a/", "b/", "orders")
+
+    engineless("its own defaultRequest base", "https://engineless.example.com/e/", "orders")
+    queryOnly("base without trailing /", "https://api.example.com/v1/items", "?q=1")
+    queryOnly("base ending in /", "https://api.example.com/v1/", "?q=1")
+    queryOnly("base with its own query", "https://api.example.com/v1/items?key=1", "?q=1")
 }

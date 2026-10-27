@@ -521,9 +521,16 @@ def main(argv: list[str]) -> int:
                 f"the jar's manifest states {jars[key][1]!r}"
             )
     for entry in ran:
-        if entry[0] in ("MERGE", "PROTOCOL", "DISPATCH", "DERIVED", "JOIN", "TWICE") and (
-            entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")
-        ):
+        if entry[0] in (
+            "MERGE",
+            "PROTOCOL",
+            "DISPATCH",
+            "DERIVED",
+            "JOIN",
+            "TWICE",
+            "ENGINELESS",
+            "QUERY",
+        ) and (entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
     # (h) a request the server never received measures nothing about routing.
     for entry in ran:
@@ -826,6 +833,46 @@ def main(argv: list[str]) -> int:
                 "client",
                 f'`url("{first}")` then `url("{second}")`, call `get("{relative}")` -> '
                 f"Ktor sent `{result}`",
+            )
+
+    # (k) the engine-less factory `HttpClient { … }`, and an address that is only a query
+    engineless_wiring = [
+        f"`{short(owner)}.{name}` `{descriptor}`"
+        for _, owner, name, descriptor in invocations(static_init)
+        if owner.endswith("HttpClientJvmKt")
+    ]
+    emit(
+        "how the engine-less client `HttpClient { … }` is constructed, from the static "
+        "initialiser of the file (k)",
+        "client",
+        "; ".join(engineless_wiring)
+        + "; the configuration lambdas call: "
+        + "; ".join(
+            f"`{name}` -> "
+            + ", ".join(
+                f"`{short(owner)}.{call}`"
+                for _, owner, call, _ in invocations(body(probe, name))
+                if call in ("install$default", "defaultRequest", "url")
+            )
+            for name in ("enginelessClient$lambda$0", "enginelessClient$lambda$0$0")
+        ),
+    )
+    for entry in ran:
+        if entry[0] == "ENGINELESS":
+            _, label, base, relative, engine, result = entry
+            emit(
+                f"`DefaultRequest` join on an engine-less `HttpClient {{ … }}`: {label} (k)",
+                "client",
+                f'the factory chose `{engine}`; base `{base}`, call `get("{relative}")` -> '
+                f"Ktor sent `{result}`",
+            )
+    for entry in ran:
+        if entry[0] == "QUERY":
+            _, label, base, relative, result = entry
+            emit(
+                f"`DefaultRequest` join: a query and nothing else, {label} (k)",
+                "client",
+                f'base `{base}`, call `get("{relative}")` -> Ktor sent `{result}`',
             )
     return 0
 

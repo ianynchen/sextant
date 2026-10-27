@@ -48,6 +48,19 @@ val derivedClient = client.config {
     defaultRequest { url("https://derived.example.com/") }
 }
 
+// Row group (k): the engine-less factory, `HttpClient { … }` (koog's `WebSearchAgent` and
+// `OpenMeteoClient`), and a client a function builds from its own parameter. After the two
+// above, so their `<clinit>` calls keep their ordinals.
+val enginelessClient = HttpClient {
+    defaultRequest { url("https://engineless.example.com/") }
+}
+
+fun madeClient(base: String) = HttpClient(CIO) {
+    defaultRequest { url(base) }
+}
+
+val made = madeClient("https://made.example.com/")
+
 // ---- (b) the HTTP client's five forms, and a relative call ---------------------------------
 
 suspend fun clientGetString() = client.get("https://orders.example.com/orders")
@@ -75,6 +88,10 @@ suspend fun clientOptionsString() = client.options("https://orders.example.com/o
 suspend fun clientRelative() = client.get("relative/path")
 
 suspend fun clientDerivedRelative() = derivedClient.get("/derived/path")
+
+suspend fun clientEnginelessRelative() = enginelessClient.get("engineless/path")
+
+suspend fun clientMadeRelative() = made.get("made/path")
 
 // ---- (d) WebSocket and SSE clients ---------------------------------------------------------
 
