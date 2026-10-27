@@ -99,13 +99,22 @@ here would restate those documents rather than add anything.
   on Ktor 3.x.** Before, they read it only on 3.0.3. `fixtures/orders-ktor` moves to Ktor
   3.6.0, and its 28 routing rows are unchanged.
 - **Ktor's limits:**
-  - The fixture stays on Kotlin 2.2.0, because the extractor cannot read Kotlin 2.4 metadata
-    (OI-219).
   - Manual SSE (a `get` route writing `text/event-stream`) is still an `http` row (OI-218).
   - Type-safe Resources routes derive nothing (OI-220).
   - COVERAGE §2c's Ktor family line reads ✅ on REST in, REST out, WebSocket and SSE.
 
 ### Fixed
+
+- **Classes compiled by Kotlin 2.4 are read in full** (OI-219). The extractor's
+  `kotlin-metadata-jvm` was 2.2.0, which reads metadata only through Kotlin 2.3, so every class
+  kotlinc 2.4 wrote came out `partial`, without its nullability, suspend return types, parameter
+  defaults or extension-receiver mark. An extension's `$default` call then marked the wrong
+  parameter as defaulted. The library and the Kotlin plugin both move to 2.4.20, which reads
+  through Kotlin 2.5. `KotlinMetadataVersionTest` pins that ceiling on a real class, as
+  `ClassFileVersionTest` pins ASM's. Measured: `ktor-samples/client-tools` 7 of 7 classes
+  `partial` → 0, `kotlin-ktor-exposed-starter` 33 of 33 → 0, `fixtures/orders-ktor` (now built
+  with Kotlin 2.4.20) 32 of 34 → 0. Each workspace's `metadata.json` now records
+  `kotlin-metadata-jvm:2.4.20`.
 
 - **A grpc-java service's handler is read from real generated code** (Task 4 fix round of spec
   2026-10-24-quarkus-messaging-and-grpc). `supertype_derived` matched an override only against

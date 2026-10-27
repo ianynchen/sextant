@@ -12,15 +12,14 @@
        — the first `mvn compile` fetches them ONLINE and every later one runs `-o`.
        Ktor 3.6.0, the version the real corpora build against (spec 2026-10-26 §3f), with
        the WebSocket and SSE server plugins and the HTTP client and its CIO engine for
-       `KtorStreams.kt` and `KtorClient.kt`. Kotlin stays at 2.2.0, not the corpora's 2.4.20:
-       the extractor's `kotlin-metadata-jvm` 2.2.0 cannot read Kotlin 2.4 metadata, so on
-       2.4.20 bytecode every class here is `partial` and an extension's `$default` call is
-       mis-projected (OI-219). It moves to 2.4.20 when OI-219 lands. The class-lambda twin
-       `orders-ktor-classlambdas` stays on Ktor 3.0.3, so the 3.0.3 shapes stay pinned too.
+       `KtorStreams.kt` and `KtorClient.kt`. Kotlin 2.4.20, the compiler the real corpora use,
+       now that the extractor reads its metadata (OI-219). The class-lambda twin
+       `orders-ktor-classlambdas` stays on Ktor 3.0.3 and Kotlin 2.2.0, so the older
+       compiler's and library's shapes stay pinned on real bytecode too.
        Built with JDK 21 (javac 27 renumbers lambdas). -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
-    <kotlin.version>2.2.0</kotlin.version>
+    <kotlin.version>2.4.20</kotlin.version>
     <ktor.version>3.6.0</ktor.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>

@@ -2,8 +2,10 @@ plugins {
     java
     // Test-only: the committed Kotlin fixture below must be compiled by Gradle,
     // so `./gradlew test` stays self-contained on a fresh checkout. No Kotlin
-    // reaches the shaded jar.
-    kotlin("jvm") version "2.2.0"
+    // reaches the shaded jar. Moves with kotlin-metadata-jvm below: the samples
+    // it compiles are the newest Kotlin output the build claims to read
+    // (KotlinMetadataVersionTest).
+    kotlin("jvm") version "2.4.20"
     id("com.gradleup.shadow") version "9.6.1"
 }
 
@@ -34,8 +36,10 @@ dependencies {
     implementation("org.ow2.asm:asm-analysis:9.10.1")
     // The extractor's first non-ASM runtime dependency (ARCHITECTURE §9): Kotlin's
     // nullability lives only in the opaque protobuf blob the compiler writes to
-    // @Metadata, and this is the library that decodes it.
-    implementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.2.0")
+    // @Metadata, and this is the library that decodes it. It reads metadata one
+    // minor past its own release (2.4.20 reads through Kotlin 2.5) and refuses
+    // anything newer; KotlinMetadataVersionTest pins that ceiling.
+    implementation("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.20")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     // Test scope only: the committed fixture needs an annotation to compile
@@ -66,7 +70,7 @@ tasks.withType<JavaCompile> {
 }
 
 kotlin {
-    // Only the bytecode target needs pinning: Kotlin 2.2.0's compiler runs fine
+    // Only the bytecode target needs pinning: Kotlin 2.4.20's compiler runs fine
     // on this JDK, but without this it targets whatever bytecode version this
     // JDK defaults to, which then disagrees with JavaCompile's release(21) above
     // for the mixed test source set (compileTestJava and compileTestKotlin must

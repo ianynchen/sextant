@@ -1242,12 +1242,12 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
     under BOTH profiles — a suspend lambda is a class either way — so even the handler
     column agrees once the module prefix is dropped. A difference here is a shape one
     profile reads and the other does not, and it is reported, not tolerated."""
-    # Re-pinned 2026-10-26: `orders-ktor` moved to Ktor 3.6.0 (Kotlin stays 2.2.0 until
-    # OI-219: the extractor cannot read Kotlin 2.4 metadata) and gained
+    # Re-pinned 2026-10-26: `orders-ktor` moved to Ktor 3.6.0 (and to Kotlin 2.4.20 with
+    # OI-219, 2026-10-27) and gained
     # `KtorStreams.kt` and `KtorClient.kt` (spec 2026-10-26 §3f), which the twin does not
     # compile — it stays on Ktor 3.0.3 and Kotlin 2.2.0. The comparison is of the one source
     # both build, `KtorRoutes.kt`, so it now also says that source derives the same rows on
-    # Ktor 3.0.3 and on 3.6.0.
+    # Ktor 3.0.3 and Kotlin 2.2.0, and on Ktor 3.6.0 and Kotlin 2.4.20.
     shared = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
     default, classes = _rows_modulo_module(shared), _rows_modulo_module(ktor_classlambda_rows)
     assert default == classes, {
