@@ -5163,6 +5163,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "ktor.a-block-handing-its-receiver-to-SUPPLIED-code-declines": Guard(
+        what="a block that hands its receiver to a call made on a value it captured or on "
+        "another of its parameters declines",
+        why="`fun mk(block) = HttpClient(CIO) { defaultRequest { url(a) }; block() }` runs "
+        "the caller's `block` on the configuration, and the caller's block may set its own "
+        "base. Skipped, the row publishes `a` at `resolved` for a call Ktor sends wherever "
+        "the caller's block pointed it (measured on kotlinc 2.2's output)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="            if _hands_to_supplied_code(inner, receiver):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "ktor.a-base-from-ANOTHER-path-is-never-paired": Guard(
         what="a setter whose value the walk resolves to several bases gives no base",
         why="the producer reader records no path, so where `madeClient(base)` is called "

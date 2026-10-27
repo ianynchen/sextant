@@ -440,6 +440,8 @@ class _Ladder:
                 continue
             if self._may_move_base(inner) or self._hands_off(inner, receiver):
                 return None, UNTRACED
+            if _hands_to_supplied_code(inner, receiver):
+                return None, UNTRACED
             nested = self._rung_of(inner)
             if nested is None or nested.get("parent") is not None:
                 continue
@@ -490,12 +492,7 @@ class _Ladder:
             return False
         if (str(site["caller"]), int(str(site["ordinal"]))) not in self._values.reached:
             return False
-        return any(
-            isinstance(argument, Mapping)
-            and argument.get("kind") == "parameter"
-            and argument.get("value") == receiver
-            for argument in site["arguments"] or []
-        )
+        return _hands_receiver(site, receiver)
 
     def _may_move_base(self, site: Mapping[str, Any]) -> bool:
         """A call in a reached block that may set the base although it is not the declared
@@ -511,6 +508,31 @@ class _Ladder:
         if site.get("owner") == self._setter["owner"]:
             return True
         return any(_listed(site, entry) for entry in self._may_set)
+
+
+def _hands_to_supplied_code(site: Mapping[str, Any], receiver: int) -> bool:
+    """Whether `site` hands the block's receiver to code SUPPLIED from outside the block: a
+    call made on a value the block captured or on another of its parameters, never on the
+    receiver itself. `block()` in `HttpClient(CIO) { defaultRequest { … }; block() }` is
+    `invoke(block, receiver)` on the captured `block`, and what that does is the caller's
+    code, which the walk never sees; it may replace the base. A static call is made on no
+    value at all (the compiler's null check on the receiver, `install$default(config, …)`),
+    so it is not this question, and a call on the captured value not handed the receiver
+    cannot configure it."""
+    on = site.get("receiver_parameter")
+    if on is None or int(str(on)) == receiver:
+        return False
+    return _hands_receiver(site, receiver)
+
+
+def _hands_receiver(site: Mapping[str, Any], receiver: int) -> bool:
+    """Whether one of `site`'s arguments is the block's receiver parameter."""
+    return any(
+        isinstance(argument, Mapping)
+        and argument.get("kind") == "parameter"
+        and argument.get("value") == receiver
+        for argument in site["arguments"] or []
+    )
 
 
 def _matches(site: Mapping[str, Any], call: Mapping[str, Any]) -> bool:

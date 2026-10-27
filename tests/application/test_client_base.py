@@ -1240,6 +1240,88 @@ def test_a_block_handing_its_receiver_to_module_code_declines(tmp_path: Path):
     assert _client_rows(tmp_path / "other", other) == [_BASED_ROW]
 
 
+_INVOKE = ("kotlin/jvm/functions/Function1#", "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;")
+
+
+def _client_with_a_captured_block(calls: list[CallSiteFact]) -> list:
+    """`fun mk(block: HttpClientConfig<*>.() -> Unit) = HttpClient(CIO) { defaultRequest {
+    url(_PRICING) }; <calls> }`, and a call on the client it builds. The client's block
+    CAPTURES `block`, so its body's parameter 0 is that captured value and parameter 1 is the
+    block's own receiver (`CallArgument.captures`, D00 §5) — kotlinc 2.2's `mk$lambda$1`."""
+    outer = _MODULE + _body("client$lambda$0")
+    return [
+        _call(
+            _CLINIT,
+            1,
+            _FACTORY,
+            [
+                _CIO,
+                CallArgument(kind="lambda", symbol=_body("client$lambda$0"), source=4, captures=1),
+            ],
+            result=101,
+        ),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=_FILE + "client.",
+            value=CallArgument(kind="unresolved", source=101),
+            written_by=_CLINIT,
+        ),
+        *_on("client", _fn("orders"), "orders"),
+        _call(
+            outer,
+            1,
+            _DEFAULT_REQUEST,
+            [
+                CallArgument(kind="parameter", value=1),
+                CallArgument(kind="lambda", symbol=_body("client$lambda$0$0"), source=7),
+            ],
+        ),
+        _in_default_request(0, _SETTER, [_base(_PRICING)]),
+        *(_call(outer, 2 + index, *call[:2], **call[2]) for index, call in enumerate(calls)),
+    ]
+
+
+@pytest.mark.declines("ktor-client")
+@pytest.mark.pins("ktor.a-block-handing-its-receiver-to-SUPPLIED-code-declines")
+def test_a_block_handing_its_receiver_to_a_captured_block_declines(tmp_path: Path):
+    """`HttpClient(CIO) { defaultRequest { url("https://a/") }; block() }`, `block` the
+    caller's: `block()` is `Function1.invoke(block, receiver)`, a call made ON the captured
+    value and handed the block's receiver. What `block` does is code the caller supplies and
+    the walk never sees, so it may replace the base — measured on kotlinc 2.2's output before
+    this rule: `GET a.example.com /x resolved` for a caller whose own block sets `b`. Neither a
+    module method nor a listed call, so no other rule asked about it."""
+    facts = _client_with_a_captured_block(
+        [
+            (
+                _INVOKE,
+                [CallArgument(kind="parameter", value=1)],
+                {"invoke_kind": "interface", "receiver_parameter": 0},
+            )
+        ]
+    )
+    assert _client_rows(tmp_path, facts) == [_DECLINED_ROW]
+
+
+def test_a_static_call_or_one_not_handed_the_receiver_keeps_the_base(tmp_path: Path):
+    """The near-misses, in the same capturing body. Kotlin's null check on the receiver is a
+    STATIC call on no captured value, and a call on the captured value that is not handed the
+    receiver (`block.toString()`) cannot configure it: the declared base stands for both."""
+    null_check = _client_with_a_captured_block(
+        [(_NULL_CHECK, [CallArgument(kind="parameter", value=1), _base("$this$HttpClient")], {})]
+    )
+    assert _client_rows(tmp_path / "null_check", null_check) == [_BASED_ROW]
+    not_handed = _client_with_a_captured_block(
+        [
+            (
+                ("java/lang/Object#", "toString", "()Ljava/lang/String;"),
+                [],
+                {"invoke_kind": "virtual", "receiver_parameter": 0},
+            )
+        ]
+    )
+    assert _client_rows(tmp_path / "not_handed", not_handed) == [_BASED_ROW]
+
+
 def test_the_null_check_on_the_receiver_does_not_decline(tmp_path: Path):
     """Kotlin opens every block body with `Intrinsics.checkNotNullParameter(this, …)`: a
     library call handed the receiver, which `may_set_base` does not list, so a plain client
