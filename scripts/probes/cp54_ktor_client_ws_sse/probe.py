@@ -532,8 +532,20 @@ def main(argv: list[str]) -> int:
             "ENGINELESS",
             "QUERY",
             "INSTALLED",
+            "WSJOIN",
+            "SSEJOIN",
         ) and (entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
+    # (n) an engine that does not declare `SSECapability` is refused before it sees the request,
+    # so a row run on one would measure the refusal, not the join.
+    for entry in ran:
+        if entry[0] == "SSEJOIN" and "SSECapability" not in entry[4].split(", "):
+            raise ProbeError(f"the SSE engine declares no SSECapability: {' | '.join(entry)}")
+    # (m) the default ports the joins are rendered against, as Ktor's `URLProtocol` states them;
+    # one missing means the table below cannot say why a port is or is not written.
+    ports = {entry[1]: entry[2] for entry in ran if entry[0] == "PORT"}
+    if set(ports) != {"http", "https", "ws", "wss"}:
+        raise ProbeError(f"the run reported default ports for {sorted(ports)} only")
     # (h) a request the server never received measures nothing about routing.
     for entry in ran:
         if entry[0] == "DISPATCH" and entry[3] == "NOT RECEIVED":
@@ -902,6 +914,32 @@ def main(argv: list[str]) -> int:
                 f"`DefaultRequest` join: the plugin installed as {label} (l)",
                 "client",
                 f'base `{base}`, call `get("{relative}")` -> Ktor sent `{result}`',
+            )
+
+    # (m) a WebSocket call's address joined onto the base, for every form and base shape
+    emit(
+        "the default port of each scheme, `URLProtocol.<scheme>.defaultPort` (m)",
+        "http",
+        "; ".join(f"`{name}` {port}" for name, port in ports.items()),
+    )
+    for entry in ran:
+        if entry[0] == "WSJOIN":
+            _, label, base, address, result = entry
+            emit(
+                f"`DefaultRequest` join through a WebSocket call: {label} (m)",
+                "client",
+                f"base `{base}`, address `{address}` -> the engine received `{result}`",
+            )
+
+    # (n) an SSE call's address joined onto the base, on an engine declaring `SSECapability`
+    for entry in ran:
+        if entry[0] == "SSEJOIN":
+            _, label, base, address, capabilities, result = entry
+            emit(
+                f"`DefaultRequest` join through an SSE call: {label} (n)",
+                "client",
+                f"engine capabilities {capabilities}; base `{base}`, address `{address}` -> "
+                f"the engine received `{result}`",
             )
     return 0
 

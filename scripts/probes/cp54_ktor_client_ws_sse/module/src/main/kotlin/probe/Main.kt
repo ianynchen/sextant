@@ -1,12 +1,19 @@
 package probe
 
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.HttpClientEngineCapability
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respondOk
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.plugin
+import io.ktor.client.plugins.sse.SSE as ClientSSE
+import io.ktor.client.plugins.sse.SSECapability
+import io.ktor.client.plugins.sse.serverSentEvents
+import io.ktor.client.plugins.sse.sse
+import io.ktor.client.plugins.sse.sseSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket as clientWebSocket
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -17,6 +24,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.request
 import io.ktor.client.request.url
 import io.ktor.http.HttpMethod
+import io.ktor.http.URLProtocol
 import io.ktor.server.application.Application
 import io.ktor.server.application.createApplicationPlugin
 import io.ktor.server.application.hooks.CallFailed
@@ -290,6 +298,59 @@ private fun socketWebSocket(label: String, requests: List<Pair<HttpMethod, Strin
     }
 }
 
+// Row group (m): a WebSocket call's address joined onto a `defaultRequest` base, for every form
+// and base shape a reader would otherwise have to predict from rows 61-63 — the `webSocket` and
+// `webSocketSession` address forms beside `ws` and `wss`, both scheme pairs, a base with its own
+// port, a path without `/`, a query on both sides, the parts form with only a path, a host given
+// in the parts form, and absolute addresses of each scheme. The mock engine records the URL the
+// request carries when it reaches the engine; it completes no handshake, so the call then fails,
+// and only an address the engine never saw aborts the run.
+private fun wsJoin(label: String, base: String, address: String, call: suspend (HttpClient) -> Unit) =
+    runBlocking {
+        var seen = "NOT REACHED"
+        val client = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+            install(WebSockets)
+            defaultRequest { url(base) }
+        }
+        try {
+            call(client)
+        } catch (e: Throwable) {
+            // the mock engine completes no handshake; the URL was recorded before this
+        }
+        client.close()
+        println("WSJOIN\t$label\t$base\t$address\t$seen")
+    }
+
+// Row group (n): an SSE call's address joined onto a `defaultRequest` base. Ktor's SSE plugin
+// refuses an engine that does not declare `SSECapability` before the request reaches it, and the
+// plain mock engine declares only HTTP-timeout and WebSocket capabilities, so this engine is the
+// mock engine with `SSECapability` added and nothing else changed. The capabilities it declares
+// are printed with each row. The engine answers 200 with no event stream, so the call then fails;
+// only an address the engine never saw aborts the run.
+private class SseMockEngine(config: MockEngineConfig) : MockEngine(config) {
+    override val supportedCapabilities: Set<HttpClientEngineCapability<out Any>> =
+        super.supportedCapabilities + SSECapability
+}
+
+private fun sseJoin(label: String, base: String, address: String, call: suspend (HttpClient) -> Unit) =
+    runBlocking {
+        var seen = "NOT REACHED"
+        val config = MockEngineConfig().apply { addHandler { request -> seen = request.url.toString(); respondOk() } }
+        val engine = SseMockEngine(config)
+        val capabilities = engine.supportedCapabilities.map { it.toString() }.sorted().joinToString(", ")
+        val client = HttpClient(engine) {
+            install(ClientSSE)
+            defaultRequest { url(base) }
+        }
+        try {
+            call(client)
+        } catch (e: Throwable) {
+            // no event stream came back; the URL was recorded before this
+        }
+        client.close()
+        println("SSEJOIN\t$label\t$base\t$address\t$capabilities\t$seen")
+    }
+
 fun main() {
     // The version each Ktor jar in use states, as the running process sees it. The server jars are
     // only loaded, not run.
@@ -360,4 +421,70 @@ fun main() {
     queryOnly("base with its own query", "https://api.example.com/v1/items?key=1", "?q=1")
 
     installed("`install(DefaultRequest) { url(…) }`", "https://installed.example.com/i/", "orders")
+
+    // Row group (m), after every earlier row so their numbers hold. First the default port of each
+    // scheme the joins below render, as Ktor's own `URLProtocol` states it: a joined address writes
+    // its port only where it differs from its scheme's default.
+    for (protocol in listOf(URLProtocol.HTTP, URLProtocol.HTTPS, URLProtocol.WS, URLProtocol.WSS)) {
+        println("PORT\t${protocol.name}\t${protocol.defaultPort}")
+    }
+    val https = "https://api.example.com/v1/"
+    val http = "http://api.example.com/v1/"
+    val httpsPort = "https://api.example.com:8443/v1/"
+    val httpPort = "http://api.example.com:8080/v1/"
+    wsJoin("`webSocket(\"/chat\")`, https base", https, "/chat") { it.clientWebSocket("/chat") { } }
+    wsJoin("`webSocketSession(\"/chat\")`, https base", https, "/chat") { it.webSocketSession("/chat") }
+    wsJoin("`ws(\"/chat\")`, http base", http, "/chat") { it.ws("/chat") { } }
+    wsJoin("`wss(\"/chat\")`, https base", https, "/chat") { it.wss("/chat") { } }
+    wsJoin("`ws(\"chat\")`, https base", https, "chat") { it.ws("chat") { } }
+    wsJoin("`ws(\"/chat\")`, https base with its own port", httpsPort, "/chat") { it.ws("/chat") { } }
+    wsJoin("`wss(\"/chat\")`, https base with its own port", httpsPort, "/chat") { it.wss("/chat") { } }
+    wsJoin("`ws(\"/chat\")`, http base with its own port", httpPort, "/chat") { it.ws("/chat") { } }
+    wsJoin("`wss(\"/chat\")`, http base with its own port", httpPort, "/chat") { it.wss("/chat") { } }
+    wsJoin("`ws(\"/chat?room=1\")`, https base with a query", "$https?key=1", "/chat?room=1") {
+        it.ws("/chat?room=1") { }
+    }
+    wsJoin("`ws(path = \"/parts\")`, the parts form with only a path, https base", https, "/parts") {
+        it.ws(path = "/parts") { }
+    }
+    wsJoin("`wss(path = \"/parts\")`, the parts form with only a path, http base", http, "/parts") {
+        it.wss(path = "/parts") { }
+    }
+    wsJoin("`webSocket(path = \"/parts\")`, the parts form with only a path, https base", https, "/parts") {
+        it.clientWebSocket(path = "/parts") { }
+    }
+    wsJoin("`webSocketSession(path = \"/parts\")`, the parts form with only a path, https base", https, "/parts") {
+        it.webSocketSession(path = "/parts")
+    }
+    wsJoin("`webSocket(host = \"chat.example.com\", path = \"/parts\")`, https base", https, "/parts") {
+        it.clientWebSocket(host = "chat.example.com", path = "/parts") { }
+    }
+    wsJoin("`ws(\"https://other.example.com/x\")`, an absolute https address", https, "https://other.example.com/x") {
+        it.ws("https://other.example.com/x") { }
+    }
+    wsJoin("`wss(\"ws://other.example.com/x\")`, an absolute ws address", https, "ws://other.example.com/x") {
+        it.wss("ws://other.example.com/x") { }
+    }
+    wsJoin("`webSocket(\"wss://other.example.com/x\")`, an absolute wss address", https, "wss://other.example.com/x") {
+        it.clientWebSocket("wss://other.example.com/x") { }
+    }
+    wsJoin("`ws(\"//other.example.com/x\")`, a protocol-relative address", https, "//other.example.com/x") {
+        it.ws("//other.example.com/x") { }
+    }
+
+    // Row group (n).
+    sseJoin("`sse(\"/stream\")`, base ending in /", https, "/stream") { it.sse("/stream") { } }
+    sseJoin("`sse(\"stream\")`, base ending in /", https, "stream") { it.sse("stream") { } }
+    sseJoin("`sse(\"stream\")`, base without trailing /", https.removeSuffix("/"), "stream") { it.sse("stream") { } }
+    sseJoin("`sse(\"/stream\")`, http base with its own port", httpPort, "/stream") { it.sse("/stream") { } }
+    sseJoin("`sse(\"stream?x=1\")`, base with a query", "$https?key=1", "stream?x=1") { it.sse("stream?x=1") { } }
+    sseJoin("`sse(\"https://events.example.com/stream\")`, an absolute address", https, "https://events.example.com/stream") {
+        it.sse("https://events.example.com/stream") { }
+    }
+    sseJoin("`sseSession(\"/stream\")`", https, "/stream") { it.sseSession("/stream") }
+    sseJoin("`serverSentEvents(\"/stream\")`", https, "/stream") { it.serverSentEvents("/stream") { } }
+    sseJoin("`sse(path = \"/parts\")`, the parts form with only a path", https, "/parts") { it.sse(path = "/parts") { } }
+    sseJoin("`sse(scheme = \"http\", path = \"/parts\")`, the parts form with a scheme", https, "/parts") {
+        it.sse(scheme = "http", path = "/parts") { }
+    }
 }
