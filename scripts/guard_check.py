@@ -5001,6 +5001,99 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    # --- A client's base, read through the declared ladder (Task 10) -------------------
+    "ktor.a-RELATIVE-call-joins-its-clients-default-request-base": Guard(
+        what="a relative client call is joined onto the base the client it is issued on "
+        "holds, read through the catalog's `client_base` ladder",
+        why='Ktor sends `client.get("quotes")` on a client built with `defaultRequest { '
+        'url("https://pricing.example.com/") }` to `https://pricing.example.com/quotes` '
+        "(CP-54 rows 51, 88). Without the join the row publishes `quotes` with no peer, a "
+        "path that names no service, for a call whose service the code states",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    client = captures.get(_CLIENT)\n",
+                replace="    client = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.each-client-joins-its-OWN-base": Guard(
+        what="a client derived by `config { … }` joins its OWN block's base, and inherits "
+        "its parent's only where its block sets none",
+        why="Ktor sends a derived client's relative call to the derived client's own "
+        "`defaultRequest` base (CP-54 row 79) and to the parent's only without one (row 80). "
+        "Read parent-first, every derived client publishes its parent's service — "
+        "`parent.example.com` for a call Ktor sends to `child.example.com`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        base, reason = self._block_base(site, rung)\n",
+                replace='        if rung.get("parent") == _FROM_RECEIVER:  # guard disabled by '
+                "scripts/guard_check.py\n"
+                "            return self.base_of(site, RECEIVER, seen)\n"
+                "        base, reason = self._block_base(site, rung)\n",
+            ),
+        ),
+    ),
+    "ktor.the-ENGINE-LESS-factory-is-a-ladder-rung": Guard(
+        what="`ktor-client.yml` declares the engine-less `HttpClient { … }` factory, "
+        "`HttpClientJvmKt.HttpClient(Function1)`, as a rung with its block at argument 0",
+        why="the engine-less factory is its own JVM function (CP-54 row 87), and koog builds "
+        "its clients with it. Undeclared, a relative call on such a client keeps a bare "
+        "path where Ktor sends it to the block's `defaultRequest` base (row 88)",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-client.yml",
+                find="      - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClient, block_arg: 0,\n",
+                replace="      - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClientDisabledByGuard, "
+                "block_arg: 0,\n",
+            ),
+        ),
+    ),
+    "ktor.only-a-DECLARED-factory-overload-is-read": Guard(
+        what="a ladder rung matches a construction only under the descriptor it declares",
+        why="`HttpClient(engine) { … }` over an engine instance shares the measured "
+        "factory's owner and name. Matched on those alone, its block is read as the "
+        "measured overload's, and a base no probe row measured is published at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        and ("descriptor" not in call or site.get("descriptor") == '
+                'call["descriptor"])\n',
+                replace="        and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-RELATIVE-setter-after-an-absolute-one-declines": Guard(
+        what="a `defaultRequest` block whose setter is handed a relative address declines",
+        why='a relative `url("b/")` after `url("https://first.example.com/a/")` MOVES '
+        "the base to `…/a/b/` (CP-54 row 86), which is not modelled. Taken as the base "
+        "itself, the join publishes an address built on `b/`, which Ktor never sends",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="                if address is None or not _has_host(address):\n",
+                replace="                if address is None:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-base-from-ANOTHER-path-is-never-paired": Guard(
+        what="a setter whose value the walk resolves to several bases gives no base",
+        why="the producer reader records no path, so where `madeClient(base)` is called "
+        "with two bases nothing says which one a given client was built with. Taking one "
+        'pairs the client with a base from another call (ruling M-1): `a.get("orders")` '
+        "published at `b.example.com`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        if len(distinct) > 1:\n            return None, NON_ENUMERABLE\n"
+                "        return distinct[0], None\n\n    def _rung_of",
+                replace="        return distinct[0], None  # guard disabled by "
+                "scripts/guard_check.py\n\n    def _rung_of",
+            ),
+        ),
+    ),
     # --- WebSocket and SSE routes in Ktor's routing tree (spec 2026-10-26 §3b) ------
     "ktor.a-WEBSOCKET-route-is-a-verbless-inbound-row": Guard(
         what="a `combinator` row carries its verb rule's own `protocol`",

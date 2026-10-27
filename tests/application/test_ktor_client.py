@@ -83,11 +83,13 @@ def _inlined_call(
     body: CallArgument | None = None,
     issued: bool = True,
     url_descriptor: str = _URL,
+    client: CallArgument | None = None,
 ) -> list[CallSiteFact]:
     """One inlined client call, in CP-54 row (b)'s order. `verbs` is the verb set before
     `url` and the one set after it (None where that `setMethod` is not compiled); `body`
     adds the two `setBody`/`setBodyType` pairs; `issued=False` leaves out the
-    `HttpStatement` the builder is handed to."""
+    `HttpStatement` the builder is handed to; `client` is the `HttpStatement`'s argument 1,
+    a field nothing writes unless a test says otherwise."""
     sites: list[CallSiteFact] = []
 
     def add(owner, name, descriptor, receiver, arguments, invoke_kind="virtual", result=None):
@@ -139,7 +141,7 @@ def _inlined_call(
             176,
             [
                 CallArgument(kind="instance", source=_B, symbol=BUILDER),
-                CallArgument(kind="field", symbol="com/acme/kt/ClientKt#client."),
+                client or CallArgument(kind="field", symbol="com/acme/kt/ClientKt#client."),
             ],
             invoke_kind="special",
         )
@@ -266,8 +268,9 @@ def test_a_builder_with_no_verb_set_is_get(tmp_path: Path):
 def test_a_relative_url_with_no_base_stays_relative_and_unresolved(tmp_path: Path):
     """`client.get("relative/path")` (CP-54 row 14). Ktor joins a relative address onto the
     client's `defaultRequest` base, or onto `http://localhost` where it has none (CP-54
-    row 57), and the client is not read here. So the row keeps the relative path it states
-    and is `unresolved`, with no peer: the code says which path, not which service."""
+    row 57), and this client's construction is not reached: the field it is read from has
+    no writer. So the row keeps the relative path it states and is `unresolved`, with no
+    peer: the code says which path, not which service."""
     facts = _inlined_call(_caller("relative"), "relative/path", verbs=(None, "Get"))
     assert _rows(tmp_path, facts) == [
         (_caller("relative"), "outbound", "GET", None, "relative/path", "unresolved", False)

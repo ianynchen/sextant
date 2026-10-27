@@ -75,7 +75,7 @@ from sextant.application.resolve.shapes.arguments import (
     valid_via_arity,
     with_authority,
 )
-from sextant.application.resolve.shapes.client_base import client_base_of
+from sextant.application.resolve.shapes.client_base import client_base, client_base_of, join_url
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -205,6 +205,11 @@ _READS_LINK = "\x00reads_link"
 # (`sends_to`), and the row's handler is that handler, whatever a later
 # `handle` after the link captured (a reader of the channel, `_READS_LINK`).
 _LINK_SENDER = "\x00link_sender"
+# The client the chain's request is issued on (spec 2026-10-26 §3c): the executing call's
+# `client_base.client_arg` argument, stamped with where it was read. Present only for a
+# catalog declaring `client_base`, on a chain that reached its terminal through an
+# argument join with exactly one executing call.
+_CLIENT = "\x00client"
 
 # F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
 # A reserved key inside `captures` rather than a second parameter threaded through
@@ -838,6 +843,7 @@ def _walk(
     caller), so folding into it in place is folding into the branch."""
     if _reaches_terminal(site, context):
         reached_terminal = True
+        _hold_client(site, captures, context)
     # Spec 2026-09-21 §5: a value this row produced that a declared consumer
     # takes as an argument hands the chain on — the walk continues from the
     # consumer with these captures, and derivation belongs to the continued
@@ -869,6 +875,7 @@ def _walk(
             _fold_site(next_site, captures, context)
             if _reaches_terminal(next_site, context):
                 reached_terminal = True
+                _hold_client(next_site, captures, context)
             continue
         forked = True
         next_captures = dict(captures)
@@ -883,6 +890,22 @@ def _walk(
         context.collect.append(captures)
     elif reached_terminal:
         _derive(captures, context)
+
+
+def _hold_client(site: dict[str, Any], captures: dict[str, Any], context: _ChainContext) -> None:
+    """Where the catalog declares `client_base`, the client the request at `site` is issued
+    on, held in `captures` for the address join (`_against_client_base`): argument
+    `client_arg` of the executing call that consumes `site`'s built value — Ktor's
+    `HttpStatement(builder, client)`. Only where exactly one call executes the value: a
+    request handed to two would have two clients, and which one a row means is not known."""
+    name = str(site["name"])
+    if context.client_base is None or name not in context.via_argument_names:
+        return
+    executing = _consumers(site, context.sites, context.via_argument_names[name])
+    if len(executing) != 1:
+        return
+    slot = int(context.client_base["client_arg"])
+    captures[_CLIENT] = _captured_at(_arg_at(executing[0]["arguments"], slot), executing[0], slot)
 
 
 def _continuations(
@@ -1643,7 +1666,7 @@ def _composed_address(
     url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         if context.workspace is None or context.values is None:
-            return _against_client_base(url_of(url_argument), context)
+            return _against_client_base(url_of(url_argument), captures, context)
         # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
         # identities, so the path is text the code states, and who is CALLED is asked
         # separately of the first operand — the user's ruling of 2026-10-17, "peer and path
@@ -1658,6 +1681,7 @@ def _composed_address(
                 context.values,
                 context.catalog.value_model or (),
             ),
+            captures,
             context,
         )
     base = _string_value(_address_read(captures.get("base"), context))
@@ -1672,16 +1696,21 @@ def _composed_address(
 
 
 def _against_client_base(
-    address: tuple[str | None, str | None, str], context: _ChainContext
+    address: tuple[str | None, str | None, str],
+    captures: dict[str, Any],
+    context: _ChainContext,
 ) -> tuple[str | None, str | None, str]:
     """`address` where the catalog says a relative address is relative to a base the
     executing CLIENT holds (`client_base`, spec 2026-10-26 §3c): Ktor joins
     `get("relative/path")` onto the client's `defaultRequest` base, and onto
-    `http://localhost` where it has none (CP-54 rows 51-57). The client's construction is
-    not read yet — the value walk answers what a value is, never which call built it, and a
-    client held in a field or a top-level `val` has no write fact at all (D00 §5, CP-33 rows
-    6-7) — so the address the code states is a PATH and not the URL called: it keeps the
-    path, peer NULL, at `unresolved`.
+    `http://localhost` where it has none (CP-54 rows 51-57).
+
+    The base is `shapes.client_base.client_base`'s, read off the client the chain was
+    issued on (`_hold_client`), and the join is the catalog's rule; the joined URL is split
+    by CP-2 as a written one is. Where the base cannot be read — the client's construction
+    is not reached, or the code setting the base is not read — or the join declines, the
+    address the code states is a PATH and not the URL called: it keeps the path, peer NULL,
+    at `unresolved`.
 
     Only a relative address read in full moves. An absolute one is the whole address (Ktor
     ignores the base for it, CP-54 row 55); a `${…}` expression is configuration that may be
@@ -1697,7 +1726,14 @@ def _against_client_base(
         or carries_expression(path)
     ):
         return address
-    return None, path, str(Resolution.UNRESOLVED)
+    client = captures.get(_CLIENT)
+    base = None
+    if client is not None and context.workspace is not None:
+        base, _ = client_base(context.workspace, context.values, client, context.client_base)
+    joined = None if base is None else join_url(base, path, str(context.client_base["join"]))
+    if joined is None:
+        return None, path, str(Resolution.UNRESOLVED)
+    return _address_of(joined)
 
 
 def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str, Any] | None:

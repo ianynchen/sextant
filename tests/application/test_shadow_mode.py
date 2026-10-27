@@ -285,6 +285,9 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # `block_arg` (the configuration block of `HttpClient`, `config` and `defaultRequest`) and
 # the setter's `value_arg` (`DefaultRequestBuilder.url`'s address). The reader reads them by
 # shape, as it reads every `*_arg`; nothing else in the catalog moved.
+# **`ktor-client` moved (7, 8) -> (8, 9) on 2026-10-26** (Task 10): one more ladder rung, the
+# engine-less `HttpClient { … }` factory (CP-54 rows 87-88), whose `block_arg` is one more
+# position read the same way.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -305,7 +308,7 @@ _ASKS_PER_CATALOG = {
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
     "kafka-streams-topology": (5, 5),
-    "ktor-client": (7, 8),
+    "ktor-client": (8, 9),
     "ktor-routing": (49, 111),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
@@ -362,8 +365,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # `spring-integration-kafka` `Pattern` rows, same comment. **+16 on 2026-10-26**: the
     # `ktor-routing` WebSocket and SSE rules, same comment. **+3 on 2026-10-26**: the new
     # `ktor-client` catalog's three steps, same comment. **+4 on 2026-10-26**: its
-    # `client_base` ladder and setter, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 822
+    # `client_base` ladder and setter, same comment. **+1 on 2026-10-26**: the engine-less
+    # factory's rung, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 823
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
