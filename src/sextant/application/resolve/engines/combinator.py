@@ -1771,6 +1771,12 @@ def _verbs_at(argument: dict[str, Any] | None, scope: _Scope) -> list[str]:
     if field_verb is not None:
         return [field_verb]
     if argument.get("kind") == "enum" and argument.get("symbol") is not None:
+        # A member of an owner the field table declares, but not one it lists, is a verb
+        # the table does not know (D02 §2): poisoned, as `fluent` reads it, never its own
+        # member name.
+        owner = owner_of(bare_descriptor(str(argument["symbol"])))
+        if any(declared == owner for declared, _ in scope.context.verb_fields):
+            return []
         return [member_name(str(argument["symbol"]))]
     verb = _getter_value(argument, scope, scope.context.verb_getters)
     return [] if verb is None else [verb]

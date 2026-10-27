@@ -4888,6 +4888,21 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     # --- a verb written as a static field (spec 2026-10-26 §3a) ------------
+    "ktor.an-UNLISTED-member-of-a-declared-verb-field-owner-is-no-verb": Guard(
+        what="in `combinator`, an `enum`-kind verb argument whose owner the "
+        "`verb_values.fields` table declares, naming a member it does not list, is no verb",
+        why="D02 §2: a field the table does not name reads as nothing, the same poisoned verb "
+        "`fluent` gives. Read as its own member name, an unlisted `HttpMethod` field becomes "
+        "a verb word Ktor never sends, and the routes inside `method(…) { … }` are dropped "
+        "where they should stay unresolved rows",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if any(declared == owner for declared, _ in scope.context.verb_fields):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "ktor.a-VERB-read-from-a-static-field": Guard(
         what="a verb argument that is a static field (`enum`-kind where the field is typed "
         "as its own owner, as `HttpMethod.Get` is, `field`-kind otherwise) is read through "

@@ -6336,6 +6336,38 @@ def test_an_undeclared_field_is_no_verb(tmp_path: Path):
     ]
 
 
+@pytest.mark.pins("ktor.an-UNLISTED-member-of-a-declared-verb-field-owner-is-no-verb")
+def test_an_unlisted_member_of_a_declared_field_owner_is_no_verb(tmp_path: Path):
+    """An `enum`-kind argument whose OWNER the `verb_values.fields` table declares, naming a
+    member the table does not list — a field of `HttpMethod` typed as `HttpMethod` that is
+    not one of the nine — is no verb (D02 §2): `method` is poisoned and the row is unresolved
+    with its path intact, as `fluent` reads it. Read as its own member name it was the verb
+    `Unlisted`, which disagreed with the inner `get` and dropped the route. An enum of an
+    owner the table does not declare still reads its member's name, as every enum verb
+    does."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="enum", symbol=_HTTP_METHOD + "Unlisted.")],
+            [("get", "/x")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="enum", symbol="com/acme/Verbs#GET.")],
+            [("get", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/y", handler, "resolved"),
+        (None, "/x", handler, "unresolved"),
+    ]
+
+
 def test_a_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path):
     """`verb_values.fields` is validated at load as `getters` is: a key without its `#` (no
     field named), or a `verb_values` block holding a key besides `getters` and `fields`,
