@@ -53,14 +53,24 @@ OUT = Path("/tmp/a1-proof")
 # from a constant emitted NO fact before, so every line carrying it is a line the before jar
 # never wrote, and no line it did write changes. The expected reading is therefore "0 carry a
 # new key, N newly emitted" on a fixture that holds such a write, and byte-identical
-# everywhere else. **`value` is also a key the ARGUMENT grammar has always used**, so a
-# `receiver_parameter`-style strip would hide a real difference inside a call site's
-# arguments; `without_the_new_keys` strips by key NAME at every depth, which is why the two
-# halves of this proof are read together — the identical count must stay as high as it was.
+# everywhere else.
 #
 # `receiver_field` (2026-10-26) is of the first kind again: a key on call sites the before jar
 # already wrote, naming the static field a `getstatic` receiver was read from.
-NEW_KEYS = frozenset({"receiver_parameter", "captures", "written_by", "value", "receiver_field"})
+#
+# **Each key is stripped only WHERE IT LIVES** (2026-10-26). `value` is also a key the ARGUMENT
+# grammar has always used, and stripping every key by name at every depth removed an
+# argument's `value` from the after line while the before line kept it: the first release to
+# add a key to call sites that carry literal arguments (`receiver_field`) then read as
+# "differs beyond the keys" on every such line. So a fact's own keys are stripped from the
+# fact, per kind, and `captures` from a `lambda` entry of the argument grammar wherever the
+# grammar recurs — and nowhere else.
+FACT_KEYS = {
+    "call_site": frozenset({"receiver_parameter", "receiver_field"}),
+    "field_write": frozenset({"written_by", "value"}),
+}
+LAMBDA_KEYS = frozenset({"captures"})
+NEW_KEYS = frozenset().union(*FACT_KEYS.values(), LAMBDA_KEYS)
 
 
 def scan(jar: Path, classes: Path, out: Path) -> None:
@@ -90,23 +100,42 @@ def scan(jar: Path, classes: Path, out: Path) -> None:
     )
 
 
-def without_the_new_keys(value: object) -> object:
-    """The fact with both keys removed at every depth: `receiver_parameter` sits on
-    the call site itself, `captures` on a `lambda` entry of the argument grammar, and
-    the grammar nests (an array's `elements`) and recurs on other kinds (a method
-    return's `value`), so the walk is over the whole object rather than one path."""
+def without_the_new_keys(fact: object) -> object:
+    """The fact with every added key removed where it lives: the fact's own keys for its
+    kind (`receiver_parameter` on a call site, `written_by` on a field write), and
+    `captures` on each `lambda` entry of the argument grammar, which nests (an array's
+    `elements`) and recurs on other kinds (a method return's `value`). An argument's own
+    `value` is never touched."""
+    if not isinstance(fact, dict):
+        return fact
+    own = FACT_KEYS.get(str(fact.get("kind")), frozenset())
+    return {k: _without_lambda_keys(v) for k, v in fact.items() if k not in own}
+
+
+def _without_lambda_keys(value: object) -> object:
     if isinstance(value, dict):
-        return {k: without_the_new_keys(v) for k, v in value.items() if k not in NEW_KEYS}
+        drop = LAMBDA_KEYS if value.get("kind") == "lambda" else frozenset()
+        return {k: _without_lambda_keys(v) for k, v in value.items() if k not in drop}
     if isinstance(value, list):
-        return [without_the_new_keys(v) for v in value]
+        return [_without_lambda_keys(v) for v in value]
     return value
 
 
-def carries_a_new_key(value: object) -> bool:
+def carries_a_new_key(fact: object) -> bool:
+    """Whether the fact carries an added key where that key lives."""
+    if not isinstance(fact, dict):
+        return False
+    own = FACT_KEYS.get(str(fact.get("kind")), frozenset())
+    return bool(own & fact.keys()) or any(_carries_lambda_key(v) for v in fact.values())
+
+
+def _carries_lambda_key(value: object) -> bool:
     if isinstance(value, dict):
-        return bool(NEW_KEYS & value.keys()) or any(carries_a_new_key(v) for v in value.values())
+        if value.get("kind") == "lambda" and LAMBDA_KEYS & value.keys():
+            return True
+        return any(_carries_lambda_key(v) for v in value.values())
     if isinstance(value, list):
-        return any(carries_a_new_key(v) for v in value)
+        return any(_carries_lambda_key(v) for v in value)
     return False
 
 
