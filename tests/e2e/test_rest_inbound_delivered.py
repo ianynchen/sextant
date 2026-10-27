@@ -946,9 +946,9 @@ def _suspend_body(handler_class: str) -> str:
 
 def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     """`ktor-routing`, spec §14 test 13. `routing { route("/api") { get("/orders") { }
-    … } }` on ktor-server-core 3.0.3: every verb is a static extension whose receiver is
-    argument 0, every block an `invokedynamic` body, and the route is the prefix chain
-    the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
+    … } }` on ktor-server-core 3.6.0 (and on 3.0.3, the class-lambda twin below): every
+    verb is a static extension whose receiver is argument 0, every block an
+    `invokedynamic` body, and the route is the prefix chain the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
     on the prefix node itself (`javap -c`), so it serves `/api` — the empty literal
     path, never `/api/**`. The slashless `route("legacy") { get("orders") { } }` reads
     `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
@@ -1044,11 +1044,17 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         (r["path"], r["consumes"], r["produces"]) for r in ktor_rows if r["path"] in ("/j", "/c")
     }
     assert media == {("/j", None, '["application/json"]'), ("/c", '["application/json"]', None)}
-    # Exactly twenty-eight rows — the twenty-four above, the stray, the two `mount` rows
-    # and `reads()`'s `GET /reads/orders/{id}` (the handler-read fixture, §5d, asserted on
-    # `endpoint_metadata` below) — so an extra row (a conflict's route, a duplicate) cannot
-    # pass silently.
-    assert len(ktor_rows) == 28, sorted(rows, key=str)
+    # Exactly twenty-eight rows declared in `KtorRoutes.kt` — the twenty-four above, the
+    # stray, the two `mount` rows and `reads()`'s `GET /reads/orders/{id}` (the handler-read
+    # fixture, §5d, asserted on `endpoint_metadata` below) — so an extra row (a conflict's
+    # route, a duplicate) cannot pass silently. Re-pinned 2026-10-26 when the fixture moved
+    # to Ktor 3.6.0 (spec 2026-10-26 §3f): the count was of the whole fixture, and
+    # `KtorStreams.kt` and `KtorClient.kt` add ten rows of their own (three inbound, seven
+    # outbound, pinned by the tests below), so the twenty-eight are counted on the file they
+    # come from and the fixture's whole count is thirty-eight. No `KtorRoutes.kt` row moved.
+    routes = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
+    assert len(routes) == 28, sorted(rows, key=str)
+    assert len(ktor_rows) == 38, sorted(map(str, ktor_rows))
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
@@ -1056,7 +1062,7 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         "#orders(" in str(r["caller"])
         or "#selectors(" in str(r["caller"])
         or "#reads(" in str(r["caller"])
-        for r in ktor_rows
+        for r in routes
         if r["resolution"] == "resolved"
     )
     assert not any(
@@ -1226,12 +1232,18 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
     under BOTH profiles — a suspend lambda is a class either way — so even the handler
     column agrees once the module prefix is dropped. A difference here is a shape one
     profile reads and the other does not, and it is reported, not tolerated."""
-    default, classes = _rows_modulo_module(ktor_rows), _rows_modulo_module(ktor_classlambda_rows)
+    # Re-pinned 2026-10-26: `orders-ktor` moved to Ktor 3.6.0 and Kotlin 2.4.20 and gained
+    # `KtorStreams.kt` and `KtorClient.kt` (spec 2026-10-26 §3f), which the twin does not
+    # compile — it stays on Ktor 3.0.3 and Kotlin 2.2.0. The comparison is of the one source
+    # both build, `KtorRoutes.kt`, so it now also says that source derives the same rows on
+    # Ktor 3.0.3 and on 3.6.0.
+    shared = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
+    default, classes = _rows_modulo_module(shared), _rows_modulo_module(ktor_classlambda_rows)
     assert default == classes, {
         "only under the default profile": sorted(default - classes, key=str),
         "only under -Xlambdas=class": sorted(classes - default, key=str),
     }
-    assert len(ktor_classlambda_rows) == len(ktor_rows) == 28
+    assert len(ktor_classlambda_rows) == len(shared) == 28
 
 
 def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
@@ -1287,6 +1299,106 @@ def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
             "resolved",
         ),
     }
+
+
+# Ktor's WebSocket and SSE routes, its HTTP client and its WebSocket and SSE clients (spec
+# 2026-10-26 §3f, §6), on `orders-ktor` at Ktor 3.6.0. They are here, beside the routing
+# pins, because they read the same one analysis of the fixture (`ktor_tables`): a second
+# `module analyze` of it in an outbound file would cost a run for rows already in hand.
+# The new code is in `KtorStreams.kt` and `KtorClient.kt`, never `KtorRoutes.kt`, so the
+# class-lambda twin's copy of that file stays the very same source.
+
+
+def _streams_body(handler_class: str) -> str:
+    """`_suspend_body` for a `KtorStreamsKt` handler."""
+    return (
+        "sextant-jvm maven com.acme/orders-ktor 1.0.0 com/acme/kt/KtorStreamsKt$"
+        + handler_class
+        + "#invokeSuspend(sig_262c527a)."
+    )
+
+
+def test_ktor_websocket_and_sse_routes_derive_at_their_nested_paths(ktor_rows):
+    """`streams()`: `route("/api") { webSocket("/chat") { }; sse("/events") { } }`. A
+    WebSocket route is verbless, as every WebSocket catalog's row is, and nests under the
+    prefix as an HTTP route does: `websocket /api/chat`. `sse(path)` is GET (CP-54 rows
+    64-78, Ktor registers it under a GET selector): `sse GET /api/events`. Both rows are
+    `ktor-routing`'s, read through the one prefix list the three protocols share.
+
+    `method(HttpMethod.Get) { get("/legacy") { } }` is the verb read off Ktor 3.6.0's
+    STATIC FIELD on REAL bytecode: kotlinc writes `getstatic HttpMethod.Get`, and the
+    extractor describes it as an `enum`-kind argument (the field is typed as its own
+    owner, D00 §5). Task 2's hand-made facts gave it the `field` kind and passed while the
+    real shape published nothing (Task 4 found and fixed it); this is the pin those facts
+    could not be. Agreeing with the route's own GET, it is `GET /legacy`.
+
+    `method(HttpMethod.Post) { webSocket("/never-ws") { } }` is no row: a WebSocket route
+    with a path is registered under GET (CP-54 rows 64-78), and Ktor never dispatches a
+    GET node under a POST scope, exactly as `/never` above."""
+    rows = {
+        (r["protocol"], r["method"], r["path"], r["resolution"], r["handler"])
+        for r in ktor_rows
+        if r["catalog_id"] == "ktor-routing" and "KtorStreamsKt#" in str(r["caller"])
+    }
+    assert rows == {
+        ("websocket", None, "/api/chat", "resolved", _streams_body("streams$1$1$1")),
+        ("sse", "GET", "/api/events", "resolved", _streams_body("streams$1$1$2")),
+        ("http", "GET", "/legacy", "resolved", _streams_body("streams$1$2$1")),
+    }, sorted(rows, key=str)
+    assert not any("never-ws" in str(r["path"]) for r in ktor_rows), "a verb conflict published"
+
+
+def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_rows):
+    """`KtorClient.kt`: a top-level `val client = HttpClient(CIO) { install(WebSockets);
+    install(SSE); defaultRequest { url("https://pricing.example.com/") } }` and one call in
+    each of the five forms CP-54 row group (b) measured. Every form compiles to the same
+    inlined builder sequence, so each is one `ktor-client` row, the peer split off the URL.
+
+    `client.get("quotes")` is RELATIVE: the walk reaches the client through its
+    `<clinit>` `putstatic` (a field written from a call, D00 §5), the producer reader finds
+    the `HttpClient(CIO) { … }` that built it, the ladder reads `defaultRequest`'s
+    `url("…")`, and the address joins by Ktor's own rule (`replace_last_segment`, CP-54
+    rows 51-56): `pricing.example.com` `/quotes`, resolved. `install(WebSockets)` and
+    `install(SSE)` are plugins that set no base, so the base is trusted (`may_set_base`
+    names only `DefaultRequest`'s plugin).
+
+    `client.request(…) { method = HttpMethod.Put }` reads its verb off the static field, as
+    the routing selector above does. The WebSocket call is the whole URL in `path`, peer
+    NULL, verbless (`jakarta-websocket-client.yml`'s shape); the SSE call is GET, split into
+    peer and path."""
+    http = {
+        (r["method"], r["peer"], r["path"], r["resolution"])
+        for r in ktor_rows
+        if r["catalog_id"] == "ktor-client"
+    }
+    assert http == {
+        ("GET", "pricing.example.com", "/quotes", "resolved"),
+        ("POST", "orders.example.com", "/orders", "resolved"),
+        ("GET", "stock.example.com", "/levels", "resolved"),
+        ("PUT", "orders.example.com", "/orders/7", "resolved"),
+        ("GET", "orders.example.com", "/prepared", "resolved"),
+    }, sorted(http, key=str)
+    streams = {
+        (r["catalog_id"], r["protocol"], r["method"], r["peer"], r["path"], r["resolution"])
+        for r in ktor_rows
+        if r["catalog_id"] in ("ktor-websocket-client", "ktor-sse-client")
+    }
+    assert streams == {
+        (
+            "ktor-websocket-client",
+            "websocket",
+            None,
+            None,
+            "ws://chat.example.com/chat",
+            "resolved",
+        ),
+        ("ktor-sse-client", "sse", "GET", "events.example.com", "/stream", "resolved"),
+    }, sorted(streams, key=str)
+    assert all(
+        r["direction"] == "outbound"
+        for r in ktor_rows
+        if r["catalog_id"] in ("ktor-client", "ktor-websocket-client", "ktor-sse-client")
+    )
 
 
 GATEWAY = FIXTURES / "orders-gateway"

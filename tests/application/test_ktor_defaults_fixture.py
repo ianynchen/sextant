@@ -177,6 +177,13 @@ def test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route(
     assert ("GET", "/api/orders", "resolved") in {
         (str(r["method"]), str(r["path"]), str(r["resolution"])) for r in every
     }
-    assert len(every) == 28, sorted(
+    # Re-pinned 2026-10-26 (spec 2026-10-26 §3f): the fixture gained `KtorStreams.kt`, whose
+    # three routes this routing-only catalog also derives, so the twenty-eight are counted
+    # on `KtorRoutes.kt`, the file they come from, and the whole count is thirty-one.
+    routes = [r for r in every if "/KtorRoutesKt#" in str(r["caller"])]
+    assert len(routes) == 28, sorted(
+        (str(r["method"]), str(r["path"]), str(r["caller"])) for r in routes
+    )
+    assert len(every) == 31, sorted(
         (str(r["method"]), str(r["path"]), str(r["caller"])) for r in every
     )
