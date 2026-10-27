@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-213 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-221 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -216,6 +216,14 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-210 | [SEXTANT-203](https://app.plane.so/portolan/browse/SEXTANT-203/) | Go has no scanner (language order 4) |
 | OI-211 | [SEXTANT-204](https://app.plane.so/portolan/browse/SEXTANT-204/) | Rust has no scanner (language order 5) |
 | OI-212 | [SEXTANT-205](https://app.plane.so/portolan/browse/SEXTANT-205/) | Swift has no scanner (language order 6) |
+| OI-213 | [SEXTANT-206](https://app.plane.so/portolan/browse/SEXTANT-206/) | the route-requirements store has no protocol column, so an HTTP and an SSE row with one handler at one path would share requirements |
+| OI-214 | [SEXTANT-207](https://app.plane.so/portolan/browse/SEXTANT-207/) | a field-annotation lookup ignored which method wrote the field, so a static setter could borrow a constructor parameter's annotation (fixed on `cov/ktor-client-ws-sse`) |
+| OI-215 | [SEXTANT-208](https://app.plane.so/portolan/browse/SEXTANT-208/) | Ktor client base: the last `url(…)` setter by position under a branch publishes one branch's base |
+| OI-216 | [SEXTANT-209](https://app.plane.so/portolan/browse/SEXTANT-209/) | Ktor client base: four ladder shapes are read wrongly or declined (a caller-supplied block overriding a declared base, `config += shared`, a non-parent rung nested in another rung's block, a `headers.append` decline losing a resolved base) |
+| OI-217 | [SEXTANT-210](https://app.plane.so/portolan/browse/SEXTANT-210/) | the catalog hash omits `type-models/` and `server-models/`, so an edit there does not change it |
+| OI-218 | [SEXTANT-211](https://app.plane.so/portolan/browse/SEXTANT-211/) | Ktor manual SSE (a `get` route writing `ContentType.Text.EventStream`) is an `http` row, not an `sse` row |
+| OI-219 | [SEXTANT-212](https://app.plane.so/portolan/browse/SEXTANT-212/) | Kotlin 2.4 metadata is unreadable (`kotlin-metadata-jvm` 2.2.0): every class kotlinc 2.4 compiles is `partial`, loses nullability, suspend returns, parameter defaults and extension-receiver marks, and an extension's `$default` call is mis-projected |
+| OI-220 | [SEXTANT-213](https://app.plane.so/portolan/browse/SEXTANT-213/) | Ktor type-safe Resources routing (`get<T>`, `handle<T>`) derives nothing |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

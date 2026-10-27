@@ -56,6 +56,39 @@ here would restate those documents rather than add anything.
   is joined to its handler with no question, no gRPC outbound row is left, and both REST traces
   reach the handler. Closes OI-192: `quarkus-grpc-mutiny` left the delivery register on CI run
   40253274692, and COVERAGE §2c's Quarkus gRPC cell reads ✅.
+- **Ktor's HTTP client, WebSockets and SSE are read, in both directions** (spec
+  2026-10-26-ktor-client-websockets-sse; probe CP-54, Ktor 3.6.0). Closes OI-206.
+  - **HTTP client** (`ktor-client.yml`). Each of `client.get`, `post`, `request` and
+    `prepareGet` is an outbound row. Kotlin inlines these calls, so the catalog reads the
+    builder steps they compile to, and the verb comes from Ktor 3.x's `HttpMethod` static
+    fields.
+  - **Relative addresses.** A relative address is joined onto the client's own
+    `defaultRequest { url("…") }` base by Ktor's own rule: `get("quotes")` on
+    `https://pricing.example.com/` is `pricing.example.com /quotes`. A base taken from a
+    configuration key gives a `partial` row.
+  - **WebSocket and SSE routes** are inbound rows at their nested paths. A WebSocket route has
+    no verb. An SSE route is GET.
+  - **WebSocket and SSE client calls** are outbound rows that join the same base. A relative
+    WebSocket call takes its own scheme: `ws` for `http`, `wss` for `https`.
+- **Two additions under these rows.** The value walk finds a client through two things that
+  are new:
+  - **Wider `field_write` facts.** These now record a field or top-level `val` written from a
+    call's result, in static methods too. This covers CP-33 rows 6-7 (D00 §5).
+  - **A producer reader.** It names the call that built a value, so the client's
+    construction, and the `defaultRequest` inside it, can be read.
+- **A client with no declared base is not assumed to send to `http://localhost`.** That is
+  Ktor's runtime default, but bytecode cannot prove that nothing set a base. So a relative
+  call on such a client stays `unresolved`. This reverses the branch's first ruling and is
+  recorded in D02.
+- **`method(HttpMethod.Get) { … }` and `route(path, HttpMethod.Put) { … }` now read their verb
+  on Ktor 3.x.** Before, they read it only on 3.0.3. `fixtures/orders-ktor` moves to Ktor
+  3.6.0, and its 28 routing rows are unchanged.
+- **Ktor's limits:**
+  - The fixture stays on Kotlin 2.2.0, because the extractor cannot read Kotlin 2.4 metadata
+    (OI-219).
+  - Manual SSE (a `get` route writing `text/event-stream`) is still an `http` row (OI-218).
+  - Type-safe Resources routes derive nothing (OI-220).
+  - COVERAGE §2c's Ktor family line reads ✅ on REST in, REST out, WebSocket and SSE.
 
 ### Fixed
 
