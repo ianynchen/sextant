@@ -1,0 +1,104 @@
+id: ktor-websocket-client
+displayName: Ktor WebSocket client (webSocket, ws, wss, webSocketSession)
+style: single_call
+protocol: websocket
+direction: outbound
+
+# Ktor's WebSocket client functions live in `ktor-client-core` itself (the plugin's
+# `BuildersKt`), so the coordinates are the HTTP client's; `single_call` is not a gated
+# style (`resolve/dependencies.py`), so this list describes the library and decides
+# nothing about which modules are read.
+detect:
+  coordinates: ["io.ktor:ktor-client-core-jvm", "io.ktor:ktor-client-core"]
+
+measured:
+  - { artifact: io.ktor:ktor-client-core-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+
+requires: [call_site, string_constants]
+
+# The client's base address, declared once for every Ktor client catalog:
+# `client-models/ktor.yml`. This catalog states only where the client sits at its call.
+client_model: ktor
+
+# NOT INLINED, unlike the HTTP client's calls: `client.webSocket("ws://…") { }` compiles to
+# one static call, `BuildersKt.webSocket$default(client, "ws://…", null, block, …)`, the
+# client at argument 0 and the address at 1 (CP-54 row group (d), rows 28-31 and 36-41,
+# `scripts/probes/cp54_ktor_client_ws_sse.md`). So each form is one `single_call` row.
+#
+# **One shape, the whole URL in `path`, `peer` NULL, verbless** — the shape every outbound
+# WebSocket catalog writes (`jakarta-websocket-client.yml` says why: a WebSocket address is
+# kept whole, `channel_arg`), and spec §3g item 5's verbless convention.
+#
+# **A relative address joins the client's base, and then carries the call's own scheme and
+# port** (CP-54 rows 61-63, 94-113): `client.ws("/chat")` on a client whose
+# `defaultRequest` base is `https://api.example.com/v1/` reaches the engine as
+# `ws://api.example.com:443/chat`. Each row's `request_url` is what its call sets on the
+# request before the address is read, read off Ktor's own lambdas (`websocket.BuildersKt`)
+# and measured row by row:
+#   webSocket(…), ws(…)                 scheme `ws`, no port: the base's stays (rows 95, 100)
+#   wss("…")                            scheme `wss`, port 443 (rows 98, 101, 103)
+#   webSocketSession(…)                 scheme `ws`, port 80 (rows 96, 108)
+#   wss(path = …), the parts form       scheme `wss`, no port (row 106: `wss://h:80/parts`)
+# and the port is written only where it differs from the scheme's default (row 94). An
+# absolute address is sent as written, whatever the call (rows 110-112); a
+# protocol-relative one declines (row 113 measured `ws` alone).
+#
+# **Every overload with an address, both JVM names each** — the direct call and the
+# `$default` bridge a call leaving any argument to its default compiles to (rows 28-31).
+# The names are plain; the descriptor separates the address form from the parts form.
+#
+# Not declared, so a stated boundary: the request-lambda form, `webSocket({ url("ws://…")
+# }) { }` (row 38), whose address is set inside a lambda; reading it needs `url`'s
+# overloads told apart inside the body (row 47), which `lambda_steps` cannot do.
+matches:
+  owner: io.ktor.client.plugins.websocket.BuildersKt
+  client_base:
+    client_arg: 0
+  methods:
+    # The address form, `<name>(client, urlString, request, block)` — `webSocketSession`
+    # has no block (rows 28-31 (3), (2) for `wss`).
+    - { name: webSocket, arity: 5, channel_arg: 1, request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: webSocket$default, arity: 7, channel_arg: 1, request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: ws, arity: 5, channel_arg: 1, request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: ws$default, arity: 7, channel_arg: 1, request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: wss, arity: 5, channel_arg: 1, request_url: { scheme: wss, port: 443 },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: wss$default, arity: 7, channel_arg: 1, request_url: { scheme: wss, port: 443 },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: webSocketSession, arity: 4, channel_arg: 1, request_url: { scheme: ws, port: 80 },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: webSocketSession$default, arity: 6, channel_arg: 1, request_url: { scheme: ws, port: 80 },
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    # The parts form, `<name>(client, method, host, port, path, request, block)` (rows 28-31,
+    # 37): the path at 4. A host or port given at 2 or 3 replaces the base's (row 109), and
+    # the parts are not assembled (spec §3g item 4): the row keeps the path, `unresolved`.
+    # With both left to their defaults (`null`), the path joins as the address form's does
+    # (rows 105-108).
+    - { name: webSocket, arity: 8, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: webSocket$default, arity: 10, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: ws, arity: 8, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: ws$default, arity: 10, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: wss, arity: 8, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: wss },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: wss$default, arity: 10, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: wss },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: webSocketSession, arity: 7, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws, port: 80 },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: webSocketSession$default, arity: 9, channel_arg: 4, address_parts: [2, 3], request_url: { scheme: ws, port: 80 },
+        descriptor: "(Lio/ktor/client/HttpClient;Lio/ktor/http/HttpMethod;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

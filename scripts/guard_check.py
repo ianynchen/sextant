@@ -5036,16 +5036,16 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "ktor.the-ENGINE-LESS-factory-is-a-ladder-rung": Guard(
-        what="`ktor-client.yml` declares the engine-less `HttpClient { … }` factory, "
+        what="`client-models/ktor.yml` declares the engine-less `HttpClient { … }` factory, "
         "`HttpClientJvmKt.HttpClient(Function1)`, as a rung with its block at argument 0",
         why="the engine-less factory is its own JVM function (CP-54 row 87), and koog builds "
         "its clients with it. Undeclared, a relative call on such a client keeps a bare "
         "path where Ktor sends it to the block's `defaultRequest` base (row 88)",
         edits=(
             Edit(
-                path="sextant/catalogs/ktor-client.yml",
-                find="      - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClient, block_arg: 0,\n",
-                replace="      - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClientDisabledByGuard, "
+                path="sextant/catalogs/client-models/ktor.yml",
+                find="    - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClient, block_arg: 0,\n",
+                replace="    - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClientDisabledByGuard, "
                 "block_arg: 0,\n",
             ),
         ),
@@ -5176,6 +5176,101 @@ GUARDS: dict[str, Guard] = {
                 "        return distinct[0], None\n\n    def _rung_of",
                 replace="        return distinct[0], None  # guard disabled by "
                 "scripts/guard_check.py\n\n    def _rung_of",
+            ),
+        ),
+    ),
+    # --- WebSocket and SSE client calls (spec 2026-10-26 §3d, §3g items 2 and 4) -------
+    "ktor.a-WEBSOCKET-client-call-is-an-outbound-row": Guard(
+        what="`ktor-websocket-client.yml` matches the client `BuildersKt` WebSocket functions "
+        "on their own owner",
+        why='`client.webSocket("ws://…") { }` is one static call, '
+        '`websocket.BuildersKt.webSocket$default(client, "ws://…", …)` (CP-54 row 36). '
+        "Unmatched, a module that opens a WebSocket has that connection in no export",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-websocket-client.yml",
+                find="  owner: io.ktor.client.plugins.websocket.BuildersKt\n",
+                replace="  owner: io.ktor.client.plugins.websocket.BuildersKtDisabledByGuard\n",
+            ),
+        ),
+    ),
+    "ktor.an-SSE-client-call-is-an-outbound-row": Guard(
+        what="`ktor-sse-client.yml` matches the client `BuildersKt` SSE functions on their own "
+        "owner",
+        why='`client.sse("https://…") { }` is one static call, '
+        '`sse.BuildersKt."sse-Mswn-_c$default"(client, "https://…", …)` (CP-54 row 42). '
+        "Unmatched, a module subscribing to an event stream has that call in no export",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-sse-client.yml",
+                find="  owner: io.ktor.client.plugins.sse.BuildersKt\n",
+                replace="  owner: io.ktor.client.plugins.sse.BuildersKtDisabledByGuard\n",
+            ),
+        ),
+    ),
+    "ktor.a-relative-WS-call-joins-the-base": Guard(
+        what="a `single_call` row whose catalog declares `client_base` joins a relative "
+        "address onto the base of the client at `client_arg`",
+        why='`client.ws("/opentelemetry/websocket")` on a client whose `defaultRequest` base '
+        "is `https://api.example.com/` is sent to `ws://api.example.com:443/…` (CP-54 rows 61, "
+        "95). Without the client the row keeps `/opentelemetry/websocket` unresolved, a path "
+        "naming no service, for a call whose service the code states",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    address, resolution = against_client_base(\n"
+                "        workspace, values, client, declared, path, method.get(_REQUEST_URL)\n",
+                replace="    address, resolution = against_client_base(  # guard disabled by "
+                "scripts/guard_check.py\n"
+                "        workspace, values, None, declared, path, method.get(_REQUEST_URL)\n",
+            ),
+        ),
+    ),
+    "ktor.a-WEBSOCKET-call-sends-with-its-OWN-scheme-and-port": Guard(
+        what="a call's `request_url` sets the joined address's scheme, and its port where it "
+        "sets one, written only where it differs from the scheme's default",
+        why='Ktor sends `ws("/chat")` over `https://api.example.com/v1/` to '
+        '`ws://api.example.com:443/chat` and `wss("/chat")` to `wss://api.example.com/chat` '
+        "(CP-54 rows 94-108). Joined as an HTTP call, both rows publish "
+        "`https://api.example.com/chat`, a URL no WebSocket call reaches",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    if request is None:\n        return _replace_last_segment(base, relative)\n"
+                "    return _with_request_scheme(base, relative, request, default_ports or {})\n",
+                replace="    return _replace_last_segment(base, relative)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-HOST-in-the-parts-form-is-not-assembled": Guard(
+        what="an address whose other parts (`address_parts`) are given is kept, `unresolved`, "
+        "and never joined",
+        why='`client.webSocket(host = "chat.example.com", path = "/parts")` is sent to '
+        "`ws://chat.example.com/parts` (CP-54 row 109): the host replaces the base's. Joined, "
+        "the row publishes `ws://api.example.com:443/parts`, the base's service for a call "
+        "Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    if any(_given(_arg_at(arguments, position)) for position in "
+                "method.get(_ADDRESS_PARTS, ())):\n"
+                "        return None, path, str(Resolution.UNRESOLVED)\n",
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.the-client-BASE-is-declared-once-for-every-catalog": Guard(
+        what="a catalog naming `client_model` takes the model's `client_base` ladder, merged "
+        "into its own `client_arg`",
+        why="the HTTP, WebSocket and SSE catalogs read one client's base through one ladder "
+        "(`client-models/ktor.yml`). Unmerged, each catalog's `client_base` is a lone "
+        "`client_arg`, and a copy of the ladder per catalog is the drift the model exists to end",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    return {**matches, "client_base": {**shared, **own}}\n',
+                replace="    return matches  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -18,6 +18,14 @@ rule, not ours (DR-6). Three parts live here, so the `fluent` client catalog and
   producer reader (`values.producers_of`), then read through the declared ladder to the
   setter's string. It names no engine's types, so `fluent` and `single_call` call the same
   copy.
+- **`against_client_base`**, what a relative address the code states becomes: the joined
+  URL, a configuration base carried at `partial`, or the address kept at `unresolved` where
+  no base is read or the join declines — one decision, which both engines render in their
+  own row shape.
+
+The key itself is declared once per CLIENT, not per catalog: a catalog names a model in
+`client-models/` (`client_model:`) and states only its own `client_arg`, and the loader
+merges the two (`ingress/catalogs/yaml_source._with_client_model`).
 """
 
 import json
@@ -44,6 +52,7 @@ from sextant.application.resolve.values import (
     producers_of,
     resolve_positions,
 )
+from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import type_descriptor, with_descriptor
 
 # The join Ktor's `DefaultRequest` makes, read off its 3.6.0 bytecode
@@ -54,6 +63,12 @@ REPLACE_LAST_SEGMENT = "replace_last_segment"
 _JOINS = (REPLACE_LAST_SEGMENT,)
 
 _KEYS = {"client_arg", "ladder", "setter", "join", "may_set_base"}
+# Optional: the default port of each scheme (`{scheme: port}`), which a call that sets its
+# own scheme on the request needs to know whether Ktor writes the port (CP-54 rows 94-108).
+_DEFAULT_PORTS = "default_ports"
+# One call's `request_url`, what it sets on the request's URL before its address is read:
+# a `scheme`, and a `port` where the call sets one too.
+_REQUEST_KEYS = {"scheme", "port"}
 _RUNG_KEYS = {"owner", "method", "block_arg", "descriptor", "parent"}
 _SETTER_KEYS = {"owner", "method", "value_arg", "descriptor"}
 # One `may_set_base` entry: an owner, optionally narrowed to a method and a descriptor, and
@@ -95,7 +110,7 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
     where = f"loading catalog {source}: `client_base`"
     if not isinstance(declared, dict):
         raise CatalogError(f"{where} is a mapping of {sorted(_KEYS)}, got {declared!r}")
-    unknown = sorted(set(declared) - _KEYS)
+    unknown = sorted(set(declared) - _KEYS - {_DEFAULT_PORTS})
     missing = sorted(_KEYS - set(declared))
     if unknown or missing:
         raise CatalogError(
@@ -121,7 +136,52 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
         raise CatalogError(f"{where}'s `may_set_base` is a list of calls, got {may!r}")
     for entry in may:
         _may_set_entry(entry, f"{where}'s `may_set_base` entry {entry!r}")
+    ports = declared.get(_DEFAULT_PORTS, {})
+    if not isinstance(ports, dict) or not all(
+        isinstance(scheme, str) and scheme and _is_port(port) for scheme, port in ports.items()
+    ):
+        raise CatalogError(
+            f"{where}'s `{_DEFAULT_PORTS}` maps each scheme to its default port, got {ports!r}"
+        )
     return MappingProxyType(declared)
+
+
+def request_url_of(
+    row: Mapping[str, Any], declared: Mapping[str, Any] | None, where: str
+) -> Mapping[str, Any] | None:
+    """A call row's `request_url`, validated, or None where it declares none: what the call
+    sets on its request's URL before the address is read — `ws("/chat")` the scheme `ws`,
+    `wss("/chat")` the scheme `wss` and the port 443 (CP-54 rows 95-108). It means something
+    only against a client base, and only where the base's `default_ports` names the scheme,
+    because whether the port is written depends on the scheme's default."""
+    request = row.get("request_url")
+    if request is None:
+        return None
+    if declared is None:
+        raise CatalogError(
+            f"{where} declares `request_url` and its catalog no `client_base`: what a call sets "
+            f"on its request only changes the address it is joined to"
+        )
+    ports = declared.get(_DEFAULT_PORTS, {})
+    if (
+        not isinstance(request, dict)
+        or not set(request) <= _REQUEST_KEYS
+        or not isinstance(request.get("scheme"), str)
+        or ("port" in request and not _is_port(request["port"]))
+    ):
+        raise CatalogError(
+            f"{where}'s `request_url` is `{{scheme, port?}}`, a scheme and a port, got {request!r}"
+        )
+    if request["scheme"] not in ports:
+        raise CatalogError(
+            f"{where}'s `request_url` scheme `{request['scheme']}` has no default port in the "
+            f"client base's `{_DEFAULT_PORTS}` ({sorted(ports)})"
+        )
+    return MappingProxyType(request)
+
+
+def _is_port(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value < 65536
 
 
 def _may_set_entry(entry: Any, where: str) -> None:
@@ -491,17 +551,115 @@ def _has_host(address: str) -> bool:
     return bool(split.scheme) and bool(split.hostname)
 
 
-def join_url(base: str, relative: str, rule: str) -> str | None:
+def against_client_base(
+    workspace: Workspace | None,
+    values: ValueIndex | None,
+    client_value: Mapping[str, Any] | None,
+    declared: Mapping[str, Any],
+    address: str,
+    request: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """What `address`, read in full as the code states it, is sent to by a client that may
+    hold a base: `(address, resolution)`, for the caller to render in its own row shape.
+
+    - **an absolute address is the whole address** (CP-54 rows 55, 110-112, 119), `resolved`;
+    - **a relative one joins the base** of `client_value` (`client_base`, stamped as it says)
+      by the catalog's `join`, under the call's `request` where it sets one, `resolved`;
+    - **a configuration base** (`${pricing.url}`) is carried, `base + address` as written, at
+      `partial` and never joined — the join depends on whether the deployed value ends in
+      `/`, which the key does not say;
+    - **otherwise the address is a path, not the URL called**: no base is read (the client is
+      not reached, or no setter is) or the join declines, so it is kept, `unresolved`.
+    """
+    if _has_host(address):
+        return address, str(Resolution.RESOLVED)
+    base = None
+    if client_value is not None and workspace is not None:
+        base, _ = client_base(workspace, values, client_value, declared)
+    if base is not None and carries_expression(base):
+        return base + address, str(Resolution.PARTIAL)
+    joined = (
+        None
+        if base is None
+        else join_url(base, address, str(declared["join"]), request, declared.get(_DEFAULT_PORTS))
+    )
+    if joined is None:
+        return address, str(Resolution.UNRESOLVED)
+    return joined, str(Resolution.RESOLVED)
+
+
+def join_url(
+    base: str,
+    relative: str,
+    rule: str,
+    request: Mapping[str, Any] | None = None,
+    default_ports: Mapping[str, int] | None = None,
+) -> str | None:
     """`relative` sent from a client whose base is `base`, under the framework's `rule` — or
     None where the join DECLINES: the address is one whose result is not modelled, and the
     caller keeps it unresolved rather than publishing a string the framework never sends.
 
     Only `replace_last_segment` exists. Ktor sends a client with no base to its request
     builder's origin, `http://localhost` (CP-54 rows 50, 57), and this join with that origin
-    as the base gives the same URL — but the reader never assumes that a client has none."""
+    as the base gives the same URL — but the reader never assumes that a client has none.
+
+    `request` is what the CALL sets on its request's URL before the address is read (a
+    WebSocket call's scheme, and its port where it sets one, `request_url` on its row), and
+    `default_ports` the scheme's default port each is rendered against: see
+    `_with_request_scheme`."""
     if rule != REPLACE_LAST_SEGMENT:
         raise ValueError(f"no join rule {rule!r}; the rules are {list(_JOINS)}")
-    return _replace_last_segment(base, relative)
+    if request is None:
+        return _replace_last_segment(base, relative)
+    return _with_request_scheme(base, relative, request, default_ports or {})
+
+
+def _with_request_scheme(
+    base: str, relative: str, request: Mapping[str, Any], ports: Mapping[str, int]
+) -> str | None:
+    """The join for a call that sets its own scheme on the request before its address is
+    read, as Ktor 3.6.0 sends it (CP-54 rows 61-62, 94-113; `ktor-client-core`'s
+    `websocket.BuildersKt` lambdas set the protocol, and `wss("…")` and `webSocketSession`
+    the port, then `DefaultRequest$Plugin.mergeUrls` keeps the request's protocol, and its
+    port where one is set, over the base's — bytecode 50-72):
+
+    - **the path and query are the `DefaultRequest` join's** (rows 99, 104), `_replace_last_segment`;
+    - **the scheme is the call's** (rows 95-98);
+    - **the port is the call's where it sets one, else the base's** — the base's own, or its
+      scheme's default — and written only where it differs from the CALL's scheme's default
+      (row 94): `ws` over `https://h/` is `ws://h:443/…` (rows 61, 95), `wss("…")` over
+      `https://h:8443/` is `wss://h/…` (row 101), `wss(path = …)` over `http://h/` is
+      `wss://h:80/…` (row 106);
+    - **an absolute address is sent as written** (rows 110-112), whatever scheme the call sets;
+    - **declined**: a protocol-relative address (it takes the call's scheme, row 113, measured
+      for `ws` alone), a scheme with no host (as for the HTTP join), a base carrying user info,
+      and a scheme the port table does not name.
+    """
+    scheme, refused = _scheme_of(relative)
+    if refused:
+        return None
+    if scheme is not None:
+        return relative if _has_host(relative) else None
+    if len(relative) - len(relative.lstrip("/")) >= 2:
+        return None
+    joined = _replace_last_segment(base, relative)
+    origin = urlsplit(base)
+    if joined is None or "@" in origin.netloc:
+        return None
+    try:
+        stated = origin.port
+    except ValueError:
+        return None
+    base_port = stated if stated is not None else ports.get(origin.scheme)
+    called = str(request["scheme"])
+    default = ports.get(called)
+    if base_port is None or default is None:
+        return None
+    port = int(request.get("port", base_port))
+    host = origin.netloc if stated is None else origin.netloc[: origin.netloc.rfind(":")]
+    sent = urlsplit(joined)
+    authority = host if port == default else f"{host}:{port}"
+    return urlunsplit((called, authority, sent.path, sent.query, sent.fragment))
 
 
 def _replace_last_segment(base: str, relative: str) -> str | None:

@@ -291,6 +291,14 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **`ktor-client` moved (8, 9) -> (10, 11) on 2026-10-26** (Task 10 fix round 1): two
 # `may_set_base` entries name an argument position (`install`'s and `install$default`'s
 # plugin, `arg: 0` and `arg: 1`), read by shape as every argument position is.
+# **`ktor-websocket-client` joined at (23, 23) and `ktor-sse-client` at (39, 39) on 2026-10-26**
+# (spec 2026-10-26 §3d), two new catalogs rather than moved ones: one address position per
+# `methods` row — `channel_arg` on the sixteen WebSocket rows, `url_arg` on the thirty-two SSE
+# rows — plus the seven positions of the `client_base` they take from `client-models/ktor.yml`
+# (four rungs' `block_arg`, the setter's `value_arg`, two `may_set_base` `arg`s), exactly
+# `ktor-client`'s seven. `address_parts` is not an ask: it reads whether a part is GIVEN, never
+# its value. `ktor-client` is unchanged at (10, 11) although its ladder moved into the model,
+# because the reader reads the merged catalog.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -313,6 +321,8 @@ _ASKS_PER_CATALOG = {
     "kafka-streams-topology": (5, 5),
     "ktor-client": (10, 11),
     "ktor-routing": (49, 111),
+    "ktor-sse-client": (39, 39),
+    "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
     "spring-cloud-gateway": (14, 20),
@@ -370,8 +380,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # `ktor-client` catalog's three steps, same comment. **+4 on 2026-10-26**: its
     # `client_base` ladder and setter, same comment. **+1 on 2026-10-26**: the engine-less
     # factory's rung, same comment. **+2 on 2026-10-26**: its two `may_set_base` plugin
-    # positions, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 825
+    # positions, same comment. **+62 on 2026-10-26**: the two new Ktor WebSocket and SSE
+    # client catalogs, 23 and 39, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 887
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

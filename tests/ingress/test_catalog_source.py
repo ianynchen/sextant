@@ -22,7 +22,13 @@ CATALOGS = catalogs_dir()
 # two-loader proof covers them too.
 SHIPPED = sorted(CATALOGS.glob("*.yml")) + [
     path
-    for subdirectory in ("shape-models", "bean-models", "step-models", "value-models")
+    for subdirectory in (
+        "shape-models",
+        "bean-models",
+        "step-models",
+        "value-models",
+        "client-models",
+    )
     for path in sorted((CATALOGS / subdirectory).glob("*.yml"))
 ]
 

@@ -1,0 +1,105 @@
+id: ktor
+displayName: Ktor's HTTP client base address (the `client_base` ladder, setter, join and ports)
+
+# WHAT THIS FILE IS, and why it is not a catalog.
+#
+# Every Ktor client call — an HTTP request (`ktor-client.yml`), a WebSocket
+# (`ktor-websocket-client.yml`) and an SSE stream (`ktor-sse-client.yml`) — is sent
+# through the same `DefaultRequest` plugin, so a relative address joins the same base
+# by the same rule whichever call it is (spec 2026-10-26 §3g item 2). Where that base is
+# set is a property of the CLIENT, not of any one call, so it is declared once, here,
+# and each of the three catalogs names it with `client_model: ktor`. The loader merges
+# this `client_base` into the catalog's own `matches.client_base`, which states only
+# what differs per catalog — `client_arg`, where the client sits at the call
+# (`ingress/catalogs/yaml_source.py`, `_with_client_model`). A key declared both here
+# and in a catalog is refused by file: one ladder, never a copy that can drift. The
+# `step_model` discipline (spec 2026-09-21 §5) applied to a base address.
+#
+# This file is NOT a catalog and lives outside the `*.yml` glob that loads them: it
+# declares no `style`, no `matches` and no boundary. A catalog naming an id no file here
+# carries is refused by file, exactly as an unknown `step_model` is.
+measured:
+  - { artifact: io.ktor:ktor-client-core-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+  - { artifact: io.ktor:ktor-http-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+
+# A relative address is joined onto the client's `defaultRequest` base (CP-54 rows 51-56)
+# by Ktor's own rule (`replace_last_segment`, `shapes/client_base.py`). An absolute one is
+# the whole address, as Ktor treats it (rows 55, 110-112, 119).
+#
+# Where the base is set, as CP-54 row groups (e), (i) and (k) measure it:
+#   HttpClient(engineFactory) { … }        `HttpClientKt.HttpClient`, the block argument 1
+#   HttpClient { … }                       `HttpClientJvmKt.HttpClient`, the engine-less
+#                                          factory, the block argument 0 (rows 87-88)
+#   parent.config { … }                    a derived client, block argument 0; it inherits
+#                                          the parent's base where its block sets none
+#                                          (row 80) and its own base wins (row 79)
+#   defaultRequest { … }                   `DefaultRequestKt.defaultRequest(config, block)`
+#   url("…")                               the MEMBER `DefaultRequestBuilder.url(String)`,
+#                                          the address at argument 0 (rows 46, 49)
+#
+# Every rung without `parent` is read the same way, whether it builds the client (the
+# `HttpClient` factory) or sits inside another rung's block (`defaultRequest`): its
+# `block_arg` is a block the next rung, or the setter, is looked for in. `parent: receiver`
+# adds one thing: where its block sets no base, the base is the receiver client's.
+#
+# A block calling `url(…)` more than once applies each in order (CP-54 rows 85-86): the base
+# is the LAST absolute address, and a relative `url(…)` after one moves it — `url("b/")`
+# after `…/a/` is `…/a/b/`. The reader takes the last absolute one and declines a block
+# where a relative `url(…)` follows it; that resolution is not modelled.
+#
+# Not declared, because not measured: the `HttpClient(engine) { … }` factory over an
+# engine INSTANCE (the same owner and name as the first rung, another overload, so its
+# block is not read), the factories' `HttpClient$default` bridges (`HttpClient(CIO)` with
+# no block), `defaultRequest(replace = true) { … }` (row 48's second overload), and the
+# `url { … }` and parts setters (row 46), which carry no string.
+#
+# The client's construction is found by the value walk's producer reader: a client held
+# in a field or a top-level `val` through its write (D00 §5, CP-33 rows 6-7), a client
+# handed in as a parameter through its callers, a derived client's parent through
+# `config`'s receiver (a `getstatic` of a top-level `val` included, D00 §5's
+# `receiver_field`). Where it is not reached, a relative call keeps the path it states,
+# peer NULL, at `unresolved` — and so it does where the construction is reached and no
+# declared setter is: Ktor would then send to `http://localhost` (CP-54 rows 50, 57), but
+# that a client has no base cannot be proven from the bytecode.
+client_base:
+  ladder:
+    - { owner: io.ktor.client.HttpClientKt, method: HttpClient, block_arg: 1,
+        descriptor: "(Lio/ktor/client/engine/HttpClientEngineFactory;Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;" }
+    - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClient, block_arg: 0,
+        descriptor: "(Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;" }
+    - { owner: io.ktor.client.HttpClient, method: config, block_arg: 0, parent: receiver,
+        descriptor: "(Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;" }
+    - { owner: io.ktor.client.plugins.DefaultRequestKt, method: defaultRequest, block_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClientConfig;Lkotlin/jvm/functions/Function1;)V" }
+  setter: { owner: io.ktor.client.plugins.DefaultRequest$DefaultRequestBuilder, method: url,
+            descriptor: "(Ljava/lang/String;)V", value_arg: 0 }
+  join: replace_last_segment
+  # Calls that MAY move the base and are not rungs, so a base read in a block holding one
+  # is not trusted: the reader declines rather than answer a base Ktor may override. Beside
+  # these, any call on the setter's owner (`host = …`, `url { … }`, `url.takeFrom(…)`,
+  # `url$default`) and a rung's or the setter's name under an undeclared descriptor
+  # (`defaultRequest(replace = true) { … }`, row 48) decline by rule. Calls that set no
+  # base (`install(WebSockets)`, `expectSuccess = …`) are not listed and stay allowed.
+  may_set_base:
+    # The DefaultRequest plugin installed directly (CP-54 rows 92-93): `install(plugin,
+    # block)` with the plugin at argument 0, or `install$default(config, plugin, …)`
+    # where no block is given, the plugin read by `getstatic DefaultRequest.Plugin`.
+    - { owner: io.ktor.client.HttpClientConfig, method: install, arg: 0,
+        field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
+    - { owner: io.ktor.client.HttpClientConfig, method: install$default, arg: 1,
+        field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
+    # Every other function `DefaultRequestKt` declares: the `defaultRequest$default`
+    # bridge and the `replace` overload (row 48).
+    - { owner: io.ktor.client.plugins.DefaultRequestKt }
+    # The URL builder `DefaultRequestBuilder` exposes (`getUrl()`, `url { … }`'s
+    # receiver, row 46).
+    - { owner: io.ktor.http.URLBuilder }
+  # The default port of each scheme, as Ktor's `URLProtocol` states it (CP-54 row 94). A
+  # call that sets its own scheme on the request — a WebSocket call, `request_url` on its
+  # row — keeps the base's port, or the one the call sets, and Ktor writes that port into
+  # the URL only where it differs from the new scheme's default (rows 95-108):
+  # `ws("/chat")` over `https://api.example.com/v1/` is `ws://api.example.com:443/chat`.
+  # A scheme not listed here declines the join.
+  default_ports: { http: 80, https: 443, ws: 80, wss: 443 }

@@ -33,6 +33,7 @@ from sextant.application.resolve.shapes.arguments import (
     address_argument,
     argument_descriptor,
     call_site_index,
+    carries_expression,
     channel_of,
     channel_of_answer,
     channels_of,
@@ -46,6 +47,11 @@ from sextant.application.resolve.shapes.arguments import (
     url_of_answer,
     valid_via_arity,
     with_authority,
+)
+from sextant.application.resolve.shapes.client_base import (
+    against_client_base,
+    client_base_of,
+    request_url_of,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -129,6 +135,15 @@ _ADDRESS_ARG_2 = "address_arg_2"
 # methods called INSIDE it and which of their arguments carry what.
 _LAMBDA_ARG = "lambda_arg"
 _LAMBDA_STEPS = "lambda_steps"
+# Spec 2026-10-26 §3g item 4. The positions of a call's OTHER address parts — a scheme, a
+# host, a port — beside the one `url_arg`/`channel_arg` reads: Ktor's `webSocket(method, host,
+# port, path)` and `sse(scheme, host, port, path)` (CP-54 row 28, 32). Where any of them is
+# given, the address is assembled from parts, which no shipped rule does, so the part read is
+# kept and never taken for the whole address. A `null` at a part is the part not given.
+_ADDRESS_PARTS = "address_parts"
+# What a call sets on its request's URL before its address is read (spec 2026-10-26 §3g item
+# 2): read by `shapes.client_base.request_url_of`, meaningful only beside `client_base`.
+_REQUEST_URL = "request_url"
 
 
 def _channel_declared(method: dict[str, Any]) -> bool:
@@ -286,6 +301,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    # Spec 2026-10-26 §3g item 2: the client's base, read by the one reader `fluent` reads it
+    # through, and None for every catalog declaring no `client_base` — whose rows are then
+    # exactly what they were.
+    client_base = client_base_of(matches, catalog.source)
+    _validate_client_rows(methods, client_base, catalog)
     # Read once per run, beside `_validate_methods`, because it is checked
     # against the rows: a separator with no paired row, or a paired row with
     # no separator, is a file that cannot be honoured either way.
@@ -876,6 +896,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if walked_pairs is not None
             else [(verb, destination) for destination in destinations]
         )
+        # **A relative address joins the client's base** (spec 2026-10-26 §3g item 2), and an
+        # address one of several parts is kept unjoined (item 4). Only for a catalog declaring
+        # either, so every other row is minted exactly as before.
+        if client_base is not None or _ADDRESS_PARTS in method:
+            if values is None and client_base is not None:
+                values = cached_value_index(workspace)
+            minted = [
+                (row_verb, _sent_to(destination, site, method, client_base, workspace, values))
+                for row_verb, destination in minted
+            ]
         for row_verb, (peer, path, url_resolution) in minted:
             # 2O design §8: identity is the URL the framework serves, so the
             # path is canonicalized HERE — before the dedup key below is built
@@ -1026,6 +1056,86 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
+
+
+def _sent_to(
+    destination: tuple[str | None, str | None, str],
+    site: dict[str, Any],
+    method: dict[str, Any],
+    declared: Any,
+    workspace: Workspace,
+    values: ValueIndex | None,
+) -> tuple[str | None, str | None, str]:
+    """Where a call whose catalog declares `client_base` sends `destination`, the address
+    its own position states (spec 2026-10-26 §3g items 2 and 4).
+
+    Only an address read in full and naming no peer moves — `fluent._against_client_base`'s
+    rule, and the decision is the same shared one (`shapes.client_base.against_client_base`):
+    an absolute address is the whole address, a relative one joins the base of the client at
+    `client_arg` — stamped where it was read, as the reader asks — under the row's
+    `request_url`, and where no base is read or the join declines, the address is a path and
+    not the URL called, kept at `unresolved`. A `partial` or `unresolved` address already
+    says it was not read in full.
+
+    **An address given in parts is never joined or assembled** (item 4): where any of the
+    row's `address_parts` is given, Ktor sends to the host it is handed (CP-54 row 109), and
+    no shipped rule puts a scheme, host, port and path together. The part read stays, at
+    `unresolved`.
+
+    The joined URL keeps the row's shape: whole in `path` for a `channel_arg` row (a
+    WebSocket's), split into peer and path by CP-2 for a `url_arg` row (an SSE stream's)."""
+    peer, path, resolution = destination
+    if (
+        peer is not None
+        or path is None
+        or resolution != str(Resolution.RESOLVED)
+        or carries_expression(path)
+    ):
+        return destination
+    arguments = site["arguments"] or []
+    if any(_given(_arg_at(arguments, position)) for position in method.get(_ADDRESS_PARTS, ())):
+        return None, path, str(Resolution.UNRESOLVED)
+    if declared is None:
+        return destination
+    slot = int(declared["client_arg"])
+    argument = _arg_at(arguments, slot)
+    client = (
+        None
+        if argument is None
+        else {**argument, "captured_at": (site["caller"], site["ordinal"], slot)}
+    )
+    address, resolution = against_client_base(
+        workspace, values, client, declared, path, method.get(_REQUEST_URL)
+    )
+    if resolution == str(Resolution.RESOLVED) and not _channel_declared(method):
+        return url_of({"kind": "string", "value": address})
+    return None, address, resolution
+
+
+def _given(argument: dict[str, Any] | None) -> bool:
+    """An address part the call hands over: present, and not the `null` a defaulted or
+    explicitly absent part compiles to."""
+    return argument is not None and argument.get("kind") != "null"
+
+
+def _validate_client_rows(rows: list[dict[str, Any]], declared: Any, catalog: Catalog) -> None:
+    """Refuses a broken `request_url` or `address_parts` before any call site is matched, the
+    `_validate_methods` discipline: `request_url` through the client base's own reader, which
+    also refuses it on a catalog with no base to join; `address_parts` as a non-empty list of
+    argument positions."""
+    for row in rows:
+        where = f"loading catalog {catalog.source}: `{row['name']}`"
+        request_url_of(row, declared, where)
+        parts = row.get(_ADDRESS_PARTS)
+        if parts is not None and not (
+            isinstance(parts, list)
+            and parts
+            and all(isinstance(p, int) and not isinstance(p, bool) and p >= 0 for p in parts)
+        ):
+            raise CatalogError(
+                f"{where} declares `{_ADDRESS_PARTS}: {parts!r}`, which is a non-empty list of "
+                f"argument positions (D02 §2's single_call style)"
+            )
 
 
 def _matching_method(

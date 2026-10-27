@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**90 of 105 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**92 of 107 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -837,6 +837,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `io.ktor:ktor-server-core-jvm` | 3.0.3 |
 |  | `io.ktor:ktor-server-sse-jvm` | 3.6.0 |
 |  | `io.ktor:ktor-server-websockets-jvm` | 3.6.0 |
+| `ktor-sse-client` | `io.ktor:ktor-client-core-jvm` | 3.6.0 |
+| `ktor-websocket-client` | `io.ktor:ktor-client-core-jvm` | 3.6.0 |
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
 | `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |

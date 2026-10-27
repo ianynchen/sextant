@@ -122,6 +122,11 @@ ARTIFACTS=(
   # and why its coordinate is one of its own here. Pinned to the version CP-31
   # measured and `fixtures/orders-eventbus/pom.xml` declares.
   "io.smallrye.reactive|smallrye-mutiny-vertx-core|3.16.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `ktor-websocket-client.yml` and `ktor-sse-client.yml` (spec 2026-10-26 §3d). Ktor's
+  # client WebSocket and SSE functions live in `ktor-client-core` itself; the jar writes a
+  # manifest `Implementation-Version:` and no `pom.properties` (CP-54's own identity
+  # check reads the same entry). Pinned to the version CP-54 measured.
+  "io.ktor|ktor-client-core-jvm|3.6.0|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

@@ -75,7 +75,7 @@ from sextant.application.resolve.shapes.arguments import (
     valid_via_arity,
     with_authority,
 )
-from sextant.application.resolve.shapes.client_base import client_base, client_base_of, join_url
+from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -1728,19 +1728,16 @@ def _against_client_base(
     ):
         return address
     client = captures.get(_CLIENT)
-    base = None
-    if client is not None and context.workspace is not None:
-        base, _ = client_base(context.workspace, context.values, client, context.client_base)
-    if base is not None and carries_expression(base):
-        # A configuration base (`${pricing.url}`), rendered exactly as a `base` capture fed
-        # by configuration is (`_composed_address`: `base + path`, the two concatenated as
-        # written, peer NULL; the `${billing.url}/invoices` pins) — and `partial`, never
-        # joined: Ktor's join depends on whether the deployed value ends in `/`, which the
-        # key does not say.
-        return None, base + path, str(Resolution.PARTIAL)
-    joined = None if base is None else join_url(base, path, str(context.client_base["join"]))
-    if joined is None:
-        return None, path, str(Resolution.UNRESOLVED)
+    # The decision is the shared one (`shapes.client_base.against_client_base`), which
+    # `single_call`'s WebSocket and SSE rows make too. A configuration base (`${pricing.url}`)
+    # comes back rendered exactly as a `base` capture fed by configuration is
+    # (`_composed_address`: `base + path`, the two concatenated as written, peer NULL; the
+    # `${billing.url}/invoices` pins) — and `partial`, never joined.
+    joined, resolution = against_client_base(
+        context.workspace, context.values, client, context.client_base, path
+    )
+    if resolution != str(Resolution.RESOLVED):
+        return None, joined, resolution
     return _address_of(joined)
 
 

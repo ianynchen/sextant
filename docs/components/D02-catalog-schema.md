@@ -656,6 +656,34 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other three directories: it is knowledge a run was produced with.
 
+## 1g. `client_model` — a client's base address, declared once
+
+The fifth (spec 2026-10-26 §3g item 2). **Where a client's relative calls are sent is a
+property of the CLIENT, and one client issues the calls of several catalogs**: a Ktor
+`HttpClient` sends HTTP requests (`ktor-client.yml`, `fluent`), WebSocket connections
+(`ktor-websocket-client.yml`, `single_call`) and SSE streams (`ktor-sse-client.yml`,
+`single_call`), all through the same `DefaultRequest` plugin. The ladder its base is set
+through, the setter, the join, the calls that may move the base and the scheme ports are
+therefore declared ONCE:
+
+```yaml
+client_model: ktor          # client-models/ktor.yml: the whole of `client_base` but `client_arg`
+matches:
+  client_base:
+    client_arg: 0           # this catalog's own: where the client sits at ITS call
+```
+
+names a file in `catalogs/client-models/` holding an `id` and a `client_base:` mapping.
+**The loader MERGES the model's `client_base` into the catalog's own `matches.client_base`**
+(`yaml_source._with_client_model`), the `step_model` mechanism applied to one key: the catalog
+states only what differs per catalog, `client_arg`, and there is no `Catalog.client_model`
+field — both engines read one merged `client_base` (§2's `fluent`, "`client_base`"). Refused
+by file: an id no model carries; a catalog naming a model and declaring no `client_base`
+mapping (nothing says which argument is the client); a key declared on BOTH sides, so a
+catalog cannot carry a copy of the ladder that drifts from the model's. Whether the merged key
+is complete is refused where it is read, by `shapes/client_base.client_base_of`, which both
+engines call. An edit to the directory moves `_catalog_hash`.
+
 ---
 
 ## 2. The styles
@@ -1593,8 +1621,9 @@ matches:
 
 Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
 url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
-path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?}`,
-beside the catalog-level `default_address?` both described below.
+path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?,
+request_url?, address_parts?}`, beside the catalog-level `default_address?` and
+`client_base?`, all described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
@@ -1650,6 +1679,35 @@ destination expression, recorded verbatim as `path` with `peer` always NULL, whi
 destination is a whole queue URL
 (`https://sqs.us-east-1.amazonaws.com/123456789012/my-queue`), and splitting it would
 record a destination nothing could send to plus a peer no messaging fact ever carried.
+
+**`client_base`, `request_url` and `address_parts` — a call issued on a client that holds a
+base** (spec 2026-10-26 §3d, §3g items 2 and 4). A `single_call` catalog may declare
+`matches.client_base` exactly as a `fluent` one does (§2's `fluent`, read by the same
+`shapes/client_base.client_base_of`, usually merged from a `client_model`, §1g), with
+`client_arg` the position of the client in the matched call itself. A relative address read
+in full then joins the base of the client at that position, by the one shared decision
+`fluent` makes too (`shapes/client_base.against_client_base`): an absolute address is the
+whole address, a relative one is joined, a configuration base is carried at `partial`, and
+where no base is read or the join declines the address is kept at `unresolved`. The joined URL
+keeps the row's shape — whole in `path` for a `channel_arg` row, split by CP-2 for a
+`url_arg` row. Two row keys refine it:
+
+- **`request_url: {scheme, port?}`** is what the call sets on its request's URL before its
+  address is read — Ktor's `ws("/chat")` the scheme `ws`, `wss("/chat")` the scheme `wss` and
+  the port 443 (CP-54 rows 95-108). The joined address then carries that scheme, and the
+  call's port where it sets one or the base's otherwise (the base's own, or its scheme's
+  default), written only where it differs from the call's scheme's default — so `ws("/chat")`
+  over `https://api.example.com/v1/` is `ws://api.example.com:443/chat`. The defaults are the
+  client base's `default_ports` (§2's `fluent`); a row declaring `request_url` on a catalog with
+  no `client_base`, or naming a scheme `default_ports` does not, is refused at load. An absolute
+  address is sent as written; a protocol-relative one declines (CP-54 row 113 measured one
+  call only).
+- **`address_parts: [i, …]`** names the positions of a call's OTHER address parts — a scheme,
+  a host, a port — beside the one `url_arg`/`channel_arg` reads (Ktor's `webSocket(method,
+  host, port, path)`, `sse(scheme, host, port, path)`). Where any of them is given (anything
+  but a `null` argument), the address is assembled from parts, which no rule here does: the
+  part read is kept, `unresolved`, and never joined to the base, which a given host replaces
+  (CP-54 row 109). With every part `null`, the address joins as any relative one does.
 
 **`channel_via` reads a destination the consuming call's own argument position never names
 directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
@@ -1908,7 +1966,10 @@ extension call as at any static call. `receiver_arg` is a non-negative integer a
 word; anything else, and the word on a root, is refused at load.
 
 **`client_base`** (spec 2026-10-26 §3c, §3g items 1-3) says the library joins a relative
-address onto a base the executing CLIENT holds, and declares where that base is set:
+address onto a base the executing CLIENT holds, and declares where that base is set. Every
+part but `client_arg` belongs to the client and is declared once in a `client_model` (§1g),
+which the loader merges into the catalog's own `client_arg`; merged, `ktor-client.yml`'s
+reads:
 
 ```yaml
 client_base:
@@ -1928,9 +1989,10 @@ client_base:
         field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
     - { owner: io.ktor.client.plugins.DefaultRequestKt }
     - { owner: io.ktor.http.URLBuilder }
+  default_ports: { http: 80, https: 443, ws: 80, wss: 443 }   # optional
 ```
 
-(The four `may_set_base` entries `ktor-client.yml` ships, in full.)
+(The four `may_set_base` entries `client-models/ktor.yml` ships, in full.)
 
 | key | what it is |
 |---|---|
@@ -1938,6 +2000,7 @@ client_base:
 | `ladder` | a non-empty list of `{owner, method, block_arg, descriptor?, parent?}`: each call whose `block_arg` is a configuration block the base may be set in. `parent: receiver` marks a call that DERIVES a client from the one it is made on, which inherits that client's base where its own block sets none (CP-54 rows 79-80) |
 | `setter` | `{owner, method, value_arg, descriptor?}`: the call inside a block that sets the base, with the address at `value_arg` |
 | `join` | the framework's rule for joining a relative address onto the base, one of `shapes/client_base.py`'s rules. A rule is named for what it does, never for a framework: the code that implements it may not name one (`tests/architecture/test_source_rules.py`), and the catalog choosing it is where the framework is named |
+| `default_ports` | optional: `{scheme: port}`, each scheme's default port as the framework states it (Ktor's `URLProtocol`, CP-54 row 94). Read only where a `single_call` row declares `request_url`: whether a joined address writes its port depends on the call's scheme's default |
 | `may_set_base` | a list (possibly empty) of `{owner, method?, descriptor?, arg?, field?}`: calls that may move the base and are not ladder rungs. An entry naming only `owner` matches every method of it; `arg` and `field` together match only a call whose argument `arg` reads the static field `field` (`{owner, name}`), which is how a plugin handed to a generic installer is told apart (`install(DefaultRequest)`, CP-54 row 92) |
 
 **How the ladder is read.** Every rung without `parent` is read the same way, whether it
@@ -2009,7 +2072,10 @@ into peer and path as a written one is. With no base, or where the join declines
 the path the code states, `peer` NULL, at `unresolved`. An absolute address is the whole
 address; a `${…}` expression, and a `partial` or `unresolved` address, read as they always do. A
 catalog not declaring the key keeps a relative address at `resolved` with `peer` NULL, as
-before. Every part is refused at load where malformed: a key other than the five, a missing key,
+before. The decision is one function both engines call (`shapes/client_base.against_client_base`),
+each rendering it in its own row shape (`single_call`'s `client_base`, §2). Every part is refused
+at load where malformed: a key other than the five and `default_ports`, a missing key, a
+`default_ports` that is not a mapping of schemes to ports,
 a position that is not a non-negative integer, an empty ladder, a call naming no `owner` or
 `method`, a `parent` other than `receiver`, a `join` no rule implements, and a `may_set_base`
 that is not a list of well-formed entries. The interim word `relative_to_client_base` is folded into this
