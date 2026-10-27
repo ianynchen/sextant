@@ -1888,6 +1888,7 @@ def test_a_binding_with_two_writers_gives_one_producer_per_writer(walked):
     )
 
 
+@pytest.mark.pins("values.the-producer-stop-comes-BEFORE-the-returns")
 def test_a_declared_call_with_a_scanned_body_is_where_the_reader_stops(walked):
     """The reader stops AT a declared call and does not follow its body: `Names#one` is in
     this module and returns `solo`, which is what the value walk answers. The property is
@@ -1898,8 +1899,13 @@ def test_a_declared_call_with_a_scanned_body_is_where_the_reader_stops(walked):
     assert _producers(walked, _symbol(_PROPERTY, "send", "()V"), 1, 0, declared) == (
         Producer(caller=_symbol(_PROPERTY, "<init>", "()V"), ordinal=0, identity=(_NAMES, "one")),
     )
+    # Undeclared, the path crosses the body and ends at the literal it returns, kept whole.
+    assert _producers(walked, _symbol(_PROPERTY, "send", "()V"), 1, 0, set()) == (
+        Producer(ended_at=Answer(kind="literal", value="solo", literal_kind="string")),
+    )
 
 
+@pytest.mark.pins("values.a-declared-CONSTRUCTOR-is-a-producer")
 def test_a_declared_constructor_is_a_producer_like_a_factory(walked):
     """`new Name("built-notify")` is a call as much as `Name.of(…)` is, and the walk already
     treats a construction as a value's producer. Undeclared, the path ends at what the value
@@ -1908,7 +1914,9 @@ def test_a_declared_constructor_is_a_producer_like_a_factory(walked):
     assert _producers(walked, built, 1, 0, {(_NAME, "<init>")}) == (
         Producer(caller=built, ordinal=0, identity=(_NAME, "<init>")),
     )
-    assert _producers(walked, built, 1, 0, set()) == (Producer(reason="literal"),)
+    assert _producers(walked, built, 1, 0, set()) == (
+        Producer(ended_at=Answer(kind="literal", value=_NAME, literal_kind="symbol")),
+    )
 
 
 def test_a_spill_slot_whose_reported_writer_stores_a_helpers_result_gives_no_producer(walked):

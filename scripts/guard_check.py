@@ -1918,6 +1918,67 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-declared-CONSTRUCTOR-is-a-producer": Guard(
+        what="a value BUILT by a declared constructor ends the producer reader's path at that "
+        "construction, as a declared factory call does",
+        why="a construction carries no `produced_by` edge (`call_sites.result` is null for an "
+        "initialiser), so the factory stop never sees it. Without the construction stop, a "
+        "client built with `new` reaches the value walk's answer, the constructed TYPE, and "
+        "the reader names no call for a construction that is a fact; a declared `<init>` "
+        "would silently never match",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._identified(site) is None and self._declared_producer(site) "
+                "is None:",
+                replace="        if self._identified(site) is None:  "
+                "# guard disabled by scripts/guard_check.py",
+            ),
+            Edit(
+                path=_VALUES,
+                find="""            if constructed is not None:
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None:
+                    return _only(trail, stopped)
+""",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.the-producer-stop-comes-BEFORE-the-returns": Guard(
+        what="the producer reader stops at a declared call BEFORE reading that call's returns",
+        why="a declared call whose body is in this module would otherwise be crossed, and the "
+        "path would end at whatever the body hands back: a literal, or a call inside the "
+        "body. The reader then names no call, or a call the caller never declared, for the "
+        "one it asked about, and the block that set the client's base is not the one read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="""        if producers:
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
+        reached: list[_Reached] = []
+""",
+                replace="        reached: list[_Reached] = []\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="""        if reached:
+            return tuple(reached)
+        if not producers:
+""",
+                replace="""        if reached:
+            return tuple(reached)
+        if producers:  # guard disabled by scripts/guard_check.py: the stop moved down
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
+        if not producers:
+""",
+            ),
+        ),
+    ),
     "values.the-PRODUCER-reader-matches-the-declared-OWNER": Guard(
         what="a producing call is the declared one only where its owner matches as well as "
         "its method name",

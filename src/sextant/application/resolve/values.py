@@ -331,20 +331,24 @@ class Binding:
 
 @dataclass(frozen=True)
 class Producer:
-    """The CALL that produced a value, on one path (`producers_of`).
+    """Where one path of the producer reader ENDED (`producers_of`).
 
     `caller` and `ordinal` name the call site, which is a site's identity everywhere in D01,
     and `identity` is the declared `(owner, method)` it matched. A path that ends anywhere
-    else leaves all three None and says why in `reason`: the walk's own reason where the
-    path ends unresolved (`external`, `no_writer`, …), and otherwise the kind of answer it
-    ended at (`literal`, `expression`, `absent`), because a value the code states is not a
-    call anyone built.
+    else leaves all three None and says where in exactly one of the other two:
+
+    * `reason` — one of §1d's reasons and nothing else (`external`, `no_writer`, …), where
+      the path ends unresolved;
+    * `ended_at` — the `Answer` itself, where the path ends at a value the code states
+      (`literal`, `expression`, `absent`): not a call anyone built, and kept whole so a
+      literal end still carries its literal.
     """
 
     caller: str | None = None
     ordinal: int | None = None
     identity: tuple[str, str] | None = None
     reason: str | None = None
+    ended_at: Answer | None = None
 
 
 @dataclass(frozen=True)
@@ -770,7 +774,7 @@ def producers_of(
     slot: int | str,
     declared: AbstractSet[tuple[str, str]],
 ) -> tuple[Producer, ...]:
-    """The calls that produced one slot of one site: one `Producer` per path.
+    """The calls that produced one slot of one site: one `Producer` per distinct end.
 
     `resolve_site` answers what a value IS. Some readers need the call that BUILT it
     instead, because what they read is that call's own arguments — a block argument, which
@@ -788,9 +792,9 @@ def producers_of(
     No identity table is applied: an `identified_by` entry says what a value MEANS, and a
     rendering of a client is not the client.
 
-    `site` is projected first, for the reason `resolve_site` states. Identical records are
-    one record: two paths that reach the same call name the same call. The order is the
-    walk's own (NFR-1).
+    `site` is projected first, for the reason `resolve_site` states. Identical ends are one
+    record — two paths that reach the same call name the same call — and the record carries
+    no path. The order is the walk's own (NFR-1).
     """
     walk = _Walk(index, declared=declared)
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
@@ -798,10 +802,10 @@ def producers_of(
     for _, answer in walk.at(site, slot):
         if answer.kind == _PRODUCED:
             found.append(answer.value)
+        elif answer.kind == UNRESOLVED:
+            found.append(Producer(reason=answer.reason))
         else:
-            found.append(
-                Producer(reason=answer.reason if answer.kind == UNRESOLVED else answer.kind)
-            )
+            found.append(Producer(ended_at=answer))
     return tuple(dict.fromkeys(found))
 
 

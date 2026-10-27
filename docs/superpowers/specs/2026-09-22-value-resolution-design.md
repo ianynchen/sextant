@@ -203,10 +203,11 @@ call's returns are read, and a declared constructor stops a construction the sam
 walk declares nothing, so `resolve_site`'s answers are unchanged.
 
 `Producer` names the call site (`caller`, `ordinal`) and the identity it matched. A path that ends
-anywhere else gives a record with no call, and its `reason` is the walk's own reason (`external`,
-`no_writer`, …). Where the path ends at a value the code states instead, `reason` is that answer's
-kind. No identity table is applied, because an `identified_by` entry says what a value means, and
-that is not the question here.
+anywhere else gives a record with no call. If it ended unresolved, its `reason` holds §1d's reason
+(`external`, `no_writer`, …), and only §1d's reasons ever appear there. If it ended at a value the
+code states, `ended_at` holds that `Answer` whole, so a literal end keeps its literal. Identical
+ends are one record, and the record carries no path. No identity table is applied, because an
+`identified_by` entry says what a value means, and that is not the question here.
 
 Measured on the CP-54 probe module over every slot of every site (2,047 positions): the reader
 computes 3,395 positions, exactly what the value walk computes there. No position costs more, and
