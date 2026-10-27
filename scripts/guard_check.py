@@ -5145,6 +5145,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "ktor.a-block-handing-its-receiver-to-MODULE-code-declines": Guard(
+        what="a block that hands its receiver to a method of this module, whose body is "
+        "scanned and not followed, declines",
+        why="`HttpClient(CIO) { configure(this) }` may set the base inside `configure`. Read "
+        "as silence, the block sets no base and the row publishes `localhost` for a call "
+        "Ktor sends wherever `configure` pointed it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="            if self._may_move_base(inner) or self._hands_off(inner, receiver):\n",
+                replace="            if self._may_move_base(inner):  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "ktor.a-base-from-ANOTHER-path-is-never-paired": Guard(
         what="a setter whose value the walk resolves to several bases gives no base",
         why="the producer reader records no path, so where `madeClient(base)` is called "

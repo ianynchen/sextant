@@ -1161,3 +1161,66 @@ def test_a_rung_under_another_descriptor_declines_on_any_ladder(tmp_path: Path):
     assert _client_rows(tmp_path / "other", other, catalog) == [
         (_fn("acme"), None, "orders", "unresolved")
     ]
+
+
+_CONFIGURE_JVM = "(Lio/ktor/client/HttpClientConfig;)V"
+_CONFIGURE = _MODULE + method_descriptor(_FILE, "configure", _CONFIGURE_JVM)
+_LOG = _MODULE + method_descriptor(_FILE, "log", "(Ljava/lang/String;)V")
+_NULL_CHECK = (
+    "kotlin/jvm/internal/Intrinsics#",
+    "checkNotNullParameter",
+    "(Ljava/lang/Object;Ljava/lang/String;)V",
+)
+
+
+def _in_module(symbol: str) -> list:
+    """A method of this module with a scanned body: what makes a call to it a resolved
+    `call_edges` row."""
+    return [
+        SymbolFact(
+            document_id="doc_1", symbol=symbol, construct_kind="method", enclosing=_MODULE + _FILE
+        ),
+        MethodReturnFact(document_id="doc_1", method=symbol, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.declines("ktor-client")
+@pytest.mark.pins("ktor.a-block-handing-its-receiver-to-MODULE-code-declines")
+def test_a_block_handing_its_receiver_to_module_code_declines(tmp_path: Path):
+    """`HttpClient(CIO) { configure(this) }`, `configure` a method of this module: its body
+    is scanned and not followed, so it may set the base, and the client is not read as having
+    none. The same module call handed something else (`log("x")`) is no such hand-off."""
+    handed = [
+        *_in_module(_CONFIGURE),
+        *_plain_client(
+            [
+                _in_client_block(
+                    0,
+                    (_FILE, "configure", _CONFIGURE_JVM),
+                    [CallArgument(kind="parameter", value=0)],
+                )
+            ]
+        ),
+    ]
+    assert _client_rows(tmp_path / "handed", handed) == [_DECLINED_ROW]
+    other = [
+        *_in_module(_LOG),
+        *_plain_client(
+            [_in_client_block(0, (_FILE, "log", "(Ljava/lang/String;)V"), [_base("x")])]
+        ),
+    ]
+    assert _client_rows(tmp_path / "other", other) == [_LOCALHOST_ROW]
+
+
+def test_the_null_check_on_the_receiver_does_not_decline(tmp_path: Path):
+    """Kotlin opens every block body with `Intrinsics.checkNotNullParameter(this, …)`: a
+    library call handed the receiver, which `may_set_base` does not list, so a plain client
+    still sends to `localhost`."""
+    facts = _plain_client(
+        [
+            _in_client_block(
+                0, _NULL_CHECK, [CallArgument(kind="parameter", value=0), _base("$this$HttpClient")]
+            )
+        ]
+    )
+    assert _client_rows(tmp_path, facts) == [_LOCALHOST_ROW]

@@ -1974,8 +1974,10 @@ makes. The reader answers ONE base or none:
   but only where nothing in a reached block MAY have set one. A block declines instead where it
   holds a call matching a rung or the setter on owner and name under an undeclared descriptor
   (Ktor's `url { … }`, `defaultRequest(replace = true) { … }`), any other call on the setter's
-  owner type (`host = …`, `url.takeFrom(…)`), or a call `may_set_base` lists. Calls that move no
-  base (`install(WebSockets)`) are not listed and stay allowed;
+  owner type (`host = …`, `url.takeFrom(…)`), a call `may_set_base` lists, or a call handing the
+  block's receiver to a method of THIS module (`configure(this)`: a body scanned and not
+  followed — the walk's `reached` test). A library call handed the receiver is governed by
+  `may_set_base` alone, so the compiler's null check and `install(WebSockets)` stay allowed;
 - **the setter is handed a configuration key** (`url("${pricing.base-url}")`, a value carrying
   a `${…}` key): the key is the base, rendered exactly as a configuration-fed `base` capture is
   (`fluent._composed_address`: base and path concatenated as written, `peer` NULL —

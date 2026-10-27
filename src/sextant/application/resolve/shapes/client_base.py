@@ -227,7 +227,9 @@ def client_base(
       MAY have set one: a call matching a rung or the setter on owner and name under
       another descriptor, any other call on the setter's owner type, or a call the catalog
       lists in `may_set_base` (`install(DefaultRequest) { … }`, row 92) declines the block
-      instead. Silence is "no base" only where it is silence.
+      instead; and so does a block that hands its receiver to a method of this module whose
+      body is not followed (`configure(this)`). Silence is "no base" only where it is
+      silence.
 
     A base may be a configuration expression (`${pricing.url}`): the setter's value
     resolves to text carrying a `${…}` key. It is answered as it is, and the caller
@@ -367,6 +369,9 @@ class _Ladder:
         if not isinstance(block, Mapping) or block.get("kind") != "lambda":
             return None, UNTRACED
         body = with_descriptor(str(site["caller"]), str(block.get("symbol")))
+        # The block's own receiver: the body's parameter after the values it captured
+        # (`CallArgument.captures`, D00 §5).
+        receiver = int(str(block.get("captures") or 0))
         base: str | None = None
         for inner in self._by_caller.get(body, []):
             if _matches(inner, self._setter):
@@ -375,7 +380,7 @@ class _Ladder:
                     return None, reason or UNTRACED
                 base = address
                 continue
-            if self._may_move_base(inner):
+            if self._may_move_base(inner) or self._hands_off(inner, receiver):
                 return None, UNTRACED
             nested = self._rung_of(inner)
             if nested is None or nested.get("parent") is not None:
@@ -415,6 +420,24 @@ class _Ladder:
 
     def _rung_of(self, site: Mapping[str, Any]) -> Mapping[str, Any] | None:
         return next((rung for rung in self._rungs if _matches(site, rung)), None)
+
+    def _hands_off(self, site: Mapping[str, Any], receiver: int) -> bool:
+        """Whether `site` hands the block's receiver to a method of THIS module —
+        `configure(this)` — whose body is scanned and not followed here, so it may set the
+        base. "Of this module" is the walk's own test: a site whose callee `call_edges`
+        resolved, `ValueIndex.reached`. A library call handed the receiver (the compiler's
+        null check on it, `install$default(config, WebSockets)`) is not this question:
+        library knowledge is catalog data, `may_set_base`. A rung is not asked."""
+        if self._rung_of(site) is not None:
+            return False
+        if (str(site["caller"]), int(str(site["ordinal"]))) not in self._values.reached:
+            return False
+        return any(
+            isinstance(argument, Mapping)
+            and argument.get("kind") == "parameter"
+            and argument.get("value") == receiver
+            for argument in site["arguments"] or []
+        )
 
     def _may_move_base(self, site: Mapping[str, Any]) -> bool:
         """A call in a reached block that may set the base although it is not the declared
