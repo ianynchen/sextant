@@ -58,6 +58,7 @@ SERVER_SSE_KT = "io.ktor.server.sse.RoutingKt"
 CLIENT_WS_KT = "io.ktor.client.plugins.websocket.BuildersKt"
 CLIENT_SSE_KT = "io.ktor.client.plugins.sse.BuildersKt"
 PROBE = "probe.ProbeKt"
+INSTALL = "probe.InstallKt"
 
 # The probe module's functions, one per shape, in the order the table reports them.
 HTTP_FORMS = [
@@ -530,6 +531,7 @@ def main(argv: list[str]) -> int:
             "TWICE",
             "ENGINELESS",
             "QUERY",
+            "INSTALLED",
         ) and (entry[-1] == "NOT REACHED" or entry[-1].startswith("FAILED")):
             raise ProbeError(f"Ktor's run did not complete: {' | '.join(entry)}")
     # (h) a request the server never received measures nothing about routing.
@@ -537,7 +539,7 @@ def main(argv: list[str]) -> int:
         if entry[0] == "DISPATCH" and entry[3] == "NOT RECEIVED":
             raise ProbeError(f"the server received no request: {' | '.join(entry)}")
 
-    module = classes(Path(arguments["CLASSES"]), [PROBE, "probe.MainKt"])
+    module = classes(Path(arguments["CLASSES"]), [PROBE, "probe.MainKt", INSTALL])
     probe = module[PROBE]
     metadata = re.search(r"mv=\[(?:I\()?(\d+)\)?,(?:I\()?(\d+)\)?,(?:I\()?(\d+)\)?\]", probe.text)
     stated_metadata = ".".join(metadata.groups()) if metadata else "NOT FOUND"
@@ -871,6 +873,33 @@ def main(argv: list[str]) -> int:
             _, label, base, relative, result = entry
             emit(
                 f"`DefaultRequest` join: a query and nothing else, {label} (k)",
+                "client",
+                f'base `{base}`, call `get("{relative}")` -> Ktor sent `{result}`',
+            )
+
+    # (l) the DefaultRequest plugin installed with `install(…)`
+    installs = []
+    plugin = "NONE"
+    for step in body(module[INSTALL], "installedClient$lambda$0"):
+        if step.opcode == "getstatic":
+            plugin = step.comment.removeprefix("Field ")
+        match = re.match(r"(?:Interface)?Method (\S+)\.(\S+?):(\S+)", step.comment)
+        if step.opcode.startswith("invoke") and match and "install" in match.group(2):
+            installs.append(
+                f"`{short(match.group(1).replace('/', '.'))}.{match.group(2)}` "
+                f"`{match.group(3)}` after `getstatic {plugin}`"
+            )
+    emit(
+        "how `install(WebSockets)` and `install(DefaultRequest) { url(…) }` compile, from a "
+        "client's configuration lambda (l)",
+        "client",
+        "; ".join(installs) or "NO install CALL FOUND",
+    )
+    for entry in ran:
+        if entry[0] == "INSTALLED":
+            _, label, base, relative, result = entry
+            emit(
+                f"`DefaultRequest` join: the plugin installed as {label} (l)",
                 "client",
                 f'base `{base}`, call `get("{relative}")` -> Ktor sent `{result}`',
             )

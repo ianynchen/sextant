@@ -3,6 +3,7 @@ package probe
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respondOk
+import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.plugin
@@ -160,6 +161,23 @@ private fun queryOnly(label: String, base: String, relative: String) = runBlocki
     }
     client.close()
     println("QUERY\t$label\t$base\t$relative\t$outcome")
+}
+
+// Row group (l): the DefaultRequest plugin installed with `install(DefaultRequest) { url(…) }`
+// — whether a base set that way is joined as `defaultRequest { url(…) }`'s is (row 51).
+private fun installed(label: String, base: String, relative: String) = runBlocking {
+    var seen = "NOT REACHED"
+    val client = HttpClient(MockEngine { request -> seen = request.url.toString(); respondOk() }) {
+        install(DefaultRequest) { url(base) }
+    }
+    val outcome = try {
+        client.get(relative)
+        seen
+    } catch (e: Throwable) {
+        "FAILED " + e.javaClass.name + ": " + e.message
+    }
+    client.close()
+    println("INSTALLED\t$label\t$base\t$relative\t$outcome")
 }
 
 // The WebSocket and SSE calls resolve a relative address through the same plugin; the engine only
@@ -340,4 +358,6 @@ fun main() {
     queryOnly("base without trailing /", "https://api.example.com/v1/items", "?q=1")
     queryOnly("base ending in /", "https://api.example.com/v1/", "?q=1")
     queryOnly("base with its own query", "https://api.example.com/v1/items?key=1", "?q=1")
+
+    installed("`install(DefaultRequest) { url(…) }`", "https://installed.example.com/i/", "orders")
 }
