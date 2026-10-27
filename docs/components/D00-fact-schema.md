@@ -1166,7 +1166,7 @@ carries it as `OI-15`.
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
 whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
-parameter load, an `LDC` constant, or an invoke's result with nothing but a `CHECKCAST` in
+load of a parameter the method never stores to, an `LDC` constant, or an invoke's result with nothing but a `CHECKCAST` in
 between — and that producer (with a `PUTFIELD`'s `ALOAD 0`) in the write's OWN basic block —
 producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus
 **exactly one** of `from_parameter: N` or `value: <argument-grammar entry>`. A call's result
@@ -1175,7 +1175,17 @@ where `N` is that call site's own `result` in the WRITER's frame — so a reader
 the writing method exactly as it would that argument. A computed assignment — concatenation,
 a default expression, a value built with `new`, a value parked in a local first, a lambda
 (which names a body, not a value) — emits nothing, and the resolution that would have
-followed it degrades honestly rather than guessing a source.
+followed it degrades honestly rather than guessing a source. **A parameter's own slot counts
+as such a local once the method stores to it**: a load of slot N is `from_parameter` only
+where no `xSTORE` or `IINC` anywhere in the method writes slot N. `if
+(!host.startsWith("https://")) host = "https://fallback…"; HOST = host;` holds the caller's
+argument on one path and the fallback on the other, and `u = u.trim(); this.u = u;` holds the
+call's result on every path; before this rule both were reported as the parameter, and the
+caller's argument was published as the field's value (measured on javac 21: `GET
+given.example.com /s resolved`, and a base `…/api` joined as `/apiorders` where the field
+holds `…/api/`). The scan is syntactic — one pass over the instructions, no flow analysis —
+and errs toward reporting less: a store on a path that never reaches the write refuses it
+too.
 
 Three things it deliberately does not report, each because reporting them would be a claim
 nobody can check:
@@ -1242,7 +1252,11 @@ fact), nor on the CP-54 probe module, which has grown to 170 writes since the 84
 every compiled module under `examples/` (78 class roots) the count went 9,840 → 9,838, and
 both dropped writes are joins of the kind the rule exists for: `ruoyi-vue-pro`'s
 `ApiDecryptRequestWrapper#body` (one decryptor's result or another's) and
-`apollo-build-sql-converter`'s `SqlStatement$Builder#textLines` (a three-way ternary).
+`apollo-build-sql-converter`'s `SqlStatement$Builder#textLines` (a three-way ternary). **Then the stored-slot rule** (a parameter load is refused where the method stores
+to that slot): one more write went, `spring-petclinic-api-gateway` 37 → 36, the census 9,838
+→ 9,837 and nothing else anywhere. It is `PetDetails#visits`, a record's compact constructor
+doing `if (visits == null) visits = new ArrayList<>();` before the implicit `this.visits =
+visits` — a null-default, reported until then as parameter 4. No pinned row moved.
 
 **Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-26**, in three
 steps: the walk's sixth edge reads `written_by` and crosses into the writing method (PR #47),

@@ -12,6 +12,7 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
@@ -251,7 +252,8 @@ public final class MethodFlow {
     }
 
     /** D00 §5's {@code field_write}: any method, direct traces only. A {@code PUTFIELD} on
-     *  {@code this} or a {@code PUTSTATIC}, whose value is a bare parameter load, an
+     *  {@code this} or a {@code PUTSTATIC}, whose value is a bare load of a parameter the
+     *  method never stores to, an
      *  {@code LDC} constant, or a CALL'S RESULT with nothing but a cast in between, in the
      *  write's own basic block — and each of those is the whole rule. A computed assignment
      *  (concatenation, a default expression, a value parked in a local first, a value two
@@ -287,6 +289,7 @@ public final class MethodFlow {
             if (insn.getOpcode() >= 0) real.add(insn);
         }
         int[] block = basicBlocks(method, real);
+        Set<Integer> stored = storedSlots(real);
         // The dataflow pass, run only for the one shape that needs it — a call's result
         // written into a field, whose receiver load can sit any distance below the value —
         // and at most once per method. Every other shape is syntactic.
@@ -344,7 +347,16 @@ public final class MethodFlow {
             // every read of a Ktor client held in a top-level `val` answered the same.
             if (direct && written instanceof VarInsnNode valueLoad && isLoad(valueLoad.getOpcode())) {
                 int parameterIndex = indexOfSlot(parameterSlots, valueLoad.var);
-                if (parameterIndex < 0) continue;
+                // **A parameter's slot holds the parameter only where nothing stores to it.**
+                // `if (!host.startsWith("https://")) host = "https://fallback…"; HOST = host;`
+                // loads slot 0 right below the write, in the write's own block, and the slot
+                // holds the caller's argument on one path and the fallback on the other;
+                // `u = u.trim(); this.u = u;` holds the call's result on every path. Reported
+                // as `from_parameter`, the caller's argument was published as the field's
+                // value. Any store to the slot, anywhere in the method, refuses it — a
+                // syntactic scan with no flow analysis, and sound in the under-reporting
+                // direction.
+                if (parameterIndex < 0 || stored.contains(valueLoad.var)) continue;
                 lines.add(fieldWriteJson(documentId, methodSymbol, put, parameterIndex, null));
             } else if (direct && written instanceof LdcInsnNode constant) {
                 // The declared type is handed over for the shared mapping's sake; for a
@@ -490,6 +502,20 @@ public final class MethodFlow {
             if (leaves) current++;
         }
         return block;
+    }
+
+    /** Every local slot the method writes: an {@code xSTORE}'s, or an {@code IINC}'s. */
+    private static Set<Integer> storedSlots(List<AbstractInsnNode> real) {
+        Set<Integer> stored = new HashSet<>();
+        for (AbstractInsnNode insn : real) {
+            if (insn instanceof VarInsnNode store
+                    && store.getOpcode() >= Opcodes.ISTORE && store.getOpcode() <= Opcodes.ASTORE) {
+                stored.add(store.var);
+            } else if (insn instanceof IincInsnNode increment) {
+                stored.add(increment.var);
+            }
+        }
+        return stored;
     }
 
     /** One of the five {@code xLOAD} opcodes — {@code ILOAD} through {@code

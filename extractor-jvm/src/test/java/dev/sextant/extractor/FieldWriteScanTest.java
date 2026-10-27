@@ -544,6 +544,59 @@ class FieldWriteScanTest {
         assertEquals(1, writesInto("KotlinMergedHolder", "<init>", "(Z)V", "single").size());
     }
 
+    /** **A parameter's SLOT is the parameter only where the method never stores to it.**
+     *  {@code init(String given) { if (…) given = "https://fallback…"; host = given; }}: the
+     *  load right below the {@code putstatic} reads slot 0, which holds the caller's argument
+     *  on one path and the fallback on the other. Reported as {@code from_parameter: 0}, the
+     *  caller's {@code "http://given…"} was published as the field's value. */
+    @Test
+    void a_parameter_reassigned_on_a_branch_into_a_static_field_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("ReassignedParameterSample", "init", "(Ljava/lang/String;)V", "host"));
+    }
+
+    /** {@code if (!given.endsWith("/")) given = given + "/"; this.base = given;} — the
+     *  caller's {@code "…/api"} was joined as {@code /apiorders} where the field holds
+     *  {@code /api/} on that path. */
+    @Test
+    void a_parameter_reassigned_on_a_branch_into_this_field_emits_nothing() throws Exception {
+        assertEquals(List.of(), writesInto("ReassignedParameterSample", "normalise",
+            "(Ljava/lang/String;)V", "base"));
+    }
+
+    /** {@code given = given.trim(); this.url = given;} — one straight line, so no block rule
+     *  catches it: the slot holds the call's result, not the argument. D00 §5's "a value
+     *  parked in a local first" emits nothing, and a parameter's own slot is such a local. */
+    @Test
+    void a_parameter_reassigned_in_one_straight_line_emits_nothing() throws Exception {
+        assertEquals(List.of(), writesInto("ReassignedParameterSample", "trimmed",
+            "(Ljava/lang/String;)V", "url"));
+        assertEquals(List.of(), writesInto("ReassignedParameterSample", "trimmedStatic",
+            "(Ljava/lang/String;)V", "host"));
+    }
+
+    /** {@code n++; count = n;} — {@code IINC} writes the slot as a store does. */
+    @Test
+    void a_parameter_incremented_in_place_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("ReassignedParameterSample", "bumped", "(I)V", "count"));
+    }
+
+    /** **The near-misses.** An untouched parameter written into {@code this}'s field is
+     *  still {@code from_parameter: 0}; and where ANOTHER parameter is reassigned, the one
+     *  written is still reported — the rule is per slot, not per method. */
+    @Test
+    void an_untouched_parameter_is_still_reported() throws Exception {
+        List<String> field = writesInto("ReassignedParameterSample", "untouched",
+            "(Ljava/lang/String;)V", "kept");
+        assertEquals(1, field.size(), String.join("\n", field));
+        assertTrue(field.get(0).contains("\"from_parameter\":0"), field.get(0));
+        List<String> statics = writesInto("ReassignedParameterSample", "otherReassigned",
+            "(Ljava/lang/String;Ljava/lang/String;)V", "host");
+        assertEquals(1, statics.size(), String.join("\n", statics));
+        assertTrue(statics.get(0).contains("\"from_parameter\":0"), statics.get(0));
+    }
+
     /** The pass runs where the method symbol is minted, so a {@code
      *  field_write} is a line of the same fact file as the constructor it
      *  belongs to, carrying the same document. */
