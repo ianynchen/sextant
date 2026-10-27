@@ -103,6 +103,11 @@ by the caller as `identities` and never held here: the walk finds the producing 
 line drawn exactly where DR-6 puts it. A caller that passes none gets the walk as it was
 before Task 7 — a producer whose value nothing names answers with a reason.
 
+**A second reader shares the walk, and answers the CALL instead** (2026-10-26).
+`producers_of` runs the same `_Walk` with one more stop — a producing call the caller declares
+— and names that call, because a block argument is not a value and the reader that needs one
+reads it off the call itself. The value walk declares nothing, so its answers are unchanged.
+
 **One engine consumes this, and the migrations add the rest** (§3c). Task 4's measurement
 was the gate before any engine called it and §7a's shadow read is the gate before each
 migration; `resolve/engines/interface_implementation.py` is the first through both (Task 7,
@@ -121,6 +126,7 @@ work that takes under a millisecond.
 
 import json
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from itertools import product
 from typing import Any
@@ -161,6 +167,11 @@ EXPRESSION = "expression"
 # contradict the facts. Carries no value and no reason (ruled 2026-09-23).
 ABSENT = "absent"
 UNRESOLVED = "unresolved"
+# **Not one of §1b's answer kinds, and it never leaves this module.** The producer reader
+# (`producers_of`) runs the same walk with one more stop, and a path that ends at a declared
+# call carries that call here as its `value` (a `Producer`) until the reader turns the path
+# into its record. The value walk declares nothing, so it never mints one.
+_PRODUCED = "produced"
 
 STRING = "string"
 INT = "int"
@@ -316,6 +327,24 @@ class Binding:
 
     path: tuple[str, ...]
     slots: dict[int | str, Answer]
+
+
+@dataclass(frozen=True)
+class Producer:
+    """The CALL that produced a value, on one path (`producers_of`).
+
+    `caller` and `ordinal` name the call site, which is a site's identity everywhere in D01,
+    and `identity` is the declared `(owner, method)` it matched. A path that ends anywhere
+    else leaves all three None and says why in `reason`: the walk's own reason where the
+    path ends unresolved (`external`, `no_writer`, …), and otherwise the kind of answer it
+    ended at (`literal`, `expression`, `absent`), because a value the code states is not a
+    call anyone built.
+    """
+
+    caller: str | None = None
+    ordinal: int | None = None
+    identity: tuple[str, str] | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -735,6 +764,47 @@ def resolve_positions(
     return [answers for _, answers in combined]
 
 
+def producers_of(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int | str,
+    declared: AbstractSet[tuple[str, str]],
+) -> tuple[Producer, ...]:
+    """The calls that produced one slot of one site: one `Producer` per path.
+
+    `resolve_site` answers what a value IS. Some readers need the call that BUILT it
+    instead, because what they read is that call's own arguments — a block argument, which
+    is not a value (ruled 2026-09-22): this reader names the call, and the caller reads its
+    block. So this is the same walk, with the same crossings and the same single distance
+    rule (§0a) — locals, parameters, returns and bindings — and one more stop: a producing
+    call whose `(owner, method)` is in `declared`. Owners are spelled as the site's own
+    `owner` column, as the identity table's are (`io/acme/Factory#`).
+
+    **The stop comes before the call's body is read.** A declared call whose body is in this
+    module is still where the path ends, since the caller asked for the call and not for
+    what its body hands back. A construction is a call like any other: a declared `<init>`
+    stops the path where the value walk would answer the constructed type.
+
+    No identity table is applied: an `identified_by` entry says what a value MEANS, and a
+    rendering of a client is not the client.
+
+    `site` is projected first, for the reason `resolve_site` states. Identical records are
+    one record: two paths that reach the same call name the same call. The order is the
+    walk's own (NFR-1).
+    """
+    walk = _Walk(index, declared=declared)
+    site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
+    found: list[Producer] = []
+    for _, answer in walk.at(site, slot):
+        if answer.kind == _PRODUCED:
+            found.append(answer.value)
+        else:
+            found.append(
+                Producer(reason=answer.reason if answer.kind == UNRESOLVED else answer.kind)
+            )
+    return tuple(dict.fromkeys(found))
+
+
 def _slots_of(site: Mapping[str, Any]) -> list[int | str]:
     """Which positions this site HAS. The arguments by index, and the receiver where the
     facts name one — `receiver` is the value id it came from and `receiver_parameter` the
@@ -810,9 +880,17 @@ class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
 
-    def __init__(self, index: ValueIndex, identities: Identities = ()) -> None:
+    def __init__(
+        self,
+        index: ValueIndex,
+        identities: Identities = (),
+        declared: AbstractSet[tuple[str, str]] = frozenset(),
+    ) -> None:
         self._index = index
         self._identities = tuple(identities)
+        # The producer reader's stop set (`producers_of`). Empty for the value walk, which is
+        # what keeps its answers exactly what they were: `_declared_producer` matches nothing.
+        self._declared = frozenset(declared)
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -1493,13 +1571,17 @@ class _Walk:
         needs: it hands the id to `_through`, which finds the construction again for the
         `escapes` window it has to compute anyway. None is the common answer and the one
         that keeps `_entry`'s declaration branch exactly as it was: no `source`, no
-        construction, or no entry claiming it."""
+        construction, or no entry claiming it. A constructor the producer reader declared
+        claims it too, so that reader reaches the construction through `_value` as well."""
         source = argument.get("source")
         if source is None:
             return None
         value = int(str(source))
         constructed = self._construction(method, value)
-        if constructed is None or self._identified((method, constructed)) is None:
+        if constructed is None:
+            return None
+        site = (method, constructed)
+        if self._identified(site) is None and self._declared_producer(site) is None:
             return None
         return value
 
@@ -1517,7 +1599,17 @@ class _Walk:
         descended through pushed as that frame: a callee that hands back its own parameter
         is answered by the argument at this site, never by every caller the callee has.
         Doing it the other way is M-1 again, one edge along.
+
+        **A DECLARED producer ends the path before anything else is read** — the one stop
+        `producers_of` adds to this walk, checked ahead of the returns because that reader
+        asks for the call and not for what its body hands back. The value walk declares
+        nothing, so for it both checks below answer None and nothing else changes.
         """
+        producers = self._index.producers.get((method, value), ())
+        if producers:
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
         reached: list[_Reached] = []
         for ordinal, callee in self._index.returns.get((method, value), ()):
             for return_ordinal, entry in self._index.returned_values.get(callee, ()):
@@ -1536,7 +1628,6 @@ class _Walk:
                 )
         if reached:
             return tuple(reached)
-        producers = self._index.producers.get((method, value), ())
         if not producers:
             # No call handed this value back. A CONSTRUCTION is still a producer — one the
             # `produced_by` edge cannot carry, because `call_sites.result` is null for an
@@ -1546,6 +1637,10 @@ class _Walk:
             # reach a MEASURED claim about one producer, not to give constructed values a
             # second reading of their own.
             constructed = self._construction(method, value)
+            if constructed is not None:
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None:
+                    return _only(trail, stopped)
             slot = None if constructed is None else self._identified((method, constructed))
             if constructed is None or slot is None:
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -1718,6 +1813,28 @@ class _Walk:
             (_SLOT, site[0], site[1]),
             trail,
             "argument",
+        )
+
+    def _declared_producer(self, site: tuple[str, int]) -> Answer | None:
+        """The path's end where `site` is a call the producer reader declared, else None.
+
+        Matched on the projected row's `owner` and `name`, exactly — the pair the caller
+        declared, with no arity or descriptor, because the question is which call built the
+        value and not which overload. The value walk declares nothing, so this answers None
+        there before reading anything."""
+        if not self._declared:
+            return None
+        row = self._index.sites.get(site)
+        if row is None:
+            return None
+        identity = (row.get("owner"), row["name"])
+        if identity not in self._declared:
+            return None
+        return Answer(
+            kind=_PRODUCED,
+            value=Producer(
+                caller=site[0], ordinal=site[1], identity=(str(identity[0]), str(identity[1]))
+            ),
         )
 
     def _identity_matches(self, site: tuple[str, int]) -> tuple[Mapping[str, Any], ...]:

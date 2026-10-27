@@ -1902,6 +1902,38 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.the-PRODUCER-reader-stops-at-a-declared-call": Guard(
+        what="the producer reader ends a path at a producing call whose (owner, method) the "
+        "caller declared, and names that call",
+        why="a reader that must read the block a client was BUILT with needs the call itself, "
+        "and the value walk answers only values — measured on the CP-54 probe module, every "
+        "read of `ProbeKt#client` answers `external` at the unscanned factory. Without the "
+        "stop, every path ends where the value walk ends it, so the reader names no call for "
+        "a client whose construction is a fact, and the base its block sets is never read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if identity not in self._declared:",
+                replace="        if True:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.the-PRODUCER-reader-matches-the-declared-OWNER": Guard(
+        what="a producing call is the declared one only where its owner matches as well as "
+        "its method name",
+        why="method names repeat across types — `config`, `create`, `build`, `of` — so a stop "
+        "matched on the name alone names a call on some other type as the client's producer, "
+        "and the reader then reads a base out of a block that configures something else: a "
+        "wrong address at `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if identity not in self._declared:",
+                replace='        if row["name"] not in {name for _, name in self._declared}:  '
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "
