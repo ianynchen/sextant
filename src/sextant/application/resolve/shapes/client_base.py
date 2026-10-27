@@ -96,9 +96,9 @@ def client_base_of(matches: Mapping[str, Any], source: object) -> Mapping[str, A
     spelling it does not load as one whose relative rows read `resolved`."""
     if _RETIRED in matches:
         raise CatalogError(
-            f"loading catalog {source}: `{_RETIRED}` is folded into `client_base` (D02 §2's "
-            f"`fluent` style), which declares where the client's base is set; declare that "
-            f"instead"
+            f"loading catalog {source}: `{_RETIRED}` is folded into `client_base` (D02 §2, read "
+            f"by the `fluent` and `single_call` styles), which declares where the client's base "
+            f"is set; declare that instead"
         )
     return _validated(matches.get("client_base"), source)
 

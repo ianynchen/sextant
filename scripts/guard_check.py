@@ -5115,7 +5115,8 @@ GUARDS: dict[str, Guard] = {
         "under an undeclared descriptor declines the block",
         why="`defaultRequest(replace = true) { … }` and `url { … }` set a base through an "
         "overload the ladder does not read (CP-54 rows 46, 48). Skipped, the block reads as "
-        "setting none and the row publishes `localhost` for a call Ktor sends elsewhere",
+        "setting only the base the declared setter read, and the row publishes that base at "
+        "`resolved` for a call Ktor sends where the other overload pointed it",
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
@@ -5128,8 +5129,8 @@ GUARDS: dict[str, Guard] = {
         what="any call on the setter's owner type other than the declared setter declines "
         "the block it is in",
         why="`defaultRequest { host = … }` and `url.takeFrom(…)` move the base through members "
-        "of `DefaultRequestBuilder` the reader does not model. Skipped, the block reads as "
-        "setting none and the row publishes `localhost`",
+        "of `DefaultRequestBuilder` the reader does not model. Skipped, the row publishes the "
+        "base `url(…)` set at `resolved`, for a call Ktor sends to the host set after it",
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
@@ -5141,8 +5142,9 @@ GUARDS: dict[str, Guard] = {
     "ktor.a-LISTED-call-that-may-set-the-base-declines": Guard(
         what="a call the catalog's `may_set_base` lists declines the block it is in",
         why="`install(DefaultRequest) { url(…) }` sets the base as `defaultRequest { }` does "
-        "(CP-54 rows 92-93), through a generic installer. Unlisted, the client reads as having "
-        "no base and the row publishes `localhost` for a call Ktor sends to the installed base",
+        "(CP-54 rows 92-93), through a generic installer. Unlisted, the row publishes the "
+        "`defaultRequest` base beside it at `resolved`, for a call Ktor sends to the installed "
+        "base",
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
@@ -5167,8 +5169,8 @@ GUARDS: dict[str, Guard] = {
         what="a block that hands its receiver to a method of this module, whose body is "
         "scanned and not followed, declines",
         why="`HttpClient(CIO) { configure(this) }` may set the base inside `configure`. Read "
-        "as silence, the block sets no base and the row publishes `localhost` for a call "
-        "Ktor sends wherever `configure` pointed it",
+        "as silence, the row publishes the block's own declared base at `resolved`, for a "
+        "call Ktor sends wherever `configure` pointed it",
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",

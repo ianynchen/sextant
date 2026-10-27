@@ -31,10 +31,10 @@ host and in a CIO server bound to `127.0.0.1` on a free port, sends them request
 them). Rows (h) measure one server engine, CIO; whether Netty or Jetty complete a WebSocket
 upgrade on a verb other than GET is not measured. The verbs `get`, `post`, `put`, `patch`, `delete`, `head`, `options` with
 an address string are measured; `trace`, `query`, `submitForm`, `request(HttpRequestBuilder)` and
-a request built by hand are not. The SSE client's join of a relative address is not measured: the
-mock engine does not offer the SSE capability, so the SSE call stops before it sends anything
-(the WebSocket calls were measured). How the real corpora use these calls is the builder's
-fixture and corpus work, not this record.
+a request built by hand are not. The SSE client's join of a relative address is measured over an
+engine that declares the SSE capability (rows 114–123); the plain mock engine of rows 61–63 does
+not, and an SSE call over it stops before it sends anything. How the real corpora use these calls
+is the builder's fixture and corpus work, not this record.
 
 **How to run.** `JAVA_HOME=<jdk 21> bash scripts/probes/cp54_ktor_client_ws_sse/run.sh`. It
 compiles `scripts/probes/cp54_ktor_client_ws_sse/module/` with Maven after a `clean` (so no cell

@@ -21,6 +21,7 @@ own scan, value ids and argument kinds included: the builder is one value id thr
 from pathlib import Path
 
 import pytest
+import yaml
 from test_call_engines import CATALOGS_DIR, _resolve_fluent
 
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget
@@ -303,3 +304,32 @@ def test_the_url_parts_overload_is_not_read_as_an_address(tmp_path: Path):
     assert _rows(tmp_path, facts) == [
         (_caller("parts"), "outbound", "GET", None, None, "unresolved", False)
     ]
+
+
+def _verb_field_tables(node: object) -> list[dict]:
+    """Every `verb_values.fields` table in a catalog document, wherever it sits."""
+    if isinstance(node, list):
+        return [table for item in node for table in _verb_field_tables(item)]
+    if not isinstance(node, dict):
+        return []
+    tables = [table for value in node.values() for table in _verb_field_tables(value)]
+    verb_values = node.get("verb_values")
+    if isinstance(verb_values, dict) and "fields" in verb_values:
+        tables.append(verb_values["fields"])
+    return tables
+
+
+def test_the_routing_and_client_catalogs_spell_one_verb_field_table():
+    """`HttpMethod`'s nine static fields are spelled twice, once in `ktor-routing.yml` and
+    once in `ktor-client.yml`, because each catalog keeps its own `verb_values`. Both say
+    which verb the same Ktor field is, so they must agree entry for entry: an edit to one
+    alone reads `HttpMethod.Query` as a verb on one side of a call and as nothing on the
+    other. Removing the copy is logged for later; until then this pins the two equal."""
+    tables = {
+        name: _verb_field_tables(yaml.safe_load((CATALOGS_DIR / name).read_text(encoding="utf-8")))
+        for name in ("ktor-routing.yml", "ktor-client.yml")
+    }
+    routing, client = tables["ktor-routing.yml"], tables["ktor-client.yml"]
+    assert routing and client, tables
+    assert all(table == client[0] for table in [*routing, *client]), tables
+    assert len(client[0]) == 9, client[0]

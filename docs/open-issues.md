@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-221 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-222 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -224,6 +224,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-218 | [SEXTANT-211](https://app.plane.so/portolan/browse/SEXTANT-211/) | Ktor manual SSE (a `get` route writing `ContentType.Text.EventStream`) is an `http` row, not an `sse` row |
 | OI-219 | [SEXTANT-212](https://app.plane.so/portolan/browse/SEXTANT-212/) | Kotlin 2.4 metadata is unreadable (`kotlin-metadata-jvm` 2.2.0): every class kotlinc 2.4 compiles is `partial`, loses nullability, suspend returns, parameter defaults and extension-receiver marks, and an extension's `$default` call is mis-projected |
 | OI-220 | [SEXTANT-213](https://app.plane.so/portolan/browse/SEXTANT-213/) | Ktor type-safe Resources routing (`get<T>`, `handle<T>`) derives nothing |
+| OI-221 | [SEXTANT-214](https://app.plane.so/portolan/browse/SEXTANT-214/) | Ktor follow-ups from the final review: four client and verb gaps (logged, not fixed) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

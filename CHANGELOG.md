@@ -69,17 +69,27 @@ here would restate those documents rather than add anything.
   - **WebSocket and SSE routes** are inbound rows at their nested paths. A WebSocket route has
     no verb. An SSE route is GET.
   - **WebSocket and SSE client calls** are outbound rows that join the same base. A relative
-    WebSocket call takes its own scheme: `ws` for `http`, `wss` for `https`.
+    WebSocket call takes the scheme of the function called, not one derived from the base:
+    `wss(…)` is `wss`, the others are `ws`. The base's port is written where it differs from
+    that scheme's default, so `ws("/feed")` over an `https` base is `ws://…:443/feed`.
 - **Two additions under these rows.** The value walk finds a client through two things that
   are new:
   - **Wider `field_write` facts.** These now record a field or top-level `val` written from a
-    call's result, in static methods too. This covers CP-33 rows 6-7 (D00 §5).
+    call's result, in static methods too. This covers CP-33 rows 6-7 (D00 §5). A write whose
+    value two branches join at the write (`PROD ? "https://prod…" : "https://staging…"`,
+    Kotlin's `?:` and `if`) records nothing, because neither branch's value is the field's
+    only one (CP-33 row 9). Before this rule, a `RestTemplate` reading such a field published
+    the staging address as `resolved`.
   - **A producer reader.** It names the call that built a value, so the client's
     construction, and the `defaultRequest` inside it, can be read.
 - **A client with no declared base is not assumed to send to `http://localhost`.** That is
   Ktor's runtime default, but bytecode cannot prove that nothing set a base. So a relative
   call on such a client stays `unresolved`. This reverses the branch's first ruling and is
   recorded in D02.
+- **A client whose block runs code its caller supplied has no base read.** In `fun
+  mk(block) = HttpClient(CIO) { defaultRequest { url("https://a/") }; block() }`, the caller's
+  `block` may set its own base, so a relative call on that client stays `unresolved` rather
+  than joining `https://a/` (OI-216 item 1, D02).
 - **`method(HttpMethod.Get) { … }` and `route(path, HttpMethod.Put) { … }` now read their verb
   on Ktor 3.x.** Before, they read it only on 3.0.3. `fixtures/orders-ktor` moves to Ktor
   3.6.0, and its 28 routing rows are unchanged.
