@@ -252,9 +252,10 @@ public final class MethodFlow {
 
     /** D00 §5's {@code field_write}: any method, direct traces only. A {@code PUTFIELD} on
      *  {@code this} or a {@code PUTSTATIC}, whose value is a bare parameter load, an
-     *  {@code LDC} constant, or a CALL'S RESULT with nothing but a cast in between — and
-     *  each of those is the whole rule. A computed assignment (concatenation, a default
-     *  expression, a value parked in a local first) never presents one of them, so it
+     *  {@code LDC} constant, or a CALL'S RESULT with nothing but a cast in between, in the
+     *  write's own basic block — and each of those is the whole rule. A computed assignment
+     *  (concatenation, a default expression, a value parked in a local first, a value two
+     *  branches merge at the write) never presents one of them, so it
      *  emits nothing and the resolution that would have followed it degrades honestly
      *  rather than guessing a source.
      *
@@ -315,9 +316,22 @@ public final class MethodFlow {
             // `PUTFIELD` needs its receiver to be `this`, which the triple reads as the
             // `ALOAD 0` right below the value; `PUTSTATIC` has no receiver at all, so the
             // value load alone is the pair.
-            boolean direct = !onThis
-                || (p >= 2 && real.get(p - 2) instanceof VarInsnNode receiverLoad
-                    && receiverLoad.getOpcode() == Opcodes.ALOAD && receiverLoad.var == 0);
+            //
+            // **And the pair or triple must sit in the write's OWN basic block.** The
+            // instruction right below a write is the value only on the straight line into
+            // it: where two branches join AT the write, it is the last branch's value and
+            // the other branch's is just as live. `static String URL = PROD ? "https://prod…"
+            // : "https://staging…"` compiles to `getstatic; ifeq L1; ldc prod; goto L2; L1:
+            // ldc staging; L2: putstatic`, and reading `ldc staging` as the field's one
+            // writer published a `resolved` staging address for a field that also holds the
+            // production one — measured on javac 21 and on kotlinc 2.2's `?:` and `if`
+            // expressions, before this rule (CP-33 row 9). A merged value emits nothing, and
+            // a read of the field answers `no_writer`, which is true.
+            boolean direct = p > 0 && block[p - 1] == block[p]
+                && (!onThis
+                    || (p >= 2 && block[p - 2] == block[p]
+                        && real.get(p - 2) instanceof VarInsnNode receiverLoad
+                        && receiverLoad.getOpcode() == Opcodes.ALOAD && receiverLoad.var == 0));
             // **Three kinds of write, and the last two were invisible until 2026-10-18 and
             // 2026-10-26.** `this.f = parameter` loads the value from a local slot; `private
             // String f = "literal"` loads it from the CONSTANT POOL, which javac compiles into
@@ -360,7 +374,7 @@ public final class MethodFlow {
                 // result qualifies: an `<init>` returns nothing (the value a `NEW` built is
                 // the `NEW`'s, and stays unreported), and an `invokedynamic` is either a
                 // concatenation — computed — or a lambda, which names a body and not a value.
-                MethodInsnNode call = callBefore(real, p);
+                MethodInsnNode call = callBefore(real, block, p);
                 if (call == null) continue;
                 if (onThis) {
                     if (!analysed) {
@@ -381,11 +395,17 @@ public final class MethodFlow {
      *  is the top of the stack, so the instruction right below the write produced it — with
      *  a {@code CHECKCAST} looked through, because a cast re-labels the same reference (the
      *  rule {@link CopyTransparentSourceInterpreter} already applies), and CP-33 row 7
-     *  measured javac putting one there for a generic call's erased result. */
-    private static MethodInsnNode callBefore(List<AbstractInsnNode> real, int p) {
+     *  measured javac putting one there for a generic call's erased result.
+     *
+     *  <p>The call must be in the write's own basic block, the rule the load and constant
+     *  shapes keep too: {@code if (f) HttpClient {…} else HttpClient {…}} ends each branch
+     *  with its own factory call, and the one right below the write is only the else's. The
+     *  CALL's block is compared, not the cast's, since a cast can sit after the join. */
+    private static MethodInsnNode callBefore(List<AbstractInsnNode> real, int[] block, int p) {
         int at = p - 1;
         while (at >= 0 && real.get(at).getOpcode() == Opcodes.CHECKCAST) at--;
-        if (at < 0 || !(real.get(at) instanceof MethodInsnNode call)) return null;
+        if (at < 0 || block[at] != block[p]) return null;
+        if (!(real.get(at) instanceof MethodInsnNode call)) return null;
         return Type.getReturnType(call.desc).getSort() == Type.VOID ? null : call;
     }
 

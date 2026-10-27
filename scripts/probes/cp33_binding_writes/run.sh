@@ -45,6 +45,9 @@ emit_row () {  # $1 = label, $2 = javap method signature prefix
       line = substr($0, RSTART + RLENGTH)
       sub(/[[:space:]]+#[0-9]+.*$/, "", line)
       sub(/[[:space:]]+$/, "", line)
+      # The target offset of a jump is padded with a run of spaces (`ifeq          9`); one
+      # space keeps the offset, which is what shows the two branches meeting.
+      gsub(/[[:space:]]+/, " ", line)
       out = out (out == "" ? "" : "; ") line
     }
     END { print out }')"
@@ -67,6 +70,7 @@ emit_row "a second parameter after a \`long\`"     "public void setSecond(long, 
 emit_row "a static initialiser"                    "static {};"
 emit_row "a field assigned a CALL's result"          "public void setFromCall(java.util.List<java.lang.String>);"
 emit_row "an instance field INITIALISER"             "public probe.BindingWrites();"
+emit_row "a value two branches merge at the write"   "public static void setMerged(boolean);"
 echo
 echo "Full \`javap\` output follows, so a reader can check the extraction above."
 echo

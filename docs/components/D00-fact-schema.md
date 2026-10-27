@@ -1167,7 +1167,8 @@ carries it as `OI-15`.
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
 whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
 parameter load, an `LDC` constant, or an invoke's result with nothing but a `CHECKCAST` in
-between, producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus
+between — and that producer (with a `PUTFIELD`'s `ALOAD 0`) in the write's OWN basic block —
+producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus
 **exactly one** of `from_parameter: N` or `value: <argument-grammar entry>`. A call's result
 is the entry a call argument fed by a call already is — `{"kind": "unresolved", "source": N}`,
 where `N` is that call site's own `result` in the WRITER's frame — so a reader resolves it in
@@ -1185,7 +1186,18 @@ nobody can check:
 * a write whose receiver is another object — `other.f = …` loads that object rather than
   `this`, so the receiver check excludes it. A `PUTSTATIC` has no receiver to check, and is
   reported since 2026-10-26;
-* a constant whose kind the §5 argument grammar has no entry for (a `float`, a method handle).
+* a constant whose kind the §5 argument grammar has no entry for (a `float`, a method handle);
+* a value two branches join AT the write (CP-33 row 9). `static String URL = PROD ?
+  "https://prod…" : "https://staging…"` compiles to `getstatic; ifeq; ldc; goto; ldc;
+  putstatic`, the write a jump target, so the instruction right below it is the last
+  branch's value alone; kotlinc 2.2's `?:` and `if` expressions, and a ternary of two calls,
+  present the same join. Reported, a `RestTemplate` reading that field published `GET
+  staging.example.com /orders resolved`, and a Ktor client built from `val envBase =
+  getenv("PRICING_URL") ?: "https://default…/"` published the default as its base. The rule
+  is the producer's basic block, not a list of shapes: a branch BELOW the producer
+  (`this.url = make(c ? "x" : "y")`) leaves the write reported, because the call is in the
+  write's block and the field holds its one result. A read of a field whose only write
+  merges answers `no_writer`, which is true.
 
 **History, because the fact's reach changed three times:** constructors only until
 2026-10-18, when the `<init>` filter came off and the writes found on real code roughly
@@ -1222,7 +1234,15 @@ the factory, a jar nobody scanned. The other 10 read a continuation's `L$0` — 
 the continuation's `create()` as `other.L$0 = p`, a write into ANOTHER object, which stays
 excluded. Those reads stay unresolved, which is true. No published row moved
 and all six field pins still pass. Every key is OPTIONAL, so a fact written before any of
-these reads exactly as it did and no schema version moved.
+these reads exactly as it did and no schema version moved. **Re-measured 2026-10-27, after
+the same-block rule above:** not one fact moved on any of the six field pins (`apollo-portal`
+1,789, `jhipster-sample-app` 152, `mall-admin` 1,631, `spring-petclinic-rest` 253,
+`spring-petclinic-genai-service` 44, `spring-petclinic-api-gateway` 37, diffed fact by
+fact), nor on the CP-54 probe module, which has grown to 170 writes since the 84 above. Over
+every compiled module under `examples/` (78 class roots) the count went 9,840 → 9,838, and
+both dropped writes are joins of the kind the rule exists for: `ruoyi-vue-pro`'s
+`ApiDecryptRequestWrapper#body` (one decryptor's result or another's) and
+`apollo-build-sql-converter`'s `SqlStatement$Builder#textLines` (a three-way ternary).
 
 **Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-26**, in three
 steps: the walk's sixth edge reads `written_by` and crosses into the writing method (PR #47),

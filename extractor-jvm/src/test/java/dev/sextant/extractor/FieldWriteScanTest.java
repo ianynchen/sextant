@@ -35,15 +35,29 @@ class FieldWriteScanTest {
 
     /** One method of the compiled {@code ConstructorSample}, as javac emitted it. */
     private static MethodNode method(String name, String descriptor) throws Exception {
+        return method("ConstructorSample", name, descriptor);
+    }
+
+    /** One method of a compiled test fixture class, as its compiler emitted it. */
+    private static MethodNode method(String className, String name, String descriptor)
+            throws Exception {
         ClassNode classNode = new ClassNode();
         try (InputStream in = FieldWriteScanTest.class
-                .getResourceAsStream("/dev/sextant/extractor/ConstructorSample.class")) {
+                .getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
             new ClassReader(in.readAllBytes()).accept(classNode, ClassReader.SKIP_FRAMES);
         }
         return classNode.methods.stream()
             .filter(candidate -> name.equals(candidate.name) && candidate.desc.equals(descriptor))
             .findFirst()
-            .orElseThrow(() -> new AssertionError("no " + name + descriptor + " on ConstructorSample"));
+            .orElseThrow(() -> new AssertionError("no " + name + descriptor + " on " + className));
+    }
+
+    /** The writes {@code fieldWrites} reports into one named field of a fixture method. */
+    private static List<String> writesInto(
+            String className, String name, String descriptor, String field) throws Exception {
+        return MethodFlow.fieldWrites("doc", SYMBOL, method(className, name, descriptor)).stream()
+            .filter(line -> line.contains("#" + field + ".\""))
+            .toList();
     }
 
     /** The {@code "source":N} a write's value carries, or -1 where it carries none. */
@@ -418,6 +432,116 @@ class FieldWriteScanTest {
 
         assertEquals(List.of(),
             MethodFlow.fieldWrites("doc", "doc com/acme/Sample#<clinit>(sig_cl).", initialiser));
+    }
+
+    /** **A value two branches merge AT the write emits nothing** (CP-33 row 9). javac's
+     *  {@code host = prod ? "https://prod…" : "https://staging…"} ends each branch with its own
+     *  {@code ldc} and joins them at the {@code putstatic}, so the instruction right below the
+     *  write is the else branch's constant alone. Reported, it published a {@code resolved}
+     *  staging address through a {@code RestTemplate} for a field that also holds the
+     *  production one. Neither constant is the field's one value, so no fact. */
+    @Test
+    void a_java_ternary_of_two_constants_into_a_static_field_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("MergedWriteSample", "ternaryStatic", "(Z)V", "host"));
+    }
+
+    /** {@code host = getenv(k) != null ? getenv(k) : "https://default…"} — the lookup's result
+     *  on one branch and a constant on the other. The constant is the one right below the
+     *  write, and it is the value only when the lookup found nothing. */
+    @Test
+    void a_java_null_default_into_a_static_field_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("MergedWriteSample", "nullDefaultStatic", "()V", "host"));
+    }
+
+    /** {@code this.url = c ? make("x") : make("y")}: each branch ends with its own call, so the
+     *  call right below the write is {@code make("y")}'s alone. The receiver is {@code this}
+     *  on both branches, which the frame confirms; the VALUE is what is merged. */
+    @Test
+    void a_java_ternary_of_two_calls_into_this_field_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("MergedWriteSample", "ternaryField", "(Z)V", "url"));
+    }
+
+    /** {@code this.url = lookup() != null ? lookup() : make("default")} — the null-default
+     *  with a call on both branches. */
+    @Test
+    void a_java_null_default_of_two_calls_into_this_field_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("MergedWriteSample", "nullDefaultField", "()V", "url"));
+    }
+
+    /** {@code this.url = (String) (c ? makeObject("x") : makeObject("y"))}: the branches join
+     *  BEFORE the cast, so the cast is in the write's block and neither call is. The block
+     *  compared is the CALL's, which the cast is looked through to reach. */
+    @Test
+    void a_cast_after_two_calls_join_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("MergedWriteSample", "castAfterTheJoin", "(Z)V", "url"));
+    }
+
+    /** {@code (c ? other : this).url = value} — the RECEIVER merged, the value not. The {@code
+     *  aload_0} two below the write is the else branch's, and the then branch writes
+     *  another object's field, which this fact never reports. */
+    @Test
+    void a_write_whose_receiver_two_branches_merge_emits_nothing() throws Exception {
+        assertEquals(List.of(), writesInto("MergedWriteSample", "mergedReceiver",
+            "(ZLdev/sextant/extractor/MergedWriteSample;Ljava/lang/String;)V", "url"));
+    }
+
+    /** **The near-miss: a branch BELOW the producer leaves the write reported.** {@code
+     *  this.url = make(c ? "x" : "y")} merges the call's ARGUMENT, and the call itself is in the
+     *  write's block, so the field holds that one call's result — which the call site's own
+     *  argument grammar then reports as merged. */
+    @Test
+    void a_branch_in_the_calls_argument_leaves_the_write_reported() throws Exception {
+        MethodNode writer = method("MergedWriteSample", "branchBelowTheCall", "(Z)V");
+        List<String> lines = MethodFlow.fieldWrites("doc", SYMBOL, writer);
+        assertEquals(1, lines.size(), String.join("\n", lines));
+        int source = sourceOf(lines.get(0));
+        assertTrue(MethodFlow.callSites("doc", SYMBOL, writer).stream()
+            .anyMatch(site -> site.contains("\"name\":\"make\"")
+                && site.contains("\"result\":" + source + ",")),
+            "no call site whose result is " + source);
+    }
+
+    /** kotlinc's elvis into a top-level {@code val}: {@code getenv; dup; ifnonnull L; pop;
+     *  ldc; L: putstatic}. The {@code ldc} is the value only when the lookup returned null.
+     *  This is the {@code val envBase = getenv("PRICING_URL") ?: "https://default…"} read by
+     *  {@code defaultRequest { url(envBase) }} that published the default as resolved. */
+    @Test
+    void a_kotlin_elvis_into_a_top_level_val_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("KotlinMergedWritesKt", "<clinit>", "()V", "elvisTop"));
+    }
+
+    /** kotlinc's {@code if} expression into a top-level {@code val}, a factory call on each
+     *  branch — {@code val client = if (f) HttpClient {…} else HttpClient {…}}'s shape. The
+     *  {@code val} beside it, written from one call, is still reported. */
+    @Test
+    void a_kotlin_if_expression_into_a_top_level_val_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("KotlinMergedWritesKt", "<clinit>", "()V", "chosenTop"));
+        assertEquals(1,
+            writesInto("KotlinMergedWritesKt", "<clinit>", "()V", "singleTop").size());
+    }
+
+    /** The elvis into a class property, a call on both sides: {@code putfield} from a call
+     *  that is not the value on every path. */
+    @Test
+    void a_kotlin_elvis_of_two_calls_into_a_property_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("KotlinMergedHolder", "<init>", "(Z)V", "elvis"));
+    }
+
+    /** The {@code if} expression into a class property; its single-call neighbour stays
+     *  reported, so the rule refuses the merge and nothing else in the constructor. */
+    @Test
+    void a_kotlin_if_expression_into_a_property_emits_nothing() throws Exception {
+        assertEquals(List.of(),
+            writesInto("KotlinMergedHolder", "<init>", "(Z)V", "chosen"));
+        assertEquals(1, writesInto("KotlinMergedHolder", "<init>", "(Z)V", "single").size());
     }
 
     /** The pass runs where the method symbol is minted, so a {@code
