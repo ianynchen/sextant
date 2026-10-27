@@ -1921,12 +1921,16 @@ client_base:
   setter: { owner: io.ktor.client.plugins.DefaultRequest$DefaultRequestBuilder, method: url,
             descriptor: "(Ljava/lang/String;)V", value_arg: 0 }
   join: replace_last_segment
-  default_base: "http://localhost"   # where a client nothing sets a base on sends
   may_set_base:                      # calls that may move the base and are not rungs
     - { owner: io.ktor.client.HttpClientConfig, method: install, arg: 0,
         field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
+    - { owner: io.ktor.client.HttpClientConfig, method: install$default, arg: 1,
+        field: { owner: io.ktor.client.plugins.DefaultRequest, name: Plugin } }
     - { owner: io.ktor.client.plugins.DefaultRequestKt }
+    - { owner: io.ktor.http.URLBuilder }
 ```
+
+(The four `may_set_base` entries `ktor-client.yml` ships, in full.)
 
 | key | what it is |
 |---|---|
@@ -1934,7 +1938,6 @@ client_base:
 | `ladder` | a non-empty list of `{owner, method, block_arg, descriptor?, parent?}`: each call whose `block_arg` is a configuration block the base may be set in. `parent: receiver` marks a call that DERIVES a client from the one it is made on, which inherits that client's base where its own block sets none (CP-54 rows 79-80) |
 | `setter` | `{owner, method, value_arg, descriptor?}`: the call inside a block that sets the base, with the address at `value_arg` |
 | `join` | the framework's rule for joining a relative address onto the base, one of `shapes/client_base.py`'s rules. A rule is named for what it does, never for a framework: the code that implements it may not name one (`tests/architecture/test_source_rules.py`), and the catalog choosing it is where the framework is named |
-| `default_base` | the absolute address a client sends a relative call to when its construction is reached and nothing sets a base — Ktor's request builder's origin, `http://localhost` (CP-54 rows 50, 57). Framework knowledge, so catalog data |
 | `may_set_base` | a list (possibly empty) of `{owner, method?, descriptor?, arg?, field?}`: calls that may move the base and are not ladder rungs. An entry naming only `owner` matches every method of it; `arg` and `field` together match only a call whose argument `arg` reads the static field `field` (`{owner, name}`), which is how a plugin handed to a generic installer is told apart (`install(DefaultRequest)`, CP-54 row 92) |
 
 **How the ladder is read.** Every rung without `parent` is read the same way, whether it
@@ -1970,14 +1973,22 @@ walk resolves at the setter — a parameter of the method that built the client,
 the block, crosses to that method's callers. The base each construction answers is read once per resolve, however many calls the client
 makes. The reader answers ONE base or none:
 
-- **the construction is reached and no block sets a base**: `default_base` (CP-54 row 57) —
-  but only where nothing in a reached block MAY have set one. A block declines instead where it
+- **the construction is reached and no declared setter is**: no base, with
+  `computed_base_addresses_not_traced`, exactly as for an unreached construction. **A client with
+  no declared base is not assumed to send to `localhost`: absence cannot be proven from the
+  bytecode.** Ktor does send such a client to its builder's origin, `http://localhost` (CP-54 rows
+  50, 57), and an earlier ruling published that; it was reversed (Task 10 fix round 2) because the
+  forms that set a base without the declared setter — `install(DefaultRequest)`, a
+  caller-supplied `block()`, a helper the block calls — are an open set, and each one left out
+  published a false `localhost`;
+- **a base that was read is not trusted where it may be overridden**: a block declines where it
   holds a call matching a rung or the setter on owner and name under an undeclared descriptor
   (Ktor's `url { … }`, `defaultRequest(replace = true) { … }`), any other call on the setter's
   owner type (`host = …`, `url.takeFrom(…)`), a call `may_set_base` lists, or a call handing the
   block's receiver to a method of THIS module (`configure(this)`: a body scanned and not
   followed — the walk's `reached` test). A library call handed the receiver is governed by
-  `may_set_base` alone, so the compiler's null check and `install(WebSockets)` stay allowed;
+  `may_set_base` alone, so the compiler's null check and `install(WebSockets)` stay allowed
+  beside a declared base;
 - **the setter is handed a configuration key** (`url("${pricing.base-url}")`, a value carrying
   a `${…}` key): the key is the base, rendered exactly as a configuration-fed `base` capture is
   (`fluent._composed_address`: base and path concatenated as written, `peer` NULL —
@@ -1998,11 +2009,10 @@ into peer and path as a written one is. With no base, or where the join declines
 the path the code states, `peer` NULL, at `unresolved`. An absolute address is the whole
 address; a `${…}` expression, and a `partial` or `unresolved` address, read as they always do. A
 catalog not declaring the key keeps a relative address at `resolved` with `peer` NULL, as
-before. Every part is refused at load where malformed: a key other than the six, a missing key,
+before. Every part is refused at load where malformed: a key other than the five, a missing key,
 a position that is not a non-negative integer, an empty ladder, a call naming no `owner` or
-`method`, a `parent` other than `receiver`, a `join` no rule implements, a `default_base`
-that is not an absolute address, and a `may_set_base` that is not a list of well-formed
-entries. The interim word `relative_to_client_base` is folded into this
+`method`, a `parent` other than `receiver`, a `join` no rule implements, and a `may_set_base`
+that is not a list of well-formed entries. The interim word `relative_to_client_base` is folded into this
 key and refused at load.
 
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference

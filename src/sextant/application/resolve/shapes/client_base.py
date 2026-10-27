@@ -9,9 +9,8 @@ rule, not ours (DR-6). Three parts live here, so the `fluent` client catalog and
 - **`client_base_of`**, the key read and its shape refused at load. It says where the client
   sits at the call that issues it (`client_arg`), the configuration calls a base is set
   through (`ladder`, each with the argument holding its block), the call inside the last
-  block that sets the base (`setter`), which join applies (`join`), where a client
-  nothing sets a base on sends (`default_base`), and which other calls may move the base
-  (`may_set_base`). All of it is catalog data: nothing here names a framework.
+  block that sets the base (`setter`), which join applies (`join`), and which other calls
+  may move the base (`may_set_base`). All of it is catalog data: nothing here names a framework.
 - **`join_url`**, the join itself, one rule per behaviour measured. A rule is named for what
   it does, never for the framework that does it (the source rules keep framework names out of
   code); the catalog that declares the join is where the framework is named.
@@ -54,7 +53,7 @@ from sextant.domain.symbols import type_descriptor, with_descriptor
 REPLACE_LAST_SEGMENT = "replace_last_segment"
 _JOINS = (REPLACE_LAST_SEGMENT,)
 
-_KEYS = {"client_arg", "ladder", "setter", "join", "default_base", "may_set_base"}
+_KEYS = {"client_arg", "ladder", "setter", "join", "may_set_base"}
 _RUNG_KEYS = {"owner", "method", "block_arg", "descriptor", "parent"}
 _SETTER_KEYS = {"owner", "method", "value_arg", "descriptor"}
 # One `may_set_base` entry: an owner, optionally narrowed to a method and a descriptor, and
@@ -117,11 +116,6 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
     _call(declared["setter"], _SETTER_KEYS, "value_arg", f"{where}'s `setter`")
     if declared["join"] not in _JOINS:
         raise CatalogError(f"{where}'s `join` is one of {list(_JOINS)}, got {declared['join']!r}")
-    if not isinstance(declared["default_base"], str) or not _has_host(declared["default_base"]):
-        raise CatalogError(
-            f"{where}'s `default_base` is the absolute address a client with no base sends "
-            f"to, got {declared['default_base']!r}"
-        )
     may = declared["may_set_base"]
     if not isinstance(may, list):
         raise CatalogError(f"{where}'s `may_set_base` is a list of calls, got {may!r}")
@@ -222,14 +216,17 @@ def client_base(
       relative one declines the block (row 86, not modelled);
     - **a derived client (`parent: receiver`) whose block sets none inherits** its
       receiver's base (row 80), the receiver walked the same way;
-    - **a client whose construction is reached and sets no base sends to `default_base`**
-      (Ktor: `http://localhost`, rows 50, 57) — but only where nothing in a reached block
-      MAY have set one: a call matching a rung or the setter on owner and name under
-      another descriptor, any other call on the setter's owner type, or a call the catalog
-      lists in `may_set_base` (`install(DefaultRequest) { … }`, row 92) declines the block
-      instead; and so does a block that hands its receiver to a method of this module whose
-      body is not followed (`configure(this)`). Silence is "no base" only where it is
-      silence.
+    - **a construction reached with no declared setter reached gives NO base**
+      (`UNTRACED`), exactly as an unreached one does. Ktor sends such a client's relative
+      call to its builder's origin, `http://localhost` (rows 50, 57), but that the client
+      has no base cannot be proven from the bytecode: the set of forms that set one —
+      `install(DefaultRequest)`, a caller-supplied `block()`, a helper the block calls — is
+      open. (Reversed by ruling, Task 10 fix round 2.)
+    - **a base that WAS read is not silently overridden**: a block declines where it holds
+      a call matching a rung or the setter on owner and name under another descriptor, any
+      other call on the setter's owner type, a call the catalog lists in `may_set_base`
+      (`install(DefaultRequest) { … }`, row 92), or a call handing its receiver to a method
+      of this module whose body is not followed (`configure(this)`).
 
     A base may be a configuration expression (`${pricing.url}`): the setter's value
     resolves to text carrying a `${…}` key. It is answered as it is, and the caller
@@ -280,7 +277,6 @@ class _Ladder:
         ]
         setter = declared["setter"]
         self._setter = {**setter, "owner": type_descriptor(str(setter["owner"]))}
-        self._default = str(declared["default_base"])
         self._may_set = [
             {
                 **entry,
@@ -356,7 +352,9 @@ class _Ladder:
             return base, None
         if rung.get("parent") == _FROM_RECEIVER:
             return self.base_of(site, RECEIVER, seen)
-        return self._default, None
+        # No declared setter was reached. Not "no base": absence cannot be proven from the
+        # bytecode, so the base is unread, as for an unreached construction.
+        return None, UNTRACED
 
     def _block_base(
         self, site: Mapping[str, Any], rung: Mapping[str, Any]
@@ -498,9 +496,9 @@ def join_url(base: str, relative: str, rule: str) -> str | None:
     None where the join DECLINES: the address is one whose result is not modelled, and the
     caller keeps it unresolved rather than publishing a string the framework never sends.
 
-    Only `replace_last_segment` exists. A client with no base at all is the caller's case:
-    Ktor's request builder then takes its origin, `http://localhost` (CP-54 rows 50, 57), and
-    this join with that origin as the base gives the same URL."""
+    Only `replace_last_segment` exists. Ktor sends a client with no base to its request
+    builder's origin, `http://localhost` (CP-54 rows 50, 57), and this join with that origin
+    as the base gives the same URL — but the reader never assumes that a client has none."""
     if rule != REPLACE_LAST_SEGMENT:
         raise ValueError(f"no join rule {rule!r}; the rules are {list(_JOINS)}")
     return _replace_last_segment(base, relative)

@@ -160,7 +160,6 @@ def test_the_ktor_client_catalog_declares_its_base_ladder():
     assert declared["setter"]["method"] == "url"
     assert declared["setter"]["value_arg"] == 0
     assert declared["join"] == REPLACE_LAST_SEGMENT
-    assert declared["default_base"] == "http://localhost"
     assert {entry["owner"] for entry in declared["may_set_base"]} == {
         "io.ktor.client.HttpClientConfig",
         "io.ktor.client.plugins.DefaultRequestKt",
@@ -173,7 +172,6 @@ _LADDER = {
     "ladder": [{"owner": "com.acme.http.ClientKt", "method": "Client", "block_arg": 1}],
     "setter": {"owner": "com.acme.http.Defaults", "method": "url", "value_arg": 0},
     "join": REPLACE_LAST_SEGMENT,
-    "default_base": "http://localhost",
     "may_set_base": [],
 }
 
@@ -193,8 +191,7 @@ _LADDER = {
         ),
         ({**_LADDER, "setter": {"owner": "com.acme.Defaults", "method": "url"}}, "value_arg"),
         ({**_LADDER, "join": "concatenate"}, "join"),
-        ({**_LADDER, "default_base": "localhost"}, "default_base"),
-        ({key: value for key, value in _LADDER.items() if key != "default_base"}, "default_base"),
+        ({key: value for key, value in _LADDER.items() if key != "may_set_base"}, "may_set_base"),
         ({**_LADDER, "may_set_base": {"owner": "com.acme.Kt"}}, "may_set_base"),
         ({**_LADDER, "may_set_base": [{"method": "install"}]}, "owner"),
         ({**_LADDER, "may_set_base": [{"owner": "com.acme.Kt", "arg": 0}]}, "field"),
@@ -561,13 +558,21 @@ def test_a_derived_client_with_no_base_of_its_own_inherits_its_parents(tmp_path:
     assert _why(tmp_path / "why", unnamed, _fn("child")) == (None, "not_readable")
 
 
-@pytest.mark.pins("ktor.a-client-with-NO-base-sends-to-the-builders-origin")
-def test_a_client_built_with_no_base_sends_to_localhost(tmp_path: Path):
-    """A client whose construction is reached and declares no `defaultRequest`: Ktor sends
-    the relative address to its request builder's origin, `http://localhost` (CP-54 rows
-    50, 57) — the URL the module really calls, so the row says so."""
+@pytest.mark.declines("ktor-client")
+@pytest.mark.pins("ktor.a-client-with-no-DECLARED-base-is-not-assumed-localhost")
+def test_a_client_with_no_declared_base_stays_relative(tmp_path: Path):
+    """A client whose construction is reached and whose blocks reach no declared setter.
+    Ktor sends such a client's relative call to its builder's origin, `http://localhost`
+    (CP-54 rows 50, 57), but that the client HAS no base cannot be proven from the
+    bytecode: `install(DefaultRequest)`, a caller-supplied `block()`, a helper the block
+    calls all set one, and the set is open. So the call stays relative and unresolved, as
+    for a construction not reached at all (ruling reversed, Task 10 fix round 2)."""
     facts = [*_top_level("client", 1, []), *_on("client", _fn("local"), "orders")]
-    assert _client_rows(tmp_path, facts) == [(_fn("local"), "localhost", "/orders", "resolved")]
+    assert _client_rows(tmp_path, facts) == [(_fn("local"), None, "orders", "unresolved")]
+    assert _why(tmp_path / "why", facts, _fn("local")) == (
+        None,
+        "computed_base_addresses_not_traced",
+    )
 
 
 @pytest.mark.pins("ktor.the-ENGINE-LESS-factory-is-a-ladder-rung")
@@ -825,9 +830,14 @@ _WEBSOCKETS_PLUGIN = CallArgument(
 )
 
 
+_PRICING = "https://pricing.example.com/"
+
+
 def _plain_client(extra: list[CallSiteFact], inner: list[CallSiteFact] | None = None) -> list:
-    """`val client = HttpClient(CIO) { <extra> }` with no `defaultRequest`, or, where `inner`
-    is given, `HttpClient(CIO) { defaultRequest { <inner> } }`; and `client.get("orders")`."""
+    """`val client = HttpClient(CIO) { <extra>; defaultRequest { url(_PRICING); <inner> } }`
+    and `client.get("orders")`: a client whose base IS read, so each rule below is seen
+    protecting that base from a call that may override it. `inner` sites take ordinals
+    from 1, after the setter."""
     outer = _MODULE + _body("client$lambda$0")
     facts = [
         _call(
@@ -845,20 +855,18 @@ def _plain_client(extra: list[CallSiteFact], inner: list[CallSiteFact] | None = 
         ),
         *extra,
         *_on("client", _fn("orders"), "orders"),
+        _call(
+            outer,
+            9,
+            _DEFAULT_REQUEST,
+            [
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_body("client$lambda$0$0"), source=7),
+            ],
+        ),
+        _in_default_request(0, _SETTER, [_base(_PRICING)]),
+        *(inner or []),
     ]
-    if inner is not None:
-        facts.append(
-            _call(
-                outer,
-                9,
-                _DEFAULT_REQUEST,
-                [
-                    CallArgument(kind="parameter", value=0),
-                    CallArgument(kind="lambda", symbol=_body("client$lambda$0$0"), source=7),
-                ],
-            )
-        )
-        facts.extend(inner)
     return facts
 
 
@@ -877,15 +885,14 @@ def _in_default_request(ordinal: int, target, arguments: list[CallArgument]) -> 
     )
 
 
-_LOCALHOST_ROW = (_fn("orders"), "localhost", "/orders", "resolved")
+_BASED_ROW = (_fn("orders"), "pricing.example.com", "/orders", "resolved")
 _DECLINED_ROW = (_fn("orders"), None, "orders", "unresolved")
 
 
-@pytest.mark.pins("ktor.a-client-with-NO-base-sends-to-the-builders-origin")
-def test_a_call_that_sets_no_base_keeps_the_localhost_answer(tmp_path: Path):
-    """`HttpClient(CIO) { install(WebSockets) }` — a plugin that sets no base, installed
-    through the `install$default` bridge (CP-54 row 92): the client still sends to
-    `http://localhost`, so only calls that MAY move the base decline."""
+def test_a_call_that_sets_no_base_keeps_the_read_base(tmp_path: Path):
+    """`install(WebSockets)` — a plugin that sets no base, installed through the
+    `install$default` bridge (CP-54 row 92) — beside a declared base: the base stands, so
+    only calls that MAY move the base decline."""
     facts = _plain_client(
         [
             _in_client_block(
@@ -901,17 +908,17 @@ def test_a_call_that_sets_no_base_keeps_the_localhost_answer(tmp_path: Path):
             )
         ]
     )
-    assert _client_rows(tmp_path, facts) == [_LOCALHOST_ROW]
+    assert _client_rows(tmp_path, facts) == [_BASED_ROW]
 
 
-def test_a_rung_or_setter_under_another_descriptor_declines_rather_than_localhost(
+def test_a_rung_or_setter_under_another_descriptor_declines_the_read_base(
     tmp_path: Path,
 ):
     """`defaultRequest(replace = true) { … }` (row 48's second overload) in the client's block,
-    and `url { host = … }` (row 46's block setter) in a `defaultRequest` block: each may set
-    the base, and neither is read, so the block's silence is not "no base" — the call keeps
-    its path rather than publish `localhost`. Either alone declines. (On Ktor's catalog two
-    rules cover each; the rule alone is pinned on an invented ladder below.)"""
+    and `url { host = … }` (row 46's block setter) in a `defaultRequest` block: each may
+    override the base that was read, so the call keeps its path rather than publish it.
+    Either alone declines. (On Ktor's catalog two rules cover each; the rule alone is
+    pinned on an invented ladder below.)"""
     replace = _plain_client(
         [
             _in_client_block(
@@ -930,7 +937,7 @@ def test_a_rung_or_setter_under_another_descriptor_declines_rather_than_localhos
         [],
         inner=[
             _in_default_request(
-                0, _URL_BLOCK, [CallArgument(kind="lambda", symbol=_body("u$lambda"), source=3)]
+                1, _URL_BLOCK, [CallArgument(kind="lambda", symbol=_body("u$lambda"), source=3)]
             )
         ],
     )
@@ -940,22 +947,22 @@ def test_a_rung_or_setter_under_another_descriptor_declines_rather_than_localhos
 @pytest.mark.declines("ktor-client")
 @pytest.mark.pins("ktor.any-other-call-on-the-SETTERS-owner-declines")
 def test_any_other_call_on_the_setters_owner_declines(tmp_path: Path):
-    """`defaultRequest { host = "pricing.example.com" }`: `setHost` on the setter's own type
-    moves the base and is not the declared setter, so the block is not read as setting
-    none."""
+    """`defaultRequest { url(…); host = "other.example.com" }`: `setHost` on the setter's own
+    type moves the base that was read and is not the declared setter, so the base is not
+    published."""
     facts = _plain_client(
-        [], inner=[_in_default_request(0, _SET_HOST, [_base("pricing.example.com")])]
+        [], inner=[_in_default_request(1, _SET_HOST, [_base("other.example.com")])]
     )
     assert _client_rows(tmp_path, facts) == [_DECLINED_ROW]
 
 
 @pytest.mark.declines("ktor-client")
 @pytest.mark.pins("ktor.a-LISTED-call-that-may-set-the-base-declines")
-def test_install_default_request_declines_rather_than_localhost(tmp_path: Path):
-    """`HttpClient(CIO) { install(DefaultRequest) { url("https://installed.example.com/") } }`
-    sets the base as `defaultRequest { }` does (CP-54 rows 92-93), through a generic
-    installer the ladder does not read; `may_set_base` names it, so the client is not read
-    as having no base."""
+def test_install_default_request_declines_the_read_base(tmp_path: Path):
+    """`install(DefaultRequest) { url("https://installed.example.com/") }` beside a declared
+    base sets a base as `defaultRequest { }` does (CP-54 rows 92-93), through a generic
+    installer the ladder does not read; `may_set_base` names it, so the base that was read
+    is not published as the one Ktor uses."""
     facts = _plain_client(
         [
             _in_client_block(
@@ -1079,7 +1086,6 @@ _ACME_LADDER = {
     ],
     "setter": {"owner": "com.acme.http.Defaults", "method": "url", "value_arg": 0},
     "join": REPLACE_LAST_SEGMENT,
-    "default_base": "http://localhost",
     "may_set_base": [],
 }
 
@@ -1104,6 +1110,28 @@ def _acme_client(block_calls: list[CallSiteFact]) -> list:
             written_by=_CLINIT,
         ),
         *block_calls,
+        # `defaults { url("https://acme.example.com/") }`, the declared nested rung.
+        _call(
+            _MODULE + _body("acme$lambda$0"),
+            5,
+            (
+                "com/acme/http/DefaultsKt#",
+                "defaults",
+                "(Lcom/acme/http/Config;Lkotlin/jvm/functions/Function1;)V",
+            ),
+            [
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_body("acme$lambda$0$0"), source=7),
+            ],
+        ),
+        _call(
+            _MODULE + _body("acme$lambda$0$0"),
+            0,
+            ("com/acme/http/Defaults#", "url", "(Ljava/lang/String;)V"),
+            [_base("https://acme.example.com/")],
+            invoke_kind="virtual",
+            receiver_parameter=0,
+        ),
         _call(caller, 0, (builder, "<init>", "()V"), [], invoke_kind="special", receiver=2),
         _call(
             caller,
@@ -1138,11 +1166,11 @@ def _acme_client(block_calls: list[CallSiteFact]) -> list:
 def test_a_rung_under_another_descriptor_declines_on_any_ladder(tmp_path: Path):
     """The rule itself, with nothing else to catch the call: `defaults` under an undeclared
     descriptor in the factory's block may set the base, so the client is not read as having
-    none. Without that call the same client sends to `default_base`."""
+    none. Without that call the same client's declared base is read."""
     catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": _ACME_LADDER})
     plain = _acme_client([])
     assert _client_rows(tmp_path / "plain", plain, catalog) == [
-        (_fn("acme"), "localhost", "/orders", "resolved")
+        (_fn("acme"), "acme.example.com", "/orders", "resolved")
     ]
     other = _acme_client(
         [
@@ -1209,13 +1237,13 @@ def test_a_block_handing_its_receiver_to_module_code_declines(tmp_path: Path):
             [_in_client_block(0, (_FILE, "log", "(Ljava/lang/String;)V"), [_base("x")])]
         ),
     ]
-    assert _client_rows(tmp_path / "other", other) == [_LOCALHOST_ROW]
+    assert _client_rows(tmp_path / "other", other) == [_BASED_ROW]
 
 
 def test_the_null_check_on_the_receiver_does_not_decline(tmp_path: Path):
     """Kotlin opens every block body with `Intrinsics.checkNotNullParameter(this, …)`: a
     library call handed the receiver, which `may_set_base` does not list, so a plain client
-    still sends to `localhost`."""
+    keeps its declared base."""
     facts = _plain_client(
         [
             _in_client_block(
@@ -1223,4 +1251,4 @@ def test_the_null_check_on_the_receiver_does_not_decline(tmp_path: Path):
             )
         ]
     )
-    assert _client_rows(tmp_path, facts) == [_LOCALHOST_ROW]
+    assert _client_rows(tmp_path, facts) == [_BASED_ROW]

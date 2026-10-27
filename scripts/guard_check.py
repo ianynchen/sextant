@@ -5078,17 +5078,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "ktor.a-client-with-NO-base-sends-to-the-builders-origin": Guard(
-        what="a client whose construction is reached and whose blocks set no base sends a "
-        "relative call to the catalog's `default_base`",
-        why="Ktor sends a relative call on a client with no `defaultRequest` to its request "
-        "builder's origin, `http://localhost` (CP-54 rows 50, 57). Answered as no base, the "
-        "row publishes a bare path for a call whose destination the code fixes",
+    "ktor.a-client-with-no-DECLARED-base-is-not-assumed-localhost": Guard(
+        what="a construction reached with no declared setter reached gives no base, as an "
+        "unreached one does",
+        why="Ktor sends a client with no base to `http://localhost` (CP-54 rows 50, 57), but "
+        "that a client has none cannot be proven from the bytecode: `install(DefaultRequest)`, "
+        "a caller-supplied `block()` or a helper the block calls may each set one, and the set "
+        "is open. Assumed, the row publishes `localhost` for a call Ktor sends elsewhere",
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="        return self._default, None\n",
-                replace="        return None, UNTRACED  # guard disabled by scripts/guard_check.py\n",
+                find="        # bytecode, so the base is unread, as for an unreached construction.\n"
+                "        return None, UNTRACED\n",
+                replace="        # bytecode, so the base is unread, as for an unreached construction.\n"
+                '        return "http://localhost", None  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),

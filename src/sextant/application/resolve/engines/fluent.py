@@ -1702,8 +1702,9 @@ def _against_client_base(
 ) -> tuple[str | None, str | None, str]:
     """`address` where the catalog says a relative address is relative to a base the
     executing CLIENT holds (`client_base`, spec 2026-10-26 §3c): Ktor joins
-    `get("relative/path")` onto the client's `defaultRequest` base, and onto
-    `http://localhost` where it has none (CP-54 rows 51-57).
+    `get("relative/path")` onto the client's `defaultRequest` base (CP-54 rows 51-56). A
+    client with no declared base is not assumed to send to `http://localhost` (rows 50, 57):
+    absence cannot be proven from the bytecode, so its relative call stays unresolved.
 
     The base is `shapes.client_base.client_base`'s, read off the client the chain was
     issued on (`_hold_client`), and the join is the catalog's rule; the joined URL is split
