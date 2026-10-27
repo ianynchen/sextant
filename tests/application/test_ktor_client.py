@@ -267,10 +267,11 @@ def test_a_builder_with_no_verb_set_is_get(tmp_path: Path):
 @pytest.mark.pins("fluent.a-RELATIVE-address-off-a-client-base-is-unresolved")
 def test_a_relative_url_with_no_base_stays_relative_and_unresolved(tmp_path: Path):
     """`client.get("relative/path")` (CP-54 row 14). Ktor joins a relative address onto the
-    client's `defaultRequest` base, or onto `http://localhost` where it has none (CP-54
-    row 57), and this client's construction is not reached: the field it is read from has
-    no writer. So the row keeps the relative path it states and is `unresolved`, with no
-    peer: the code says which path, not which service."""
+    client's `defaultRequest` base, and this client's construction is not reached: the
+    field it is read from has no writer. So the row keeps the relative path it states and
+    is `unresolved`, with no peer: the code says which path, not which service. (Ktor's own
+    `http://localhost` for a client with no base, CP-54 row 57, is never assumed either,
+    D02.)"""
     facts = _inlined_call(_caller("relative"), "relative/path", verbs=(None, "Get"))
     assert _rows(tmp_path, facts) == [
         (_caller("relative"), "outbound", "GET", None, "relative/path", "unresolved", False)

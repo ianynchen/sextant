@@ -922,8 +922,18 @@ def _requirements(metadata: list[dict]) -> set[tuple]:
 
 
 @pytest.fixture(scope="module")
-def ktor_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
-    return _analyzed_tables(KTOR, tmp_path_factory.mktemp("ktor"))
+def ktor_tables(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    """The two tables, and the module document one `render` of the same analysis writes
+    (`document`): the Ktor client, WebSocket and SSE pins below read the rows in the
+    document as well as in the table, because the document is the result."""
+    workspace_dir = tmp_path_factory.mktemp("ktor")
+    tables: dict = _analyzed_tables(KTOR, workspace_dir)
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(KTOR), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    tables["document"] = (workspace_dir / "render" / "architecture.md").read_text(encoding="utf-8")
+    return tables
 
 
 @pytest.fixture(scope="module")
@@ -946,9 +956,9 @@ def _suspend_body(handler_class: str) -> str:
 
 def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     """`ktor-routing`, spec §14 test 13. `routing { route("/api") { get("/orders") { }
-    … } }` on ktor-server-core 3.6.0 (and on 3.0.3, the class-lambda twin below): every
-    verb is a static extension whose receiver is argument 0, every block an
-    `invokedynamic` body, and the route is the prefix chain the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
+    … } }` on ktor-server-core 3.6.0: every verb is a static extension whose receiver is
+    argument 0, every block an `invokedynamic` body, and the route is the prefix chain
+    the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
     on the prefix node itself (`javap -c`), so it serves `/api` — the empty literal
     path, never `/api/**`. The slashless `route("legacy") { get("orders") { } }` reads
     `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
@@ -1049,12 +1059,12 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     # fixture, §5d, asserted on `endpoint_metadata` below) — so an extra row (a conflict's
     # route, a duplicate) cannot pass silently. Re-pinned 2026-10-26 when the fixture moved
     # to Ktor 3.6.0 (spec 2026-10-26 §3f): the count was of the whole fixture, and
-    # `KtorStreams.kt` and `KtorClient.kt` add ten rows of their own (three inbound, seven
-    # outbound, pinned by the tests below), so the twenty-eight are counted on the file they
-    # come from and the fixture's whole count is thirty-eight. No `KtorRoutes.kt` row moved.
+    # `KtorStreams.kt` and `KtorClient.kt` add thirteen rows of their own (three inbound,
+    # ten outbound, pinned by the tests below), so the twenty-eight are counted on the file
+    # they come from and the fixture's whole count is forty-one. No `KtorRoutes.kt` row moved.
     routes = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
     assert len(routes) == 28, sorted(rows, key=str)
-    assert len(ktor_rows) == 38, sorted(map(str, ktor_rows))
+    assert len(ktor_rows) == 41, sorted(map(str, ktor_rows))
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
@@ -1232,7 +1242,8 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
     under BOTH profiles — a suspend lambda is a class either way — so even the handler
     column agrees once the module prefix is dropped. A difference here is a shape one
     profile reads and the other does not, and it is reported, not tolerated."""
-    # Re-pinned 2026-10-26: `orders-ktor` moved to Ktor 3.6.0 and Kotlin 2.4.20 and gained
+    # Re-pinned 2026-10-26: `orders-ktor` moved to Ktor 3.6.0 (Kotlin stays 2.2.0 until
+    # OI-219: the extractor cannot read Kotlin 2.4 metadata) and gained
     # `KtorStreams.kt` and `KtorClient.kt` (spec 2026-10-26 §3f), which the twin does not
     # compile — it stays on Ktor 3.0.3 and Kotlin 2.2.0. The comparison is of the one source
     # both build, `KtorRoutes.kt`, so it now also says that source derives the same rows on
@@ -1365,11 +1376,17 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     `client.request(…) { method = HttpMethod.Put }` reads its verb off the static field, as
     the routing selector above does. The WebSocket call is the whole URL in `path`, peer
     NULL, verbless (`jakarta-websocket-client.yml`'s shape); the SSE call is GET, split into
-    peer and path."""
+    peer and path.
+
+    The RELATIVE WebSocket and SSE calls join the same base, on real bytecode: `client.ws(
+    "/feed")` sends with its own scheme and keeps the base's port, which Ktor writes because
+    443 is not `ws`'s default — `ws://pricing.example.com:443/feed`, as CP-54's rows 94-113
+    measured (`request_url: {scheme: ws}`); `client.sse("ticks")` joins as `get` does, `GET
+    pricing.example.com /ticks` (rows 114-123)."""
     http = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in ktor_rows
-        if r["catalog_id"] == "ktor-client"
+        if r["catalog_id"] == "ktor-client" and "#bareOrders(" not in str(r["caller"])
     }
     assert http == {
         ("GET", "pricing.example.com", "/quotes", "resolved"),
@@ -1393,12 +1410,63 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
             "resolved",
         ),
         ("ktor-sse-client", "sse", "GET", "events.example.com", "/stream", "resolved"),
+        (
+            "ktor-websocket-client",
+            "websocket",
+            None,
+            None,
+            "ws://pricing.example.com:443/feed",
+            "resolved",
+        ),
+        ("ktor-sse-client", "sse", "GET", "pricing.example.com", "/ticks", "resolved"),
     }, sorted(streams, key=str)
     assert all(
         r["direction"] == "outbound"
         for r in ktor_rows
         if r["catalog_id"] in ("ktor-client", "ktor-websocket-client", "ktor-sse-client")
     )
+
+
+def test_a_ktor_client_with_no_declared_base_is_not_sent_to_localhost(ktor_rows):
+    """`val bare = HttpClient(CIO) { expectSuccess = true }` and `bare.get("orders")`. The
+    walk reaches the construction and its block, a rung of the ladder, and the block calls
+    no base setter. Ktor would send the request to `http://localhost/orders` (CP-54 rows 50,
+    57), but that nothing set a base cannot be proven from bytecode, so the row keeps the
+    path it states, peer NULL, at `unresolved` — never a resolved `localhost` (D02, the
+    branch's reversal of its first ruling)."""
+    bare = [
+        (r["catalog_id"], r["method"], r["peer"], r["path"], r["resolution"])
+        for r in ktor_rows
+        if "#bareOrders(" in str(r["caller"])
+    ]
+    assert bare == [("ktor-client", "GET", None, "orders", "unresolved")], bare
+    assert not any("localhost" in str(r["peer"]) + str(r["path"]) for r in ktor_rows)
+
+
+def test_ktor_client_and_stream_rows_reach_the_module_document(ktor_tables):
+    """The document is the result: the outbound HTTP, WebSocket and SSE rows, and an inbound
+    WebSocket route, as `module render` writes them into `architecture.md` — each with its
+    destination. HTTP and SSE rows name their peer in the Peer column; a WebSocket row
+    carries the whole URL in its identity and records no peer; the base-less call is
+    `unresolved` and names no peer."""
+    document = ktor_tables["document"]
+    outbound = document.split("## Outbound endpoints", 1)[1].split("\n## ", 1)[0]
+    for line in (
+        "| `GET /quotes` | pricing.example.com | `com/acme/kt/KtorClientKt#quotes(",
+        "| `PUT /orders/7` | orders.example.com | `com/acme/kt/KtorClientKt#replaceOrder(",
+        "| `GET orders` | none recorded | `com/acme/kt/KtorClientKt#bareOrders(",
+        "| `sse GET /stream` | events.example.com | `com/acme/kt/KtorClientKt#events(",
+        "| `sse GET /ticks` | pricing.example.com | `com/acme/kt/KtorClientKt#ticks(",
+        "| `websocket ws://chat.example.com/chat` | none recorded | `com/acme/kt/KtorClientKt#chat(",
+        (
+            "| `websocket ws://pricing.example.com:443/feed` | none recorded "
+            "| `com/acme/kt/KtorClientKt#feed("
+        ),
+    ):
+        assert line in outbound, (line, outbound)
+    assert "| `GET orders` | none recorded" in outbound and "localhost" not in outbound
+    assert "| `websocket /api/chat` | `KtorStreamsKt$streams$1$1$1#invokeSuspend` |" in document
+    assert "| `sse GET /api/events` | `KtorStreamsKt$streams$1$1$2#invokeSuspend` |" in document
 
 
 GATEWAY = FIXTURES / "orders-gateway"

@@ -9,8 +9,8 @@
        `invokedynamic` body by default is a `Lambda` CLASS here, the shape every Kotlin
        build before 2.0 produced (CP-23's harness doubles as the fixture). The e2e asserts
        the two builds derive identical endpoint rows from that file. It stays on Ktor 3.0.3
-       and Kotlin 2.2.0 when `orders-ktor` moves to 3.6.0 and 2.4.20 (spec 2026-10-26 §3f),
-       so the 3.0.3 shapes stay pinned on real bytecode. -->
+       when `orders-ktor` moves to 3.6.0 (spec 2026-10-26 §3f), so the 3.0.3 shapes stay
+       pinned on real bytecode. Both are on Kotlin 2.2.0 until OI-219. -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
     <kotlin.version>2.2.0</kotlin.version>

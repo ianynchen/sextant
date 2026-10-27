@@ -230,12 +230,24 @@ The pins are in `tests/e2e/test_rest_inbound_delivered.py`:
   - `GET orders.example.com /prepared`.
 - The same test, outbound: `ktor-websocket-client` `ws://chat.example.com/chat` (peer NULL,
   verbless), and `ktor-sse-client` `GET events.example.com /stream`.
+- The same test, the RELATIVE stream calls on the base-declaring client (fix round 1):
+  - `client.ws("/feed")` is `ws://pricing.example.com:443/feed`: the call's own scheme, with
+    the base's port written because 443 is not `ws`'s default (CP-54 rows 94-113);
+  - `client.sse("ticks")` is `GET pricing.example.com /ticks`.
+- `test_a_ktor_client_with_no_declared_base_is_not_sent_to_localhost` (fix round 1): `val
+  bare = HttpClient(CIO) { expectSuccess = true }` plus `bare.get("orders")`. The ladder
+  reaches the block and finds no setter, so the row is `GET`, peer NULL, `orders`,
+  `unresolved`, and no row anywhere names `localhost`.
+- `test_ktor_client_and_stream_rows_reach_the_module_document` (fix round 1): `module render`
+  writes every one of those outbound rows into `architecture.md` with its destination, and
+  the inbound `websocket /api/chat` and `sse GET /api/events` too.
 
-Both tests failed on the Ktor 3.0.3 fixture, and pass as first written.
+The first two tests failed on the Ktor 3.0.3 fixture and pass as first written; the
+fix-round-1 additions were written against the 3.6.0 fixture and pass as written.
 
 Three counts were re-pinned, each because the fixture gained files, and none was deleted:
 - The routing test's 28 is now counted on `KtorRoutes.kt` rows, and the fixture's whole count
-  is 38: 28 + 3 inbound + 7 outbound.
+  is 41: 28 + 3 inbound + 10 outbound.
 - The twin comparison is of `KtorRoutes.kt` rows. The same source derives the same 28 rows on
   Ktor 3.0.3 and on 3.6.0.
 - `test_ktor_defaults_fixture.py`'s 28 under its routing-only test catalog is counted on
@@ -280,7 +292,8 @@ analyze` through a scratchpad Maven wrapper (a `pom.xml` naming Ktor 3.6.0, and 
 classes as `target/classes`). Nothing was written inside them.
 
 **Both are Kotlin 2.4.20**, so every class is `partial` under OI-219 (7 of 9 and 33 of 35
-documents). No Ktor row depends on what that loses.
+documents). No Ktor row affected by what that loses was observed, but that cannot be
+measured until OI-219 lands.
 
 | Corpus | HTTP client rows | WebSocket / SSE rows | Verbs read from `method(...)` |
 |---|---|---|---|
@@ -288,6 +301,13 @@ documents). No Ktor row depends on what that loses.
 | `kotlin-ktor-exposed-starter` | none (its client is only in `src/test`) | inbound `websocket /updates`, resolved. `webSocket("/updates")` sits in the `Route.widget()` helper beside `route("/widgets")`, not inside it, so §2b's "inside a nested route" is loose wording; the route is reached through a helper. Beside it, six resolved HTTP rows (`/widgets`, `/widgets/{id}`, `/`). | none written |
 | `ktor-samples/youkube` | not built: its wrapper fails at configuration (`jvmToolchain(17)`, no JDK 17, and no toolchain repository) | — | — |
 | `koog` | not built, so not measured | — | — |
+
+**No built corpus has a WebSocket or SSE client call.** The WebSocket clients §2c counts
+are in ktor-samples modules that were not built, and the SSE clients are in koog. So the
+relative joins, the WebSocket scheme rewrite included, are pinned on the fixture's bytecode
+(`client.ws("/feed")`, `client.sse("ticks")`, above), on CP-54's probe module, and by the
+hand-written facts of `tests/application/test_ktor_ws_sse_clients.py`; no real corpus
+exercises them yet.
 
 **Findings, logged:**
 - **youkube.** Its `method(HttpMethod.Get) { handle<Login> { } }` (§2d) is the Resources

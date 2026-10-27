@@ -20,6 +20,7 @@ import io.ktor.client.plugins.sse.SSE
 import io.ktor.client.plugins.sse.sse
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.client.plugins.websocket.ws
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.prepareGet
@@ -42,3 +43,18 @@ suspend fun prepared() = client.prepareGet("https://orders.example.com/prepared"
 
 suspend fun chat() = client.webSocket("ws://chat.example.com/chat") { }
 suspend fun events() = client.sse("https://events.example.com/stream") { }
+
+// Relative WebSocket and SSE calls join the same base. A WebSocket call sends with its OWN
+// scheme and keeps the base's port, which Ktor writes where it differs from the new scheme's
+// default: `ws("/feed")` over `https://pricing.example.com/` is
+// `ws://pricing.example.com:443/feed` (CP-54 rows 94-113). `sse("ticks")` joins as `get` does.
+suspend fun feed() = client.ws("/feed") { }
+suspend fun ticks() = client.sse("ticks") { }
+
+// A client whose block declares no base. Ktor would send its relative call to
+// `http://localhost`, but bytecode cannot prove nothing set a base, so the call stays relative
+// and unresolved (D02). The block is a reached rung of the ladder, so this is the no-base case
+// itself, not a construction the walk could not read.
+val bare = HttpClient(CIO) { expectSuccess = true }
+
+suspend fun bareOrders() = bare.get("orders")
