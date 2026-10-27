@@ -1,6 +1,6 @@
 package dev.sextant.extractor;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
@@ -34,10 +34,31 @@ class EnumScanTest {
     /** {@code $VALUES} is compiler machinery, not a declaration: nobody wrote
      *  it, so there is no fact to emit about it. A modifier would be the wrong
      *  answer — that says "a field somebody declared, kept off the wire" — and
-     *  the symbol graph would carry a member no source file contains. */
+     *  the symbol graph would carry a member no source file contains.
+     *
+     *  <p>**The one fact that does name it is the WRITE**, and that is a fact about an
+     *  instruction rather than a declaration: {@code <clinit>} stores {@code $values()}'s
+     *  result into the field, which D00 §5's {@code field_write} reports since 2026-10-26
+     *  (CP-33 row 6). A write into a compiler-made field was a fact before that too — a
+     *  Kotlin lambda class's captured {@code $seen} is {@code ACC_SYNTHETIC}, and the walk
+     *  reads its write — so that one write is the only line allowed to name it, and it is
+     *  asserted exactly: one {@code field_write}, by {@code <clinit>}.
+     *
+     *  <p>**And one READ, since 2026-10-26.** {@code values()} is {@code $VALUES.clone()},
+     *  a call whose receiver is a {@code getstatic}, and D00 §5's {@code receiver_field}
+     *  names the field such a receiver was read from — an instruction fact again, the same
+     *  name an argument read the same way carries. Re-pinned from one line to two for that
+     *  reason, and the second line is asserted exactly too. */
     @Test
     void emits_no_fact_at_all_for_a_compiler_synthesized_field() throws Exception {
-        assertFalse(scanVerb().stream().anyMatch(line -> line.contains("VALUES")));
+        List<String> naming = scanVerb().stream().filter(line -> line.contains("VALUES")).toList();
+        assertEquals(2, naming.size(), String.join("\n", naming));
+        assertTrue(naming.stream().anyMatch(line -> line.contains("\"kind\":\"field_write\"")
+            && line.contains("\"field\":\"dev/sextant/extractor/Verb#$VALUES.\"")
+            && line.contains("#<clinit>(")), String.join("\n", naming));
+        assertTrue(naming.stream().anyMatch(line -> line.contains("\"kind\":\"call_site\"")
+            && line.contains("\"receiver_field\":\"dev/sextant/extractor/Verb#$VALUES.\"")
+            && line.contains("#values(")), String.join("\n", naming));
     }
 
     /** The constants themselves are declarations, and they are bound to the

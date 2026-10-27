@@ -1,0 +1,138 @@
+id: ktor-sse-client
+displayName: Ktor SSE client (sse, sseSession, serverSentEvents, serverSentEventsSession)
+style: single_call
+protocol: sse
+direction: outbound
+
+# Ktor's SSE client functions live in `ktor-client-core` itself (the plugin's `BuildersKt`),
+# so the coordinates are the HTTP client's; `single_call` is not a gated style
+# (`resolve/dependencies.py`), so this list describes the library and decides nothing about
+# which modules are read.
+detect:
+  coordinates: ["io.ktor:ktor-client-core-jvm", "io.ktor:ktor-client-core"]
+
+measured:
+  - { artifact: io.ktor:ktor-client-core-jvm, versions: ["3.6.0"],
+      identity: reported, by: scripts/probes/cp54_ktor_client_ws_sse.md }
+
+requires: [call_site, string_constants]
+
+# The client's base address, declared once for every Ktor client catalog:
+# `client-models/ktor.yml`. This catalog states only where the client sits at its call.
+client_model: ktor
+
+# NOT INLINED: `client.sse("https://…") { }` compiles to one static call,
+# `BuildersKt."sse-Mswn-_c$default"(client, "https://…", …)`, the client at argument 0 and
+# the address at 1 (CP-54 row group (d), rows 32-35 and 42-45). The suffix is the
+# compiler's encoding of the `Duration` parameter's inline class, so every name is listed as
+# Ktor 3.6.0 spells it, and it changes per version: a later Ktor is not read until it is
+# measured. **The suffix does not identify a form** — `sse-Mswn-_c` is both the address form
+# and the request-lambda form with a deserializer (row 32) — so every row declares its
+# descriptor, and the one whose argument 1 is a lambda has no row.
+#
+# **A GET row split into peer and path**, the HTTP client's shape: an SSE stream is a GET
+# request (spec §3g item 5; CP-54 rows 74-75 measure the server answering GET only), and its
+# path is the path an inbound SSE route serves.
+#
+# **A relative address joins the client's base by the HTTP join, unchanged** (CP-54 rows
+# 114-123, run on an engine declaring `SSECapability`): `sse("stream")` over
+# `https://api.example.com/v1/` is `https://api.example.com/v1/stream`, `/stream` replaces
+# the base's path, the base's own port and query stay. An absolute address is sent as
+# written (row 119).
+#
+# **The parts form** (`scheme, host, port, path`, the path at 4) joins its path where no
+# other part is given (row 122), as a PATH that Ktor never parses: `//x/y` is a path on the
+# base's host and a whole URL a path segment (rows 129-130, 132, 134); a path carrying `?` or
+# `#` stays `unresolved`; a scheme, host or port given is not assembled (spec §3g item
+# 4, and row 123 shows a scheme kept over the base's host with the base's port written): the
+# row keeps the path, `unresolved`.
+#
+# Not declared, so a stated boundary: the request-lambda forms (`sse({ url("…") }) { }`, row
+# 44), whose address is set inside a lambda.
+matches:
+  owner: io.ktor.client.plugins.sse.BuildersKt
+  client_base:
+    client_arg: 0
+  methods:
+    # `sse` (row 32): the address form `sse-Mswn-_c` (row 42) and with a deserializer
+    # `sse-Q9yt8Vw`; the parts form `sse-tL6_L-A` (row 43) and `sse-BAHpl2s`. The OTHER
+    # `sse-Mswn-_c`, the request-lambda form with a deserializer, has a `Function1` at
+    # argument 1 and no row: the descriptor is what tells the two apart.
+    - { name: "sse-Mswn-_c", arity: 8, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sse-Mswn-_c$default", arity: 10, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sse-Q9yt8Vw", arity: 9, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sse-Q9yt8Vw$default", arity: 11, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sse-tL6_L-A", arity: 11, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sse-tL6_L-A$default", arity: 13, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sse-BAHpl2s", arity: 12, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sse-BAHpl2s$default", arity: 14, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    # `sseSession` (row 33): `sseSession-mY9Nd3A` (row 45) and `-Mswn-_c` take the address;
+    # `-xEWcMm4` and `-tL6_L-A` are the parts form. The other `sseSession-mY9Nd3A` takes a
+    # deserializer at argument 1 and no address.
+    - { name: "sseSession-mY9Nd3A", arity: 7, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sseSession-mY9Nd3A$default", arity: 9, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sseSession-Mswn-_c", arity: 8, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sseSession-Mswn-_c$default", arity: 10, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sseSession-xEWcMm4", arity: 10, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sseSession-xEWcMm4$default", arity: 12, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "sseSession-tL6_L-A", arity: 11, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "sseSession-tL6_L-A$default", arity: 13, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    # `serverSentEvents` (row 34), the same calls under their long name: `-3bFjkrY` and
+    # `-pTj2aPc` take the address, `-1wIb-0I` and `-BqdlHlk` are the parts form.
+    - { name: "serverSentEvents-3bFjkrY", arity: 8, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-3bFjkrY$default", arity: 10, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-pTj2aPc", arity: 9, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-pTj2aPc$default", arity: 11, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-1wIb-0I", arity: 11, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-1wIb-0I$default", arity: 13, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-BqdlHlk", arity: 12, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEvents-BqdlHlk$default", arity: 14, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    # `serverSentEventsSession` (row 35): `-mY9Nd3A` and `-Mswn-_c` take the address,
+    # `-xEWcMm4` and `-tL6_L-A` are the parts form.
+    - { name: "serverSentEventsSession-mY9Nd3A", arity: 7, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-mY9Nd3A$default", arity: 9, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-Mswn-_c", arity: 8, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-Mswn-_c$default", arity: 10, http_method: GET, url_arg: 1,
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-xEWcMm4", arity: 10, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-xEWcMm4$default", arity: 12, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-tL6_L-A", arity: 11, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { name: "serverSentEventsSession-tL6_L-A$default", arity: 13, http_method: GET, url_arg: 4, address_parts: [1, 2, 3],
+        descriptor: "(Lio/ktor/client/HttpClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlin/jvm/functions/Function2;Lkotlin/time/Duration;Ljava/lang/Boolean;Ljava/lang/Boolean;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;" }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

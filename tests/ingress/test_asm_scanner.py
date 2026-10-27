@@ -531,7 +531,27 @@ def test_no_fact_is_written_for_a_compiler_synthesized_field(tmp_path: Path):
     # Narrowed to the synthesized `$VALUES` array: protobuf's generated enum
     # also declares an explicit, non-synthetic `VALUES` field, whose fact is
     # correct and must not trip this pin.
-    assert "$VALUES" not in written
+    #
+    # The one fact that does name it is the WRITE — `<clinit>` storing
+    # `$values()`'s result — which D00 §5's `field_write` reports since
+    # 2026-10-26 (CP-33 row 6). It is a fact about an instruction, not a
+    # declaration, and a write into a compiler-made field was already one: a
+    # lambda class's captured `$seen` is synthetic too and the walk reads its write.
+    #
+    # And, since 2026-10-26, the READ: `values()` is `$VALUES.clone()`, a call whose receiver
+    # is a `getstatic`, and D00 §5's `receiver_field` names the field such a receiver was
+    # read from — an instruction fact again. Re-pinned to allow exactly that call site.
+    naming = [json.loads(line) for line in written.splitlines() if "$VALUES" in line]
+    assert naming, "the fixture's enums no longer write `$VALUES` — this pin measures nothing"
+    for fact in naming:
+        if fact["kind"] == "call_site":
+            assert fact["receiver_field"].endswith("#$VALUES."), fact
+            assert fact["target"]["name"] == "clone", fact
+            assert "#values(" in fact["caller"], fact
+            continue
+        assert fact["kind"] == "field_write", fact
+        assert fact["field"].endswith("#$VALUES."), fact
+        assert "#<clinit>(" in fact["written_by"], fact
 
 
 def test_a_nested_class_is_scanned_under_the_outer_sources_path_and_its_own_id(

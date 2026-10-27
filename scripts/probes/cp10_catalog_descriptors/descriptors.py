@@ -43,8 +43,11 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 # `<key>=<value>` in a `.properties` entry, and the manifest's own `Name: value`
 # — the two spellings the self-reports below are written in.
 _PROPERTY = re.compile(r"^\s*([\w.\-]+)\s*[:=]\s*(.+?)\s*$")
-# `javap`'s own two lines: the declaration, then the erased descriptor under it.
-_DECLARATION = re.compile(r"([\w$.]+)\s*\(")
+# `javap`'s own two lines: the declaration, then the erased descriptor under it. A JVM
+# method name may carry `-` where a Java one may not: Kotlin mangles a function taking an
+# inline-class parameter into `sse-Mswn-_c` (CP-54 row 32), and a name read only up to the
+# last `-` (`_c`) filed every such descriptor as NOT DECLARED.
+_DECLARATION = re.compile(r"([\w$.\-]+)\s*\(")
 _DESCRIPTOR_LINE = re.compile(r"^\s*descriptor:\s*(\S+)\s*$")
 _GENERICS = re.compile(r"<[^<>]*>")
 

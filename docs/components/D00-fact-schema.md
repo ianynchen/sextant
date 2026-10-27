@@ -350,9 +350,9 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so `owner_not_scanned` is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
-| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
-| `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the constant it was written from | The field resolution ladder (2F) |
+| `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
 | `config_entry` | `key_raw`, `key_path`, `value`, source document, `doc_index` (§5c) | Configuration resolution |
@@ -1004,6 +1004,17 @@ into a lambda body can then tell "this call is on the lambda's own parameter" fr
 receiver could not be read". Strictly additive: an engine that does not read it sees the
 site it always saw.
 
+**`receiver_field`** names the static field a receiver was read from, where the receiver is
+a `getstatic`: `owner#name.`, the symbol a call ARGUMENT read the same way already carries
+(the `field` and `enum` kinds below). `receiver` keeps the read's own value id, so every
+within-method join is unchanged; but no other fact names that id, so a walk from the
+receiver reached nothing before this key. Kotlin's file-level `val client = …` followed by
+`client.config { … }` is the shape it exists for (2026-10-26): the `config` call's receiver
+is now the binding `client`, which the walk follows to its writer as it follows the same
+field read as an argument. A receiver read by `getfield` gets no key — only the static read
+was ruled in, so an instance field's receiver is a stated boundary. Absent everywhere else,
+and strictly additive in the same way.
+
 **`arguments`** carries one entry per argument slot, resolved by walking the frame back to
 each slot's source instruction. Without it, every endpoint path is unresolved — this is why
 annotation arguments and call literals are first-class fields rather than something
@@ -1152,38 +1163,107 @@ joins a `method_return` to the caller's own `result` id; the fact ships ahead of
 that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
 carries it as `OI-15`.
 
-**`field_write` is a fact of its own, ANY instance method, direct traces only** — a method
-assigns a parameter, or a constant, directly to field F. The JVM mapping: a `PUTFIELD` whose
-receiver is `this` and whose value is either a bare parameter load or an `LDC` constant,
-producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus **exactly
-one** of `from_parameter: N` or `value: <argument-grammar entry>`. A computed assignment —
-concatenation, a default expression, a call's result, anything but those two — emits nothing,
-and the resolution that would have followed it degrades honestly rather than guessing a
-source.
+**`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
+parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
+whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
+load of a parameter the method never stores to, an `LDC` constant, or an invoke's result with nothing but a `CHECKCAST` in
+between — and that producer (with a `PUTFIELD`'s `ALOAD 0`) in the write's OWN basic block —
+producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus
+**exactly one** of `from_parameter: N` or `value: <argument-grammar entry>`. A call's result
+is the entry a call argument fed by a call already is — `{"kind": "unresolved", "source": N}`,
+where `N` is that call site's own `result` in the WRITER's frame — so a reader resolves it in
+the writing method exactly as it would that argument. A computed assignment — concatenation,
+a default expression, a value built with `new`, a value parked in a local first, a lambda
+(which names a body, not a value) — emits nothing, and the resolution that would have
+followed it degrades honestly rather than guessing a source. **A parameter's own slot counts
+as such a local once the method stores to it**: a load of slot N is `from_parameter` only
+where no `xSTORE` or `IINC` anywhere in the method writes slot N. `if
+(!host.startsWith("https://")) host = "https://fallback…"; HOST = host;` holds the caller's
+argument on one path and the fallback on the other, and `u = u.trim(); this.u = u;` holds the
+call's result on every path; before this rule both were reported as the parameter, and the
+caller's argument was published as the field's value (measured on javac 21: `GET
+given.example.com /s resolved`, and a base `…/api` joined as `/apiorders` where the field
+holds `…/api/`). The scan is syntactic — one pass over the instructions, no flow analysis —
+and errs toward reporting less: a store on a path that never reaches the write refuses it
+too.
 
 Three things it deliberately does not report, each because reporting them would be a claim
 nobody can check:
 
-* a write a LATER write in the same basic block overwrites, which no read can observe
-  (`private String f = "default"` beside `this.f = parameter` in one constructor). A later
-  write behind a BRANCH leaves the earlier live, so that one is reported;
-* a `PUTSTATIC`, and a write whose receiver is another object — `other.f = …` loads that
-  object rather than `this`, so the receiver check excludes it;
-* a constant whose kind the §5 argument grammar has no entry for (a `float`, a method handle).
+* a write a LATER write to the same field in the same basic block overwrites, which no read
+  can observe (`private String f = "default"` beside `this.f = parameter` in one constructor).
+  A later write behind a BRANCH leaves the earlier live, so that one is reported;
+* a write whose receiver is another object — `other.f = …` loads that object rather than
+  `this`, so the receiver check excludes it. A `PUTSTATIC` has no receiver to check, and is
+  reported since 2026-10-26;
+* a constant whose kind the §5 argument grammar has no entry for (a `float`, a method handle);
+* a value two branches join AT the write (CP-33 row 9). `static String URL = PROD ?
+  "https://prod…" : "https://staging…"` compiles to `getstatic; ifeq; ldc; goto; ldc;
+  putstatic`, the write a jump target, so the instruction right below it is the last
+  branch's value alone; kotlinc 2.2's `?:` and `if` expressions, and a ternary of two calls,
+  present the same join. Reported, a `RestTemplate` reading that field published `GET
+  staging.example.com /orders resolved`, and a Ktor client built from `val envBase =
+  getenv("PRICING_URL") ?: "https://default…/"` published the default as its base. The rule
+  is the producer's basic block, not a list of shapes: a branch BELOW the producer
+  (`this.url = make(c ? "x" : "y")`) leaves the write reported, because the call is in the
+  write's block and the field holds its one result. A read of a field whose only write
+  merges answers `no_writer`, which is true.
 
-**History, because the fact's reach changed twice in one week:** constructors only until
+**History, because the fact's reach changed three times:** constructors only until
 2026-10-18, when the `<init>` filter came off and the writes found on real code roughly
 tripled (`spring-petclinic-rest` 86 → 237, `apollo-portal` 553 → 1,638, spec
 `2026-10-18-the-sixth-edge-design.md` §0); then `value` on 2026-10-18 (`OI-138` cause 2),
-which is how a field holding a literal host became readable at all. Both keys are OPTIONAL,
-so a fact written before either reads exactly as it did and no schema version moved.
+which is how a field holding a literal host became readable at all; then on 2026-10-26 a
+call's result and `PUTSTATIC` (CP-33 rows 6 and 7), after the Ktor client work found the
+walk could not reach a client held in a Kotlin top-level `val` or a class property — every
+read of one answered `no_writer`. That widening added no key and changed no existing fact:
+re-scanned before and after, not one fact went away, and the counts went `apollo-portal`
+1,640 → 1,789, `jhipster-sample-app` 101 → 152, `mall-admin` 1,618 → 1,631,
+`spring-petclinic-rest` 244 → 253, `spring-petclinic-genai-service` 38 → 44,
+`spring-petclinic-api-gateway` 37 → 37, and the CP-54 probe module 41 → 84. Of the 228 new
+facts on the five field pins that gained any, 123 are `PUTSTATIC` from a call (mostly a
+static logger — `LoggerFactory.getLogger`), 7 more are an enum's compiler-made `$VALUES`, 93
+are `PUTFIELD` from a call (among them `spring-petclinic-genai-service`'s `webClient`,
+`restClient` and `chatClient`, each built from a builder), and 5 are `PUTSTATIC` from a
+constant or a parameter. On the probe, 2 of the 43 are `ProbeKt#client` and
+`ProbeKt#derivedClient`, and the other 41 are a coroutine's continuation fields (`L$0`,
+`L$1`, …) written with `SpillingKt.nullOutSpilledVariable(x)` — a library function whose
+body is `aconst_null; areturn`, so each stores NULL into a spill slot that is dead from then
+on. They stay reported: telling them apart would mean modelling a library method's body, or
+naming that one helper, and both are ruled out ("one rule, not one parser per method"). The
+answer they give stays honest — such a read resolves to the helper's result, which is
+`external`, never to a value. The
+walk's cost barely moved (`scripts/measure_value_walk.py`'s reader, every position a shipped
+catalog asks about): `apollo-portal` 28,801 → 28,817 positions visited and 7,949 → 7,952
+paths over 259 positions, `no_writer` 16 → 13, with no other pin's figures changing beyond one
+visit; over EVERY slot of the probe, 3,362 → 3,395 visits and `no_writer` 69 → 36, the 33
+reads now answering `external`. 23 of them read `ProbeKt#client` or `derivedClient` and reach
+the factory, a jar nobody scanned. The other 10 read a continuation's `L$0` — among them the
+`HttpClient` argument of `ws$default`, `wss$default` and `webSocketSession$default` in
+`MainKt$main$1/2/3` — and reach only the null-out write: the slot's real value is written in
+the continuation's `create()` as `other.L$0 = p`, a write into ANOTHER object, which stays
+excluded. Those reads stay unresolved, which is true. No published row moved
+and all six field pins still pass. Every key is OPTIONAL, so a fact written before any of
+these reads exactly as it did and no schema version moved. **Re-measured 2026-10-27, after
+the same-block rule above:** not one fact moved on any of the six field pins (`apollo-portal`
+1,789, `jhipster-sample-app` 152, `mall-admin` 1,631, `spring-petclinic-rest` 253,
+`spring-petclinic-genai-service` 44, `spring-petclinic-api-gateway` 37, diffed fact by
+fact), nor on the CP-54 probe module, which has grown to 170 writes since the 84 above. Over
+every compiled module under `examples/` (78 class roots) the count went 9,840 → 9,838, and
+both dropped writes are joins of the kind the rule exists for: `ruoyi-vue-pro`'s
+`ApiDecryptRequestWrapper#body` (one decryptor's result or another's) and
+`apollo-build-sql-converter`'s `SqlStatement$Builder#textLines` (a three-way ternary). **Then the stored-slot rule** (a parameter load is refused where the method stores
+to that slot): one more write went, `spring-petclinic-api-gateway` 37 → 36, the census 9,838
+→ 9,837 and nothing else anywhere. It is `PetDetails#visits`, a record's compact constructor
+doing `if (visits == null) visits = new ArrayList<>();` before the implicit `this.visits =
+visits` — a null-default, reported until then as parameter 4. No pinned row moved.
 
-**Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-18**, in two
+**Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-26**, in three
 steps: the walk's sixth edge reads `written_by` and crosses into the writing method (PR #47),
-and `value` carries a constant write (`OI-138` cause 2). What follows describes the state
-before that and is kept because the measurement in it is still the baseline every later
-figure is compared against. The remaining unread shapes are a write from a call's RESULT and
-from a static initialiser (CP-33 rows 2, 6, 7).
+`value` carries a constant write (`OI-138` cause 2), and `value` carries a call's result,
+`PUTSTATIC` included (CP-33 rows 6 and 7). What follows describes the state before that and
+is kept because the measurement in it is still the baseline every later figure is compared
+against.
 
 **Originally specified as capability 9.19 and deferred** (spec
 `docs/superpowers/specs/2026-09-22-value-resolution-design.md` §4; ruled 2026-10-17,
@@ -1198,8 +1278,8 @@ one compiler version, as every bytecode shape here is):
 | shape | reaches the fact? |
 |---|---|
 | a non-constructor method assigning a bare parameter (a setter) | **yes** — the triple presents verbatim, so the capability is lifting the `<init>` guard plus a per-method `firstSlot` (a static method's parameters start at slot 0) |
-| `@PostConstruct` assigning a literal, and a static initialiser | **no** — both assign CONSTANTS, and `{field, from_parameter}` has no parameter to name. A static initialiser also has no receiver load and emits `putstatic` |
-| a computed assignment, and a field assigned another CALL'S RESULT | **no, and correctly so** — something that is not an `xLOAD` intervenes, so *"direct traces only"* holds outside `<init>` with no extra work |
+| `@PostConstruct` assigning a literal, and a static initialiser | **no** — both assign CONSTANTS, and `{field, from_parameter}` has no parameter to name. A static initialiser also has no receiver load and emits `putstatic`. **Both reached since**: the constant by `value` (2026-10-18), `putstatic` on 2026-10-26 |
+| a computed assignment, and a field assigned another CALL'S RESULT | **no, and correctly so** — something that is not an `xLOAD` intervenes, so *"direct traces only"* holds outside `<init>` with no extra work. **The call's result is reached since 2026-10-26**, read off the frame because the call's own arguments sit between the receiver load and the write; a computed assignment still is not |
 
 The last row is the one with a consequence elsewhere: it is the `ActorRef ref =
 system.actorOf(...)` shape, which is why this capability would not close

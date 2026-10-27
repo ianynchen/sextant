@@ -38,7 +38,8 @@ class YamlCatalogSource:
 
     def _models(self, subdirectory: str) -> dict[str, dict[str, Any]]:
         """The models one subdirectory holds, by id — `shape-models` (D02 §1b),
-        `bean-models` (D02 §1c) and `step-models` (spec 2026-09-21 §5), one read
+        `bean-models` (D02 §1c), `step-models` (spec 2026-09-21 §5) and
+        `client-models` (spec 2026-10-26 §3g), one read
         for each.
 
         A SUBDIRECTORY rather than more files beside the catalogs, because a
@@ -309,6 +310,7 @@ class YamlCatalogSource:
         shape_models = self._models("shape-models")
         bean_models = self._models("bean-models")
         step_models = self._models("step-models")
+        client_models = self._models("client-models")
         # Once, here, and handed to every catalog: an identity is declared once per
         # PRODUCER (spec §2), so it belongs to the source rather than to any one file.
         # It re-reads the directory this loop is about to read — measured at 26 ms for the
@@ -340,8 +342,15 @@ class YamlCatalogSource:
                     # `undeclared_steps` merged in beside the catalog's own, so
                     # the engine reads one table; `matches` as written for a
                     # catalog naming no `step_model`.
-                    matches=_with_step_model(
-                        _required(raw, "matches", path), raw, step_models, path
+                    # Spec 2026-10-26 §3g item 2: the client model's `client_base`
+                    # merged into the catalog's own the same way — the base a client's
+                    # relative calls join is the client's, shared by every catalog
+                    # whose calls it issues.
+                    matches=_with_client_model(
+                        _with_step_model(_required(raw, "matches", path), raw, step_models, path),
+                        raw,
+                        client_models,
+                        path,
                     ),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
@@ -717,12 +726,13 @@ def _shape_model_of(
     return model
 
 
-# The three keys a catalog names a model with, each to the subdirectory that holds
+# The four keys a catalog names a model with, each to the subdirectory that holds
 # the files and the section that defines it — the refusal below names both.
 _MODEL_DIRECTORIES = {
     "shape_model": ("shape-models", "D02 §1b"),
     "bean_model": ("bean-models", "D02 §1c"),
     "step_model": ("step-models", "spec 2026-09-21 §5"),
+    "client_model": ("client-models", "spec 2026-10-26 §3g"),
 }
 
 
@@ -766,6 +776,51 @@ def _with_step_model(
             )
         merged["undeclared_steps"] = model["undeclared_steps"]
     return merged
+
+
+def _with_client_model(
+    matches: Any, raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> Any:
+    """`matches` with the named client model's `client_base` merged into the catalog's own
+    (spec 2026-10-26 §3g item 2). Where a client's relative calls are sent — the ladder its
+    base is set through, the setter, the join, the calls that may move it — is a property of
+    the CLIENT, and one client issues the calls of several catalogs (Ktor's HTTP, WebSocket
+    and SSE calls), so it is declared once in `client-models/` and each catalog states only
+    what differs: where the client sits at its own call (`client_arg`).
+
+    The UNION of the two halves, and a key both sides declare is refused by file, the
+    `_with_step_model` rule for the same reason: a catalog that cannot hold a copy of the
+    ladder cannot hold one that has drifted. Whether the merged key is COMPLETE is not asked
+    here: `shapes/client_base.client_base_of`, which both engines declaring the key call,
+    refuses a missing part with the catalog's name attached."""
+    model = _named_model(raw, "client_model", models, path)
+    if model is None:
+        return matches
+    if not isinstance(matches, dict):
+        raise CatalogError(f"loading catalog {path}: `matches` must be a mapping")
+    own = matches.get("client_base")
+    if not isinstance(own, dict):
+        raise CatalogError(
+            f"loading catalog {path}: names `client_model: {raw['client_model']}` and declares "
+            f"no `matches.client_base` mapping stating where its client sits (`client_arg`) — "
+            f"the model says where a client's base is set, never which argument of this "
+            f"catalog's call is the client (spec 2026-10-26 §3g)"
+        )
+    shared = model.get("client_base")
+    if not isinstance(shared, dict):
+        raise CatalogError(
+            f"loading model `{raw['client_model']}` for catalog {path}: declares no "
+            f"`client_base` mapping (spec 2026-10-26 §3g)"
+        )
+    twice = sorted(set(own) & set(shared))
+    if twice:
+        raise CatalogError(
+            f"loading catalog {path}: names `client_model: {raw['client_model']}` and also "
+            f"declares `client_base` keys `{'`, `'.join(twice)}` — the model's ladder is "
+            f"declared once and a catalog states only where its client sits (spec 2026-10-26 "
+            f"§3g)"
+        )
+    return {**matches, "client_base": {**shared, **own}}
 
 
 def _step_identity(step: Any) -> tuple[frozenset[str], str, str | None]:

@@ -36,6 +36,8 @@ from sextant.application.resolve.values import (
     RECEIVER,
     Answer,
     Binding,
+    Producer,
+    producers_of,
     resolve_site,
     value_index,
 )
@@ -96,6 +98,45 @@ _CLOSING = _PKG + "Closing#"
 # assembled from an object has (`OI-138` cause 3, CP-39).
 _RENDERED = _PKG + "Rendered#"
 _UNREADABLE = _PKG + "Unreadable#"
+# Bindings written from a CALL'S RESULT (CP-33 rows 6-7, 2026-10-26). `ProbeKt` is Kotlin's
+# file class for a top-level `val client = HttpClient(CIO) { … }` — spelled exactly as the
+# CP-54 probe module's bytecode spells it — whose `<clinit>` stores an unscanned factory's
+# result with `putstatic`. `Property` is a class whose constructor stores an IN-MODULE call's
+# result into its own property with `putfield`.
+_PROBE_KT = "probe/ProbeKt#"
+_HTTP_CLIENT = (
+    "io/ktor/client/HttpClientKt#",
+    "HttpClient",
+    (
+        "(Lio/ktor/client/engine/HttpClientEngineFactory;Lkotlin/jvm/functions/Function1;)"
+        "Lio/ktor/client/HttpClient;"
+    ),
+)
+_PROPERTY = _PKG + "Property#"
+# A coroutine continuation's spill slot, as kotlinc 2.2 compiles it (CP-54 probe,
+# `MainKt$main$1`): `invokeSuspend` writes `this.L$0 = SpillingKt.nullOutSpilledVariable(x)` —
+# a library helper whose body is `aconst_null; areturn` — and the slot's REAL value is written
+# in `create()` as `other.L$0 = p`, a write into another object that no fact reports.
+_SPILL = _PKG + "Spill$1#"
+_NULL_OUT = (
+    "kotlin/coroutines/jvm/internal/SpillingKt#",
+    "nullOutSpilledVariable",
+    "(Ljava/lang/Object;)Ljava/lang/Object;",
+)
+# The PRODUCER reader's own shapes (Task 9): a client the unscanned factory builds and the
+# same method uses, one built and handed to another method as an argument, and a binding two
+# methods write from two factory calls.
+_CLIENTS = _PKG + "Clients#"
+_POOLED = _PKG + "Pooled#"
+_TAKES_CLIENT = "(Lio/ktor/client/HttpClient;)V"
+_FACTORY_IDENTITY = (_HTTP_CLIENT[0], _HTTP_CLIENT[1])
+# `val derivedClient = client.config { … }` in the same `<clinit>`: the receiver is a
+# `getstatic` of `client`, whose own value id no other fact names (CP-54 probe).
+_CONFIG = (
+    "io/ktor/client/HttpClient#",
+    "config",
+    "(Lkotlin/jvm/functions/Function1;)Lio/ktor/client/HttpClient;",
+)
 _ENTRY = _PKG + "Entry#"
 _OUTSIDE = _PKG + "Outside#"
 # The identity arm's producer (spec §2): deliberately NOT declared, so every value it
@@ -194,6 +235,7 @@ def _site(
     result: int | None = None,
     receiver: int | None = None,
     receiver_parameter: int | None = None,
+    receiver_field: str | None = None,
 ) -> Fact:
     owner, name, jvm = target
     return CallSiteFact(
@@ -205,6 +247,7 @@ def _site(
         result=result,
         receiver=receiver,
         receiver_parameter=receiver_parameter,
+        receiver_field=receiver_field,
         arguments=arguments or [],
     )
 
@@ -251,6 +294,11 @@ def _facts() -> list[Fact]:
             _WRITTEN,
             _RENDERED,
             _UNREADABLE,
+            _PROBE_KT,
+            _PROPERTY,
+            _SPILL,
+            _CLIENTS,
+            _POOLED,
             _CLOSING,
             _ENTRY,
             _OUTSIDE,
@@ -745,6 +793,146 @@ def _facts() -> list[Fact]:
             field=_UNREADABLE + "held.",
             value=CallArgument(kind="class", symbol="com/acme/orders/values/Order#"),
             written_by=_symbol(_UNREADABLE, "<init>", "()V"),
+        ),
+        # A STATIC field written from a call's result in the static initialiser: `<clinit>`
+        # stores `HttpClient(...)`'s result (value id 11) with `putstatic`, and a function
+        # elsewhere in the file reads the field as a call argument.
+        _declared(_PROBE_KT, "<clinit>", "()V"),
+        _site(_symbol(_PROBE_KT, "<clinit>", "()V"), 0, _HTTP_CLIENT, result=11),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_PROBE_KT + "client.",
+            value=CallArgument(kind="unresolved", source=11),
+            written_by=_symbol(_PROBE_KT, "<clinit>", "()V"),
+        ),
+        # `client.config { … }` right after it, on the field read back with `getstatic`
+        # (value id 9, the read's own index): `receiver_field` names the field.
+        _site(
+            _symbol(_PROBE_KT, "<clinit>", "()V"),
+            1,
+            _CONFIG,
+            kind="virtual",
+            receiver=9,
+            receiver_field=_PROBE_KT + "client.",
+            result=12,
+        ),
+        # The same call where the facts name only the read's id — what every scan wrote
+        # before `receiver_field`.
+        _declared(_PROBE_KT, "unnamed", "()V"),
+        _site(
+            _symbol(_PROBE_KT, "unnamed", "()V"),
+            0,
+            _CONFIG,
+            kind="virtual",
+            receiver=9,
+            result=12,
+        ),
+        _declared(_PROBE_KT, "clientGet", "()V"),
+        _site(
+            _symbol(_PROBE_KT, "clientGet", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_PROBE_KT + "client.")],
+        ),
+        # A PROPERTY written from an in-module call's result in the constructor: value id 5 in
+        # `<init>` is `Names#one()`, which returns `solo`. The READER holds a value id 5 of its
+        # own — `Names#pick()`, which returns `orders` and `orders-fast` — so a walk that
+        # resolved the write's `source` in the reader's frame instead of the writer's would
+        # answer those.
+        _declared(_PROPERTY, "<init>", "()V"),
+        _site(_symbol(_PROPERTY, "<init>", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=5),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_PROPERTY + "made.",
+            value=CallArgument(kind="unresolved", source=5),
+            written_by=_symbol(_PROPERTY, "<init>", "()V"),
+        ),
+        _declared(_PROPERTY, "send", "()V"),
+        _site(_symbol(_PROPERTY, "send", "()V"), 0, (_NAMES, "pick", _MAKES_STRING), result=5),
+        _site(
+            _symbol(_PROPERTY, "send", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_PROPERTY + "made.")],
+        ),
+        # The spill slot: the only REPORTED write is the null-out helper's result (value id 9
+        # in `invokeSuspend`); `create` is where the real value comes from — `Names#one()`,
+        # which returns `solo` — and it stores it with `other.L$0 = …`, so no fact says so.
+        _declared(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+        _site(_symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT), 0, _NULL_OUT, result=9),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SPILL + "L$0.",
+            value=CallArgument(kind="unresolved", source=9),
+            written_by=_symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+        ),
+        _site(
+            _symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_SPILL + "L$0.")],
+        ),
+        _declared(_SPILL, "create", _MAKES_OBJECT),
+        _site(
+            _symbol(_SPILL, "create", _MAKES_OBJECT), 0, (_NAMES, "one", _MAKES_STRING), result=4
+        ),
+        # The PRODUCER reader's shapes (Task 9). `Clients#local` builds a client with the
+        # unscanned factory (value id 1) and uses it in the same method; `Clients#caller` builds
+        # one (value id 2) and hands it to `Clients#use`, which uses its parameter 0.
+        _declared(_CLIENTS, "local", "()V"),
+        _site(_symbol(_CLIENTS, "local", "()V"), 0, _HTTP_CLIENT, result=1),
+        _site(
+            _symbol(_CLIENTS, "local", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+        _declared(_CLIENTS, "use", _TAKES_CLIENT),
+        _void(_CLIENTS, "use", _TAKES_CLIENT),
+        _site(
+            _symbol(_CLIENTS, "use", _TAKES_CLIENT),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _declared(_CLIENTS, "caller", "()V"),
+        _site(_symbol(_CLIENTS, "caller", "()V"), 0, _HTTP_CLIENT, result=2),
+        _site(
+            _symbol(_CLIENTS, "caller", "()V"),
+            1,
+            (_CLIENTS, "use", _TAKES_CLIENT),
+            arguments=[CallArgument(kind="unresolved", source=2)],
+        ),
+        # A binding with TWO writers, each storing its own factory call's result: the
+        # constructor (value id 3) and a public `reset` (value id 4).
+        _declared(_POOLED, "<init>", "()V"),
+        _site(_symbol(_POOLED, "<init>", "()V"), 0, _HTTP_CLIENT, result=3),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_POOLED + "client.",
+            value=CallArgument(kind="unresolved", source=3),
+            written_by=_symbol(_POOLED, "<init>", "()V"),
+        ),
+        _declared(_POOLED, "reset", "()V"),
+        _site(_symbol(_POOLED, "reset", "()V"), 0, _HTTP_CLIENT, result=4),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_POOLED + "client.",
+            value=CallArgument(kind="unresolved", source=4),
+            written_by=_symbol(_POOLED, "reset", "()V"),
+        ),
+        _declared(_POOLED, "send", "()V"),
+        _site(
+            _symbol(_POOLED, "send", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_POOLED + "client.")],
         ),
         # Values the grammar names nothing for.
         _declared(_UNREAD, "use", "()V"),
@@ -1602,6 +1790,193 @@ def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site
     bindings = _bindings(walked, _symbol(_UNREADABLE, "read", "()V"), 0)
     assert len(bindings) == 1, bindings
     assert _reasons(bindings) == ["not_readable"]
+
+
+@pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")
+def test_a_static_field_written_from_a_call_is_followed_to_that_call(walked):
+    """**A binding written from a CALL'S RESULT is followed to that call** (CP-33 rows 6
+    and 7, ruled 2026-10-26: "build both now"). Kotlin's top-level `val client =
+    HttpClient(CIO) { … }` compiles to `invokestatic HttpClientKt.HttpClient; putstatic
+    ProbeKt.client` in `<clinit>`, and a read anywhere in the file arrives as `{kind: field,
+    symbol: probe/ProbeKt#client.}`. Measured on the CP-54 probe module, the walk answered
+    `no_writer` there: no fact said the field was written at all.
+
+    The write's value is the call argument a call result already is — `unresolved` with the
+    call's `source` in the WRITER's frame — so the walk crosses into `<clinit>` and finds the
+    factory. That factory is a jar nobody scanned, so the honest answer for a VALUE is
+    `external`; which call produced it is the producer reader's question, not this one's.
+    A static field matches its `putstatic` writer by symbol alone: no receiver is checked,
+    because a static field has none.
+    """
+    bindings = _bindings(walked, _symbol(_PROBE_KT, "clientGet", "()V"), 0)
+    assert _reasons(bindings) == ["external"]
+
+
+@pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")
+def test_a_property_written_from_a_call_in_the_constructor_is_followed(walked):
+    """`private val made = Names.one()` — `aload_0; invokestatic; putfield` in the
+    constructor. The write's `source` is value id 5 IN THE CONSTRUCTOR, where it is the call
+    to `Names#one`, which returns `solo`; the reading method happens to hold a value id 5 of
+    its own, `Names#pick`, returning `orders` and `orders-fast`. One answer, `solo`, is what
+    resolving in the writer's frame gives, and the other two are what reading the id in the
+    wrong method would publish — a wrong value at `resolved`.
+    """
+    bindings = _bindings(walked, _symbol(_PROPERTY, "send", "()V"), 1)
+    assert [binding.slots[0].value for binding in bindings] == ["solo"]
+
+
+def test_a_slot_whose_only_reported_writer_stores_a_helpers_result_stays_unresolved(walked):
+    """**The honest answer where the reported write is not the one that matters.** Measured
+    on the CP-54 probe: all 41 continuation `L$N` writes the call-result widening added are
+    `this.L$N = SpillingKt.nullOutSpilledVariable(x)`, which stores NULL into a slot that is
+    dead from then on, and the slot's real value is written in `create()` as `other.L$0 = p`
+    — a write into another object, which the fact excludes. Ten probe reads of `L$0`, the
+    `HttpClient` argument of `ws$default` among them, reach only the null-out write.
+
+    They stay reported (ruled 2026-10-26): telling the helper apart would mean modelling a
+    library method's body or naming it, "one rule, not one parser per method". What makes
+    that safe is this answer — the helper is a jar nobody scanned, so the read is `external`
+    and never a value; above all never `solo`, the value `create` really stores.
+    """
+    bindings = _bindings(walked, _symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT), 1)
+    assert [binding.slots[0].kind for binding in bindings] == ["unresolved"]
+    assert _reasons(bindings) == ["external"]
+
+
+# --- The PRODUCER reader (Task 9): which call built this value --------------------------
+# The walk answers what a value IS; a reader that must read the block a client was built
+# with needs the CALL that built it instead. Same crossings, one more stop: a call whose
+# `(owner, method)` the caller declares.
+
+
+def _producers(
+    workspace: DuckDbWorkspace,
+    method: str,
+    ordinal: int,
+    slot: int | str,
+    declared: set[tuple[str, str]],
+) -> tuple[Producer, ...]:
+    return producers_of(value_index(workspace), _at(workspace, method, ordinal), slot, declared)
+
+
+@pytest.mark.pins("values.the-PRODUCER-reader-stops-at-a-declared-call")
+def test_a_value_a_declared_factory_built_in_the_same_method_answers_that_call(walked):
+    """The plainest shape: `val c = HttpClient(CIO) { … }; c.get(…)`. The value walk
+    answers `external` there — the factory is a jar nobody scanned — and the producer reader
+    answers the factory call itself, which is where the block the caller wants to read is."""
+    local = _symbol(_CLIENTS, "local", "()V")
+    assert _reasons(_bindings(walked, local, 1)) == ["external"]
+    assert _producers(walked, local, 1, 0, {_FACTORY_IDENTITY}) == (
+        Producer(caller=local, ordinal=0, identity=_FACTORY_IDENTITY),
+    )
+
+
+@pytest.mark.pins("values.the-PRODUCER-reader-stops-at-a-declared-call")
+def test_a_value_handed_in_as_a_parameter_answers_the_callers_call(walked):
+    """`bound_to_parameter`, crossed exactly as the value walk crosses it: `use` reads its
+    parameter 0, its one caller passes the result of the factory call it made, so the
+    producer is that call, in the CALLER."""
+    assert _producers(
+        walked, _symbol(_CLIENTS, "use", _TAKES_CLIENT), 0, 0, {_FACTORY_IDENTITY}
+    ) == (
+        Producer(caller=_symbol(_CLIENTS, "caller", "()V"), ordinal=0, identity=_FACTORY_IDENTITY),
+    )
+
+
+@pytest.mark.pins("values.the-PRODUCER-reader-stops-at-a-declared-call")
+def test_a_static_field_written_in_the_static_initialiser_answers_that_call(walked):
+    """Task 8's binding crossing, read for the call: a file-level `val client =
+    HttpClient(CIO) { … }` is `putstatic` in `<clinit>`, every function in the file reads
+    the field, and the producer of each read is the `<clinit>` factory call."""
+    assert _producers(
+        walked, _symbol(_PROBE_KT, "clientGet", "()V"), 0, 0, {_FACTORY_IDENTITY}
+    ) == (
+        Producer(
+            caller=_symbol(_PROBE_KT, "<clinit>", "()V"), ordinal=0, identity=_FACTORY_IDENTITY
+        ),
+    )
+
+
+@pytest.mark.pins("values.a-STATIC-FIELD-receiver-is-followed-to-its-writer")
+def test_a_receiver_read_from_a_static_field_answers_the_fields_writer(walked):
+    """`val derivedClient = client.config { … }` at file level: `config`'s receiver is a
+    `getstatic` of `client`, and `receiver_field` names it, so the receiver is the binding
+    `client` — written in `<clinit>` from the factory call — exactly as the same field read
+    as an ARGUMENT is. Without the key the read's value id is all the facts carry, and no
+    other fact names it: the walk can say nothing (`not_readable`)."""
+    clinit = _symbol(_PROBE_KT, "<clinit>", "()V")
+    assert _producers(walked, clinit, 1, RECEIVER, {_FACTORY_IDENTITY}) == (
+        Producer(caller=clinit, ordinal=0, identity=_FACTORY_IDENTITY),
+    )
+    assert _reasons(_bindings(walked, clinit, 1), RECEIVER) == ["external"]
+    unnamed = _symbol(_PROBE_KT, "unnamed", "()V")
+    assert _producers(walked, unnamed, 0, RECEIVER, {_FACTORY_IDENTITY}) == (
+        Producer(reason="not_readable"),
+    )
+
+
+@pytest.mark.pins("values.the-PRODUCER-reader-matches-the-declared-OWNER")
+def test_a_value_from_an_undeclared_call_gives_no_producer_and_the_walks_reason(walked):
+    """The near-misses: the same read with nothing declared, with the method declared under
+    another owner, and with the owner declared for another method. Each path ends where the
+    value walk ends it, at the unscanned factory, so the record names no call and carries
+    the walk's own reason."""
+    reader = _symbol(_PROBE_KT, "clientGet", "()V")
+    owner, method = _FACTORY_IDENTITY
+    for declared in (set(), {("other/Factory#", method)}, {(owner, "OtherClient")}):
+        assert _producers(walked, reader, 0, 0, declared) == (Producer(reason="external"),)
+
+
+@pytest.mark.pins("values.the-PRODUCER-reader-stops-at-a-declared-call")
+def test_a_binding_with_two_writers_gives_one_producer_per_writer(walked):
+    """Two writers are two paths, and each path ends at its own factory call: the
+    constructor's and `reset`'s. The reader hands both back, in the walk's own order."""
+    assert _producers(walked, _symbol(_POOLED, "send", "()V"), 0, 0, {_FACTORY_IDENTITY}) == (
+        Producer(caller=_symbol(_POOLED, "<init>", "()V"), ordinal=0, identity=_FACTORY_IDENTITY),
+        Producer(caller=_symbol(_POOLED, "reset", "()V"), ordinal=0, identity=_FACTORY_IDENTITY),
+    )
+
+
+@pytest.mark.pins("values.the-producer-stop-comes-BEFORE-the-returns")
+def test_a_declared_call_with_a_scanned_body_is_where_the_reader_stops(walked):
+    """The reader stops AT a declared call and does not follow its body: `Names#one` is in
+    this module and returns `solo`, which is what the value walk answers. The property is
+    written in the constructor's frame, so the producer is the constructor's call; the
+    reader's own value id 5 is `Names#pick`, and naming that call would be the frame
+    mistake Task 8 pins for values."""
+    declared = {(_NAMES, "one"), (_NAMES, "pick")}
+    assert _producers(walked, _symbol(_PROPERTY, "send", "()V"), 1, 0, declared) == (
+        Producer(caller=_symbol(_PROPERTY, "<init>", "()V"), ordinal=0, identity=(_NAMES, "one")),
+    )
+    # Undeclared, the path crosses the body and ends at the literal it returns, kept whole.
+    assert _producers(walked, _symbol(_PROPERTY, "send", "()V"), 1, 0, set()) == (
+        Producer(ended_at=Answer(kind="literal", value="solo", literal_kind="string")),
+    )
+
+
+@pytest.mark.pins("values.a-declared-CONSTRUCTOR-is-a-producer")
+def test_a_declared_constructor_is_a_producer_like_a_factory(walked):
+    """`new Name("built-notify")` is a call as much as `Name.of(…)` is, and the walk already
+    treats a construction as a value's producer. Undeclared, the path ends at what the value
+    walk answers — the type symbol, a literal — and the record says so."""
+    built = _symbol(_IDENTIFIED, "built", "()V")
+    assert _producers(walked, built, 1, 0, {(_NAME, "<init>")}) == (
+        Producer(caller=built, ordinal=0, identity=(_NAME, "<init>")),
+    )
+    assert _producers(walked, built, 1, 0, set()) == (
+        Producer(ended_at=Answer(kind="literal", value=_NAME, literal_kind="symbol")),
+    )
+
+
+def test_a_spill_slot_whose_reported_writer_stores_a_helpers_result_gives_no_producer(walked):
+    """The CP-54 coroutine shape Task 8 recorded: the only reported write of `L$0` stores
+    `nullOutSpilledVariable(x)`, and the real client arrives through an unreported
+    `other.L$0 = p`. The reader must give no producer — never the helper, never a client
+    built elsewhere — and the reason is the walk's: the helper is a jar nobody scanned."""
+    reader = _symbol(_SPILL, "invokeSuspend", _MAKES_OBJECT)
+    assert _producers(walked, reader, 1, 0, {_FACTORY_IDENTITY, (_NAMES, "one")}) == (
+        Producer(reason="external"),
+    )
 
 
 def test_a_parameter_no_scanned_caller_binds_is_unresolved_external(walked):

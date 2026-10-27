@@ -6221,6 +6221,168 @@ def test_an_unknown_verb_getter_poisons_the_method_alone(tmp_path: Path):
     assert _identities(rows) == [(None, "/x", _MODULE + _SUSPEND_BODY, "unresolved")]
 
 
+_HTTP_METHOD = "io/ktor/http/HttpMethod#"
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_ktor3_method_block_reads_its_verb_from_the_static_field(tmp_path: Path):
+    """Spec 2026-10-26 §2d/§3a. Ktor 3.6.0 compiles `HttpMethod.Get` to a `getstatic` of a
+    static field, so the selector is handed a `field`-kind argument carrying the field's
+    symbol and no getter call at all (CP-54 row (a) rows 1-2). Before `verb_values.fields`
+    the verb read as nothing, `method` was poisoned and the route inside was one
+    unresolved row; now the scope is `GET` and `post` disagreeing with it is silence, as
+    on 3.0.3. The four-argument `route(path, HttpMethod.Put)` reads the field the same
+    way."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_HTTP_METHOD + "Get.")],
+            [("get", "/x"), ("post", "/never")],
+        ),
+        (
+            "route",
+            [
+                CallArgument(kind="string", value="/v"),
+                CallArgument(kind="field", symbol=_HTTP_METHOD + "Put."),
+            ],
+            [("put", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/x", handler, "resolved"),
+        ("PUT", "/v/y", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_ktor3_verb_field_the_extractor_reads_as_an_enum_constant_is_read_through_the_table(
+    tmp_path: Path,
+):
+    """The same two scopes in the shape the extractor really emits. `HttpMethod.Get` is a
+    static field typed as its own owner, and D00 §5 reads such a `getstatic` as an
+    `enum`-kind argument, not a `field`-kind one (`MethodFlow.java`, measured on the CP-54
+    probe module: `{"kind": "enum", "symbol": "io/ktor/http/HttpMethod#Get."}`). The enum
+    branch alone reads the member's name, `Get`, which disagrees with the inner `get`'s
+    `GET` and drops the route; the declared table says the field is `GET`."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="enum", symbol=_HTTP_METHOD + "Get.")],
+            [("get", "/x"), ("post", "/never")],
+        ),
+        (
+            "route",
+            [
+                CallArgument(kind="string", value="/v"),
+                CallArgument(kind="enum", symbol=_HTTP_METHOD + "Put."),
+            ],
+            [("put", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/x", handler, "resolved"),
+        ("PUT", "/v/y", handler, "resolved"),
+    ]
+
+
+def test_the_ktor303_getter_form_still_reads(tmp_path: Path):
+    """The same `method(HttpMethod.Get) { get("/x") }` on Ktor 3.0.3 — the Companion getter
+    — reads `GET` exactly as before the field form was added: the two forms sit beside each
+    other in `verb_values`, neither replacing the other."""
+    facts = _selector_tree(("method", [_by_source(9)], [("get", "/x")]))
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/x", _MODULE + _SUSPEND_BODY, "resolved")]
+
+
+def test_an_undeclared_field_is_no_verb(tmp_path: Path):
+    """A static field the table does not name — `method(Constants.WEIRD)`, or a field of
+    `HttpMethod` that is not a verb word — is no verb: `method` is poisoned, the row is
+    unresolved with its path intact, exactly as an undeclared getter reads. The field
+    form reads one declared member at a time and never a name guessed to be its value."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_UNKNOWN_GETTERS + "WEIRD.")],
+            [("get", "/x")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_HTTP_METHOD + "DefaultMethods.")],
+            [("get", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        (None, "/x", handler, "unresolved"),
+        (None, "/y", handler, "unresolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.an-UNLISTED-member-of-a-declared-verb-field-owner-is-no-verb")
+def test_an_unlisted_member_of_a_declared_field_owner_is_no_verb(tmp_path: Path):
+    """An `enum`-kind argument whose OWNER the `verb_values.fields` table declares, naming a
+    member the table does not list — a field of `HttpMethod` typed as `HttpMethod` that is
+    not one of the nine — is no verb (D02 §2): `method` is poisoned and the row is unresolved
+    with its path intact, as `fluent` reads it. Read as its own member name it was the verb
+    `Unlisted`, which disagreed with the inner `get` and dropped the route. An enum of an
+    owner the table does not declare still reads its member's name, as every enum verb
+    does."""
+    facts = _selector_tree(
+        (
+            "method",
+            [CallArgument(kind="enum", symbol=_HTTP_METHOD + "Unlisted.")],
+            [("get", "/x")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="enum", symbol="com/acme/Verbs#GET.")],
+            [("get", "/y")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/y", handler, "resolved"),
+        (None, "/x", handler, "unresolved"),
+    ]
+
+
+def test_a_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path):
+    """`verb_values.fields` is validated at load as `getters` is: a key without its `#` (no
+    field named), or a `verb_values` block holding a key besides `getters` and `fields`,
+    is a broken file, not a degraded run."""
+    for broken in (
+        {"fields": {"io.ktor.http.HttpMethod.Get": "GET"}},
+        {"fields": ["io.ktor.http.HttpMethod#Get"]},
+        {"owner": "io.ktor.http.HttpMethod"},
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["verb_values"] = broken  # type: ignore[index]
+        with pytest.raises(CatalogError, match="verb_values"):
+            _resolve(tmp_path, [], _catalog(matches))
+
+
 def test_media_selectors_read_their_getter_valued_constants_and_an_unknown_one_reads_nothing(
     tmp_path: Path,
 ):
@@ -6963,3 +7125,444 @@ def test_requirement_words_of_the_wrong_shape_are_refused(tmp_path: Path):
         matches["vocabulary"]["request_requirement"] = broken  # type: ignore[index]
         with pytest.raises(CatalogError):
             _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- WebSocket and SSE routes in the routing tree (spec 2026-10-26 §3b, §3g item 5) ------
+
+_WEBSOCKET_ROUTING = "io/ktor/server/websocket/RoutingKt#"
+_SSE_ROUTING = "io/ktor/server/sse/RoutingKt#"
+_JVM_STRING = "Ljava/lang/String;"
+_JVM_FN2 = "Lkotlin/jvm/functions/Function2;"
+# The `serialize` lambda of the SSE overloads that take one — a plain `Function2`, linked
+# as a `lambda` (CP-54 row 18); never the handler.
+_SERIALIZE = DECLARER + "orders$lambda$9(sig_z0)."
+
+
+def _session(
+    owner: str, name: str, between: list[tuple[str, CallArgument]], *, mask: int | None = None
+) -> tuple[str, str, list[tuple[str, CallArgument]], int | None]:
+    """One WebSocket or SSE route call as it is written inside a block: its owner and JVM
+    name, the `(type, argument)` pairs between the receiver and the handler, and — for a
+    `$default` bridge — the mask the compiler passes (CP-54 rows 19-27)."""
+    return (owner, name, between, mask)
+
+
+def _session_call(
+    body: str,
+    ordinal: int,
+    call: tuple[str, str, list[tuple[str, CallArgument]], int | None],
+) -> CallSiteFact:
+    """`invokestatic <owner>.<name>(this, …, handler[, mask, null])` on the block's own
+    parameter, the handler a `SuspendLambda` instance, the descriptor composed from the
+    declared types — a `$default` bridge adds the `int` mask and the `Object` marker the
+    Kotlin compiler always appends (CP-54 rows 19, 21, 23, 27)."""
+    owner, name, between, mask = call
+    types = "".join(jvm_type for jvm_type, _ in between) + _JVM_FN2
+    arguments = [
+        CallArgument(kind="parameter", value=0),
+        *(argument for _, argument in between),
+        CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50),
+    ]
+    if mask is not None:
+        types += "ILjava/lang/Object;"
+        arguments += [CallArgument(kind="int", value=mask), CallArgument(kind="null")]
+    return _site(
+        body,
+        ordinal,
+        owner,
+        name,
+        result=ordinal + 100,
+        descriptor=f"({_ROUTE}{types}){_ROUTE}",
+        arguments=arguments,
+    )
+
+
+def _sessions_under(*blocks: tuple[str, list[CallArgument], list]) -> list:
+    """`routing { <selector>(…) { <session calls> } … }` — `route3` is the plain
+    `route(path) { }`, every other name a `_SELECTOR_DESCS` selector."""
+    facts = _routing_entry()
+    for index, (name, between, calls) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        descriptor = _ROUTE_DESC if name == "route3" else _SELECTOR_DESCS[name]
+        facts.append(
+            _selector(
+                10 + index,
+                "route" if name == "route3" else name,
+                between,
+                body=body,
+                descriptor=descriptor,
+            )
+        )
+        facts.extend(_session_call(body, ordinal, call) for ordinal, call in enumerate(calls))
+    return facts
+
+
+def _protocol_identities(rows: list[dict]) -> list[tuple]:
+    """`_identities` with the row's protocol in front: these rows differ from the catalog's
+    own `http` rows in exactly that column."""
+    return [
+        (row["protocol"], row["method"], row["path"], row["handler"], row["resolution"])
+        for row in rows
+    ]
+
+
+def _web_socket_default(path: str) -> tuple:
+    """`webSocket("/x") { }` — `webSocket$default` with mask 2, the protocol left to its
+    default (CP-54 rows 19, 27)."""
+    return _session(
+        _WEBSOCKET_ROUTING,
+        "webSocket$default",
+        [(_JVM_STRING, _literal(path)), (_JVM_STRING, CallArgument(kind="null"))],
+        mask=2,
+    )
+
+
+@pytest.mark.pins("ktor.a-WEBSOCKET-route-is-a-verbless-inbound-row")
+def test_a_ktor_websocket_route_nests_under_its_prefix(tmp_path: Path):
+    """Spec 2026-10-26 §3b. `routing { route("/api") { webSocket("/chat") { } } }` is ONE
+    inbound `websocket` row at `/api/chat`, `method` NULL, resolved: the WebSocket verb
+    nests through the same `route` prefix every HTTP verb does, and its row carries the
+    rule's own protocol instead of the catalog's `http`. No verb is in scope under the
+    bare `route`, and the route is still one row — a verbless rule is never expanded
+    through `all_methods`, which would be seven HTTP-verbed WebSocket rows. The direct
+    four-argument `webSocket(path, protocol)` and `webSocketRaw(path)` read the same way
+    (CP-54 rows 16, 17, 20, 23)."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _web_socket_default("/chat"),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket",
+                    [(_JVM_STRING, _literal("/proto")), (_JVM_STRING, _literal("chat"))],
+                ),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw$default",
+                    [(_JVM_STRING, _literal("/raw")), (_JVM_STRING, CallArgument(kind="null"))],
+                    mask=2,
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api/chat", handler, "resolved"),
+        ("websocket", None, "/api/proto", handler, "resolved"),
+        ("websocket", None, "/api/raw", handler, "resolved"),
+    ]
+    assert {row["direction"] for row in rows} == {"inbound"}
+
+
+@pytest.mark.pins("ktor.an-SSE-route-is-a-get-sse-row")
+def test_a_ktor_sse_route_is_a_get_sse_row(tmp_path: Path):
+    """Spec 2026-10-26 §3b, §3g item 5. `routing { route("/api") { sse("/events") { } } }`
+    is one inbound `sse` row, `GET /api/events`: `sse(path, handler)` is
+    `route(path, HttpMethod.Get) { … }` (read off the 3.6.0 jar), so the row carries GET as
+    the JAX-RS SSE rows do. The serializer overload with a path, `sse(path, serialize,
+    handler)`, is the same route; its handler is argument 3, never the serializer at 2
+    (CP-54 rows 18, 25, 27)."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _session(_SSE_ROUTING, "sse", [(_JVM_STRING, _literal("/events"))]),
+                _session(
+                    _SSE_ROUTING,
+                    "sse",
+                    [
+                        (_JVM_STRING, _literal("/typed")),
+                        (_JVM_FN2, CallArgument(kind="lambda", symbol=_SERIALIZE, captures=0)),
+                    ],
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("sse", "GET", "/api/events", handler, "resolved"),
+        ("sse", "GET", "/api/typed", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.a-GET-bound-websocket-under-a-disagreeing-scope-is-dropped")
+def test_a_websocket_route_under_a_disagreeing_verb_scope_is_dropped_like_get(tmp_path: Path):
+    """DR-6, read off the 3.6.0 jar: every `webSocket`/`webSocketRaw` form WITH a path is
+    `route(path, HttpMethod.Get) { … }`, so `method(HttpMethod.Post) { webSocket("/ws") { } }`
+    is a GET node under a POST selector that Ktor never dispatches — NO row, the A2
+    silence `get("/ws")` gets there; `route("/v", HttpMethod.Put) { webSocket("/in") }` the
+    same. Under `method(HttpMethod.Get)` it agrees and is one row, verbless. Under a scope
+    whose verb could not be read it is unresolved, as `get` is: whether it is dispatched
+    is what could not be read. The PATH-LESS `webSocket { }` has no verb selector in Ktor
+    (header selectors and `handle`), so under the POST scope it is still one verbless
+    row."""
+    pathless = _session(
+        _WEBSOCKET_ROUTING,
+        "webSocket$default",
+        [(_JVM_STRING, CallArgument(kind="null"))],
+        mask=1,
+    )
+    facts = _sessions_under(
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Post.")],
+            [_web_socket_default("/ws"), pathless],
+        ),
+        (
+            "route",
+            [_literal("/v"), CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Put.")],
+            [_web_socket_default("/in")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Get.")],
+            [_web_socket_default("/ok")],
+        ),
+        (
+            "method",
+            [CallArgument(kind="field", symbol=_UNKNOWN_GETTERS + "WEIRD.")],
+            [_web_socket_default("/odd")],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/", handler, "resolved"),
+        ("websocket", None, "/odd", handler, "unresolved"),
+        ("websocket", None, "/ok", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.a-websocket-under-a-verb-scope-is-NOT-expanded")
+def test_a_websocket_route_under_a_bare_route_is_one_verbless_row(tmp_path: Path):
+    """`route("/api") { webSocket("/ws") { } }`: no verb is in scope, and the route is ONE
+    `websocket` row with `method` NULL — never fanned out through `all_methods` into seven
+    HTTP-verbed WebSocket rows, as a verb-less `handle { }` there would be. The path-less
+    `webSocket { }` under `route("/b")` is one row at `/b` the same way."""
+    facts = _sessions_under(
+        ("route3", [_literal("/api")], [_web_socket_default("/ws")]),
+        (
+            "route3",
+            [_literal("/b")],
+            [
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket$default",
+                    [(_JVM_STRING, CallArgument(kind="null"))],
+                    mask=1,
+                )
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api/ws", handler, "resolved"),
+        ("websocket", None, "/b", handler, "resolved"),
+    ]
+
+
+def test_the_websocket_protocol_overload_is_not_read_as_a_path(tmp_path: Path):
+    """CP-54 rows 16-17, 21-22. In the three-argument `webSocket(Route, String, Function2)`
+    argument 1 is the PROTOCOL, not a path: `webSocket(protocol = "chat") { }` under
+    `route("/api")` serves `/api` itself, never `/api/chat`. The same holds for its
+    `$default` bridge (`webSocket { }`, mask 1), for `webSocketRaw(protocol) { }`, and for
+    `webSocketRaw(protocol, negotiateExtensions)`, which shares arity 4 with
+    `webSocketRaw(path, protocol)` and is told apart by the `boolean` at argument 2."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _session(_WEBSOCKET_ROUTING, "webSocket", [(_JVM_STRING, _literal("chat"))]),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocket$default",
+                    [(_JVM_STRING, CallArgument(kind="null"))],
+                    mask=1,
+                ),
+                _session(_WEBSOCKET_ROUTING, "webSocketRaw", [(_JVM_STRING, _literal("raw"))]),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw",
+                    [
+                        (_JVM_STRING, _literal("ext")),
+                        ("Z", CallArgument(kind="boolean", value=True)),
+                    ],
+                ),
+                _session(
+                    _WEBSOCKET_ROUTING,
+                    "webSocketRaw",
+                    [(_JVM_STRING, _literal("/pathed")), (_JVM_STRING, _literal("chat"))],
+                ),
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("websocket", None, "/api", handler, "resolved"),
+        ("websocket", None, "/api/pathed", handler, "resolved"),
+    ]
+    assert len(rows) == 2
+
+
+def test_a_pathless_sse_route_is_the_handle_it_compiles_to(tmp_path: Path):
+    """`sse { }` carries no path and, read off the 3.6.0 jar, no verb either: it is
+    `processSSE`, which installs the plugin and calls `handle { }` on the receiver itself —
+    no `route(path, HttpMethod.Get)` around it, unlike `sse(path)`. So it reads as the
+    verb-less terminal `handle` does: under `method(HttpMethod.Get)` it is `GET /`, and
+    under a bare `route("/stream")` it serves every verb `all_methods` lists, one `sse` row
+    each. The serializer overload `sse(serialize, handler)`, arity 3 like `sse(path,
+    handler)`, is told apart by argument 1's type (CP-54 row 18)."""
+    facts = _sessions_under(
+        (
+            "method",
+            [CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Get.")],
+            [_session(_SSE_ROUTING, "sse", [])],
+        ),
+        (
+            "route3",
+            [_literal("/stream")],
+            [
+                _session(
+                    _SSE_ROUTING,
+                    "sse",
+                    [(_JVM_FN2, CallArgument(kind="lambda", symbol=_SERIALIZE, captures=0))],
+                )
+            ],
+        ),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("sse", "DELETE", "/stream", handler, "resolved"),
+        ("sse", "GET", "/", handler, "resolved"),
+        ("sse", "GET", "/stream", handler, "resolved"),
+        ("sse", "HEAD", "/stream", handler, "resolved"),
+        ("sse", "OPTIONS", "/stream", handler, "resolved"),
+        ("sse", "PATCH", "/stream", handler, "resolved"),
+        ("sse", "POST", "/stream", handler, "resolved"),
+        ("sse", "PUT", "/stream", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("ktor.the-row-protocol-is-part-of-the-dedup-key")
+def test_http_routes_are_unchanged(tmp_path: Path):
+    """The HTTP verbs beside the new ones keep their protocol and their verbs: in one
+    `route("/api") { get("/orders"); webSocket("/chat"); sse("/events"); get("/events") }`
+    the two `get`s are `http` GET rows, and the `http` and `sse` rows at the SAME
+    `GET /api/events` are two endpoints — the protocol is part of the identity the batch
+    deduplicates on, so neither swallows the other."""
+    facts = _sessions_under(
+        (
+            "route3",
+            [_literal("/api")],
+            [
+                _web_socket_default("/chat"),
+                _session(_SSE_ROUTING, "sse", [(_JVM_STRING, _literal("/events"))]),
+            ],
+        ),
+    )
+    body = _selector_body(0)
+    facts.append(_verb_in(body, 2, "get", "/orders"))
+    facts.append(_verb_in(body, 3, "get", "/events"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _protocol_identities(rows) == [
+        ("http", "GET", "/api/events", handler, "resolved"),
+        ("http", "GET", "/api/orders", handler, "resolved"),
+        ("sse", "GET", "/api/events", handler, "resolved"),
+        ("websocket", None, "/api/chat", handler, "resolved"),
+    ]
+
+
+def test_a_verb_rules_protocol_and_registered_verb_are_validated(tmp_path: Path):
+    """A verb rule's `protocol` is one of D00's protocols — a misspelt one would publish
+    rows under a protocol nothing links — and sits on a verb rule alone: a prefix or an
+    entry registers no route of its own to carry it. `registered_verb` is an upper-case
+    verb beside `verb: none` and nowhere else."""
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verbs"][0]["protocol"] = "web-socket"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="protocol"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["prefixes"][0]["protocol"] = "websocket"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="protocol"):
+        _resolve(tmp_path, [], _catalog(matches))
+    # `verb: none` is the rule's answer for its verb; beside `verb_arg` it is two.
+    matches = copy.deepcopy(_matches())
+    rule = matches["vocabulary"]["verbs"][0]  # type: ignore[index]
+    rule["verb"] = "none"
+    rule["verb_arg"] = 0
+    with pytest.raises(CatalogError, match="verb_arg"):
+        _resolve(tmp_path, [], _catalog(matches))
+    # `registered_verb` names the verb a VERBLESS route is registered under: beside
+    # `verb: none` alone, and an upper-case verb word.
+    for verb, registered in (("GET", "GET"), ("none", "get"), ("none", 7)):
+        matches = copy.deepcopy(_matches())
+        rule = matches["vocabulary"]["verbs"][0]  # type: ignore[index]
+        rule["verb"] = verb
+        rule["registered_verb"] = registered
+        with pytest.raises(CatalogError, match="registered_verb"):
+            _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_an_unresolved_websocket_row_keeps_its_protocol(tmp_path: Path):
+    """`other.webSocket("/stray") { }` inside `route("/api") { }` is registered on a `Route`
+    this block never handed it (`receiver_arg: 0` is not the origin), so the row is
+    unresolved with its path unread — and it is still a WebSocket row: the rule's protocol is
+    stamped on the poisoned route too, never left to fall back to the catalog's `http`."""
+    facts = _sessions_under(("route3", [_literal("/api")], []))
+    facts.append(
+        _site(
+            _selector_body(0),
+            0,
+            _WEBSOCKET_ROUTING,
+            "webSocket$default",
+            result=100,
+            descriptor=f"({_ROUTE}{_JVM_STRING}{_JVM_STRING}{_JVM_FN2}ILjava/lang/Object;){_ROUTE}",
+            arguments=[
+                CallArgument(kind="field", symbol=DECLARER + "other."),
+                _literal("/stray"),
+                CallArgument(kind="null"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=50),
+                CallArgument(kind="int", value=2),
+                CallArgument(kind="null"),
+            ],
+        )
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _protocol_identities(rows) == [
+        ("websocket", None, None, _MODULE + _SUSPEND_BODY, "unresolved")
+    ]

@@ -835,14 +835,15 @@ public final class ClassScanner {
                     // before, because a returned value's `source` names one of
                     // them and a fact file reads top-down.
                     lines.addAll(MethodFlow.methodReturns(documentId, methodSymbol, this));
-                    // D00 §5's field_write: every INSTANCE method that assigns a
-                    // parameter straight to a field, and the symbol of the method
-                    // that did it. Constructors only until 2026-10-18 — the guard
-                    // was hiding about two thirds of the writes on real code
-                    // (spec 2026-10-18-the-sixth-edge-design.md §0). MethodFlow
-                    // keeps its own static-method gate, the same way it does its
-                    // own per-instruction scan, so this call stays unconditional
-                    // and is a no-op on a static method.
+                    // D00 §5's field_write: every method that assigns a parameter,
+                    // a constant or a call's result straight to a field, and the
+                    // symbol of the method that did it. Constructors only until
+                    // 2026-10-18 — the guard was hiding about two thirds of the
+                    // writes on real code (spec 2026-10-18-the-sixth-edge-design.md
+                    // §0) — and `PUTSTATIC` only since 2026-10-26. MethodFlow keeps
+                    // its own static-method rule (a static method writes no field
+                    // of `this`), the same way it does its own per-instruction
+                    // scan, so this call stays unconditional.
                     //
                     // `methodSymbol` is the one the call sites above carry, so a
                     // write and a call name their method identically.

@@ -232,14 +232,22 @@ Capability 9.19's remaining shapes, each with CP-33's measured bytecode:
 | CP-33 row | shape | why this spec does not reach it |
 |---|---|---|
 | 2 | `@PostConstruct` assigning a LITERAL | the value load is `ldc`, not an `xLOAD` — no triple, so no fact |
-| 6 | a static initialiser | `ldc; putstatic` — no receiver load and `PUTSTATIC`, not `PUTFIELD` |
-| 7 | a field assigned a CALL's result | an `invokeinterface` and a `checkcast` intervene |
+| 6 | a static initialiser | `ldc; putstatic` — no receiver load and `PUTSTATIC`, not `PUTFIELD`. **BUILT 2026-10-26** |
+| 7 | a field assigned a CALL's result | an `invokeinterface` and a `checkcast` intervene. **BUILT 2026-10-26** |
 | 8 | an instance field initialiser (`ldc`) | inside `<init>`, so the guard passes; the FACT GRAMMAR refuses it (`OI-141`) |
 
 **Row 1 — a setter assigning its parameter — has MOVED INTO the work** (§0), on the user's
 point that a write is a write. What remains is the three shapes where the VALUE is not a
 parameter load (2, 7, 8) and the one where the instruction is `putstatic` (6). Each needs a
 widened fact grammar rather than a filter change, and none is needed for the reads §0 measures.
+
+**Rows 6 and 7 are BUILT as of 2026-10-26** (the user's ruling that day, "build both now",
+after the Ktor client-base work found the walk could not reach a client held in a Kotlin
+top-level `val` or a class property). `field_write` now reports a `PUTSTATIC` — from a
+parameter, a constant or a call — and a `PUTFIELD` on `this` from a call's result, carrying
+that call as `value: {kind: unresolved, source: N}` in the writer's frame; the walk's
+`_binding` resolves it there. What it moved is D00 §5's `field_write` History paragraph.
+Rows 2 and 8 were reached earlier, by `value` carrying a constant (`OI-138` cause 2).
 
 **A `lateinit var` assigned in a method is row 1's Kotlin spelling**, so it comes with the
 guard lift. Measured on a kotlinc 2.2.0 probe: of seven Kotlin property shapes, a

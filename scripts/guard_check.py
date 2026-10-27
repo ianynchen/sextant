@@ -693,6 +693,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "shapes.a-field-borrows-an-annotation-only-from-its-CONSTRUCTOR-write": Guard(
+        what="field-ladder rung 2 lends a constructor parameter's annotation to a field only "
+        "where that constructor wrote the field from that parameter",
+        why="`OI-214`: a field written by a SETTER from its own parameter N — `static void "
+        "setHost(String h) { Client.host = h; }`, a field write since `PUTSTATIC` became one "
+        'on 2026-10-26 — beside a constructor whose parameter N carries `@Value("${…}")` '
+        "published that constructor's expression as the address at `resolved`. Nothing ties "
+        "the setter's value to the constructor's parameter; trying every constructor whatever "
+        "the writer is the mistake this guard writes back",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="        if writer is None:\n"
+                "            candidates = facts.constructor_parameters.get(owner, [])",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            candidates = facts.constructor_parameters.get(owner, [])",
+            ),
+        ),
+    ),
     "shapes.an-INEXACT-address-publishes-at-partial": Guard(
         what="`url_of_answer` publishes an inexact literal at `partial`, never `resolved`",
         why="`partial` is the word D00 §4 has for 'part of this address was read'; `resolved` "
@@ -1861,6 +1880,132 @@ GUARDS: dict[str, Guard] = {
                 "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
                 replace="        for method, index in ():  # guard disabled by guard_check.py\n"
                 "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
+            ),
+        ),
+    ),
+    "values.a-field-written-from-a-CALL-is-followed": Guard(
+        what="a binding written from a call's result is resolved in the WRITING method's "
+        "frame, through the call that produced it",
+        why="Kotlin's top-level `val client = HttpClient(CIO) { … }` is `invokestatic; "
+        "putstatic` in `<clinit>`, and a class property `private val c = HttpClient { … }` "
+        "is `aload_0; invoke…; putfield` — measured on the CP-54 probe module, every read of "
+        "such a client answered `no_writer`, so the walk could not reach the client a Ktor "
+        "call is made on. Reading the write's value as a constant instead answers "
+        "`not_readable` about a value whose producer is a fact, and reading its `source` in "
+        "the READER's frame would answer whatever that id names there — a wrong value at "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if entry.get("source") is not None and row.get("written_by") is not None:',
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.the-PRODUCER-reader-stops-at-a-declared-call": Guard(
+        what="the producer reader ends a path at a producing call whose (owner, method) the "
+        "caller declared, and names that call",
+        why="a reader that must read the block a client was BUILT with needs the call itself, "
+        "and the value walk answers only values — measured on the CP-54 probe module, every "
+        "read of `ProbeKt#client` answers `external` at the unscanned factory. Without the "
+        "stop, every path ends where the value walk ends it, so the reader names no call for "
+        "a client whose construction is a fact, and the base its block sets is never read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if identity not in self._declared:",
+                replace="        if True:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-STATIC-FIELD-receiver-is-followed-to-its-writer": Guard(
+        what="a call receiver read by `getstatic` is resolved as the field D00 §5's "
+        "`receiver_field` names",
+        why="the receiver's own value id is the `getstatic` instruction, which no other fact "
+        "names, so `val derived = client.config { }` at file level reaches no parent: the "
+        "derived client's relative call loses the base Ktor sends it to (CP-54 row 80)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='            field = site.get("receiver_field")\n',
+                replace="            field = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-declared-CONSTRUCTOR-is-a-producer": Guard(
+        what="a value BUILT by a declared constructor ends the producer reader's path at that "
+        "construction, as a declared factory call does",
+        why="a construction carries no `produced_by` edge (`call_sites.result` is null for an "
+        "initialiser), so the factory stop never sees it. Without the construction stop, a "
+        "client built with `new` reaches the value walk's answer, the constructed TYPE, and "
+        "the reader names no call for a construction that is a fact; a declared `<init>` "
+        "would silently never match",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._identified(site) is None and self._declared_producer(site) "
+                "is None:",
+                replace="        if self._identified(site) is None:  "
+                "# guard disabled by scripts/guard_check.py",
+            ),
+            Edit(
+                path=_VALUES,
+                find="""            if constructed is not None:
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None:
+                    return _only(trail, stopped)
+""",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.the-producer-stop-comes-BEFORE-the-returns": Guard(
+        what="the producer reader stops at a declared call BEFORE reading that call's returns",
+        why="a declared call whose body is in this module would otherwise be crossed, and the "
+        "path would end at whatever the body hands back: a literal, or a call inside the "
+        "body. The reader then names no call, or a call the caller never declared, for the "
+        "one it asked about, and the block that set the client's base is not the one read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="""        if producers:
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
+        reached: list[_Reached] = []
+""",
+                replace="        reached: list[_Reached] = []\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="""        if reached:
+            return tuple(reached)
+        if not producers:
+""",
+                replace="""        if reached:
+            return tuple(reached)
+        if producers:  # guard disabled by scripts/guard_check.py: the stop moved down
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
+        if not producers:
+""",
+            ),
+        ),
+    ),
+    "values.the-PRODUCER-reader-matches-the-declared-OWNER": Guard(
+        what="a producing call is the declared one only where its owner matches as well as "
+        "its method name",
+        why="method names repeat across types — `config`, `create`, `build`, `of` — so a stop "
+        "matched on the name alone names a call on some other type as the client's producer, "
+        "and the reader then reads a base out of a block that configures something else: a "
+        "wrong address at `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if identity not in self._declared:",
+                replace='        if row["name"] not in {name for _, name in self._declared}:  '
+                "# guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -4739,6 +4884,583 @@ GUARDS: dict[str, Guard] = {
                 replace='        "definite": ordered,  # guard disabled by scripts/guard_check.py\n'
                 '        "possible": [],\n'
                 '        "unknown_regions": [],\n',
+            ),
+        ),
+    ),
+    # --- a verb written as a static field (spec 2026-10-26 §3a) ------------
+    "ktor.an-UNLISTED-member-of-a-declared-verb-field-owner-is-no-verb": Guard(
+        what="in `combinator`, an `enum`-kind verb argument whose owner the "
+        "`verb_values.fields` table declares, naming a member it does not list, is no verb",
+        why="D02 §2: a field the table does not name reads as nothing, the same poisoned verb "
+        "`fluent` gives. Read as its own member name, an unlisted `HttpMethod` field becomes "
+        "a verb word Ktor never sends, and the routes inside `method(…) { … }` are dropped "
+        "where they should stay unresolved rows",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if any(declared == owner for declared, _ in scope.context.verb_fields):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-VERB-read-from-a-static-field": Guard(
+        what="a verb argument that is a static field (`enum`-kind where the field is typed "
+        "as its own owner, as `HttpMethod.Get` is, `field`-kind otherwise) is read through "
+        "the catalog's `verb_values.fields` table, in `combinator` and in `fluent`'s "
+        "`http_method: argN` capture",
+        why="Ktor 3.6.0 compiles `HttpMethod.Get` to a `getstatic`, never a getter call. "
+        "Ignoring `fields` reads that verb as nothing: `method(HttpMethod.Get) { get(...) }` "
+        "poisons `method` and every route inside it is one unresolved row (the shipped "
+        "routing gap, `ktor-samples`' `Login.kt:50`), and a client `setMethod(HttpMethod.Put)` "
+        "reads `unresolved` with `method` NULL, where the evidence says PUT",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    field_verb = static_field_value(argument, scope.context.verb_fields)\n",
+                replace="    field_verb = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)\n",
+                replace="        else _string_value(declared_verb)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    # --- the Ktor HTTP client, inlined (spec 2026-10-26 §3c) -------------------
+    "fluent.an-EXTENSION-step-joins-through-its-receiver-argument": Guard(
+        what="a step declaring `receiver_arg: N` joins the chain through argument N's value "
+        "id, not through its own `receiver`",
+        why="a Kotlin extension function compiles to a static method whose receiver is "
+        "argument 0 and whose own `receiver` is null. Joined by `receiver` alone, the walk "
+        'never reaches it: Ktor\'s `HttpRequestKt.url(builder, "…")` is never folded and '
+        "every inlined client call derives with `path` NULL at `unresolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            by_receiver.setdefault(_receiver_of(site, extension_steps), []).append(site)\n",
+                replace='            by_receiver.setdefault(site["receiver"], []).append(site)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "ktor.an-INLINED-client-call-is-an-outbound-row": Guard(
+        what="`ktor-client.yml`'s `url` step names `receiver_arg: 0`: the address of an "
+        "inlined client call is read off the static `HttpRequestKt.url(builder, …)`",
+        why="Kotlin inlines `client.get(u)` into a builder sequence whose address is set by "
+        "an extension call on the builder. Without the word that call is not part of the "
+        "chain, and every Ktor client call is an outbound row with no address",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-client.yml",
+                find="        receiver_arg: 0, captures: { url: arg1 } }\n",
+                replace="        captures: { url: arg1 } }\n",
+            ),
+        ),
+    ),
+    "ktor.the-url-step-reads-only-the-STRING-overload": Guard(
+        what="`ktor-client.yml`'s `url` step is narrowed by `descriptor` to "
+        "`url(HttpRequestBuilder, String)`",
+        why="`HttpRequestKt` declares three `url` overloads, and the parts form "
+        "`url(builder, scheme, host, port, path, block)` carries the SCHEME at argument 1. "
+        "Matched by name alone, a call built from parts publishes a request to `https`",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-client.yml",
+                find='        descriptor: "(Lio/ktor/client/request/HttpRequestBuilder;Ljava/lang/String;)V",\n',
+                replace="",
+            ),
+        ),
+    ),
+    "fluent.a-RELATIVE-address-off-a-client-base-is-unresolved": Guard(
+        what="under a declared `client_base`, a relative address read in full is "
+        "`unresolved`, its path kept and its peer NULL",
+        why="Ktor joins a relative address onto the client's `defaultRequest` base, or onto "
+        "`http://localhost`, and where the client's construction is not reached that base "
+        'cannot be read. Published at `resolved`, `client.get("relative/path")` claims the '
+        "path it states is the whole address the module calls",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        context.client_base is None\n",
+                replace="        True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-SCHEME-without-a-host-is-not-joined": Guard(
+        what="`join_url` declines an address with a scheme and no host (`gemini-pro:x`), "
+        "where Ktor's early return tests for a HOST",
+        why="Ktor sends `gemini-pro:generateContent` over a `…/models/` base as "
+        "`gemini-pro://…:443/v1beta/models/generateContent` (CP-54 rows 81-82). Returned "
+        "unchanged because it carries a scheme, the row publishes `gemini-pro:generateContent` "
+        "as an absolute address Ktor never sends",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    if scheme is not None:\n        return None\n",
+                replace="    if scheme is not None:  # guard disabled by scripts/guard_check.py\n"
+                "        return relative\n",
+            ),
+        ),
+    ),
+    "ktor.the-join-follows-KTORS-rule-not-concatenation": Guard(
+        what="`join_url`'s `replace_last_segment` is Ktor's `DefaultRequest` merge, not "
+        "the base and the relative address concatenated",
+        why="Ktor replaces a base's last segment unless it ends in `/`, lets a path starting "
+        "with `/` replace the whole base path, and puts the call's query before the base's "
+        "(CP-54 rows 51-60). Concatenated, `https://api.example.com/v1` plus `orders` "
+        "publishes `/v1orders`, an address the module never calls",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    return _replace_last_segment(base, relative)\n",
+                replace="    return base + relative  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    # --- A client's base, read through the declared ladder (Task 10) -------------------
+    "ktor.a-RELATIVE-call-joins-its-clients-default-request-base": Guard(
+        what="a relative client call is joined onto the base the client it is issued on "
+        "holds, read through the catalog's `client_base` ladder",
+        why='Ktor sends `client.get("quotes")` on a client built with `defaultRequest { '
+        'url("https://pricing.example.com/") }` to `https://pricing.example.com/quotes` '
+        "(CP-54 rows 51, 88). Without the join the row publishes `quotes` with no peer, a "
+        "path that names no service, for a call whose service the code states",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    client = captures.get(_CLIENT)\n",
+                replace="    client = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.each-client-joins-its-OWN-base": Guard(
+        what="a client derived by `config { … }` joins its OWN block's base, and inherits "
+        "its parent's only where its block sets none",
+        why="Ktor sends a derived client's relative call to the derived client's own "
+        "`defaultRequest` base (CP-54 row 79) and to the parent's only without one (row 80). "
+        "Read parent-first, every derived client publishes its parent's service — "
+        "`parent.example.com` for a call Ktor sends to `child.example.com`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        base, reason = self._block_base(site, rung)\n",
+                replace='        if rung.get("parent") == _FROM_RECEIVER:  # guard disabled by '
+                "scripts/guard_check.py\n"
+                "            return self.base_of(site, RECEIVER, seen)\n"
+                "        base, reason = self._block_base(site, rung)\n",
+            ),
+        ),
+    ),
+    "ktor.the-ENGINE-LESS-factory-is-a-ladder-rung": Guard(
+        what="`client-models/ktor.yml` declares the engine-less `HttpClient { … }` factory, "
+        "`HttpClientJvmKt.HttpClient(Function1)`, as a rung with its block at argument 0",
+        why="the engine-less factory is its own JVM function (CP-54 row 87), and koog builds "
+        "its clients with it. Undeclared, a relative call on such a client keeps a bare "
+        "path where Ktor sends it to the block's `defaultRequest` base (row 88)",
+        edits=(
+            Edit(
+                path="sextant/catalogs/client-models/ktor.yml",
+                find="    - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClient, block_arg: 0,\n",
+                replace="    - { owner: io.ktor.client.HttpClientJvmKt, method: HttpClientDisabledByGuard, "
+                "block_arg: 0,\n",
+            ),
+        ),
+    ),
+    "ktor.only-a-DECLARED-factory-overload-is-read": Guard(
+        what="a ladder rung matches a construction only under the descriptor it declares",
+        why="`HttpClient(engine) { … }` over an engine instance shares the measured "
+        "factory's owner and name. Matched on those alone, its block is read as the "
+        "measured overload's, and a base no probe row measured is published at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        and ("descriptor" not in call or site.get("descriptor") == '
+                'call["descriptor"])\n',
+                replace="        and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-RELATIVE-setter-after-an-absolute-one-declines": Guard(
+        what="a `defaultRequest` block whose setter is handed a relative address declines",
+        why='a relative `url("b/")` after `url("https://first.example.com/a/")` MOVES '
+        "the base to `…/a/b/` (CP-54 row 86), which is not modelled. Taken as the base "
+        "itself, the join publishes an address built on `b/`, which Ktor never sends",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="                if address is None or not (_has_host(address) or carries_expression(address)):\n",
+                replace="                if address is None:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-client-with-no-DECLARED-base-is-not-assumed-localhost": Guard(
+        what="a construction reached with no declared setter reached gives no base, as an "
+        "unreached one does",
+        why="Ktor sends a client with no base to `http://localhost` (CP-54 rows 50, 57), but "
+        "that a client has none cannot be proven from the bytecode: `install(DefaultRequest)`, "
+        "a caller-supplied `block()` or a helper the block calls may each set one, and the set "
+        "is open. Assumed, the row publishes `localhost` for a call Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        # bytecode, so the base is unread, as for an unreached construction.\n"
+                "        return None, UNTRACED\n",
+                replace="        # bytecode, so the base is unread, as for an unreached construction.\n"
+                '        return "http://localhost", None  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "ktor.a-rung-or-setter-under-ANOTHER-descriptor-declines": Guard(
+        what="a call in a reached block that matches a rung or the setter on owner and name "
+        "under an undeclared descriptor declines the block",
+        why="`defaultRequest(replace = true) { … }` and `url { … }` set a base through an "
+        "overload the ladder does not read (CP-54 rows 46, 48). Skipped, the block reads as "
+        "setting only the base the declared setter read, and the row publishes that base at "
+        "`resolved` for a call Ktor sends where the other overload pointed it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.any-other-call-on-the-SETTERS-owner-declines": Guard(
+        what="any call on the setter's owner type other than the declared setter declines "
+        "the block it is in",
+        why="`defaultRequest { host = … }` and `url.takeFrom(…)` move the base through members "
+        "of `DefaultRequestBuilder` the reader does not model. Skipped, the row publishes the "
+        "base `url(…)` set at `resolved`, for a call Ktor sends to the host set after it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if site.get("owner") == self._setter["owner"]:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-LISTED-call-that-may-set-the-base-declines": Guard(
+        what="a call the catalog's `may_set_base` lists declines the block it is in",
+        why="`install(DefaultRequest) { url(…) }` sets the base as `defaultRequest { }` does "
+        "(CP-54 rows 92-93), through a generic installer. Unlisted, the row publishes the "
+        "`defaultRequest` base beside it at `resolved`, for a call Ktor sends to the installed "
+        "base",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        return any(_listed(site, entry) for entry in self._may_set)\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-executed-TWICE-holds-no-client": Guard(
+        what="a built request is held against a client only where exactly one call executes it",
+        why="a builder handed to two `HttpStatement`s on two clients has two bases; holding "
+        "the first publishes that client's service for a row that may be the other's",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if len(executing) != 1:\n",
+                replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-block-handing-its-receiver-to-MODULE-code-declines": Guard(
+        what="a block that hands its receiver to a method of this module, whose body is "
+        "scanned and not followed, declines",
+        why="`HttpClient(CIO) { configure(this) }` may set the base inside `configure`. Read "
+        "as silence, the row publishes the block's own declared base at `resolved`, for a "
+        "call Ktor sends wherever `configure` pointed it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="            if self._may_move_base(inner) or self._hands_off(inner, receiver):\n",
+                replace="            if self._may_move_base(inner):  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-block-handing-its-receiver-to-SUPPLIED-code-declines": Guard(
+        what="a block that hands its receiver to an instance call made on any value other "
+        "than the receiver itself (a captured value, a parameter, a field read, a local) "
+        "declines",
+        why="`fun mk(block) = HttpClient(CIO) { defaultRequest { url(a) }; block() }` runs "
+        "the caller's `block` on the configuration, and the caller's block may set its own "
+        "base. Skipped, the row publishes `a` at `resolved` for a call Ktor sends wherever "
+        "the caller's block pointed it (measured on kotlinc 2.2's output)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="            if _hands_to_supplied_code(inner, receiver):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-base-from-ANOTHER-path-is-never-paired": Guard(
+        what="a setter whose value the walk resolves to several bases gives no base",
+        why="the producer reader records no path, so where `madeClient(base)` is called "
+        "with two bases nothing says which one a given client was built with. Taking one "
+        'pairs the client with a base from another call (ruling M-1): `a.get("orders")` '
+        "published at `b.example.com`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        if len(distinct) > 1:\n            return None, NON_ENUMERABLE\n"
+                "        return distinct[0], None\n\n    def _rung_of",
+                replace="        return distinct[0], None  # guard disabled by "
+                "scripts/guard_check.py\n\n    def _rung_of",
+            ),
+        ),
+    ),
+    # --- WebSocket and SSE client calls (spec 2026-10-26 §3d, §3g items 2 and 4) -------
+    "ktor.a-WEBSOCKET-client-call-is-an-outbound-row": Guard(
+        what="`ktor-websocket-client.yml` matches the client `BuildersKt` WebSocket functions "
+        "on their own owner",
+        why='`client.webSocket("ws://…") { }` is one static call, '
+        '`websocket.BuildersKt.webSocket$default(client, "ws://…", …)` (CP-54 row 36). '
+        "Unmatched, a module that opens a WebSocket has that connection in no export",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-websocket-client.yml",
+                find="  owner: io.ktor.client.plugins.websocket.BuildersKt\n",
+                replace="  owner: io.ktor.client.plugins.websocket.BuildersKtDisabledByGuard\n",
+            ),
+        ),
+    ),
+    "ktor.an-SSE-client-call-is-an-outbound-row": Guard(
+        what="`ktor-sse-client.yml` matches the client `BuildersKt` SSE functions on their own "
+        "owner",
+        why='`client.sse("https://…") { }` is one static call, '
+        '`sse.BuildersKt."sse-Mswn-_c$default"(client, "https://…", …)` (CP-54 row 42). '
+        "Unmatched, a module subscribing to an event stream has that call in no export",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-sse-client.yml",
+                find="  owner: io.ktor.client.plugins.sse.BuildersKt\n",
+                replace="  owner: io.ktor.client.plugins.sse.BuildersKtDisabledByGuard\n",
+            ),
+        ),
+    ),
+    "ktor.a-relative-WS-call-joins-the-base": Guard(
+        what="a `single_call` row whose catalog declares `client_base` joins a relative "
+        "address onto the base of the client at `client_arg`",
+        why='`client.ws("/opentelemetry/websocket")` on a client whose `defaultRequest` base '
+        "is `https://api.example.com/` is sent to `ws://api.example.com:443/…` (CP-54 rows 61, "
+        "95). Without the client the row keeps `/opentelemetry/websocket` unresolved, a path "
+        "naming no service, for a call whose service the code states",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    address, resolution = against_client_base(\n"
+                "        workspace, values, client, declared, path, method.get(_REQUEST_URL), "
+                "path_only\n",
+                replace="    address, resolution = against_client_base(  # guard disabled by "
+                "scripts/guard_check.py\n"
+                "        workspace, values, None, declared, path, method.get(_REQUEST_URL), "
+                "path_only\n",
+            ),
+        ),
+    ),
+    "ktor.a-WEBSOCKET-call-sends-with-its-OWN-scheme-and-port": Guard(
+        what="a call's `request_url` sets the joined address's scheme, and its port where it "
+        "sets one, written only where it differs from the scheme's default",
+        why='Ktor sends `ws("/chat")` over `https://api.example.com/v1/` to '
+        '`ws://api.example.com:443/chat` and `wss("/chat")` to `wss://api.example.com/chat` '
+        "(CP-54 rows 94-108). Joined as an HTTP call, both rows publish "
+        "`https://api.example.com/chat`, a URL no WebSocket call reaches",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="    if request is None:\n        if path_only:\n"
+                "            return _path_onto(base, relative)\n"
+                "        return _replace_last_segment(base, relative)\n"
+                "    return _with_request_scheme(base, relative, request, default_ports or {}, "
+                "path_only)\n",
+                replace="    return _replace_last_segment(base, relative)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-HOST-in-the-parts-form-is-not-assembled": Guard(
+        what="an address whose other parts (`address_parts`) are given is kept, `unresolved`, "
+        "and never joined",
+        why='`client.webSocket(host = "chat.example.com", path = "/parts")` is sent to '
+        "`ws://chat.example.com/parts` (CP-54 row 109): the host replaces the base's. Joined, "
+        "the row publishes `ws://api.example.com:443/parts`, the base's service for a call "
+        "Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="        if any(_given(_arg_at(arguments, position)) for position in "
+                "method[_ADDRESS_PARTS]):\n"
+                "            return None, path, str(Resolution.UNRESOLVED)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-PARTS-path-is-a-path-never-an-address": Guard(
+        what="a parts-form row reads its `path` as the text the code states and joins it as "
+        "segments, never as an address",
+        why="Ktor hands the parts form's `path` to `setEncodedPath` and never parses it: "
+        '`sse(path = "https://e.example.com/s")` over `https://api.example.com/v1/` is sent '
+        "to `https://api.example.com/v1/https://e.example.com/s` (CP-54 row 130). Read as an "
+        "address, the row publishes `e.example.com` `/s`, a service the call never reaches",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    path_only = _ADDRESS_PARTS in method\n",
+                replace="    path_only = False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-PROTOCOL-RELATIVE-address-under-a-call-scheme-declines": Guard(
+        what="under a call's `request_url`, an address with two or more leading slashes "
+        "declines the join",
+        why="it takes the CALL's scheme (CP-54 row 113, measured for `ws` alone), where the "
+        "HTTP join gives it the base's. Joined by the HTTP rule and rewritten, "
+        '`ws("//other.example.com/x")` publishes `ws://other.example.com:443/x`, a port '
+        "Ktor never writes for it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if len(relative) - len(relative.lstrip("/")) >= 2:\n'
+                "            return None\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.a-base-carrying-USER-INFO-under-a-call-scheme-declines": Guard(
+        what="under a call's `request_url`, a base whose authority carries user info declines",
+        why="the scheme rewrite rebuilds the authority from the base's host and port, and "
+        "Ktor's handling of user info there is not measured. Rebuilt as written, the row "
+        "publishes `ws://user@api.example.com:443/chat` as a fact",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='    if joined is None or "@" in origin.netloc:\n',
+                replace="    if joined is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.a-malformed-request-url-or-address-parts-is-refused": Guard(
+        what="`_validate_client_rows` refuses a `request_url` with no base or no default port, "
+        "a malformed `request_url`, and `address_parts` that names no positions",
+        why="each loads silently otherwise: a `request_url` nothing can render, or "
+        "`address_parts: 2`, which reads no part and so joins a host-bearing call onto the "
+        "base — the base's service published for a call Ktor sends elsewhere",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    for row in rows:\n"
+                "        where = f\"loading catalog {catalog.source}: `{row['name']}`\"\n",
+                replace="    for row in []:  # guard disabled by scripts/guard_check.py\n"
+                "        where = f\"loading catalog {catalog.source}: `{row['name']}`\"\n",
+            ),
+        ),
+    ),
+    "ktor.a-client-model-key-cannot-be-COPIED-into-a-catalog": Guard(
+        what="a catalog naming `client_model` may not declare a `client_base` key the model "
+        "declares",
+        why="the merge would let the catalog's copy win silently, so a ladder, join or "
+        "`may_set_base` edited in the model would stop reaching the catalog that copied it — "
+        "the drift one declaration exists to end",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="    twice = sorted(set(own) & set(shared))\n    if twice:\n",
+                replace="    twice = sorted(set(own) & set(shared))\n"
+                "    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.the-client-BASE-is-declared-once-for-every-catalog": Guard(
+        what="a catalog naming `client_model` takes the model's `client_base` ladder, merged "
+        "into its own `client_arg`",
+        why="the HTTP, WebSocket and SSE catalogs read one client's base through one ladder "
+        "(`client-models/ktor.yml`). Unmerged, each catalog's `client_base` is a lone "
+        "`client_arg`, and a copy of the ladder per catalog is the drift the model exists to end",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    return {**matches, "client_base": {**shared, **own}}\n',
+                replace="    return matches  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    # --- WebSocket and SSE routes in Ktor's routing tree (spec 2026-10-26 §3b) ------
+    "ktor.a-WEBSOCKET-route-is-a-verbless-inbound-row": Guard(
+        what="a `combinator` row carries its verb rule's own `protocol`",
+        why="Ktor's `webSocket` routes nest through the same prefixes as its HTTP verbs. "
+        'Without the rule\'s protocol, `route("/api") { webSocket("/chat") }` publishes an '
+        "`http` row at `/api/chat`, and a WebSocket client calling it is matched against an "
+        "HTTP endpoint",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='        "protocol": route.protocol or catalog.protocol,\n',
+                replace='        "protocol": catalog.protocol,  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "ktor.an-SSE-route-is-a-get-sse-row": Guard(
+        what="`ktor-routing.yml`'s `sse(path, …)` rules name `protocol: sse` beside `verb: GET`",
+        why='`sse("/events") { }` is `route(path, HttpMethod.Get)` around an event stream. '
+        "Without the protocol it is published as an ordinary `http` GET route, and an SSE "
+        "client calling it is matched against an HTTP endpoint it does not speak to",
+        edits=(
+            Edit(
+                path="sextant/catalogs/ktor-routing.yml",
+                find="method: sse, protocol: sse, verb: GET,",
+                replace="method: sse, verb: GET,",
+                occurrences=2,
+            ),
+        ),
+    ),
+    "ktor.a-websocket-under-a-verb-scope-is-NOT-expanded": Guard(
+        what="a route from a `verb: none` rule is never fanned out through `all_methods`",
+        why='`route("/api") { webSocket("/ws") { } }` reads no verb because a WebSocket route '
+        "has none. Fanned out like a verb-less `handle { }`, it is seven HTTP-verbed rows "
+        "(`GET` … `OPTIONS`) at `/api/ws` where one verbless WebSocket row is the truth",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    if route.verb is not None or route.verbless or route.poisons or not context.all_methods:\n",
+                replace="    if route.verb is not None or route.poisons or not context.all_methods:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "ktor.the-row-protocol-is-part-of-the-dedup-key": Guard(
+        what="`combinator`'s `_emitted` deduplicates on the ROW's protocol, not the catalog's",
+        why='`route("/api") { sse("/events") { }; get("/events") { } }` is an `sse` and an `http` '
+        "`GET /api/events` with one handler. Keyed on the catalog's `http`, the two are one "
+        "identity and whichever came second is silently discarded",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='                row["protocol"],\n                catalog.direction,\n',
+                replace="                catalog.protocol,  # guard disabled by scripts/guard_check.py\n"
+                "                catalog.direction,\n",
+            ),
+        ),
+    ),
+    "ktor.a-GET-bound-websocket-under-a-disagreeing-scope-is-dropped": Guard(
+        what="a verbless route meets a scope's verb by its `registered_verb` and never takes "
+        "the scope's verb: `_verbs_disagree` compares the registered verb, and `_merged` "
+        "keeps `method` NULL",
+        why="Ktor wraps a WebSocket route with a path in `route(path, HttpMethod.Get)`, so "
+        '`method(HttpMethod.Post) { webSocket("/ws") { } }` is a node Ktor never dispatches. '
+        "Comparing nothing publishes a row for it; taking the scope's verb publishes "
+        "`GET`/`POST` WebSocket rows, and the path-less form under POST as `POST /`",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    own = route.registered_verb if route.verbless else route.verb\n",
+                replace="    own = route.verb  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_COMBINATOR,
+                find="    if verbless:\n        verb = None\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        verb = None\n",
             ),
         ),
     ),

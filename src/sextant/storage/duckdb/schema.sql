@@ -1180,6 +1180,8 @@ SELECT document_id,
        -- `->>` on an absent key is SQL NULL, which is today's meaning for every site
        -- that carries no such parameter.
        (payload ->> 'receiver_parameter')::INTEGER AS receiver_parameter,
+       -- D00 §5: the static field a `getstatic` receiver was read from; NULL elsewhere.
+       payload ->> 'receiver_field'            AS receiver_field,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site'
@@ -1237,10 +1239,12 @@ SELECT document_id,
        payload ->> 'field'                     AS field,
        (payload ->> 'from_parameter')::INTEGER AS from_parameter,
        -- The CONSTANT a field was written from, as an argument-grammar entry (`OI-138`
-       -- cause 2). NULL for a write from a parameter, and exactly one of the two is ever
-       -- set. Kept as JSON text rather than split into kind and value: it is the same
-       -- grammar `call_sites.arguments` carries, and the walk reads it with the same
-       -- reader, so a second spelling here would be a second thing to keep in step.
+       -- cause 2), or since 2026-10-26 the CALL whose result it was written from
+       -- (`unresolved` with a `source` in the writer's frame). NULL for a write from a
+       -- parameter, and exactly one of the two is ever set. Kept as JSON text rather
+       -- than split into kind and value: it is the same grammar `call_sites.arguments`
+       -- carries, and the walk reads it with the same reader, so a second spelling here
+       -- would be a second thing to keep in step.
        payload -> 'value'                      AS value,
        payload ->> 'written_by'                AS written_by
 FROM raw_facts WHERE kind = 'field_write'

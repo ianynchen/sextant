@@ -531,9 +531,15 @@ def _module_commit_of(path: Path) -> str:
 
 
 # The model subdirectories beside the catalogs, each part of the knowledge a run
-# was produced with (`yaml_source.YamlCatalogSource` reads the same four: `_models`
-# the first three, `value_model` the fourth).
-_MODEL_DIRECTORIES = ("shape-models", "bean-models", "step-models", "value-models")
+# was produced with (`yaml_source.YamlCatalogSource` reads the same five: `_models`
+# the first three and the fifth, `value_model` the fourth).
+_MODEL_DIRECTORIES = (
+    "shape-models",
+    "bean-models",
+    "step-models",
+    "value-models",
+    "client-models",
+)
 
 
 def _catalog_hash(catalogs: Path) -> str:
@@ -549,7 +555,8 @@ def _catalog_hash(catalogs: Path) -> str:
     step table live there and nowhere else. `value-models/` (D02 §1f, spec
     2026-09-22 §2) joins them: a producing call's identity is declared there once
     rather than once per consuming catalog, so an edit to it is an edit to what
-    every catalog resolves through. The path is included, not just the
+    every catalog resolves through. `client-models/` (spec 2026-10-26 §3g) likewise: a
+    client's base-address ladder lives there and in no catalog. The path is included, not just the
     filename, so a model and a catalog of the same name cannot collide.
     """
     digest = hashlib.sha256()

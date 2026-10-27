@@ -8,6 +8,8 @@
        only thing the code states is the service NAME. `spring-petclinic-genai-service` is the
        shape this copies, three calls of it.
 
+       `MergedHostClient` beside them holds a host in a static ternary, which states no
+       address (the extractor's same-block rule for a field write).
        `spring-cloud-commons` 4.3.2 is the version in the local repository. -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>

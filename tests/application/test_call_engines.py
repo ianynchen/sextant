@@ -5509,6 +5509,196 @@ def test_a_verb_argument_nothing_can_read_derives_no_verb_rather_than_the_roots_
     ]
 
 
+# --- `verb_values.fields` (spec 2026-10-26 §3a): a verb read from a static field ---
+
+_KTOR_VERB_MATCHES = {
+    "verb_values": {"fields": {"io.ktor.http.HttpMethod#Put": "PUT"}},
+    "roots": [
+        {
+            "owner": "okhttp3.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [
+        {"method": "url", "captures": {"url": "arg0"}},
+        {"method": "method", "captures": {"http_method": "arg0"}},
+    ],
+    "terminal": [{"method": "build", "terminal_via_argument": True}],
+}
+
+
+def _verb_rows(tmp_path: Path, verb_argument: CallArgument) -> list:
+    facts = _okhttp_generic_method_chain("com/acme/http/Client#put().", verb_argument)
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_KTOR_VERB_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["path"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_fluent_verb_capture_reads_a_static_field(tmp_path: Path):
+    """Ktor 3.6.0 passes `HttpMethod.Put` to `setMethod` as a `getstatic` — a `field`-kind
+    argument with the field's symbol. Under a catalog declaring `verb_values.fields` the
+    `http_method: arg0` capture reads it, the same table `combinator` reads, where it read
+    `unresolved` (and `method` NULL) before."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Put.")
+    ) == [("PUT", "/orders/1", "resolved")]
+
+
+def test_a_fluent_static_field_the_table_does_not_name_is_no_verb(tmp_path: Path):
+    """The near-miss: any other static field handed as the verb stays today's honest
+    answer, `method` NULL at `unresolved`, never the root's `GET` default."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="field", symbol="io/ktor/http/HttpMethod#Post.")
+    ) == [(None, "/orders/1", "unresolved")]
+
+
+def test_a_fluent_verb_fields_table_of_the_wrong_shape_is_refused(tmp_path: Path):
+    """A `fluent` catalog's `verb_values` holds `fields` alone, each key `<owner>#<field>`;
+    anything else is a broken file, refused at load."""
+    for broken in (
+        {"fields": {"io.ktor.http.HttpMethod.Put": "PUT"}},
+        {"getters": {"io.ktor.http.HttpMethod$Companion#getPut": "PUT"}},
+    ):
+        catalog = _fluent_catalog({**_KTOR_VERB_MATCHES, "verb_values": broken})
+        with pytest.raises(CatalogError, match="verb_values"):
+            _resolve_fluent(tmp_path, [], catalog)
+
+
+@pytest.mark.pins("ktor.a-VERB-read-from-a-static-field")
+def test_a_fluent_verb_capture_reads_a_static_field_the_extractor_reads_as_an_enum(
+    tmp_path: Path,
+):
+    """The shape the extractor really emits for `setMethod(HttpMethod.Put)`: a static field
+    typed as its own owner is an `enum`-kind argument (D00 §5, `MethodFlow.java`; measured
+    on the CP-54 probe module), not a `field`-kind one. The same table reads it."""
+    assert _verb_rows(
+        tmp_path, CallArgument(kind="enum", symbol="io/ktor/http/HttpMethod#Put.")
+    ) == [("PUT", "/orders/1", "resolved")]
+
+
+# --- `receiver_arg` (spec 2026-10-26 §3c): a step that is an extension function ---
+#
+# A Kotlin extension function compiles to a STATIC method whose argument 0 is the
+# receiver, so the call's own `receiver` is null and the value it extends arrives as an
+# argument. `receiver_arg: N` says which argument that is.
+
+_EXTENSION_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET"},
+        }
+    ],
+    "steps": [
+        {
+            "owner": "com.acme.http.RequestKt",
+            "method": "url",
+            "receiver_arg": 0,
+            "captures": {"url": "arg1"},
+        },
+    ],
+    "terminal": [
+        {
+            "method": "<init>",
+            "terminal_via_argument": {"owner": "com.acme.http.Statement", "method": "<init>"},
+        }
+    ],
+}
+
+
+def _extension_chain(caller: str, extended: int) -> list:
+    """`new Request.Builder()`, then the static `RequestKt.url(<value extended>, "…")`, then
+    `new Statement(builder)`: the builder's value id is 2, and `extended` is the value id
+    the extension call is handed as its argument 0."""
+    return [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            "com/acme/http/RequestKt#",
+            "url",
+            1,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", source=extended, symbol=BUILDER),
+                CallArgument(kind="string", value="https://orders.example.com/orders"),
+            ],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            "com/acme/http/Statement#",
+            "<init>",
+            2,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="instance", source=2, symbol=BUILDER)],
+            invoke_kind="special",
+        ),
+    ]
+
+
+def _extension_rows(tmp_path: Path, extended: int) -> list:
+    facts = _extension_chain("com/acme/http/Client#get().", extended)
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_EXTENSION_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("fluent.an-EXTENSION-step-joins-through-its-receiver-argument")
+def test_a_receiver_arg_step_joins_the_chain_through_that_argument(tmp_path: Path):
+    """The static extension call's own `receiver` is null, so before `receiver_arg` the walk
+    never reached it: the chain derived with `path` NULL at `unresolved`. Joined through
+    argument 0's value id, its `url` capture is the row's address."""
+    assert _extension_rows(tmp_path, extended=2) == [
+        ("GET", "orders.example.com", "/orders", "resolved")
+    ]
+
+
+def test_an_extension_call_on_another_value_is_not_folded(tmp_path: Path):
+    """The near-miss: the same extension call handed a DIFFERENT value (id 99, some other
+    builder) belongs to that value's chain, not this one. The row still derives — the
+    builder was handed to `Statement` — with the address it never captured: `path` NULL
+    at `unresolved`, never the other builder's address."""
+    assert _extension_rows(tmp_path, extended=99) == [("GET", None, None, "unresolved")]
+
+
+def test_a_receiver_arg_that_is_not_an_argument_position_is_refused(tmp_path: Path):
+    """`receiver_arg` is an argument index, a non-negative integer, and a step's word: a
+    root starts the chain and joins nothing. Anything else is a broken file, refused at
+    load rather than read as a step that silently never joins."""
+    step = _EXTENSION_MATCHES["steps"][0]
+    for broken_step in (
+        {**step, "receiver_arg": "0"},
+        {**step, "receiver_arg": -1},
+        {**step, "receiver_arg": True},
+    ):
+        catalog = _fluent_catalog({**_EXTENSION_MATCHES, "steps": [broken_step]})
+        with pytest.raises(CatalogError, match="receiver_arg"):
+            _resolve_fluent(tmp_path, [], catalog)
+    root = {**_EXTENSION_MATCHES["roots"][0], "receiver_arg": 0}
+    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "roots": [root]})
+    with pytest.raises(CatalogError, match="receiver_arg"):
+        _resolve_fluent(tmp_path, [], catalog)
+
+
+def test_the_retired_relative_to_client_base_word_is_refused(tmp_path: Path):
+    """`relative_to_client_base` was Task 4's interim word, folded into `client_base` (spec
+    2026-10-26 §3c): declaring where the base is set says a relative address is relative to
+    it. A catalog still spelling the old word is refused at load, never read as a catalog
+    whose relative rows are `resolved`. `client_base`'s own refusals are in
+    `test_client_base.py`."""
+    for declared in (True, "yes"):
+        catalog = _fluent_catalog({**_EXTENSION_MATCHES, "relative_to_client_base": declared})
+        with pytest.raises(CatalogError, match="relative_to_client_base"):
+            _resolve_fluent(tmp_path, [], catalog)
+
+
 # --- `A-M3`/`A-M4` (principles sweep §3.3): the two Spring HTTP clients ------
 #
 # Both catalogs were built from the five verbs the fixture happened to use.
@@ -7409,6 +7599,83 @@ def test_rung_two_follows_a_field_write_to_the_annotated_constructor_parameter(
 
     assert endpoint["path"] == "${billing.url}/invoices"
     assert endpoint["resolution"] == "resolved"
+
+
+def _annotated_constructor() -> SymbolFact:
+    """`Client(@Value("${billing.url}") String url)` — a constructor whose parameter 0
+    carries the expression rung 2 reads."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + CLIENT + "<init>(sig_96735f85).",
+        construct_kind="constructor",
+        enclosing=_MODULE + CLIENT,
+        signature=Signature(
+            parameters=[
+                Parameter(
+                    name="url",
+                    type=TypeRef(symbol="java/lang/String#"),
+                    annotations=[
+                        AnnotationUse(annotation=VALUE_ANNOTATION, args={"value": "${billing.url}"})
+                    ],
+                )
+            ]
+        ),
+    )
+
+
+def test_rung_two_reads_the_annotation_of_the_constructor_that_wrote_the_field(
+    tmp_path: Path,
+):
+    """Rung 2 with the writer NAMED: the `field_write` says `Client#<init>` wrote the field
+    from its parameter 0, and that constructor's parameter 0 carries the expression."""
+    caller = "com/acme/http/Client#constructorNamed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "constructorUrl.")),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + CLIENT + "constructorUrl.", construct_kind="field"
+        ),
+        _annotated_constructor(),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=CLIENT + "constructorUrl.",
+            from_parameter=0,
+            written_by=_MODULE + CLIENT + "<init>(sig_96735f85).",
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert endpoint["path"] == "${billing.url}/invoices"
+    assert endpoint["resolution"] == "resolved"
+
+
+@pytest.mark.pins("shapes.a-field-borrows-an-annotation-only-from-its-CONSTRUCTOR-write")
+def test_rung_two_lends_no_constructor_annotation_to_a_field_a_SETTER_wrote(tmp_path: Path):
+    """`OI-214`. `static void setHost(String h) { Client.host = h; }` writes the field from
+    ITS parameter 0, and the type also has a constructor whose parameter 0 carries
+    `@Value("${billing.url}")`. Nothing ties the two: the setter's own parameter is what the
+    field holds. Lending the constructor's annotation published `${billing.url}` as this
+    address at `resolved`. Real input reaches it since `PUTSTATIC` became a field write
+    (2026-10-26), and an instance setter beside an annotated constructor reached it before."""
+    caller = "com/acme/http/Client#setterFed()."
+    facts = [
+        *_base_chain(caller, CallArgument(kind="field", symbol=CLIENT + "host.")),
+        SymbolFact(document_id="doc_1", symbol=_MODULE + CLIENT + "host.", construct_kind="field"),
+        _annotated_constructor(),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=CLIENT + "host.",
+            from_parameter=0,
+            written_by=_MODULE + CLIENT + "setHost(sig_5c2e1a01).",
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_BASE_MATCHES))
+    endpoint = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert "${billing.url}" not in str(endpoint["path"])
+    assert endpoint["resolution"] != "resolved"
 
 
 def test_rung_three_synthesises_the_key_from_a_properties_field_read_directly(

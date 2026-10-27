@@ -192,6 +192,30 @@ An `Answer` is one of:
   is a different statement from "it could not be read" (D00 §5's own line).
 - **`unresolved(reason)`**
 
+**As built (2026-10-26): the producer reader.** A second entry point, `producers_of(index, site,
+slot, declared) -> tuple[Producer, ...]`, answers the CALL that produced a slot rather than the
+value it holds. It exists because a reader needs the call's own block argument: a client's
+`defaultRequest { url(…) }`. A lambda is not a value (ruled 2026-09-22), so the reader names the
+call and its caller reads the block. It is the same walk (`_Walk`), with the same crossings and the
+same single distance rule (§0a): locals, parameters, returns and bindings. There is one more stop.
+A producing call whose `(owner, method)` is in `declared` ends the path. That check runs before the
+call's returns are read, and a declared constructor stops a construction the same way. The value
+walk declares nothing, so `resolve_site`'s answers are unchanged.
+
+`Producer` names the call site (`caller`, `ordinal`) and the identity it matched. A path that ends
+anywhere else gives a record with no call. If it ended unresolved, its `reason` holds §1d's reason
+(`external`, `no_writer`, …), and only §1d's reasons ever appear there. If it ended at a value the
+code states, `ended_at` holds that `Answer` whole, so a literal end keeps its literal. Identical
+ends are one record, and the record carries no path. No identity table is applied, because an
+`identified_by` entry says what a value means, and that is not the question here.
+
+Measured on the CP-54 probe module over every slot of every site (2,047 positions): the reader
+computes 3,395 positions, exactly what the value walk computes there. No position costs more, and
+the largest costs 64. With the factory and `config` declared, every one of the module's six
+`HttpClient(…)` calls is named by the reads of the clients it built. A read of a coroutine spill
+slot whose only reported writer stores `nullOutSpilledVariable(x)` gives no producer, with reason
+`external`.
+
 ### 1c. Paths, not positions — and what multiplicity means
 
 **Approved ruling, as corrected by M-1.** The naive design resolves each position independently and

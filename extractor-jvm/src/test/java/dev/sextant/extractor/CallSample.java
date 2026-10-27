@@ -196,6 +196,16 @@ public final class CallSample {
         box.link.third();
     }
 
+    /** A static field the receiver is read from: Kotlin's file-level
+     *  {@code val client = …; client.config { … }} is this {@code GETSTATIC}. */
+    static Link shared;
+
+    /** The receiver is a {@code GETSTATIC}: it keeps its own value id, and the fact also
+     *  names the field, as a call argument read from a static field already does. */
+    public void staticFieldReceiver() {
+        shared.third();
+    }
+
     /** The OkHttp shape, and the ordinary way people write a builder: the built
      *  value goes into a local and a *separate* call consumes it. The store and
      *  the reload are the only things between the two halves, and if they count

@@ -90,20 +90,23 @@ common case rather than a corner: MEASURED on `mall-admin`, 1,411 of 2,065 value
 call sites are the third-party boundary, which `call_edges` records with a NULL callee.
 A reader tracing this module's inputs finds four, and this is why.
 
-**The sixth edge is missing and its absence is an answer.** `written_by` — a binding
-assigned anywhere but an initialiser — is specified as a scanner capability (§4, D00 9.19)
-and no backend reports it yet, so `value_edges` emits no such row. Every binding read
-therefore ends at `no_writer`, which today means *no writer edge exists to follow* and not
-*this binding is never written* — `NO_WRITER` below says so where the reason is defined.
-`_binding` is the one place that will follow the edge the day it exists. The walk does NOT
-re-derive it from the constructor-only `field_writes` fact: that would be a second spelling
-of an edge the design gives one home, which is the disease §0a records.
+**The sixth edge, `written_by`, is a binding's writer** (spec 2026-10-18, D00 §5's
+`field_write`). `value_edges` carries a write from a PARAMETER; a write from a constant or a
+call's result carries its value in the fact itself and is read straight off `field_writes`
+(`ValueIndex.constants` and `.produced`), because there is no parameter for an edge to land
+on. `_binding` is the one place that follows any of them, and a binding with no reported write
+ends at `no_writer` — `NO_WRITER` below says what that does and does not mean.
 
 **It names no framework and no language.** `identified_by` (§2) is catalog data, handed in
 by the caller as `identities` and never held here: the walk finds the producing call
 (distance) and the table says which of its arguments is the value (meaning), which is §1e's
 line drawn exactly where DR-6 puts it. A caller that passes none gets the walk as it was
 before Task 7 — a producer whose value nothing names answers with a reason.
+
+**A second reader shares the walk, and answers the CALL instead** (2026-10-26).
+`producers_of` runs the same `_Walk` with one more stop — a producing call the caller declares
+— and names that call, because a block argument is not a value and the reader that needs one
+reads it off the call itself. The value walk declares nothing, so its answers are unchanged.
 
 **One engine consumes this, and the migrations add the rest** (§3c). Task 4's measurement
 was the gate before any engine called it and §7a's shadow read is the gate before each
@@ -123,6 +126,7 @@ work that takes under a millisecond.
 
 import json
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from itertools import product
 from typing import Any
@@ -142,10 +146,11 @@ NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"
 # **What this means TODAY, said where the reason is defined.** §1d reads "a binding nothing
-# in this module writes", and that is what it will mean once capability 9.19 lands and
-# `value_edges` grows its `written_by` arm. Until then no writer edge exists at all, so the
-# answer is *nothing was found to follow* — NOT *this binding is never written*. A reader
-# acting on today's answer is reading a missing capability, not a property of the code.
+# in this module writes", and the facts now report a write from a parameter, a constant or a
+# call's result (`_binding` has the history). A write of any other shape — a value built with
+# `new`, one parked in a local first, a container's reflective injection — is still not
+# reported, so the answer is *no reported write was found to follow* — NOT *this binding is
+# never written*. A reader acting on it is reading the fact's reach, not a property of the code.
 NO_WRITER = "no_writer"
 EXTERNAL = "external"
 CYCLE = "cycle"
@@ -162,6 +167,11 @@ EXPRESSION = "expression"
 # contradict the facts. Carries no value and no reason (ruled 2026-09-23).
 ABSENT = "absent"
 UNRESOLVED = "unresolved"
+# **Not one of §1b's answer kinds, and it never leaves this module.** The producer reader
+# (`producers_of`) runs the same walk with one more stop, and a path that ends at a declared
+# call carries that call here as its `value` (a `Producer`) until the reader turns the path
+# into its record. The value walk declares nothing, so it never mints one.
+_PRODUCED = "produced"
 
 STRING = "string"
 INT = "int"
@@ -320,6 +330,28 @@ class Binding:
 
 
 @dataclass(frozen=True)
+class Producer:
+    """Where one path of the producer reader ENDED (`producers_of`).
+
+    `caller` and `ordinal` name the call site, which is a site's identity everywhere in D01,
+    and `identity` is the declared `(owner, method)` it matched. A path that ends anywhere
+    else leaves all three None and says where in exactly one of the other two:
+
+    * `reason` — one of §1d's reasons and nothing else (`external`, `no_writer`, …), where
+      the path ends unresolved;
+    * `ended_at` — the `Answer` itself, where the path ends at a value the code states
+      (`literal`, `expression`, `absent`): not a call anyone built, and kept whole so a
+      literal end still carries its literal.
+    """
+
+    caller: str | None = None
+    ordinal: int | None = None
+    identity: tuple[str, str] | None = None
+    reason: str | None = None
+    ended_at: Answer | None = None
+
+
+@dataclass(frozen=True)
 class ValueIndex:
     """The six reads the walk needs, folded once (GUIDELINES §8.7: cost is a design
     input, decided before the code exists — and this walk is asked about one position at
@@ -362,6 +394,11 @@ class ValueIndex:
     # to make: the value is in the fact, and `_binding` answers with it rather than
     # resolving a parameter in another method's frame.
     constants: dict[str, tuple[Mapping[str, Any], ...]]
+    # `field_writes.value` again, for a write whose value is a CALL'S RESULT (CP-33 rows 6-7,
+    # 2026-10-26): a binding -> (the writing method, the entry), because the entry's `source`
+    # is a value id in THAT method's frame and means nothing anywhere else. `_binding`
+    # resolves it there, as it would the same entry at a call site in that method.
+    produced: dict[str, tuple[tuple[str, Mapping[str, Any]], ...]]
     # `written_by`: a binding -> the method that wrote it and the PARAMETER it wrote from,
     # one entry per writer. Several entries is several possible values, which §4 of spec
     # 2026-10-18 rules is the exact answer where every writer is in this module rather than
@@ -549,6 +586,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
     }
     dead = private - called
     constants: dict[str, list[Mapping[str, Any]]] = {}
+    produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     for row in workspace.query("field_writes"):
         written = row.get("value")
         if written is None or row["field"] is None:
@@ -556,7 +594,16 @@ def value_index(workspace: Workspace) -> ValueIndex:
         if row.get("written_by") is not None and str(row["written_by"]) in dead:
             continue
         entry = json.loads(str(written)) if isinstance(written, str) else written
-        if isinstance(entry, dict):
+        if not isinstance(entry, dict):
+            continue
+        # **A `source` makes the entry a value of the WRITER's frame**, which is the one
+        # thing that separates the two maps: a constant is a value anywhere, a call's result
+        # is a value id that only the method that produced it can resolve. A write naming no
+        # method cannot be resolved there, so it stays with the constants and reads as the
+        # unreadable entry it is.
+        if entry.get("source") is not None and row.get("written_by") is not None:
+            produced.setdefault(str(row["field"]), []).append((str(row["written_by"]), entry))
+        else:
             constants.setdefault(str(row["field"]), []).append(entry)
 
     returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
@@ -583,6 +630,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         callers={key: tuple(value) for key, value in callers.items()},
         parameters=parameters,
         constants={key: tuple(value) for key, value in constants.items()},
+        produced={key: tuple(value) for key, value in produced.items()},
         writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
         reached=reached,
@@ -720,11 +768,53 @@ def resolve_positions(
     return [answers for _, answers in combined]
 
 
+def producers_of(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int | str,
+    declared: AbstractSet[tuple[str, str]],
+) -> tuple[Producer, ...]:
+    """The calls that produced one slot of one site: one `Producer` per distinct end.
+
+    `resolve_site` answers what a value IS. Some readers need the call that BUILT it
+    instead, because what they read is that call's own arguments — a block argument, which
+    is not a value (ruled 2026-09-22): this reader names the call, and the caller reads its
+    block. So this is the same walk, with the same crossings and the same single distance
+    rule (§0a) — locals, parameters, returns and bindings — and one more stop: a producing
+    call whose `(owner, method)` is in `declared`. Owners are spelled as the site's own
+    `owner` column, as the identity table's are (`io/acme/Factory#`).
+
+    **The stop comes before the call's body is read.** A declared call whose body is in this
+    module is still where the path ends, since the caller asked for the call and not for
+    what its body hands back. A construction is a call like any other: a declared `<init>`
+    stops the path where the value walk would answer the constructed type.
+
+    No identity table is applied: an `identified_by` entry says what a value MEANS, and a
+    rendering of a client is not the client.
+
+    `site` is projected first, for the reason `resolve_site` states. Identical ends are one
+    record — two paths that reach the same call name the same call — and the record carries
+    no path. The order is the walk's own (NFR-1).
+    """
+    walk = _Walk(index, declared=declared)
+    site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
+    found: list[Producer] = []
+    for _, answer in walk.at(site, slot):
+        if answer.kind == _PRODUCED:
+            found.append(answer.value)
+        elif answer.kind == UNRESOLVED:
+            found.append(Producer(reason=answer.reason))
+        else:
+            found.append(Producer(ended_at=answer))
+    return tuple(dict.fromkeys(found))
+
+
 def _slots_of(site: Mapping[str, Any]) -> list[int | str]:
     """Which positions this site HAS. The arguments by index, and the receiver where the
     facts name one — `receiver` is the value id it came from and `receiver_parameter` the
     enclosing method's parameter index when it is one (D00 §5); a call that names neither
-    has no receiver to resolve, and a static call never does."""
+    has no receiver to resolve, and a static call never does. A `getstatic` receiver carries
+    both its id and `receiver_field`, so it needs no test of its own here."""
     arguments = site["arguments"] or []
     slots: list[int | str] = list(range(len(arguments)))
     if site.get("receiver") is not None or site.get("receiver_parameter") is not None:
@@ -795,9 +885,17 @@ class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
 
-    def __init__(self, index: ValueIndex, identities: Identities = ()) -> None:
+    def __init__(
+        self,
+        index: ValueIndex,
+        identities: Identities = (),
+        declared: AbstractSet[tuple[str, str]] = frozenset(),
+    ) -> None:
         self._index = index
         self._identities = tuple(identities)
+        # The producer reader's stop set (`producers_of`). Empty for the value walk, which is
+        # what keeps its answers exactly what they were: `_declared_producer` matches nothing.
+        self._declared = frozenset(declared)
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -868,6 +966,12 @@ class _Walk:
     ) -> tuple[_Reached, ...]:
         method, ordinal = str(site["caller"]), int(str(site["ordinal"]))
         if slot == RECEIVER:
+            # A receiver read from a static field is that field (D00 §5's
+            # `receiver_field`), resolved as the same field read as an ARGUMENT is: the
+            # read's own value id names nothing any other fact joins to.
+            field = site.get("receiver_field")
+            if field is not None:
+                return self._resolve((_BINDING, str(field)), trail, frames)
             receiver = site.get("receiver")
             if receiver is not None:
                 return self._through(method, int(str(receiver)), ordinal, trail, frames)
@@ -1478,13 +1582,17 @@ class _Walk:
         needs: it hands the id to `_through`, which finds the construction again for the
         `escapes` window it has to compute anyway. None is the common answer and the one
         that keeps `_entry`'s declaration branch exactly as it was: no `source`, no
-        construction, or no entry claiming it."""
+        construction, or no entry claiming it. A constructor the producer reader declared
+        claims it too, so that reader reaches the construction through `_value` as well."""
         source = argument.get("source")
         if source is None:
             return None
         value = int(str(source))
         constructed = self._construction(method, value)
-        if constructed is None or self._identified((method, constructed)) is None:
+        if constructed is None:
+            return None
+        site = (method, constructed)
+        if self._identified(site) is None and self._declared_producer(site) is None:
             return None
         return value
 
@@ -1502,7 +1610,17 @@ class _Walk:
         descended through pushed as that frame: a callee that hands back its own parameter
         is answered by the argument at this site, never by every caller the callee has.
         Doing it the other way is M-1 again, one edge along.
+
+        **A DECLARED producer ends the path before anything else is read** — the one stop
+        `producers_of` adds to this walk, checked ahead of the returns because that reader
+        asks for the call and not for what its body hands back. The value walk declares
+        nothing, so for it both checks below answer None and nothing else changes.
         """
+        producers = self._index.producers.get((method, value), ())
+        if producers:
+            stopped = self._declared_producer((method, min(producers)))
+            if stopped is not None:
+                return _only(trail, stopped)
         reached: list[_Reached] = []
         for ordinal, callee in self._index.returns.get((method, value), ()):
             for return_ordinal, entry in self._index.returned_values.get(callee, ()):
@@ -1521,7 +1639,6 @@ class _Walk:
                 )
         if reached:
             return tuple(reached)
-        producers = self._index.producers.get((method, value), ())
         if not producers:
             # No call handed this value back. A CONSTRUCTION is still a producer — one the
             # `produced_by` edge cannot carry, because `call_sites.result` is null for an
@@ -1531,6 +1648,10 @@ class _Walk:
             # reach a MEASURED claim about one producer, not to give constructed values a
             # second reading of their own.
             constructed = self._construction(method, value)
+            if constructed is not None:
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None:
+                    return _only(trail, stopped)
             slot = None if constructed is None else self._identified((method, constructed))
             if constructed is None or slot is None:
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -1703,6 +1824,28 @@ class _Walk:
             (_SLOT, site[0], site[1]),
             trail,
             "argument",
+        )
+
+    def _declared_producer(self, site: tuple[str, int]) -> Answer | None:
+        """The path's end where `site` is a call the producer reader declared, else None.
+
+        Matched on the projected row's `owner` and `name`, exactly — the pair the caller
+        declared, with no arity or descriptor, because the question is which call built the
+        value and not which overload. The value walk declares nothing, so this answers None
+        there before reading anything."""
+        if not self._declared:
+            return None
+        row = self._index.sites.get(site)
+        if row is None:
+            return None
+        identity = (row.get("owner"), row["name"])
+        if identity not in self._declared:
+            return None
+        return Answer(
+            kind=_PRODUCED,
+            value=Producer(
+                caller=site[0], ordinal=site[1], identity=(str(identity[0]), str(identity[1]))
+            ),
         )
 
     def _identity_matches(self, site: tuple[str, int]) -> tuple[Mapping[str, Any], ...]:
@@ -1881,11 +2024,21 @@ class _Walk:
         `spring-petclinic-microservices`, where it cost an outbound host and left the row with
         no address at all.
 
+        **A write from a CALL'S RESULT is resolved in the writing method** (CP-33 rows 6-7,
+        2026-10-26). A file-level `val client = HttpClient(CIO) { … }` compiles to
+        `invokestatic; putstatic` in `<clinit>`, and the fact carries the value as the
+        argument entry a call result already is — `unresolved` with its `source` — so the
+        answer is that entry resolved in `<clinit>`'s frame by the same `_entry` a call
+        argument there would get: through an in-module callee's returns, an identity entry,
+        or `external` for a factory nobody scanned. A STATIC field needs nothing extra: its
+        read and its `putstatic` carry the same symbol, and no receiver is compared for any
+        binding.
+
         **`no_writer` still means something, and it is narrower again:** no write of this
-        binding was REPORTED. The remaining shapes are a call's result and a static
-        initialiser (CP-33 rows 2, 6, 7), plus a container writing the field reflectively,
-        which no bytecode can show (`@Autowired` field injection, §8.2's territory, and the
-        reason `mall-admin` answers nothing here).
+        binding was REPORTED. The remaining shapes are a value built with `new`, a value
+        parked in a local before the write, a computed assignment, plus a container writing
+        the field reflectively, which no bytecode can show (`@Autowired` field injection,
+        §8.2's territory, and the reason `mall-admin` answers nothing here).
 
         **The frame travels with the hop.** A binding write is resolved in the WRITING
         method's frame, which is not this read's: the parameter index means something only
@@ -1894,7 +2047,8 @@ class _Walk:
         """
         written = self._index.writers.get(symbol, ())
         constants = self._index.constants.get(symbol, ())
-        if not written and not constants:
+        produced = self._index.produced.get(symbol, ())
+        if not written and not constants and not produced:
             return _only(trail, _unresolved(NO_WRITER))
         reached: list[_Reached] = []
         for entry in constants:
@@ -1920,6 +2074,11 @@ class _Walk:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
+        for method, entry in produced:
+            # The origin names the write and has no ordinal, so `_through`'s `escapes` window
+            # is the whole of the writing method after the call: a call made on the stored
+            # object anywhere there changes what every later reader of the field sees.
+            reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
         return tuple(dict.fromkeys(reached))
 
 

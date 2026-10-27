@@ -127,6 +127,19 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         "BiPredicate)` overload copies another request's verb, and the catalog says its "
         "GET is wrong there."
     ),
+    ("ktor-client", "roots", "<init>", "http_method", "GET"): (
+        "a fresh `io.ktor.client.request.HttpRequestBuilder` really does issue GET: its "
+        "constructor stores `getstatic HttpMethod.Get` into `method`, and a builder nothing "
+        "is set on reports `GET` when run (CP-54 row 50, "
+        "`scripts/probes/cp54_ktor_client_ws_sse.md`). Deleting the seed under-reports "
+        "every inlined `client.get(u)` whose verb Ktor never sets. Admissible only while "
+        "every builder member that SETS the verb is a declared step: `javap -p` on "
+        "ktor-client-core-jvm 3.6.0 gives `setMethod(HttpMethod)` as the one setter, and "
+        "`ktor-client.yml` declares it. It stops being right the day Ktor adds another. "
+        "One stated boundary rides on the same seed: `takeFrom(HttpRequestBuilder)` and "
+        "`takeFromWithExecutionContext` copy another builder's verb whole, and the catalog "
+        "says its GET is wrong there."
+    ),
 }
 
 

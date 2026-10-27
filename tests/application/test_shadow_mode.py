@@ -271,6 +271,34 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # real topic names" — so the two rows were aligned with the rule rather than the rule bent
 # to them. One fixture row converts, `unresolved` -> `resolved`; the other row's overload
 # no fixture exercises.
+# **`ktor-routing` moved (33, 71) -> (49, 111) on 2026-10-26** (spec 2026-10-26 §3b): sixteen
+# verb rules for Ktor's `webSocket`, `webSocketRaw` and `sse` routes and their `$default`
+# bridges, one ask each — `receiver_arg` and `handler_arg` on every one, `path_arg` on the
+# eight that carry a path (+16 asks, +40 slots). Nothing was re-spelled; the reader reads
+# these positions as it reads `get`'s.
+# **`ktor-client` joined at (3, 4) on 2026-10-26** (spec 2026-10-26 §3c), a new catalog rather
+# than a moved one: its three steps each ask for one position — `url`'s address (`arg1`),
+# `setMethod`'s verb and `setBody`'s body (`arg0` each) — and `url` names a fourth slot,
+# `receiver_arg: 0`, the builder it extends.
+# **`ktor-client` moved (3, 4) -> (7, 8) on 2026-10-26** (spec 2026-10-26 §3g item 3): its
+# `client_base` key spells four calls, each one position — the three ladder rungs'
+# `block_arg` (the configuration block of `HttpClient`, `config` and `defaultRequest`) and
+# the setter's `value_arg` (`DefaultRequestBuilder.url`'s address). The reader reads them by
+# shape, as it reads every `*_arg`; nothing else in the catalog moved.
+# **`ktor-client` moved (7, 8) -> (8, 9) on 2026-10-26** (Task 10): one more ladder rung, the
+# engine-less `HttpClient { … }` factory (CP-54 rows 87-88), whose `block_arg` is one more
+# position read the same way.
+# **`ktor-client` moved (8, 9) -> (10, 11) on 2026-10-26** (Task 10 fix round 1): two
+# `may_set_base` entries name an argument position (`install`'s and `install$default`'s
+# plugin, `arg: 0` and `arg: 1`), read by shape as every argument position is.
+# **`ktor-websocket-client` joined at (23, 23) and `ktor-sse-client` at (39, 39) on 2026-10-26**
+# (spec 2026-10-26 §3d), two new catalogs rather than moved ones: one address position per
+# `methods` row — `channel_arg` on the sixteen WebSocket rows, `url_arg` on the thirty-two SSE
+# rows — plus the seven positions of the `client_base` they take from `client-models/ktor.yml`
+# (four rungs' `block_arg`, the setter's `value_arg`, two `may_set_base` `arg`s), exactly
+# `ktor-client`'s seven. `address_parts` is not an ask: it reads whether a part is GIVEN, never
+# its value. `ktor-client` is unchanged at (10, 11) although its ladder moved into the model,
+# because the reader reads the merged catalog.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -291,7 +319,10 @@ _ASKS_PER_CATALOG = {
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
     "kafka-streams-topology": (5, 5),
-    "ktor-routing": (33, 71),
+    "ktor-client": (10, 11),
+    "ktor-routing": (49, 111),
+    "ktor-sse-client": (39, 39),
+    "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
     "spring-cloud-gateway": (14, 20),
@@ -344,8 +375,14 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # accounts for, three catalogs at two rows each. **-16 on 2026-10-16**: eight
     # `createQueue` entries off each JMS catalog's `Topic`-typed rows, for the reason the
     # comment above `_ASKS_PER_CATALOG` measures. **+2 on 2026-10-17**: the two
-    # `spring-integration-kafka` `Pattern` rows, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 799
+    # `spring-integration-kafka` `Pattern` rows, same comment. **+16 on 2026-10-26**: the
+    # `ktor-routing` WebSocket and SSE rules, same comment. **+3 on 2026-10-26**: the new
+    # `ktor-client` catalog's three steps, same comment. **+4 on 2026-10-26**: its
+    # `client_base` ladder and setter, same comment. **+1 on 2026-10-26**: the engine-less
+    # factory's rung, same comment. **+2 on 2026-10-26**: its two `may_set_base` plugin
+    # positions, same comment. **+62 on 2026-10-26**: the two new Ktor WebSocket and SSE
+    # client catalogs, 23 and 39, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 887
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

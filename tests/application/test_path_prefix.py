@@ -308,6 +308,7 @@ def _index(sites, producers) -> ValueIndex:
         callers={},
         parameters={},
         constants={},
+        produced={},
         writers={},
         returned_values={},
         reached=frozenset(),

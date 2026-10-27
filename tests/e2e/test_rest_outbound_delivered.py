@@ -372,12 +372,33 @@ def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_r
     On real code this is the whole point: `spring-petclinic-customers-service` serves
     `/owners` and `/owners/{ownerId}/pets`, so these rows now match the callee's own inbound
     rows and the document carries the arrow.
+
+    The fourth row is `MergedHostClient`'s, whose own test follows below.
     """
     assert discovery_rows == {
         ("customers-service", "/owners", "resolved"),
         ("customers-service", "/owners/{ownerId}/pets", "resolved"),
         ("None", "<host>/orders", "partial"),
+        ("None", "None", "unresolved"),
     }
+
+
+def test_a_host_two_branches_merge_into_a_static_field_states_no_address(discovery_rows):
+    """A RestTemplate reading a static field whose value is a ternary of two constants.
+
+        static String BASE = PROD ? "https://prod.example.com/inventory"
+                                  : "https://staging.example.com/inventory";
+        restTemplate.getForObject(BASE, String.class);
+
+    javac joins the two branches AT the `putstatic`, so the instruction right below the write
+    is the staging constant alone. **Measured before the extractor's same-block rule: `GET
+    staging.example.com /inventory resolved`** — one branch's host stated as the field's one
+    value, while the field holds the production host whenever the flag is set. The write now
+    emits no `field_write`, the walk answers `no_writer`, and the row states no address,
+    which is true.
+    """
+    assert ("None", "None", "unresolved") in discovery_rows
+    assert not [row for row in discovery_rows if "example.com" in row[0] + row[1]]
 
 
 @pytest.mark.pins(

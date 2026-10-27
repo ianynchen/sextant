@@ -12,6 +12,7 @@ public class BindingWrites {
     private String viaCallResult;
     private String viaFieldInit = "field-init-value";
     private static String viaStaticInit;
+    private static String viaMerged;
 
     static { viaStaticInit = "static-init-value"; }
 
@@ -38,4 +39,8 @@ public class BindingWrites {
      *  This is the `ActorRef ref = system.actorOf(props, "worker")` shape, and it is
      *  what decides whether capability 9.19 would reach `akka-pekko-actors` at all. */
     public void setFromCall(java.util.List<String> source) { this.viaCallResult = source.get(0); }
+
+    /** 9. A value two branches MERGE at the write: each branch ends with its own constant, and
+     *  the instruction right below the write is only the last branch's. */
+    public static void setMerged(boolean prod) { viaMerged = prod ? "prod-value" : "staging-value"; }
 }
