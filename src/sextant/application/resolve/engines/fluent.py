@@ -1731,11 +1731,12 @@ def _against_client_base(
     if client is not None and context.workspace is not None:
         base, _ = client_base(context.workspace, context.values, client, context.client_base)
     if base is not None and carries_expression(base):
-        # A configuration base (`${pricing.url}`), carried as the configuration convention
-        # carries a `${…}` base — the whole address in `path`, peer NULL, for the
-        # per-environment join to read — and `partial`, never joined: Ktor's join depends on
-        # whether the base ends in `/`, which the key does not say.
-        return None, f"{base.rstrip('/')}/{path.lstrip('/')}", str(Resolution.PARTIAL)
+        # A configuration base (`${pricing.url}`), rendered exactly as a `base` capture fed
+        # by configuration is (`_composed_address`: `base + path`, the two concatenated as
+        # written, peer NULL; the `${billing.url}/invoices` pins) — and `partial`, never
+        # joined: Ktor's join depends on whether the deployed value ends in `/`, which the
+        # key does not say.
+        return None, base + path, str(Resolution.PARTIAL)
     joined = None if base is None else join_url(base, path, str(context.client_base["join"]))
     if joined is None:
         return None, path, str(Resolution.UNRESOLVED)

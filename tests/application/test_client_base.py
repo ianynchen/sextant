@@ -973,14 +973,16 @@ def test_install_default_request_declines_rather_than_localhost(tmp_path: Path):
 
 def test_a_configuration_key_base_is_carried_at_partial(tmp_path: Path):
     """`defaultRequest { url("${pricing.base-url}") }` (Kotlin's escaped `\\$`): the base is a configuration key.
-    It is carried as a `${…}` base always is — the whole address in `path`, peer NULL —
-    and `partial`, because Ktor's join depends on whether the deployed value ends in `/`."""
+    It is rendered as a configuration-fed `base` capture already is (`fluent.
+    _composed_address`, pinned by `test_call_engines`' `${billing.url}/invoices`): base and
+    path concatenated as written, peer NULL. It is `partial`, because Ktor's join depends on
+    whether the deployed value ends in `/` — which is also why `quotes` reads as glued on."""
     facts = [
         *_top_level("client", 1, [_base("${pricing.base-url}")]),
         *_on("client", _fn("quotes"), "quotes"),
     ]
     assert _client_rows(tmp_path, facts) == [
-        (_fn("quotes"), None, "${pricing.base-url}/quotes", "partial")
+        (_fn("quotes"), None, "${pricing.base-url}quotes", "partial")
     ]
 
 

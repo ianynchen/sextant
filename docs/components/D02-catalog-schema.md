@@ -1977,9 +1977,10 @@ makes. The reader answers ONE base or none:
   owner type (`host = …`, `url.takeFrom(…)`), or a call `may_set_base` lists. Calls that move no
   base (`install(WebSockets)`) are not listed and stay allowed;
 - **the setter is handed a configuration key** (`url("${pricing.base-url}")`, a value carrying
-  a `${…}` key): the key is the base, and the row carries it as a `${…}` base always is — the
-  whole address in `path`, `peer` NULL — at `partial`, never joined, because the join depends on
-  whether the deployed value ends in `/`. An assembled value naming no key (`https://{}/`)
+  a `${…}` key): the key is the base, rendered exactly as a configuration-fed `base` capture is
+  (`fluent._composed_address`: base and path concatenated as written, `peer` NULL —
+  `${billing.url}` + `/invoices` is `${billing.url}/invoices`), at `partial`, never joined,
+  because the join depends on whether the deployed value ends in `/`. An assembled value naming no key (`https://{}/`)
   declines;
 - **the construction is not reached**: no base, with the walk's own reason (`external`,
   `no_writer`, …);
