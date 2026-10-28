@@ -1,6 +1,6 @@
 # Quartz — design
 
-**Status: DRAFT 2026-10-28, awaiting approval** (branch `cov/quartz`). Plane SEXTANT-177,
+**Status: DRAFT 2026-10-28, all questions ruled; awaiting approval** (branch `cov/quartz`). Plane SEXTANT-177,
 Java/Kotlin framework order 2 (`docs/COVERAGE.md` "Priority order"). Moves COVERAGE §5.12's
 Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```delivery Async row
 (`docs/java-kotlin-delivery-list.md:63`). The Async cell does not reach ✅ from this item:
@@ -13,6 +13,8 @@ Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```deliver
 | 1 | Corpora | **Pull open-source projects, as usual.** No user codebase. |
 | 2 | Schedules kept in a database table | **Stop at the dispatcher.** *"We don't assume we can read the database. Leave the schedule as a value unknown. The scheduling part should be a partial."* Seed SQL in the repo is not read. |
 | 3 | Several triggers on one job | **Each trigger is its own entry,** *"so that user is aware there are multiple triggers for the same job."* |
+| 5 | Telling two entries on one job apart | **A: by the trigger's own name,** the way Quartz identifies triggers (`TriggerKey`). OI-183 (`@Schedules`) stays open. |
+| 6 | How it is built | **Holistically.** *"We shouldn't be building these as separate pieces. Call chains are the same, assignments are the same."* Quartz reuses the chain, value and trace machinery every other catalog uses (§3d). |
 | 4 | Non-cron schedules | **The builder chain, as written.** No English summary: that needs an LLM (optional in Sextant) or a template per builder method ([one rule, not one parser per method], 2026-10-21). *"We want deterministic logic where applicable."* |
 
 ## 2. Measured first
@@ -177,16 +179,27 @@ where that declaration is Spring's `QuartzJobBean.execute`, it is the class's ow
 The dispatcher is then the handler, and the trace continues into it as it does from any root.
 What it calls by a name read from the row stays unknown.
 
-### 3d. Engine and catalog
+### 3d. Engine and catalog (ruling 6)
 
-A new non-wire catalog `src/sextant/catalogs/quartz.yml`, detected on
-`org.quartz-scheduler:quartz`, with no `protocol` and no `direction` (the
-`spring-scheduling.yml` rule). The owners, method names, consumer signatures and kind map in
-§3a–§3c live in the catalog; the engine names no Quartz type.
+Quartz is a catalog on the machinery that already exists, not a new reader:
+- **Chains** are read by the `fluent` engine's chain walk (roots, steps, captures, `argN`), the
+  one Vert.x, Ktor, the HTTP clients and Spring Integration use. Quartz is a `fluent` catalog,
+  `src/sextant/catalogs/quartz.yml`.
+- **Values that cross methods** (a trigger returned by a helper, a class from a helper, a cron
+  from a getter, an `@Value` field) go through `resolve/values.py`, which `fluent` already calls
+  for its arguments. The value walk finds the call that produced the value; the chain walk reads
+  the chain in the method where that call is.
+- **What a job does** is traced from its handler through the same call graph as every other
+  root. A job that sends to Kafka, calls a REST client, publishes on the Vert.x event bus or
+  returns a reactive chain gets those rows from those catalogs, unchanged.
 
-The current `scheduled_work` engine reads annotations only, and the `fluent` engine writes
-endpoints only. Whether one of them grows a builder-chain reader for `scheduled_work`, or a
-new style uses `fluent`'s chain walk and `values.py`, is left to the plan. It may not copy either.
+The one generalisation this needs: `fluent` writes only endpoint rows today, and refuses a
+catalog without a `protocol`. It gains a second output, `scheduled_work`, chosen by what the
+catalog derives, as `endpoints.py` already does for non-wire styles. The `scheduled_work`
+annotation engine stays as it is; both write the same table. The owners, method names,
+consumer signatures and kind map in §3a–§3c are catalog data; the engine names no Quartz type.
+Anything here that `fluent` or the value walk cannot express yet is added there, for every
+catalog, not as a Quartz path.
 
 ### 3e. Schema
 
@@ -194,7 +207,15 @@ new style uses `fluent`'s chain walk and `values.py`, is left to the plan. It ma
 `resolved` or `unresolved`. Both promises change: `handler`, `trigger` and `expression` may be
 NULL, and `resolution` may be `partial` or `narrowed`. `GRAPH_SCHEMA_VERSION` goes 8 → 9, and
 the D01 version table gains its row. A row with a NULL handler is not a trace root (`roots.py`
-skips it). The identity question is §7.
+skips it).
+
+**A new column, `name`** (ruling 5): the trigger's key as Quartz builds it from
+`withIdentity(name, group)` or `withIdentity(name)` (group `DEFAULT`, as `TriggerKey`
+defines it), written `group.name`, when the walk resolves both to constants; NULL otherwise
+(RuoYi's runtime `getTriggerKey(jobId, …)`, and every `@Scheduled` row). The boundary
+vocabulary's `schedule` identity becomes `(handler, trigger, name)`, the `resolved_schedules`
+join gains `name`, and `BOUNDARY_VOCABULARY_VERSION` is bumped. Two rows that still share all
+three are OI-183's case, which stays open.
 
 The document's "Scheduled work" table shows a NULL cell as "not in the code". A `partial` row
 whose expression is NULL says why in its detail block, naming where the walk stopped: for
@@ -273,9 +294,4 @@ These are predictions until the "As built" section measures them.
 
 ## 7. Open — for the user
 
-**How two entries on the same job are told apart (OI-183).** The boundary vocabulary
-identifies a `schedule` by `(handler, trigger)`. Ruling 3 makes collisions ordinary: the smoke
-test's `sampleTrigger` and `every-day` are both `SampleJob.executeInternal` + `simple`. This is
-the `@Schedules` collision OI-183 already holds open. The answer decides a `scheduled_work`
-column (inside the same 8 → 9 bump), the vocabulary's `schedule` identity, and the
-`resolved_schedules` join.
+Nothing. Rulings 5 and 6 closed the last question.
