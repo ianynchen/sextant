@@ -61,6 +61,19 @@ def test_a_boxed_varargs_reads_as_ints() -> None:
     assert chain_text(sites, {}) == "dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5)"
 
 
+@pytest.mark.pins("schedules.an-enum-constant-is-written-as-its-type-and-name")
+def test_an_enum_constant_reads_as_its_type_and_name() -> None:
+    hour = {"kind": "enum", "symbol": "org/acme/IntervalUnit#HOUR."}
+    sites = [
+        _site(SCHEDULE, "dailyTimeIntervalSchedule", result=1),
+        _site(BUILDER, "withInterval", _int(1), hour, result=2),
+    ]
+
+    assert chain_text(sites, {}) == (
+        "dailyTimeIntervalSchedule().withInterval(1, IntervalUnit.HOUR)"
+    )
+
+
 def test_a_string_argument_is_quoted() -> None:
     sites = [_site(SCHEDULE, "named", {"kind": "string", "value": "nightly"}, result=1)]
 
@@ -88,6 +101,7 @@ def test_a_class_a_boolean_and_a_long_read_as_written() -> None:
         {"kind": "unresolved"},
         {"kind": "unresolved", "source": 9},
         {"kind": "parameter", "value": 0},
+        {"kind": "field", "symbol": "org/acme/Config#unit."},
         {"kind": "array", "elements": [_int(1), {"kind": "unresolved"}]},
     ],
 )

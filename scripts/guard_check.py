@@ -185,6 +185,20 @@ _QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
+    "schedules.an-enum-constant-is-written-as-its-type-and-name": Guard(
+        what="an `enum` argument (a named constant of its own type) is written as "
+        "`Type.CONSTANT` rather than leaving the chain without text",
+        why="`withInterval(1, IntervalUnit.HOUR)` is a constant the source wrote; without "
+        "the branch the whole chain of the Spring Boot smoke test has no text and its row "
+        "goes `partial`, contradicting ruling 4's constants-as-literal-text",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    if kind == "enum":',
+                replace="    if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "schedules.a-chain-with-a-non-constant-argument-has-no-text": Guard(
         what="a builder chain with an argument that is neither a constant nor a nested call "
         "of constants has no text at all",

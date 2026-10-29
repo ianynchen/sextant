@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sextant.domain.symbols import bare_descriptor, simple_name
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of, simple_name
 
 _NESTED = "unresolved"
 
@@ -55,6 +55,15 @@ def _argument(
     if kind == "class":
         symbol = argument.get("symbol")
         return None if symbol is None else simple_name(bare_descriptor(str(symbol)))
+    if kind == "enum":
+        # A GETSTATIC of a named constant of its own type (`IntervalUnit.HOUR`): a literal,
+        # unlike a `field`, which is a read of something that can vary.
+        symbol = bare_descriptor(str(argument.get("symbol")))
+        owner = owner_of(symbol)
+        constant = member_name(symbol)
+        if owner is None or not constant:
+            return None
+        return f"{simple_name(owner)}.{constant}"
     if kind == "array":
         elements = [_argument(element, effective) for element in argument.get("elements") or []]
         return (
