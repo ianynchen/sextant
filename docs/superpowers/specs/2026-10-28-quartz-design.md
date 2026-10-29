@@ -255,7 +255,9 @@ three are OI-183's case, which stays open.
 
 The document's "Scheduled work" table shows a NULL cell as "not in the code". A `partial` row
 whose expression is NULL says why in its detail block, naming where the walk stopped: for
-example, "read at runtime from `SysJob.getCronExpression()`".
+example, "read at runtime from `SysJob.getCronExpression()`". The source is stored in a nullable
+column `expression_source` (the symbol the walk stopped at), set only when `expression` is NULL
+(settled while planning).
 
 ### 3f. Fixture
 
