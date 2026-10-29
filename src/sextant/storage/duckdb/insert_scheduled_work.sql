@@ -22,18 +22,19 @@
 --
 -- Parameters:
 --   $rows -- {handler, trigger, name, expression, expression_source, resolution,
---            evidence, catalog_id}
+--            evidence, catalog_id, untied}
 --            rows, one per trigger attribute the declaration writes. A
 --            declaration naming no trigger at all contributes none: there is
 --            no expression to carry, and a row with an empty schedule would
 --            claim work the framework never runs.
 INSERT INTO scheduled_work (handler, trigger, name, expression, expression_source,
-                            resolution, evidence, catalog_id)
+                            resolution, evidence, catalog_id, untied)
 SELECT r.handler, r.trigger, r.name, r.expression, r.expression_source, r.resolution,
-       r.evidence, r.catalog_id
+       r.evidence, r.catalog_id, r.untied
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         handler VARCHAR, trigger VARCHAR, name VARCHAR, expression VARCHAR,
-        expression_source VARCHAR, resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR
+        expression_source VARCHAR, resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR,
+        untied VARCHAR[]
     )[]
 ) AS r);

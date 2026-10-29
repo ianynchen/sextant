@@ -4209,7 +4209,9 @@ because its trigger and job each passed through one helper on a call of its own 
 bound) is read part by part, and every such row is `partial`: **a part no binding ties to the row — the name, the cron, the job's class — is
 kept only where every path agrees on it; otherwise it is NULL**, a NULL cron naming in
 `expression_source` the method whose parameter it is (each caller hands its own), or the
-call the walk stopped at. A job named by a key a `job_key` call builds is paired on the path
+call the walk stopped at; each part NULL for that reason is named in the row's `untied`
+([D01](D01-graph-schema.md)), so the document says `not tied down` rather than `not in the
+code`. A job named by a key a `job_key` call builds is paired on the path
 the walk took to that call; a constant `forJob(name)` key and an injected bean pair on any
 path, being the same on every one.
 

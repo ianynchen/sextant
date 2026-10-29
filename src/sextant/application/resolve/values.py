@@ -134,7 +134,13 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
-from sextant.domain.symbols import returned_type, with_descriptor
+from sextant.domain.symbols import (
+    bare_descriptor,
+    method_name,
+    owner_of,
+    returned_type,
+    with_descriptor,
+)
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
@@ -209,6 +215,10 @@ _SLOT = "slot"
 _VALUE = "value"
 _PARAMETER = "parameter"
 _BINDING = "binding"
+# The mark a `_BINDING` position carries where the field is read on an object from outside
+# (`_Walk._unseen_object`): a position of its own, so its answer is never shared with the
+# same field's ordinary read.
+_UNSEEN = "unseen"
 # Contexts a path records a CHOICE for. Two slots of one site may disagree about nothing:
 # if both cross out of the same method, they cross through the same call (M-1); if both
 # read the same value, they read the same return of the same callee. Different contexts
@@ -415,10 +425,12 @@ class ValueIndex:
     # a name the author wrote.
     parameters: dict[str, tuple[str | None, ...]]
     # `field_writes.value`: a binding -> every CONSTANT written into it, as argument-grammar
-    # entries (`OI-138` cause 2). Separate from `writers` below because there is no crossing
-    # to make: the value is in the fact, and `_binding` answers with it rather than
-    # resolving a parameter in another method's frame.
-    constants: dict[str, tuple[Mapping[str, Any], ...]]
+    # entries (`OI-138` cause 2), each with the method that wrote it where the fact names
+    # one. Separate from `writers` below because there is no crossing to make: the value is
+    # in the fact, and `_binding` answers with it rather than resolving a parameter in
+    # another method's frame. The writer is kept for one question only: whether the write
+    # is a constructor's, which every instance gets (`_binding`'s unseen-object rule).
+    constants: dict[str, tuple[tuple[str | None, Mapping[str, Any]], ...]]
     # `field_writes.value` again, for a write whose value is a CALL'S RESULT (CP-33 rows 6-7,
     # 2026-10-26): a binding -> (the writing method, the entry), because the entry's `source`
     # is a value id in THAT method's frame and means nothing anywhere else. `_binding`
@@ -438,6 +450,14 @@ class ValueIndex:
     # `external` (we cannot see the producer) from `not_readable` (we can, and it names
     # no value) — a distinction §1d exists to make and the edge query cannot.
     reached: frozenset[tuple[str, int]]
+    # The fields the facts mark `static`, as bare descriptors: one value for every reader,
+    # so `_binding`'s unseen-object rule (OI-222) never applies to them.
+    static_fields: frozenset[str] = frozenset()
+    # The `(owner, method)` of every call whose body was not scanned — a library call. The
+    # unseen-object rule declares them to the producer reader, so an object a library call
+    # HANDS BACK (`List.get`, a mapper) ends at that call rather than at `external`: only an
+    # object that arrives from no code at all is from outside.
+    unscanned: frozenset[tuple[str, str]] = frozenset()
 
 
 # The index, built once per RESOLVE instead of once per catalog that asks for it.
@@ -610,7 +630,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         if str(row["visibility"]) == "private"
     }
     dead = private - called
-    constants: dict[str, list[Mapping[str, Any]]] = {}
+    constants: dict[str, list[tuple[str | None, Mapping[str, Any]]]] = {}
     produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     for row in workspace.query("field_writes"):
         written = row.get("value")
@@ -629,7 +649,10 @@ def value_index(workspace: Workspace) -> ValueIndex:
         if entry.get("source") is not None and row.get("written_by") is not None:
             produced.setdefault(str(row["field"]), []).append((str(row["written_by"]), entry))
         else:
-            constants.setdefault(str(row["field"]), []).append(entry)
+            writer = row.get("written_by")
+            constants.setdefault(str(row["field"]), []).append(
+                (None if writer is None else str(writer), entry)
+            )
 
     returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
     for row in workspace.query("method_returns"):
@@ -647,6 +670,14 @@ def value_index(workspace: Workspace) -> ValueIndex:
 
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
     reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
+    static_fields = frozenset(
+        bare_descriptor(str(row["symbol"])) for row in workspace.query("fields") if row["static"]
+    )
+    unscanned = frozenset(
+        (str(row.get("owner")), str(row["name"]))
+        for key, row in sites.items()
+        if key not in reached
+    )
     return ValueIndex(
         sites=sites,
         receivers={key: tuple(value) for key, value in receivers.items()},
@@ -659,6 +690,8 @@ def value_index(workspace: Workspace) -> ValueIndex:
         writers={key: tuple(value) for key, value in writers.items()},
         returned_values=returned_values,
         reached=reached,
+        static_fields=static_fields,
+        unscanned=unscanned,
     )
 
 
@@ -1130,7 +1163,7 @@ class _Walk:
             return self._parameter(position[1], position[2], trail, frames)
         # `(_BINDING, symbol)` — the symbol the `field` argument carried, which the sixth
         # edge is keyed on.
-        return self._binding(position[1], trail, frames)
+        return self._binding(position[1], trail, frames, unseen=len(position) > 2)
 
     def _of_site(
         self, site: Mapping[str, Any], slot: int | str, trail: _Trail, frames: "_Frames"
@@ -1259,6 +1292,12 @@ class _Walk:
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
+            # The unseen-object rule (`_binding`, OI-222) is decided HERE, where the reading
+            # method is known, and marks the position only when it applies: every other read
+            # keeps the one position a binding has always had, so memo and cycle detection
+            # are unchanged wherever the rule does not fire.
+            if self._unseen_object(str(symbol), frames, method):
+                return self._resolve((_BINDING, str(symbol), _UNSEEN), trail, frames)
             return self._resolve((_BINDING, str(symbol)), trail, frames)
         if kind == "parameter":
             index = argument.get("value")
@@ -2388,7 +2427,9 @@ class _Walk:
             reached.extend(self._resolve((_SLOT, caller, ordinal, index), merged, frames))
         return tuple(reached)
 
-    def _binding(self, symbol: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
+    def _binding(
+        self, symbol: str, trail: _Trail, frames: "_Frames", unseen: bool = False
+    ) -> tuple[_Reached, ...]:
         """A value read out of a named mutable location (§5a: a binding, never a field —
         it is a field in one language, a module-level variable in another, a package var
         or a closure cell elsewhere).
@@ -2438,8 +2479,53 @@ class _Walk:
         produced = self._index.produced.get(symbol, ())
         if not written and not constants and not produced:
             return _only(trail, _unresolved(NO_WRITER))
+        if unseen:
+            # **A field read on an object from outside what was scanned borrows no other
+            # object's writes** (OI-222, ruled 2026-10-29). A write a setter or a
+            # constructor's PARAMETER makes is a value for the object that call was made on,
+            # and nothing ties that object to this one: DolphinScheduler's `CronUtils` sets
+            # a default cron on a `Schedule` it builds itself, and a trigger reading
+            # `schedule.getCrontab()` off a row from the database published that default as
+            # its schedule. What a constructor writes WITHOUT a parameter (an initialiser)
+            # every instance gets, so it stays; where anything was dropped, `external` stands
+            # beside it and the kept value is INEXACT, because the dropped writes are proof
+            # the value can be something else: an entity's field default read off a database
+            # row is a default, never the row's value.
+            kept_constants = tuple(
+                (writer, entry) for writer, entry in constants if _constructs(writer, symbol)
+            )
+            kept_produced = tuple(
+                (writer, entry) for writer, entry in produced if _constructs(writer, symbol)
+            )
+            overwritten = bool(
+                written
+                or len(kept_constants) < len(constants)
+                or len(kept_produced) < len(produced)
+            )
+            kept = self._binding_writes((), kept_constants, kept_produced, symbol, trail, frames)
+            if not overwritten:
+                return kept
+            return tuple(
+                dict.fromkeys(
+                    [(path, replace(answer, inexact=True)) for path, answer in kept]
+                    + [(trail, _unresolved(EXTERNAL))]
+                )
+            )
+        return self._binding_writes(written, constants, produced, symbol, trail, frames)
+
+    def _binding_writes(
+        self,
+        written: "tuple[tuple[str, int], ...]",
+        constants: "tuple[tuple[str | None, Mapping[str, Any]], ...]",
+        produced: "tuple[tuple[str, Mapping[str, Any]], ...]",
+        symbol: str,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """The answers `_binding`'s writes give: each constant as its literal, each parameter
+        write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
-        for entry in constants:
+        for _, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -2468,6 +2554,44 @@ class _Walk:
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
         return tuple(dict.fromkeys(reached))
+
+    def _unseen_object(self, symbol: str, frames: "_Frames", reader: str | None) -> bool:
+        """Whether the instance field `symbol` is read on an object that arrives from no code
+        this module has — a parameter of a method nothing here calls, through any number of
+        locals, parameters and fields.
+
+        Asked only where the read can be placed on an object: in the method that READS the
+        field (`reader`), when that is the method the walk descended into through an instance
+        call (`frames`' innermost), declared by the field's own type — a getter,
+        `schedule.getCrontab()`. A read anywhere else is the method's own `this`, or a shape
+        this does not place, and is answered as it always was. A field the facts mark
+        `static` holds one value for every reader and is never asked about.
+
+        The object is followed by the producer reader with every library call declared
+        (`ValueIndex.unscanned`), so one a library call hands back — `List.get`, a mapper —
+        ends at that call and is NOT unseen: it may be an object this module built and put
+        there. Only every path ending `external` with no call at all is. Telling two objects
+        the module builds apart is spec 2026-10-18's step 2, not this rule."""
+        if not frames or reader is None or symbol in self._index.static_fields:
+            return False
+        callee, (caller, ordinal) = frames[-1]
+        if callee != reader or owner_of(bare_descriptor(callee)) != owner_of(symbol):
+            return False
+        site = self._index.sites.get((caller, ordinal))
+        if site is None or site.get("invoke_kind") == "static":
+            return False
+        ends = producers_of(self._index, site, RECEIVER, self._index.unscanned)
+        return bool(ends) and all(end.caller is None and end.reason == EXTERNAL for end in ends)
+
+
+def _constructs(writer: str | None, field: str) -> bool:
+    """Whether `writer` is a constructor of the type that declares `field`: a write there,
+    made without a parameter, is what every instance of the type holds."""
+    return (
+        writer is not None
+        and owner_of(bare_descriptor(writer)) == owner_of(field)
+        and method_name(bare_descriptor(writer)) == "<init>"
+    )
 
 
 # The callee frames the walk descended through: (method, the site that called it),

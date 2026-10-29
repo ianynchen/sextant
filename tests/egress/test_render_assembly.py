@@ -364,12 +364,13 @@ GOLDEN_REPORT = ResolveReport(
         {
             "handler": "s maven c 1 com/example/golden/Sweeper#sweep().",
             "trigger": "cron",
-            "name": None,
+            "name": "",
             "expression": "${orders.sweep.cron}",
             "expression_source": None,
             "resolution": "unresolved",
             "evidence": "compiler",
             "catalog_id": "spring-scheduling",
+            "untied": None,
         }
     ],
     error_handlers=[

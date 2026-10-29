@@ -112,14 +112,17 @@ def run(workspace: Workspace, catalog: Catalog, catalogs: Sequence[Catalog] | No
                 {
                     "handler": target,
                     "trigger": str(triggers[attribute]),
-                    # An `@Scheduled` carries no name of its own, and its expression is
-                    # always a literal this pass read, so there is no source to name.
-                    "name": None,
+                    # An `@Scheduled` carries no name of its own: empty, because the
+                    # framework gives none, never NULL, which says the code's name is
+                    # unknown. Its expression is always a literal this pass read, so there
+                    # is no source to name and nothing untied.
+                    "name": "",
                     "expression": expression,
                     "expression_source": None,
                     "resolution": "unresolved" if opener in expression else "resolved",
                     "evidence": "compiler",
                     "catalog_id": catalog.id,
+                    "untied": None,
                 }
             )
     workspace.derive("scheduled_work_insert", rows=rows)

@@ -392,6 +392,9 @@ class _Found:
     # Every part above came from ONE binding of one read (`_on_paths`); False where they
     # were read apart (`_apart`), which is never `resolved`.
     tied: bool = True
+    # The parts read apart that are NULL because the paths disagree on them, not because the
+    # code states none (`_apart`), in the table's column order.
+    untied: tuple[str, ...] = ()
 
 
 def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
@@ -426,20 +429,22 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
     # Classes on one branch (`narrowed` answers) reaching ONE body are one row at its own
     # resolution; reaching several, each row is `narrowed` (§3c).
     branched = {row.handler for row in found if row.narrowed}
-    rows_by_key: dict[tuple[str | None, ...], str] = {}
+    rows_by_key: dict[
+        tuple[str | None, str | None, str | None, str | None, str | None, tuple[str, ...]], str
+    ] = {}
     for row in found:
         resolution = (
             _row_resolution(row.handler, row.narrowed and len(branched) > 1, row.resolution)
             if row.tied
             else _PARTIAL
         )
-        key = (row.name, row.trigger, row.expression, row.source, row.handler)
+        key = (row.name, row.trigger, row.expression, row.source, row.handler, row.untied)
         # One body found exactly on one path and through a branch on another is one row,
         # at the weaker word: that it may not run is the true half.
         rows_by_key[key] = (
             resolution if key not in rows_by_key else _weaker(rows_by_key[key], resolution)
         )
-    for (name, trigger, expression, source, handler), resolution in rows_by_key.items():
+    for (name, trigger, expression, source, handler, untied), resolution in rows_by_key.items():
         yield TriggerEntry(
             caller=end.caller,
             row={
@@ -451,6 +456,7 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
                 "resolution": resolution,
                 "evidence": "compiler",
                 "catalog_id": context.catalog.id,
+                "untied": list(untied) or None,
             },
         )
 
@@ -521,13 +527,16 @@ def _apart(
     """The row of a pairing no single binding holds, every part read on its own, `partial`.
 
     **A part no binding ties to the row is kept only where every path agrees on it;
-    otherwise it is NULL** — the name (`_key`), the cron, the job's class alike. Two paths
+    otherwise it is NULL** — the name (`_keys`), the cron, the job's class alike. Two paths
     giving two values say nothing about which one THIS pairing ran with, and publishing each
     beside the other parts would state pairings no execution builds. A cron that varies is
-    NULL with `expression_source` naming where the walk stopped (`_varies_at`)."""
+    NULL with `expression_source` naming where the walk stopped (`_varies_at`). **Each part
+    NULL for that reason is named in `untied`**: the code does state it, so the row must not
+    read as though it did not."""
     positions, root = _positions(end, schedule, job, context)
     slot = int(context.literal["arg"])
     expression, resolution, source = schedule.expression, schedule.resolution, schedule.source
+    cron_varies = False
     if root is not None:
         read = (
             resolve_positions(
@@ -542,6 +551,7 @@ def _apart(
         expressions = {
             _expression(answers.get(_VALUE), root, slot, context) for answers in read or [{}]
         }
+        cron_varies = len(expressions) > 1
         expression, resolution, source = (
             expressions.pop()
             if len(expressions) == 1
@@ -554,9 +564,15 @@ def _apart(
     )
     classes = {_job_class(answers.get(_CLASS)) for answers in read or [{}]}
     job_class, narrowed = classes.pop() if len(classes) == 1 else (None, False)
+    names = _keys(end.captures.get(_NAME), end.captures.get(_GROUP), context)
+    untied = {
+        "handler": len(classes) > 1,
+        "name": len(names) > 1,
+        "expression": cron_varies,
+    }
     return [
         _Found(
-            name=_key(end.captures.get(_NAME), end.captures.get(_GROUP), context),
+            name=names.pop() if len(names) == 1 else None,
             trigger=schedule.kind,
             expression=expression,
             resolution=resolution,
@@ -564,6 +580,7 @@ def _apart(
             handler=None if job_class is None else _handler(job_class, context),
             narrowed=narrowed,
             tied=False,
+            untied=tuple(part for part, varies in untied.items() if varies),
         )
     ]
 
@@ -818,6 +835,13 @@ def _key(
     return _key_at(_position(name, context), _position(group, context), context)
 
 
+def _keys(
+    name: Mapping[str, Any] | None, group: Mapping[str, Any] | None, context: _Context
+) -> set[str]:
+    """Every key two captures name on some path (`_keys_at`)."""
+    return _keys_at(_position(name, context), _position(group, context), context)
+
+
 def _key_at(
     name: tuple[Mapping[str, Any], int] | None,
     group: tuple[Mapping[str, Any], int] | None,
@@ -827,17 +851,29 @@ def _key_at(
     """`group.name` where the walk reads both as one string each, on every path (within
     `within`, where given); a key with no group is in the default group (Quartz's `Key`,
     CP-55 rows 10-18). NULL for no name, or a key read at runtime."""
+    names = _keys_at(name, group, context, within)
+    return names.pop() if len(names) == 1 else None
+
+
+def _keys_at(
+    name: tuple[Mapping[str, Any], int] | None,
+    group: tuple[Mapping[str, Any], int] | None,
+    context: _Context,
+    within: Path | None = None,
+) -> set[str]:
+    """Each `group.name` the walk reads as one string each on some path (within `within`,
+    where given): one where every path agrees, several where they differ, none for no name
+    or a key read at runtime."""
     if name is None:
-        return None
+        return set()
     positions = {_NAME: name}
     if group is not None:
         positions[_GROUP] = group
-    names = {
+    return {
         key
         for answers in resolve_positions(context.workspace, positions, context.index, within=within)
         if (key := _key_of(answers, context)) is not None
     }
-    return names.pop() if len(names) == 1 else None
 
 
 def _key_of(answers: Mapping[str, Answer], context: _Context) -> str | None:

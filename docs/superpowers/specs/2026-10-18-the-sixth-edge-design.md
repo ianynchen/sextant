@@ -316,3 +316,20 @@ deduplicating them — the engines dedup — and the figure to watch is `binding
 * **`measure_value_walk.py` crashed on the full estate**, because Apollo's modules joined its
   corpora earlier the same day and `apollo-buildtools` holds classes that produce no facts. It
   now reports and skips such a module, as CP-37's probe already did.
+
+## 8. Step 2, its first half — built 2026-10-29 (OI-222)
+
+Step 2 above has two halves: a read on an object from OUTSIDE answers `external` rather than
+every write, and a read on an object the module BUILDS answers that construction's writes
+only. The first half is built, for the Quartz design's OI-222: DolphinScheduler's trigger
+read `schedule.getCrontab()` off a database row and was offered the default cron `CronUtils`
+sets on a `Schedule` of its own. The rule (`values.py`, `_unseen_object`): through a getter
+declared by the field's own type, on an object every answer for which is `external`, keep
+only constructor writes made without a parameter (inexact), and `external` beside them where
+anything was dropped. It needed no new fact: the producer reader, with every unscanned call
+declared, ends a path at a library call that hands an object back, so "every path ends
+`external`" means the object arrives from a parameter nothing here passes. A static field is
+never asked about. The second half still needs `from_value` (§1) and
+stays unbuilt; §4's over-report of `setTopic("a"); setTopic("b")` on one visible object is
+unchanged. Measured: every answer over 44 modules is the same with the rule on and off.
+

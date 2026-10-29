@@ -204,8 +204,9 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     trigger    TEXT,
     -- The trigger's own name where the framework gives one (a Quartz
     -- trigger's identity), part of the schedule's identity beside `handler`
-    -- and `trigger` (Quartz design, ruling 5). NULL for `@Scheduled`, which
-    -- has none.
+    -- and `trigger` (Quartz design, ruling 5). EMPTY for `@Scheduled`, which
+    -- gives none; NULL where the framework gives one and the code does not
+    -- say what it is (or `untied` names it).
     name       TEXT,
     -- The trigger's declared expression, VERBATIM (2O design §4a) — the cron
     -- string, or the delay/rate as it was written. Never normalised, never
@@ -231,7 +232,13 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     -- The id of the catalog that derived this row — provenance, exactly as
     -- `endpoints.catalog_id` is, and for the same reason: rule scoping, never
     -- identity.
-    catalog_id TEXT
+    catalog_id TEXT,
+    -- The parts of the row, by column name (`handler`, `name`, `expression`,
+    -- in that order), that are NULL because the paths reaching this trigger
+    -- disagree on them, not because the code states none: a helper two
+    -- callers call with two names states both, and ties neither to the row
+    -- (Quartz design, R20). NULL where no part is.
+    untied     VARCHAR[]
 );
 
 -- A scheduled job's placeholder expression, per environment (spec

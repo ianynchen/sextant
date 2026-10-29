@@ -992,17 +992,23 @@ column between them.
 own word for the schedule kind — `cron`, `fixedRate`, `fixedDelay`, catalog vocabulary
 rather than one of [D00](D00-fact-schema.md) §4's closed sets), `name` (the trigger's own
 name where the framework gives one, part of the identity beside `handler` and `trigger`;
-NULL for `@Scheduled`), `expression` (the declared
+EMPTY for `@Scheduled`, which gives none), `expression` (the declared
 schedule **verbatim** — a cron string normalised or a delay re-spelled names a different
 schedule from the one that runs), `expression_source` (the bare descriptor ([D00](D00-fact-schema.md) §5a) of the method or
 field the walk to the expression stopped at — bare because a method in a jar has no module
 coordinates; set only when `expression` is NULL),
-`resolution`, `evidence` and `catalog_id`. `handler`, `trigger`, `name`, `expression` and
-`expression_source` are nullable: a NULL is a fact the code does not state, and the
-document prints it as `not in the code`. A row with no `handler` is not a root.
+`resolution`, `evidence`, `catalog_id` and `untied` (the parts — `handler`, `name`,
+`expression`, in that order — that are NULL because the paths reaching the trigger disagree
+on them, not because the code states none; NULL where no part is). `handler`, `trigger`,
+`name`, `expression` and `expression_source` are nullable. **Each empty cell says why it is
+empty** (ruled 2026-10-29): a NULL the row's `untied` names is a value the code states and
+no one path ties to this row, printed `not tied down`; any other NULL is a fact the code
+does not state, printed `not in the code`; an EMPTY name is a part the framework does not
+have, printed `—`. A row with no `handler` is not a root.
 `resolution` is `resolved`, `unresolved`, `partial` (part of the schedule is read, part is
 not; a `partial` row with no expression is rendered with `the schedule is read at runtime
-from <expression_source>`) or `narrowed` (one of several candidates). It is `unresolved` where the expression is a property placeholder this analysis did not
+from <expression_source>`, or `the schedule differs between the calls that reach
+<expression_source>` where the expression is untied) or `narrowed` (one of several candidates). It is `unresolved` where the expression is a property placeholder this analysis did not
 substitute, with the placeholder carried exactly as written; the value comes from
 configuration a deployment overwrites, so substituting one would publish a schedule the
 repository cannot know.
@@ -1378,6 +1384,7 @@ own cadence.
 | 7 | `resolved_schedules`, a new derived table: a scheduled job's placeholder expression per environment, read from the module's configuration through the one placeholder rule (spec `2026-10-23-configured-schedules-design.md`); `scheduled_work` keeps one row per job and its `unresolved` | refused by its stamp exactly as at 5 and 6, so a workspace without the table is re-analysed rather than read as one whose jobs have no configured values |
 | 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
 | 9 | `scheduled_work` gains `name` and `expression_source`; `handler`, `trigger` and `expression` may be NULL; `resolution` may be `partial` or `narrowed`; `resolved_schedules` gains `name` (spec `2026-10-28-quartz-design.md` §3e) | refused by its stamp exactly as at 5 to 8, so a workspace without the columns is re-analysed rather than read as one whose schedules have no names |
+| 10 | `scheduled_work` gains `untied`; an `@Scheduled` row's `name` is EMPTY rather than NULL (spec `2026-10-28-quartz-design.md`, "Empty cells", ruled 2026-10-29) | refused by its stamp exactly as at 5 to 9, so every NULL of the older vintage — which could mean any of the three — is re-derived rather than printed as `not in the code` |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

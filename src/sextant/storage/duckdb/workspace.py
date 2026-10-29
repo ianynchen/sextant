@@ -714,10 +714,10 @@ _NAMED_QUERIES = {
     # a second catalog claiming the same annotation would otherwise leave open.
     "scheduled_work": """
         SELECT handler, trigger, name, expression, expression_source, resolution, evidence,
-               catalog_id
+               catalog_id, untied
         FROM scheduled_work
         ORDER BY handler, trigger, name, expression, expression_source, resolution, evidence,
-                 catalog_id
+                 catalog_id, untied
     """,
     # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
     # read as `scheduled_work` is — the job's own (handler, trigger, name, expression) leads —
@@ -1426,12 +1426,12 @@ _EXPORT_QUERIES = {
     "scheduled_work": f"""
         SELECT w.handler, w.trigger, coalesce(n.masked, w.name) AS name,
                coalesce(a.masked, w.expression) AS expression,
-               w.expression_source, w.resolution, w.evidence, w.catalog_id
+               w.expression_source, w.resolution, w.evidence, w.catalog_id, w.untied
         FROM scheduled_work w
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = w.expression
         LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = w.name
         ORDER BY w.handler, w.trigger, w.name, w.expression, w.expression_source, w.resolution,
-                 w.evidence, w.catalog_id
+                 w.evidence, w.catalog_id, w.untied
     """,
     # `error_handlers` exports through its named query verbatim, and the reason is that it
     # carries no masked column: a scope attribute is a package or a type, an exception and

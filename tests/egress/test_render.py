@@ -1368,7 +1368,8 @@ def _job(handler: str, expression: str, trigger: str = "cron") -> dict[str, obje
     return {
         "handler": handler,
         "trigger": trigger,
-        "name": None,
+        # An `@Scheduled` job: the framework gives it no name.
+        "name": "",
         "expression": expression,
         "expression_source": None,
         "resolution": "unresolved",
@@ -1390,7 +1391,7 @@ def _configured(
     return {
         "handler": handler,
         "trigger": trigger,
-        "name": None,
+        "name": "",
         "expression": expression,
         "environment": environment,
         "keys": json.dumps(list(keys)),
@@ -1418,10 +1419,7 @@ def test_a_placeholder_schedule_states_its_value_per_environment():
         [_job(SWEEP, SWEEP_CRON)],
         [_configured("default", "0 0 * * * *"), _configured("prod", "0 */5 * * * *")],
     )
-    assert (
-        f"| `com/acme/OrderSweeper#sweep().` | cron | not in the code | `{SWEEP_CRON}` | unresolved |"
-        in text
-    )
+    assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{SWEEP_CRON}` | unresolved |" in text
     assert (
         f"- `com/acme/OrderSweeper#sweep().` — cron `{SWEEP_CRON}`\n"
         "  - as configured in this repository: `0 0 * * * *` in `default`; "
@@ -1577,6 +1575,44 @@ def test_the_header_of_a_handlerless_job_names_each_part_once_and_never_dangles(
         assert not line.rstrip().endswith("—")
 
 
+@pytest.mark.pins("schedules.an-EMPTY-cell-says-why-it-is-empty")
+def test_a_name_the_framework_never_gives_reads_as_a_dash():
+    """An `@Scheduled` job has no trigger name at all, which the row says with an empty name
+    rather than a NULL: the cell reads `—`, never `not in the code`, which would send a
+    reader looking for a name that cannot exist. The header skips it."""
+    text = _schedules_document([_job(SWEEP, SWEEP_CRON)], [_configured("prod", "0 */5 * * * *")])
+    assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{SWEEP_CRON}` | unresolved |" in text
+    assert f"- `com/acme/OrderSweeper#sweep().` — cron `{SWEEP_CRON}`\n" in text
+
+
+@pytest.mark.pins("schedules.an-EMPTY-cell-says-why-it-is-empty")
+def test_a_part_the_code_states_but_no_path_ties_reads_not_tied_down():
+    """A Quartz row read part by part (`untied`): the code does state a job, a name and a
+    cron, but they differ between the callers of a helper and nothing ties one of them to
+    this row. Those cells read `not tied down`, never `not in the code`, and the block under
+    the table says the schedule differs between the calls that reach the helper, never that
+    it is read at runtime."""
+    helper = "s maven c 1 com/acme/Triggers#trigger(Ljava/lang/String;)Lorg/quartz/Trigger;."
+    row = {
+        **_job(SWEEP, "x"),
+        "handler": None,
+        "name": None,
+        "expression": None,
+        "expression_source": helper,
+        "resolution": "partial",
+        "untied": ["handler", "name", "expression"],
+    }
+    text = _schedules_document([row], [])
+    assert "| not tied down | cron | not tied down | not tied down | partial |" in text
+    assert "- not tied down — cron\n" in text
+    assert (
+        "the schedule differs between the calls that reach "
+        "`com/acme/Triggers#trigger(Ljava/lang/String;)Lorg/quartz/Trigger;.`\n"
+    ) in text
+    assert "read at runtime" not in text
+    assert "not in the code" not in text
+
+
 def test_a_configured_schedule_value_passes_the_render_redactor():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
     text = _schedules_document(
@@ -1634,8 +1670,5 @@ def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_d
         redactor,
     )
     assert "ACME_A1B2" not in text
-    assert (
-        f"| `com/acme/OrderSweeper#sweep().` | cron | not in the code | `{shown}` | unresolved |"
-        in text
-    )
+    assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{shown}` | unresolved |" in text
     assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text
