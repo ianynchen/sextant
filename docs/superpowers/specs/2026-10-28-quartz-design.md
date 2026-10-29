@@ -369,16 +369,17 @@ an entry.
 The first corpus run found the handler NULL on RuoYi-Vue, NBlog and aurora.
 - **The shared line.** All three write `jobDetail.getJobDataMap().put(KEY, row)` between the
   job's `build()` and `scheduler.scheduleJob(jobDetail, trigger)`.
-- **Why the job was refused.** `getJobDataMap()` is a call on the built value, so the value
-  walk's `escapes` window refused the job argument, and the pairing found no job.
-- **The fix (da732af0, c497c2db).** `producers_of(…, past_accessors=…)` lets an *accessor* past
-  that window. An accessor is a no-argument call that hands back a reference type that is
-  neither the value's own type nor a supertype of it. The switch is on only where the question
-  is which call **built** the value: the Quartz job and trigger pairing, and the execute-join.
-  The value walk keeps the old window, because a write through a returned live view
-  (`getJobDataMap()`, `listIterator()`) changes what the value holds.
-- **What it moved.** `field_check` moved no pin, and `measure_value_walk` is identical to the
-  baseline over 44 modules.
+- **Why the job was lost.** Calling a method on a value between making it and using it
+  counted as a possible change to it, so the code stopped looking for where the job argument
+  came from, and the trigger was paired with no job.
+- **The fix (da732af0, c497c2db).** When matching a built job or trigger to the call that
+  uses it, a call on it that takes no argument and hands back something of another type
+  (`getJobDataMap()`) is ignored: it does not change which `build()` made the value. Reading
+  what a value *holds* still counts such a call, because writing through the map or list it
+  hands back changes the value.
+- **What it moved,** as the fix commits' messages report it (not re-run here): the six pinned
+  field corpora (`scripts/field_check.py`) are unchanged, and a run of
+  `measure_value_walk` over 44 modules gives the same rows as before the fix.
 - **The fixture.** `RowScheduler.createJob` gains the RuoYi line.
 
 ### The real corpora
@@ -390,7 +391,9 @@ module analyze` on the module that holds its Quartz code. Nothing was written in
 - **The Spring Boot smoke test** went through a scratchpad Maven module on Spring Boot 4.0.0,
   whose sources are byte-identical to the corpus's.
 - **NBlog, aurora and dolphinscheduler** carry a Lombok (1.18.20 or older) that cannot run on
-  JDK 21. NBlog and dolphinscheduler were built with `-Dlombok.version=1.18.34`. aurora's
+  JDK 21. NBlog and dolphinscheduler were built with `-Dlombok.version=1.18.34`;
+  dolphinscheduler also with `-Dspotless.skip=true -Dcheckstyle.skip=true` and
+  `-pl dolphinscheduler-scheduler-plugin/dolphinscheduler-scheduler-quartz -am`. aurora's
   copied POM had its Lombok version pinned to 1.18.34, because a BOM import manages it.
 - **ruoyi-vue-pro's IoT module** is commented out of the corpus's reactor. The copy's root POM
   re-enables it, and it was built with `-pl yudao-module-iot/yudao-module-iot-biz -am`.
@@ -402,7 +405,7 @@ module analyze` on the module that holds its Quartz code. Nothing was written in
 | NBlog | `b8e537c` | `blog-api` | 1: `ScheduleJob#executeInternal`, cron, expression NULL from `ScheduleJob#getCron`, `partial` |
 | aurora | `07e9524` | `aurora-springboot` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `Job#getCronExpression`, `partial` |
 | ruoyi-vue-pro | `ac022b1` | `yudao-spring-boot-starter-job` | 1: `JobHandlerInvoker#executeInternal`, cron, expression NULL, `partial` |
-| ruoyi-vue-pro | `ac022b1` | `yudao-module-iot/yudao-module-iot-biz` | `IotSceneRuleJob#executeInternal`, cron, expression NULL from `IotSceneRuleDO$Trigger#getCronExpression`, `partial` (the IoT manager's job, from its one caller's `IotSceneRuleJob.class`); also the starter's `JobHandlerInvoker#executeInternal` row, read from the sibling module it compiles against |
+| ruoyi-vue-pro | `ac022b1` | `yudao-module-iot/yudao-module-iot-biz` | **2 Quartz rows** (beside two `@Scheduled` rows from `yudao-spring-boot-starter-mq`): `IotSceneRuleJob#executeInternal`, cron, expression NULL from `IotSceneRuleDO$Trigger#getCronExpression`, `partial` (the IoT manager's job, from its one caller's `IotSceneRuleJob.class`); also the starter's `JobHandlerInvoker#executeInternal` row, read from the sibling module it compiles against |
 | dolphinscheduler | `21968bc` | `dolphinscheduler-scheduler-plugin/dolphinscheduler-scheduler-quartz` | **2:** handler NULL, cron, expression NULL from `Schedule#getCrontab`, `partial`; and handler NULL, cron, `0 0 0 * * ? *`, `partial` (below) |
 
 The Quartz library's own `examples/` module (optional in §2a) was not measured.
@@ -425,16 +428,14 @@ The Quartz library's own `examples/` module (optional in §2a) was not measured.
   - **The kind** comes from walking into the three `CronScheduleBuilderFactory`
     implementations, each rooted at `cronSchedule(schedule.getCrontab())`, rather than from
     the factory's declared type.
-  - **A second row.** The value walk of `schedule.getCrontab()` reaches the field `crontab`,
-    and its one writer in the code: `CronUtils.getSelfFireDateList` sets
-    `Constants.DEFAULT_CRON_STRING` on a `new Schedule()` it builds for its own fallback
-    (`dolphinscheduler-service`, read as a sibling the module compiles against). The walk
-    resolves a field read on any instance against every writer of that field, which is the
-    stated over-report of spec 2026-10-18 ("every value any writer ever passed"; receiver-aware
-    field resolution is its step 2, not built). So the entry is two rows: one `partial` row
-    from the getter, and one row whose expression is `0 0 0 * * ? *`. That value is a real
-    write of `Schedule.crontab`, but not one that reaches this trigger. Listed as a finding
-    below.
+  - **A second, wrong row** (OI-222). Following `schedule.getCrontab()` back leads to the
+    field `crontab` and to the one place the code writes it: `CronUtils.getSelfFireDateList`
+    sets `Constants.DEFAULT_CRON_STRING` on a `new Schedule()` it makes for its own fallback
+    (`dolphinscheduler-service`, read because this module compiles against it). A field read
+    on an object the module never builds is answered with every value written to that field
+    anywhere, which spec 2026-10-18 states as a known over-report (telling objects apart is its
+    unbuilt step 2). So the entry is two rows: the right `partial` row from the getter, and a
+    row whose expression is `0 0 0 * * ? *`, a value that never reaches this trigger.
 
 ### ruoyi-vue-pro: what the dispatcher's trace reaches
 
@@ -448,30 +449,40 @@ that module compiles against, so the count depends on the module analysed. Measu
 
 | Module analysed | `JobHandler` implementations reached | Of those on its compile path |
 |---|---|---|
-| `yudao-spring-boot-starter-job` | **0**: the walk stops at a boundary at `JobHandler#execute` | 0 |
+| `yudao-spring-boot-starter-job` | **0**: the trace stops at `JobHandler#execute`, whose implementations are not on this module's path | 0 |
 | `yudao-server` (the deployable; the reactor builds system and infra) | **5**: infra's `JobLogCleanJob`, `AccessLogCleanJob`, `ErrorLogCleanJob`; system's `DemoJob`, `TokenCleanJob` | 5 |
 | `yudao-module-iot-biz` | **7**: the five above plus iot's `IotDeviceOfflineCheckJob`, `IotOtaUpgradeJob` | 7 |
 
-Every implementation on the analysed module's compile path is reached, each `narrowed`, with
-no Quartz-specific rule. The other 24 are in modules the corpus's reactor leaves commented out,
-so no build here produced them.
+How measured: each row is the set of `JobHandler#execute` targets in the trace from
+`JobHandlerInvoker#executeInternal` (`application.query.trace.traces_of`) on that module's own
+workspace; the 31 and the per-module split are `grep -rl "implements JobHandler"` over the
+corpus. Every implementation on the analysed module's compile path is reached, each `narrowed`,
+with no Quartz-specific rule. The other 24 are in eight modules that the corpus's root
+`pom.xml` lists only inside comments (ai 2, crm 1, hrm 3, im 2, mall 8, oa 2, pay 5, pms 1);
+they were not built here, so no analysis reached them.
 
-### Findings (for Plane; ids assigned when logged)
+### Findings, logged in Plane
 
-- **Nested enum constants are written with their binary name.** `withInterval(1,
-  IntervalUnit.HOUR)` reads as `DateBuilder$IntervalUnit.HOUR` in the expression (smoke test).
-  Cosmetic: the row stays `resolved` and readable.
-- **A field read on an object the module never constructs answers every writer of the field.**
-  This is dolphinscheduler's `0 0 0 * * ? *` row above: spec 2026-10-18's stated over-report,
-  seen through a Quartz entry.
-- **NBlog, aurora and dolphinscheduler need Lombok 1.18.30 or later to build on JDK 21.**
-  This is an environment note for anyone re-measuring.
+- **OI-222** (SEXTANT-215): dolphinscheduler's trigger gains a false cron from an unrelated
+  field writer, above.
+- **OI-223** (SEXTANT-216): a nested type in a written chain reads `Outer$Inner`, not
+  `Outer.Inner` (`DateBuilder$IntervalUnit.HOUR` in the smoke test). Cosmetic; the row stays
+  `resolved`.
+- **OI-229** (SEXTANT-222): a trigger chain must reach `build()` in its own method, and a
+  configured cron is read only as the builder's direct argument.
+- OI-224 to OI-228 and OI-230 are follow-ups from the branch's reviews of the shared code.
+- **An environment note, not an issue:** NBlog, aurora and dolphinscheduler need Lombok
+  1.18.30 or later to build on JDK 21.
 
 ### Not done, stated
 
-- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅, with three stated boundaries:
+- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅, with its one known wrong row
+  (OI-222) stated beside the ✅, and five stated boundaries:
   - `quartz_data.xml` / `quartz.properties`;
   - `JobDetailFactoryBean` / `CronTriggerFactoryBean` / `SimpleTriggerFactoryBean`;
-  - Kotlin.
+  - Kotlin;
+  - a job with no trigger (`storeDurably()`, run on demand by `triggerJob`): no entry;
+  - a dispatcher that calls its target by reflection (RuoYi-Vue, aurora, NBlog): the trace
+    stops there.
 - `quartz` left the delivery register (CI run pending). The Async ```delivery row lists only
   `akka-pekko-actors`.

@@ -35,30 +35,38 @@ here would restate those documents rather than add anything.
   - **Schedules kept in a database table** (RuoYi-Vue, NBlog, aurora, ruoyi-vue-pro,
     dolphinscheduler) give a `partial` row that names the getter that reads the cron. Seed SQL
     is never read.
-  - **Measured on six corpora.** The Spring Boot smoke test is 5 rows, all `resolved`. Each
-    database-table application has its cron row with the handler measured (dolphinscheduler's
-    is NULL, as predicted).
-  - **COVERAGE.** §5.12's Quartz row reads ✅, with three stated boundaries:
-    `quartz_data.xml` / `quartz.properties`, Spring's trigger factory beans, and Kotlin.
-    `quartz` leaves the delivery register, so the Async row's only blocker is
-    `akka-pekko-actors`.
+  - **Measured on six corpora.**
+    - The Spring Boot smoke test is 5 rows, all `resolved`.
+    - RuoYi-Vue, NBlog, aurora and ruoyi-vue-pro each give their cron row, with the handler
+      found.
+    - dolphinscheduler's trigger gives **two rows**, both with no handler (its job and trigger
+      are paired in a Guava `Set`, which is not read). The first is the expected `partial` row.
+      The second is wrong: it carries `0 0 0 * * ? *`, a default cron that an unrelated method
+      sets on its own `new Schedule()`. A value read from a field of an object the module never
+      builds is answered with every value the code writes to that field anywhere (OI-222).
+  - **COVERAGE.** §5.12's Quartz row reads ✅, with five stated boundaries:
+    `quartz_data.xml` / `quartz.properties`, Spring's trigger factory beans, Kotlin, a job with
+    no trigger (run on demand by `triggerJob`), and a job that calls its target by reflection,
+    where the trace stops. `quartz` leaves the delivery register, so the Async row's only
+    blocker is `akka-pekko-actors`.
   - **`GRAPH_SCHEMA_VERSION` moves 8 → 9 and `BOUNDARY_VOCABULARY_VERSION` 2 → 3.**
     `scheduled_work` gains `name` and `expression_source`, and an entry may be `partial`.
     Re-analyse the workspace.
-- **Shared machinery under the Quartz rows.** Each change applies to every catalog, not only
-  Quartz:
-  - **A branch between literals answers `narrowed`, with its candidates** (ruling 7). Before,
-    it answered nothing.
-  - **The chain walk is its own module, `shapes/chains.py`.** Its execute-join finds a built
-    value through the value walk, across methods.
-  - **Autoboxing reads as the constant the source wrote.**
+- **Changes under the Quartz rows that every catalog gets:**
+  - **A choice between two literals now answers with both** (`narrowed`, ruling 7). Before,
+    it answered nothing: `concurrent ? JobA.class : JobB.class` gave no class at all.
+  - **A value built in one method and used in another is followed across methods.** This is
+    how a trigger built in a helper and scheduled elsewhere is matched to its job. The code
+    that follows a builder chain now lives in `shapes/chains.py`.
+  - **A boxed constant reads as the constant the source wrote.** `Integer.valueOf(3)` reads
+    as `3`.
   - **An enum constant argument is written as its type and name.**
-  - **`producers_of` can let an accessor past its `escapes` window** (`past_accessors`). An
-    accessor is a no-argument call on the value that hands back a reference type other than
-    the value's own type or its supertypes, such as `jobDetail.getJobDataMap()`. The switch is
-    on only where the question is which call built the value: the Quartz job and trigger
-    pairing and the execute-join. The value walk itself keeps the old window, because a write
-    through a returned view changes what the value holds.
+  - **A call on the job before it is scheduled no longer hides which class built it.**
+    RuoYi-Vue, NBlog and aurora write `jobDetail.getJobDataMap().put(…)` between building the
+    job and scheduling it, and their handler was lost. A no-argument call that hands back
+    something of another type is now ignored, but only when matching a built job or trigger
+    to where it is used. Reading what a value holds still counts such a call, because writing
+    through the map it returns changes the value.
 
 - **Quarkus messaging: SmallRye Reactive Messaging channels become boundaries, wired as Quarkus
   wires them** (spec 2026-10-24-quarkus-messaging-and-grpc, rulings 1-2; probes CP-49–CP-51).
