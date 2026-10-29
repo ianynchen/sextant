@@ -17,6 +17,49 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Quartz: each new trigger is a scheduled entry point** (spec 2026-10-28-quartz; probe
+  CP-55, Quartz 2.5.1).
+  - **One row per trigger.** Each `TriggerBuilder.newTrigger()…build()` is one
+    `scheduled_work` row (catalog `quartz.yml`, engine `scheduled_chain.py`).
+  - **What the row carries:**
+    - the trigger kind;
+    - the trigger's own key, `group.name`;
+    - the schedule: a cron expression verbatim (a `${…}` one also gets `resolved_schedules`
+      rows), or any other schedule as its builder chain as written, for example
+      `simpleSchedule().withIntervalInSeconds(2).repeatForever()`;
+    - the handler Quartz runs for the job paired with the trigger.
+  - **How the job is found.** It is found wherever it is paired: `scheduleJob(job, trigger)`,
+    `forJob(name, group)`, `forJob(JobKey)` or an injected `@Bean JobDetail`, across methods
+    and classes. The handler is the body the JVM dispatches for the job class's `execute`, or
+    `executeInternal` under `QuartzJobBean`.
+  - **Schedules kept in a database table** (RuoYi-Vue, NBlog, aurora, ruoyi-vue-pro,
+    dolphinscheduler) give a `partial` row that names the getter that reads the cron. Seed SQL
+    is never read.
+  - **Measured on six corpora.** The Spring Boot smoke test is 5 rows, all `resolved`. Each
+    database-table application has its cron row with the handler measured (dolphinscheduler's
+    is NULL, as predicted).
+  - **COVERAGE.** §5.12's Quartz row reads ✅, with three stated boundaries:
+    `quartz_data.xml` / `quartz.properties`, Spring's trigger factory beans, and Kotlin.
+    `quartz` leaves the delivery register, so the Async row's only blocker is
+    `akka-pekko-actors`.
+  - **`GRAPH_SCHEMA_VERSION` moves 8 → 9 and `BOUNDARY_VOCABULARY_VERSION` 2 → 3.**
+    `scheduled_work` gains `name` and `expression_source`, and an entry may be `partial`.
+    Re-analyse the workspace.
+- **Shared machinery under the Quartz rows.** Each change applies to every catalog, not only
+  Quartz:
+  - **A branch between literals answers `narrowed`, with its candidates** (ruling 7). Before,
+    it answered nothing.
+  - **The chain walk is its own module, `shapes/chains.py`.** Its execute-join finds a built
+    value through the value walk, across methods.
+  - **Autoboxing reads as the constant the source wrote.**
+  - **An enum constant argument is written as its type and name.**
+  - **`producers_of` can let an accessor past its `escapes` window** (`past_accessors`). An
+    accessor is a no-argument call on the value that hands back a reference type other than
+    the value's own type or its supertypes, such as `jobDetail.getJobDataMap()`. The switch is
+    on only where the question is which call built the value: the Quartz job and trigger
+    pairing and the execute-join. The value walk itself keeps the old window, because a write
+    through a returned view changes what the value holds.
+
 - **Quarkus messaging: SmallRye Reactive Messaging channels become boundaries, wired as Quarkus
   wires them** (spec 2026-10-24-quarkus-messaging-and-grpc, rulings 1-2; probes CP-49–CP-51).
   `@Incoming`/`@Outgoing` (and their repeatable containers) and `@Channel` on an injected

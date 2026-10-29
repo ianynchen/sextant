@@ -339,3 +339,139 @@ These are predictions until the "As built" section measures them.
 ## 7. Open — for the user
 
 Nothing. Ruling 7 closed the last question.
+
+## As built
+
+### What the fixture pins
+
+`fixtures/orders-quartz` is built with JDK 21 against `spring-boot-starter-quartz` (Spring
+Boot 4.0.0, Quartz 2.5.1). `tests/e2e/test_async_delivered.py::test_quartz_triggers_are_scheduled_work_delivered`
+reads the rendered "Scheduled work" section off one `analyze` and one `render`. Its seven rows,
+exact:
+- **`QuartzConfig` builders:**
+  - `SweepJob#executeInternal`, simple `orders.every30s`,
+    `simpleSchedule().withIntervalInSeconds(30).repeatForever()`, `resolved`;
+  - the same handler, cron `orders.nightly` `0 0 2 * * ?`, `resolved`;
+  - `AuditJob#execute`, cron `${orders.sweep.cron}`, `unresolved`, with its configured
+    `0 */5 * * * ?` stated under it;
+  - `SweepJob#executeInternal`, dailyTimeInterval, the chain as written, with
+    `Calendar.TUESDAY` as the `3` javac compiled.
+- **The jobs-table cron (RuoYi):** `BaseRowJob#execute`, `partial`, `OrderJobRow#getCron`
+  named. The trace from it reaches `ConcurrentRowJob#run` and `SerialRowJob#run`.
+- **The private-method trigger (ruoyi-vue-pro):** `AuditJob#execute`, `partial`.
+- **The `Set` pair (dolphinscheduler):** handler NULL, cron, `partial`.
+
+`updateJob`'s `trigger.getTriggerBuilder()…build()` re-schedules an existing trigger and is not
+an entry.
+
+### Deviation: a call on the built job before it is scheduled (fix round, 2026-10-29)
+
+The first corpus run found the handler NULL on RuoYi-Vue, NBlog and aurora.
+- **The shared line.** All three write `jobDetail.getJobDataMap().put(KEY, row)` between the
+  job's `build()` and `scheduler.scheduleJob(jobDetail, trigger)`.
+- **Why the job was refused.** `getJobDataMap()` is a call on the built value, so the value
+  walk's `escapes` window refused the job argument, and the pairing found no job.
+- **The fix (da732af0, c497c2db).** `producers_of(…, past_accessors=…)` lets an *accessor* past
+  that window. An accessor is a no-argument call that hands back a reference type that is
+  neither the value's own type nor a supertype of it. The switch is on only where the question
+  is which call **built** the value: the Quartz job and trigger pairing, and the execute-join.
+  The value walk keeps the old window, because a write through a returned live view
+  (`getJobDataMap()`, `listIterator()`) changes what the value holds.
+- **What it moved.** `field_check` moved no pin, and `measure_value_walk` is identical to the
+  baseline over 44 modules.
+- **The fixture.** `RowScheduler.createJob` gains the RuoYi line.
+
+### The real corpora
+
+**How they were built.** Each corpus was copied (without `.git`) to a scratchpad directory,
+built there with its own POM (`mvn -DskipTests compile`, JDK 21), and analysed with `sextant
+module analyze` on the module that holds its Quartz code. Nothing was written inside
+`examples/`. The exceptions:
+- **The Spring Boot smoke test** went through a scratchpad Maven module on Spring Boot 4.0.0,
+  whose sources are byte-identical to the corpus's.
+- **NBlog, aurora and dolphinscheduler** carry a Lombok (1.18.20 or older) that cannot run on
+  JDK 21. NBlog and dolphinscheduler were built with `-Dlombok.version=1.18.34`. aurora's
+  copied POM had its Lombok version pinned to 1.18.34, because a BOM import manages it.
+- **ruoyi-vue-pro's IoT module** is commented out of the corpus's reactor. The copy's root POM
+  re-enables it, and it was built with `-pl yudao-module-iot/yudao-module-iot-biz -am`.
+
+| Corpus | Commit | Module | Entries |
+|---|---|---|---|
+| spring-boot smoke test | `6922eaa` | `smoke-test/spring-boot-smoke-test-quartz` | **5, all `SampleJob#executeInternal`, all `resolved`:** simple `DEFAULT.sampleTrigger` `simpleSchedule().withIntervalInSeconds(2).repeatForever()`; simple `samples.every-day` `repeatHourlyForever(24)`; cron `samples.3am-weekdays` `atHourAndMinuteOnGivenDaysOfWeek(3, 0, 1, 2, 3, 4, 5)`; calendarInterval `samples.once-a-week` `calendarIntervalSchedule().withIntervalInWeeks(1)`; dailyTimeInterval `samples.every-hour-tue-thu` `dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5).startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0)).endingDailyAt(TimeOfDay.hourAndMinuteOfDay(18, 0)).withInterval(1, DateBuilder$IntervalUnit.HOUR)` |
+| RuoYi-Vue | `13db1fc` | `ruoyi-quartz` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `SysJob#getCronExpression`, `partial` |
+| NBlog | `b8e537c` | `blog-api` | 1: `ScheduleJob#executeInternal`, cron, expression NULL from `ScheduleJob#getCron`, `partial` |
+| aurora | `07e9524` | `aurora-springboot` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `Job#getCronExpression`, `partial` |
+| ruoyi-vue-pro | `ac022b1` | `yudao-spring-boot-starter-job` | 1: `JobHandlerInvoker#executeInternal`, cron, expression NULL, `partial` |
+| ruoyi-vue-pro | `ac022b1` | `yudao-module-iot/yudao-module-iot-biz` | `IotSceneRuleJob#executeInternal`, cron, expression NULL from `IotSceneRuleDO$Trigger#getCronExpression`, `partial` (the IoT manager's job, from its one caller's `IotSceneRuleJob.class`); also the starter's `JobHandlerInvoker#executeInternal` row, read from the sibling module it compiles against |
+| dolphinscheduler | `21968bc` | `dolphinscheduler-scheduler-plugin/dolphinscheduler-scheduler-quartz` | **2:** handler NULL, cron, expression NULL from `Schedule#getCrontab`, `partial`; and handler NULL, cron, `0 0 0 * * ? *`, `partial` (below) |
+
+The Quartz library's own `examples/` module (optional in §2a) was not measured.
+
+**Against §6:**
+- **Smoke test.** As predicted: helloJob ×3 and anotherJob ×2, as the trigger keys in the
+  source pair them.
+  - `withIdentity("sampleTrigger")` has no group, so the key is in Quartz's `DEFAULT` group.
+  - `atHourAndMinuteOnGivenDaysOfWeek` is a `CronScheduleBuilder` static, so it is a `cron` row
+    carried as the builder chain (ruling 4). It is not a cron string.
+- **RuoYi-Vue and aurora.** As predicted, after the fix round: both job classes inherit
+  `AbstractQuartzJob#execute`, so they are one row.
+- **NBlog.** The prediction was wrong. §6 said "the inherited `execute`", but NBlog's job
+  `ScheduleJob` extends `QuartzJobBean`, and the handler is its `executeInternal`. The code was
+  right and the prediction was not.
+- **ruoyi-vue-pro.** As predicted: one row for the starter's dispatcher, and one for the IoT
+  manager, whose `newJob(jobClass)` takes the class its one caller passes.
+- **dolphinscheduler.** The handler is NULL as predicted, and the job is not paired (the
+  trigger `Set` is built in Guava). Two things differ from the prediction:
+  - **The kind** comes from walking into the three `CronScheduleBuilderFactory`
+    implementations, each rooted at `cronSchedule(schedule.getCrontab())`, rather than from
+    the factory's declared type.
+  - **A second row.** The value walk of `schedule.getCrontab()` reaches the field `crontab`,
+    and its one writer in the code: `CronUtils.getSelfFireDateList` sets
+    `Constants.DEFAULT_CRON_STRING` on a `new Schedule()` it builds for its own fallback
+    (`dolphinscheduler-service`, read as a sibling the module compiles against). The walk
+    resolves a field read on any instance against every writer of that field, which is the
+    stated over-report of spec 2026-10-18 ("every value any writer ever passed"; receiver-aware
+    field resolution is its step 2, not built). So the entry is two rows: one `partial` row
+    from the getter, and one row whose expression is `0 0 0 * * ? *`. That value is a real
+    write of `Schedule.crontab`, but not one that reaches this trigger. Listed as a finding
+    below.
+
+### ruoyi-vue-pro: what the dispatcher's trace reaches
+
+§3c said that the dispatch rule resolves `jobHandler.execute(param)` "to every in-module
+`JobHandler` implementation", so all ~25 job beans are reached. **That was wrong as stated.**
+The corpus has 31 `implements JobHandler` classes, in 13 modules (ai 2, crm 1, hrm 3, im 2,
+infra 3, iot 2, mall/promotion 2, mall/statistics 2, mall/trade 4, oa 2, pay 5, pms 1,
+system 2). None of them is in `yudao-spring-boot-starter-job`, the module that holds the
+dispatcher. Sextant analyses one module at a time, reading as siblings the reactor modules
+that module compiles against, so the count depends on the module analysed. Measured:
+
+| Module analysed | `JobHandler` implementations reached | Of those on its compile path |
+|---|---|---|
+| `yudao-spring-boot-starter-job` | **0**: the walk stops at a boundary at `JobHandler#execute` | 0 |
+| `yudao-server` (the deployable; the reactor builds system and infra) | **5**: infra's `JobLogCleanJob`, `AccessLogCleanJob`, `ErrorLogCleanJob`; system's `DemoJob`, `TokenCleanJob` | 5 |
+| `yudao-module-iot-biz` | **7**: the five above plus iot's `IotDeviceOfflineCheckJob`, `IotOtaUpgradeJob` | 7 |
+
+Every implementation on the analysed module's compile path is reached, each `narrowed`, with
+no Quartz-specific rule. The other 24 are in modules the corpus's reactor leaves commented out,
+so no build here produced them.
+
+### Findings (for Plane; ids assigned when logged)
+
+- **Nested enum constants are written with their binary name.** `withInterval(1,
+  IntervalUnit.HOUR)` reads as `DateBuilder$IntervalUnit.HOUR` in the expression (smoke test).
+  Cosmetic: the row stays `resolved` and readable.
+- **A field read on an object the module never constructs answers every writer of the field.**
+  This is dolphinscheduler's `0 0 0 * * ? *` row above: spec 2026-10-18's stated over-report,
+  seen through a Quartz entry.
+- **NBlog, aurora and dolphinscheduler need Lombok 1.18.30 or later to build on JDK 21.**
+  This is an environment note for anyone re-measuring.
+
+### Not done, stated
+
+- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅, with three stated boundaries:
+  - `quartz_data.xml` / `quartz.properties`;
+  - `JobDetailFactoryBean` / `CronTriggerFactoryBean` / `SimpleTriggerFactoryBean`;
+  - Kotlin.
+- `quartz` left the delivery register (CI run pending). The Async ```delivery row lists only
+  `akka-pekko-actors`.
