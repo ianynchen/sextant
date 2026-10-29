@@ -317,6 +317,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "quartz.several-PATHS-are-exact": Guard(
+        what="job classes reaching the job on SEPARATE paths (several callers) are a row each "
+        "at their own resolution, not `narrowed`",
+        why="a closed set of paths is exact (§3c, the walk's multiplicity); marking each "
+        "narrowed would say only one of them runs, when every caller's job does",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            found.append((None if job_class is None else "
+                "_handler(job_class, context), narrowed))",
+                replace="            found.append((None if job_class is None else "
+                "_handler(job_class, context), True))  # guard disabled by "
+                "scripts/guard_check.py",
+            ),
+        ),
+    ),
     "quartz.different-BODIES-are-narrowed": Guard(
         what="job classes on one branch reaching different bodies are a row each, `narrowed`",
         why="one of them runs and which is not known; publishing each at `resolved` would "

@@ -742,6 +742,110 @@ def test_forJob_by_JobKey_reads_the_key_it_is_built_from(tmp_path: Path):
     assert (_handler_of(row), row["resolution"]) == ("KeyedJob#execute", "resolved")
 
 
+@pytest.mark.pins("quartz.several-PATHS-are-exact")
+def test_classes_from_several_callers_are_a_row_each_resolved(tmp_path: Path):
+    """`addJob(Class c)` holds `newJob(c)` and `scheduleJob(job, trigger)`, and `first()`
+    and `second()` call it with `AJob.class` and `BJob.class`. Two callers are two paths,
+    each exact (§3c's "several paths"): a row per class, each `resolved` — not `narrowed`,
+    and not collapsed into one."""
+    job = ("org/quartz/Job#",)
+    add_jvm = "(Ljava/lang/Class;)V"
+    add_job = _MODULE + method_descriptor(_TRIGGERS, "addJob", add_jvm)
+    schedule_jvm = "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+
+    def caller(name: str, job_class: str) -> list:
+        symbol = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        return [
+            _method_symbol(name, "()V"),
+            _site(
+                symbol,
+                0,
+                _TRIGGERS,
+                "addJob",
+                add_jvm,
+                arguments=(CallArgument(kind="class", symbol=f"{_JOBS}{job_class}#"),),
+            ),
+        ]
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=job, declares=("execute",)),
+        *_job_class("BJob", interfaces=job, declares=("execute",)),
+        _method_symbol("addJob", add_jvm),
+        *_cron_trigger(add_job),
+        _site(
+            add_job,
+            10,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=10,
+            arguments=(CallArgument(kind="parameter", value=0),),
+        ),
+        _site(
+            add_job, 11, JOB_BUILDER, "build", "()Lorg/quartz/JobDetail;", receiver=10, result=11
+        ),
+        _site(
+            add_job,
+            12,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            schedule_jvm,
+            receiver=20,
+            result=12,
+            arguments=(
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="unresolved", source=5),
+            ),
+        ),
+        MethodReturnFact(document_id="doc_1", method=add_job, ordinal=0, value=None),
+        *caller("first", "AJob"),
+        *caller("second", "BJob"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["resolution"]) for row in rows] == [
+        ("AJob#execute", "resolved"),
+        ("BJob#execute", "resolved"),
+    ]
+
+
+def test_a_branched_job_class_with_a_placeholder_cron_is_partial(tmp_path: Path):
+    """`newJob(c ? FastJob.class : SlowJob.class)`, two bodies, with a `${…}` cron: two
+    gaps at once — which body runs, and the configured value — so neither `narrowed` nor
+    `unresolved` says it alone: `partial` (§3a)."""
+    job = ("org/quartz/Job#",)
+    caller = f"{_JOBS}Jobs#either()."
+    chain = _job_chain(caller, "FastJob", "x", "g")
+    chain[0] = chain[0].model_copy(
+        update={
+            "arguments": [
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="class", symbol=f"{_JOBS}FastJob#"),
+                        CallArgument(kind="class", symbol=f"{_JOBS}SlowJob#"),
+                    ],
+                )
+            ]
+        }
+    )
+    trigger = _trigger_for_job(f"{_JOBS}Triggers#hourly().", "x", "g")
+    trigger[2] = trigger[2].model_copy(
+        update={"arguments": [CallArgument(kind="string", value="${jobs.cron}")]}
+    )
+    facts = [
+        *_job_class("FastJob", interfaces=job, declares=("execute",)),
+        *_job_class("SlowJob", interfaces=job, declares=("execute",)),
+        *chain,
+        *trigger,
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["expression"], row["resolution"]) for row in rows] == [
+        ("FastJob#execute", "${jobs.cron}", "partial"),
+        ("SlowJob#execute", "${jobs.cron}", "partial"),
+    ]
+
+
 @pytest.mark.pins("quartz.QUARTZJOBBEAN-runs-executeInternal")
 def test_QuartzJobBean_runs_executeInternal(tmp_path: Path):
     """A job extending Spring's `QuartzJobBean` declares no `execute`: the JVM runs the
