@@ -73,6 +73,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_
 from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
+    producers_of,
 )
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
@@ -195,6 +196,10 @@ class ChainEnd:
     root: Mapping[str, Any]  # the root call site
     terminal: Mapping[str, Any] | None  # the terminal site reached, if any
     captures: Mapping[str, Any]  # folded, as fluent's `_fold` leaves them
+    # Every call that executes the terminal's built value (`_executing_calls`), in this method
+    # or across returns and parameters — empty for a terminal no execute-join declares. Several
+    # consumers are still ONE end: the walk lists them, it does not fork on them.
+    consumers: tuple[Mapping[str, Any], ...]
 
 
 def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
@@ -278,6 +283,10 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
     walk_index = cached_value_index(workspace)
+    # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
+    # one producer walk per argument of each declared executing call, never one per terminal
+    # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
+    joined = _joined_through_values(walk_index, via_argument_names)
     # The steps that join through an argument (`receiver_arg`), by name — empty for every
     # catalog declaring none, which then indexes each site by its own `receiver` exactly as
     # before and pays nothing for the rule (GUIDELINES §8.7).
@@ -312,6 +321,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             steps=steps,
             terminal_names=terminal_names,
             via_argument_names=via_argument_names,
+            joined=joined,
             catalog=catalog,
             facts=facts,
             field_sources=field_sources,
@@ -559,6 +569,9 @@ class _ChainContext:
     steps: list[dict[str, Any]]
     terminal_names: set[str]
     via_argument_names: dict[str, _JoinFilter | None]
+    # The executing calls the value walk pairs with a terminal site, by that site's
+    # `(caller, ordinal)` (`_joined_through_values`) — the module's, not this caller's.
+    joined: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
     catalog: Catalog
     facts: CallFacts
     # The field ladder's facts, read by the bean hop (`_literal_of`) alone — None for a
@@ -789,7 +802,11 @@ def _walk(
     if context.collect is not None:
         context.collect.append(captures)
     elif terminal is not None:
-        context.ends.append(ChainEnd(context.caller, context.root, terminal, captures))
+        context.ends.append(
+            ChainEnd(
+                context.caller, context.root, terminal, captures, _end_consumers(terminal, context)
+            )
+        )
 
 
 def _hold_executing_call(
@@ -799,11 +816,13 @@ def _hold_executing_call(
     `_EXECUTED_BY` for the chain's consumer — Ktor's `HttpStatement(builder, client)`,
     whose `client` argument `fluent` reads (`_client_of`). Only where exactly one call
     executes the value: a request handed to two would have two clients, and which one a
-    row means is not known."""
+    row means is not known. That holds across methods too — a helper's request sent from
+    two methods is two clients — and one executing call in another method is read in its
+    own frame, since `_client_of` stamps the argument with that call's own site."""
     name = str(site["name"])
     if name not in context.via_argument_names:
         return
-    executing = _consumers(site, context.sites, context.via_argument_names[name])
+    executing = _executing_calls(site, context)
     if len(executing) != 1:
         return
     captures[_EXECUTED_BY] = executing[0]
@@ -852,12 +871,12 @@ def _continue(consumer: dict[str, Any], captures: dict[str, Any], context: _Chai
 
 def _reaches_terminal(site: dict[str, Any], context: _ChainContext) -> bool:
     """Whether `site` makes its chain executable: a plain terminal by name, or
-    a `terminal_via_argument` one whose built value some executing call in
-    this caller actually consumes."""
+    a `terminal_via_argument` one whose built value some executing call
+    actually consumes — in this caller, or across returns and parameters
+    (`_executing_calls`)."""
     name = str(site["name"])
     return name in context.terminal_names or (
-        name in context.via_argument_names
-        and _has_execute_join(site, context.sites, context.via_argument_names[name])
+        name in context.via_argument_names and _has_execute_join(site, context)
     )
 
 
@@ -1720,14 +1739,14 @@ def _method_names(declared: Any) -> tuple[str, ...]:
     return (str(declared),)
 
 
-def _has_execute_join(
-    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: _JoinFilter | None
-) -> bool:
-    """Whether some row in this same caller carries an argument whose
+def _has_execute_join(site: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether some executing call consumes `site`'s built value (`_executing_calls`).
+
+    Within the method, that is a row carrying an argument whose
     `source` names `site`'s own `result` — the OkHttp `build()` → `newCall()`
     split, joined through D00 §5's `arguments[].source` rather than through
     `receiver`/`result` chaining, because `newCall`'s own receiver is the
-    client, not the request builder. `join_filter`, when the catalog
+    client, not the request builder. The join filter, when the catalog
     declared one, additionally requires the joining row itself to be that
     exact owner+method — otherwise any consumer of the built value (a log
     statement, an equality check) would count as executing it.
@@ -1740,7 +1759,90 @@ def _has_execute_join(
     terminal (A2 Task 8 fix round 1; reading `result` here made every such
     chain derive nothing). `_walk` and `_linked_constructor` already key a
     constructor the same way."""
-    return bool(_consumers(site, sites, join_filter))
+    return bool(_executing_calls(site, context))
+
+
+def _end_consumers(
+    terminal: dict[str, Any] | None, context: _ChainContext
+) -> tuple[dict[str, Any], ...]:
+    """`ChainEnd.consumers`: the executing calls of the terminal a chain reached, or none
+    where it reached none or reached it by name alone (a plain terminal executes itself)."""
+    if terminal is None or str(terminal["name"]) not in context.via_argument_names:
+        return ()
+    return tuple(_executing_calls(terminal, context))
+
+
+def _executing_calls(site: dict[str, Any], context: _ChainContext) -> list[dict[str, Any]]:
+    """Every call that executes `site`'s built value (Quartz spec 2026-10-28 §3c): the
+    same-method consumers `_consumers` finds through an argument's own `source`, then those
+    the value walk pairs with `site` across returns and parameters (`context.joined`) — a
+    request built in a helper and returned to the method that sends it. One record per
+    call, by `(caller, ordinal)`; same-method calls first, in ordinal order (NFR-1)."""
+    found = _consumers(site, context.sites, context.via_argument_names[str(site["name"])])
+    seen = {_site_key(consumer) for consumer in found}
+    for consumer in context.joined.get(_site_key(site), ()):
+        if _site_key(consumer) not in seen:
+            seen.add(_site_key(consumer))
+            found.append(consumer)
+    return found
+
+
+def _joined_through_values(
+    values: ValueIndex, via_argument_names: dict[str, _JoinFilter | None]
+) -> dict[tuple[str, int], tuple[dict[str, Any], ...]]:
+    """The execute-join, found through the value walk: each terminal site, by `(caller,
+    ordinal)`, mapped to the declared executing calls whose arguments `values.producers_of`
+    traces back to it — in the same method or across returns and parameters.
+
+    Built from the executing call's side because the walk runs backward: one producer walk
+    per argument of each declared call, where the other direction would walk every argument
+    of the module once per terminal. The walk stops at a call named like a joined terminal
+    on whatever owner the module calls it, so a path ends at the `build()` that made the
+    value and never reads past it.
+
+    Only an `{owner, method}` join takes part. A bare `true` names no executing call, so
+    walking from "any row" would pair a built value with any use of it — the log statement
+    the mapping form exists to exclude — and it stays the same-method `source` match. A
+    continuing join (`continue: true`) stays there too: the walk continues from its consumer
+    in THIS caller's sites, and a consumer in another method could be counted but never
+    continued, which would derive the chain's pre-continuation captures as a row."""
+    declared = {
+        name: join_filter
+        for name, join_filter in via_argument_names.items()
+        if join_filter is not None and not join_filter.continues
+    }
+    if not declared:
+        return {}
+    terminals: set[tuple[str, str]] = set()
+    executing: list[Mapping[str, Any]] = []
+    for site in values.sites.values():
+        name = str(site["name"])
+        if name in declared:
+            terminals.add((str(site["owner"]), name))
+        if any(_joins(site, join_filter) for join_filter in declared.values()):
+            executing.append(site)
+    joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for consumer in executing:
+        for slot in range(len(consumer["arguments"] or [])):
+            for producer in producers_of(values, consumer, slot, terminals):
+                if producer.caller is None or producer.ordinal is None or producer.identity is None:
+                    continue
+                if not _joins(consumer, declared[producer.identity[1]]):
+                    continue
+                pairs = joined.setdefault((producer.caller, producer.ordinal), [])
+                if all(_site_key(paired) != _site_key(consumer) for paired in pairs):
+                    pairs.append(dict(consumer))
+    return {key: tuple(pairs) for key, pairs in joined.items()}
+
+
+def _joins(site: Mapping[str, Any], join_filter: _JoinFilter) -> bool:
+    """Whether `site` is a call the join filter declares as executing."""
+    return site["owner"] in join_filter.owners and site["name"] in join_filter.methods
+
+
+def _site_key(site: Mapping[str, Any]) -> tuple[str, int]:
+    """A call site's identity everywhere in D01: its caller and ordinal."""
+    return (str(site["caller"]), int(str(site["ordinal"])))
 
 
 def _consumers(

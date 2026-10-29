@@ -2289,9 +2289,25 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        and _has_execute_join(site, context.sites, "
-                "context.via_argument_names[name])",
-                replace="        and True  # guard disabled by scripts/guard_check.py",
+                find="        name in context.via_argument_names and _has_execute_join(site, context)",
+                replace="        name in context.via_argument_names  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "chains.the-EXECUTE-JOIN-crosses-methods": Guard(
+        what="the execute-join pairs a built value with a declared executing call wherever "
+        "the value walk (`values.producers_of`) traces that call's argument back to the "
+        "terminal site — in the same method, or across returns and parameters",
+        why="a request built in a helper and returned to the method that sends it is a "
+        "request the module issues. Matching only an argument's own `source` in the same "
+        "method drops it: `sqs.sendMessage(request())` and `client.send(deleteRequest(), …)` "
+        "publish no outbound row at all, and a Quartz trigger built in a helper never pairs "
+        "with the `scheduleJob` that registers it — a missing boundary nothing reports",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for consumer in context.joined.get(_site_key(site), ()):\n",
+                replace="    for consumer in ():  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

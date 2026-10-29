@@ -1,7 +1,7 @@
 // JDK `HttpClient` (`jdk-httpclient`, spec §14): the builder chain `okhttp.yml` already reads on
 // OkHttp — a static root, verb-setting steps, `build()` handed to `send`. Both `newBuilder`
 // overloads; `uri(URI.create(…))` and `uri(new URI(…))`; `method("PATCH", …)`; a request
-// built in a helper and sent elsewhere — nothing, `fluent`'s split-builder rule (spec §13 case 9).
+// built in a helper and sent elsewhere — one row, the execute-join follows the return (Task 6).
 //
 // `POST /v1/orders` is ALSO what `OrdersLoopClient` calls through Feign, on purpose (A2 Task
 // 8 fix round 1): an outbound row is per caller and peer, so both rows stand — the

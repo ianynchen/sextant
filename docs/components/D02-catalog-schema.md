@@ -2159,6 +2159,16 @@ because one library reaches a wire through more than one client, `method` becaus
 client issues a built request through more than one call — the JDK's `send` OR
 `sendAsync`, one builder chain, one address — and two `build` entries in `terminal` would
 silently overwrite each other rather than widen the join. An empty list is refused at load.
+**The mapping form follows the built value through the value walk** (Quartz spec 2026-10-28
+§3c): a declared call consumes a chain's built value where `values.producers_of` on one of
+its arguments reaches that chain's terminal site, in the same method or across returns and
+parameters — `sqs.sendMessage(request())`, the request built in a private helper and
+returned. Each declared call's arguments are walked once per catalog run, from the call's
+side. A chain consumed by several declared calls is still one chain end, which lists every
+consumer (`ChainEnd.consumers`). The bare `true` stays a same-method `source` match — it
+names no executing call, so walking from any row would pair the value with any use of it —
+and so does a continuing join (`continue: true`, below), whose walk goes on in the method
+that holds the consumer.
 
 **A step's own `captures` may also name `base`** — the other half of ONE address, not a
 second address (2F). A builder states its base address once

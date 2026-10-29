@@ -773,7 +773,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # two rows at `partial` — one per caller's literal — once the walk resolved the merge.
         # 39 since the conditional beans (spec 2026-10-22-conditional-beans): `HttpAuditClient#record`'s
         # `POST http://audit/events`, the outbound row of a `@Bean @Profile("prod")` client.
-        "http": 39,
+        # 40 since the execute-join crosses methods (Quartz spec 2026-10-28 §3c, Task 6):
+        # `JdkOrdersClient#deleteRequest`'s `DELETE`, built in the helper `viaHelper()` sends.
+        "http": 40,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -1001,7 +1003,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 70 since the merged-values wrapper (`clients/NormalisingBillingClient`, spec 2026-10-21): the wrapper's `exchange`, two rows for two
             # callers' literals, at `partial`.
             # 71 since the conditional beans: `HttpAuditClient#record`'s `POST /events`.
-            ("outbound", 71),
+            # 72 since the execute-join crosses methods (Quartz spec 2026-10-28 §3c, Task 6):
+            # `JdkOrdersClient#deleteRequest`'s `DELETE`, sent by `viaHelper()`.
+            ("outbound", 72),
         ]
     )
 

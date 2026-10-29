@@ -19,6 +19,7 @@ from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
+from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -6566,6 +6567,169 @@ def test_a_split_builder_chain_never_issued_derives_nothing(tmp_path: Path, cata
     workspace.close()
 
     assert rows == [], f"{catalog_id} derived a row for a message that is never sent"
+
+
+# --- The execute-join finds its arguments through the value walk (Quartz spec 2026-10-28
+# §3c, Task 6). `sqsClient.sendMessage(request())`, with `request()` a private helper that
+# builds the `SendMessageRequest` and returns it: the built value reaches the executing call
+# through a return, which a same-method `source` match can never see.
+
+_SQS_PRODUCER = "com/acme/msg/Producer#"
+_SQS_REQUEST_JVM = "()Lsoftware/amazon/awssdk/services/sqs/model/SendMessageRequest;"
+
+
+def _sqs_method(name: str, jvm: str = "()V") -> str:
+    return _MODULE + method_descriptor(_SQS_PRODUCER, name, jvm)
+
+
+def _sqs_request_chain(caller: str) -> list:
+    """`SendMessageRequest.builder().queueUrl("…").build()` in `caller`, the built value
+    being value 3 — `_split_builder_chain`'s SQS chain, in a method of the module."""
+    return [
+        _call(caller, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            caller,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        _call(caller, _SQS_REQUEST, "build", 2, receiver=2, result=3),
+    ]
+
+
+def _sqs_send(caller: str, ordinal: int, source: int) -> CallSiteFact:
+    return _call(
+        caller,
+        _SQS_CLIENT,
+        "sendMessage",
+        ordinal,
+        receiver=90,
+        result=None,
+        # The real shape (`RawSqsClientSender`'s facts): `build()` erases to `Object` and the
+        # CHECKCAST back leaves an `unresolved` entry naming the producing call's value.
+        arguments=[CallArgument(kind="unresolved", source=source)],
+    )
+
+
+def _sqs_built_by_a_helper(senders: list[str]) -> tuple[str, list]:
+    """The helper `request()` building and returning the request, and one method per name
+    in `senders` doing `sqsClient.sendMessage(request())`."""
+    helper = _sqs_method("request", _SQS_REQUEST_JVM)
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=helper,
+            construct_kind="method",
+            enclosing=_MODULE + _SQS_PRODUCER,
+        ),
+        *_sqs_request_chain(helper),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=3,
+            value=CallArgument(kind="unresolved", source=3),
+        ),
+    ]
+    for name in senders:
+        sender = _sqs_method(name)
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=sender,
+                construct_kind="method",
+                enclosing=_MODULE + _SQS_PRODUCER,
+            ),
+            CallSiteFact(
+                document_id="doc_1",
+                caller=sender,
+                target=CallTarget(owner=_SQS_PRODUCER, name="request", descriptor=_SQS_REQUEST_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                receiver=None,
+                result=5,
+            ),
+            _sqs_send(sender, 1, source=5),
+            MethodReturnFact(document_id="doc_1", method=sender, ordinal=2, value=None),
+        ]
+    return helper, facts
+
+
+def _resolve_fluent_walked(tmp_path: Path, facts: list, catalog: Catalog):
+    """`_resolve_fluent`, with the two derived tables a crossing reads built first, as the
+    pipeline builds them before any engine runs (`_resolve_walked`)."""
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    skipped = derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+@pytest.mark.pins("chains.the-EXECUTE-JOIN-crosses-methods")
+def test_a_request_built_by_a_helper_still_joins_its_client_call(tmp_path: Path):
+    """The SQS shape with the request built in a private method and returned: one row, as
+    when it is inline (the test below). The built value reaches `sendMessage` through the
+    helper's return, so only the value walk can pair them; a same-method `source` match
+    finds no consumer in the helper and the chain derives nothing."""
+    helper, facts = _sqs_built_by_a_helper(["issue"])
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("aws-sqs-sdk"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["caller"], r["protocol"], r["path"]) for r in rows] == [
+        (helper, "sqs", "/acme/orders")
+    ]
+
+
+@pytest.mark.pins("chains.the-EXECUTE-JOIN-crosses-methods")
+def test_a_chain_reaching_two_consumers_is_one_end(tmp_path: Path):
+    """Two methods send the one request the helper builds. One chain is one end: the walk
+    does not fork on its consumers, it lists them, in the module's order."""
+    helper, facts = _sqs_built_by_a_helper(["issue", "retry"])
+    catalog = _shipped("aws-sqs-sdk")
+    workspace = _resolve_fluent_walked(tmp_path, facts, catalog)
+    rows = workspace.query("endpoints")
+    ends = list(chain_ends(workspace, catalog))
+    workspace.close()
+
+    assert [(r["caller"], r["path"]) for r in rows] == [(helper, "/acme/orders")]
+    [end] = ends
+    assert end.caller == helper
+    assert [(c["caller"], c["ordinal"], c["name"]) for c in end.consumers] == [
+        (_sqs_method("issue"), 1, "sendMessage"),
+        (_sqs_method("retry"), 1, "sendMessage"),
+    ]
+
+
+def test_the_same_method_join_is_unchanged(tmp_path: Path):
+    """The inline form the helper test compares against: the request built and sent in one
+    method joins through the argument's own `source`, exactly as before the walk was asked."""
+    sender = _sqs_method("inline")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=sender,
+            construct_kind="method",
+            enclosing=_MODULE + _SQS_PRODUCER,
+        ),
+        *_sqs_request_chain(sender),
+        _sqs_send(sender, 3, source=3),
+        MethodReturnFact(document_id="doc_1", method=sender, ordinal=4, value=None),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("aws-sqs-sdk"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["caller"], r["protocol"], r["path"]) for r in rows] == [
+        (sender, "sqs", "/acme/orders")
+    ]
 
 
 # verbless fluent chains — a root declaring NO `http_method` capture derives
