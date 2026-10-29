@@ -134,7 +134,7 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
-from sextant.domain.symbols import with_descriptor
+from sextant.domain.symbols import returned_type, with_descriptor
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
@@ -216,6 +216,8 @@ _BINDING = "binding"
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
 _ELEMENT_OF = "element-of"
+# Which candidate of a merge with no root a path took (ruling 7, `_Walk._branched`).
+_BRANCH_OF = "branch-of"
 
 # §2's `identified_by` table, as the walk is handed it: `{owner?, method, arg, arity?,
 # descriptor?, role?}` per producing call, built once by the loader (`yaml_source
@@ -223,6 +225,11 @@ _ELEMENT_OF = "element-of"
 # catalog. It is DATA the caller passes in, never knowledge this module holds — the rule
 # the module docstring states, and the reason the parameter exists at all.
 Identities = Sequence[Mapping[str, Any]]
+
+# A type's DIRECT supertypes, by bare type descriptor, as `dispatch.Dispatch.ancestors` holds
+# them: `(supertype, kind, scanned)` in the JVM's search order. Handed to `producers_of` by a
+# reader that turns `past_accessors` on; this module never reads the hierarchy itself.
+Ancestors = Mapping[str, Sequence[tuple[str, str, bool]]]
 
 # The key a hoisted WRAPPER entry carries and a `_via` entry deliberately does not, and
 # what it decides here. `role` says "argument N of this producer is the CHANNEL" or "the
@@ -308,6 +315,13 @@ class Answer:
     # inexact address at `partial`, `channel_of_answer` refuses one, and `_joined` makes a
     # template filled from one an `expression`. Never set on an exact answer.
     inexact: bool = False
+    # **"One of these runs; which one is not known"** (ruling 7, spec 2026-10-28 quartz §3c) —
+    # D00's `narrowed`, the word `dispatch.py` uses for several bodies. Set only by `_merged`,
+    # on each candidate of a merge with no root whose candidates are ALL literals, and
+    # carried through every hop after, like `inexact`. The candidates are the complete set,
+    # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
+    # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
+    narrowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -349,6 +363,17 @@ class Producer:
     identity: tuple[str, str] | None = None
     reason: str | None = None
     ended_at: Answer | None = None
+    # Set only by a reader walking ALONG RECEIVERS (`producers_of(..., along_receivers=True)`):
+    # every declared call of the chain that built the value, `(caller, ordinal)`, ROOT FIRST
+    # and ending at `caller`/`ordinal` — across methods, in the path's own calling contexts.
+    # `rooted` says the first one is a call on no receiver at all (a static factory), so the
+    # chain is whole; False where its first call's receiver is something the walk could not
+    # follow to another declared call.
+    chain: tuple[tuple[str, int], ...] = ()
+    rooted: bool = False
+    # A branch was passed through on the way (`_Walk._passed_through`): the chain is the
+    # shared receiver's, and which of the branch's own calls ran is not known.
+    inexact: bool = False
 
 
 @dataclass(frozen=True)
@@ -675,6 +700,7 @@ def resolve_site(
     site: Mapping[str, Any],
     index: ValueIndex | None = None,
     identities: "Identities" = (),
+    branches: bool = True,
 ) -> list[Binding]:
     """Every slot of one call site, resolved per path (§1b).
 
@@ -694,6 +720,9 @@ def resolve_site(
     (`Identities` below says what it is and what the walk does with it). Empty is the
     walk as it was before Task 7: a producer nothing names answers with a reason.
 
+    `branches` False answers a branch between literals `non_enumerable` rather than
+    `narrowed` (`_Walk.__init__` says which reader needs that).
+
     Returns one `Binding` per coherent path, in a deterministic order (NFR-1): the first
     slot's paths drive the outer order, and each slot's answers arrive in the edge query's
     own ordering. An empty list means no path answers every slot at once, which is the
@@ -701,7 +730,7 @@ def resolve_site(
     is not a row here.
     """
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold, identities)
+    walk = _Walk(fold, identities, branches=branches)
     site = fold.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     combined: list[tuple[_Trail, dict[int | str, Answer]]] = [((), {})]
     for slot in _slots_of(site):
@@ -720,6 +749,7 @@ def resolve_positions(
     positions: Mapping[str, tuple[Mapping[str, Any], int | str]],
     index: ValueIndex | None = None,
     identities: "Identities" = (),
+    within: "Path | None" = None,
 ) -> list[dict[str, Answer]]:
     """Slots of SEVERAL sites, resolved together on one coherent path.
 
@@ -749,10 +779,17 @@ def resolve_positions(
     the outer order. A label whose position no path reaches at all yields no dict rather than
     an `unresolved` entry — the empty list is the M-1 ruling's own answer, as it is in
     `resolve_site`.
+
+    `within` is a path another read took (`producer_paths`), and every answer here must
+    agree with it: the positions are read as further steps of THAT path. A cron read where
+    a trigger was built, within the path the trigger took to the call that scheduled it,
+    is the cron of that one scheduling.
     """
     fold = index if index is not None else value_index(workspace)
     walk = _Walk(fold, identities)
-    combined: list[tuple[_Trail, dict[str, Answer]]] = [((), {})]
+    combined: list[tuple[_Trail, dict[str, Answer]]] = [
+        (within.trail if within is not None else (), {})
+    ]
     for label, (named, slot) in positions.items():
         # Projected for the reason `resolve_site` states: a caller that hands in a raw
         # `call_sites` row for a bridge call is otherwise answered with the bridge's own
@@ -773,6 +810,8 @@ def producers_of(
     site: Mapping[str, Any],
     slot: int | str,
     declared: AbstractSet[tuple[str, str]],
+    along_receivers: bool = False,
+    past_accessors: Ancestors | None = None,
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -792,21 +831,140 @@ def producers_of(
     No identity table is applied: an `identified_by` entry says what a value MEANS, and a
     rendering of a client is not the client.
 
+    **`along_receivers` reads the whole CHAIN of declared calls instead** (Quartz spec
+    2026-10-28 §3b). A builder is a chain — `cronSchedule(x).withMisfireHandling…()` — and
+    its first call can be in another method than its last: a helper takes the builder as a
+    parameter and calls one more step on it. So at a declared call the walk does not stop;
+    it goes on through that call's RECEIVER, on the SAME path, and prepends the call to
+    whatever the receiver reaches (`Producer.chain`). The path is what keeps the calling
+    context: inside a helper the walk descended into, the helper's parameter is the argument
+    at the call it came through, never every caller the helper has. And a branch whose every
+    candidate is a declared call on one shared receiver passes through to that receiver
+    (`_Walk._passed_through`), marked `inexact`.
+
+    **`past_accessors` lets an ACCESSOR on the value past the `escapes` window** (Quartz fix
+    rounds 2-3, 2026-10-29), for a reader whose whole question is WHICH CALL built the
+    value: `jobDetail.getJobDataMap().put(k, v)` between `build()` and `scheduleJob` writes
+    into the detail through the map it handed back, and that does not change which `build()`
+    made it. `_Walk._accessor` has the rule; the value is the type hierarchy it needs
+    (`Dispatch.ancestors`). None, the default, keeps every call in the window — the right
+    answer for a reader that reads the producer's ARGUMENTS as what the value holds, which a
+    write through a returned view can change.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
     """
-    walk = _Walk(index, declared=declared)
+    walk = _Walk(
+        index,
+        declared=declared,
+        along_receivers=along_receivers,
+        past_accessors=past_accessors,
+    )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
     for _, answer in walk.at(site, slot):
         if answer.kind == _PRODUCED:
-            found.append(answer.value)
+            found.append(replace(answer.value, inexact=True) if answer.inexact else answer.value)
         elif answer.kind == UNRESOLVED:
             found.append(Producer(reason=answer.reason))
         else:
             found.append(Producer(ended_at=answer))
     return tuple(dict.fromkeys(found))
+
+
+@dataclass(frozen=True)
+class Path:
+    """One path a read took, as the coherence rule compares paths (`_combine`) — opaque to
+    a caller, which only joins two (`joined`) or reads further within one
+    (`resolve_positions(..., within=...)`)."""
+
+    trail: "_Trail" = ()
+    # The steps written for a call the path ENTERED a helper through (`_entered`), as
+    # against a caller it crossed out to. Empty for every path but `producer_paths`'.
+    entered: "frozenset[_Step]" = frozenset()
+
+    def joined(self, other: "Path") -> "Path | None":
+        """Both paths as one, or None where they made different choices somewhere."""
+        merged = _combine(self.trail, other.trail)
+        return None if merged is None else Path(merged, self.entered | other.entered)
+
+    def two_calls_of_one_helper(self, other: "Path") -> bool:
+        """Whether the two paths disagree ONLY on which call entered a helper — each value
+        handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
+        binding cannot hold (the M-1 bound) — rather than on a caller either crossed out
+        to, which says they come from two different executions. False where they agree
+        everywhere (`joined` answers then)."""
+        chosen = {step.context: step for step in self.trail}
+        clashes = [
+            (chosen[step.context], step)
+            for step in other.trail
+            if step.context in chosen and chosen[step.context].label != step.label
+        ]
+        return bool(clashes) and all(
+            mine in self.entered and theirs in other.entered for mine, theirs in clashes
+        )
+
+
+def producer_paths(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int | str,
+    declared: AbstractSet[tuple[str, str]],
+    along_receivers: bool = False,
+    past_accessors: Ancestors | None = None,
+) -> tuple[tuple[Producer, Path], ...]:
+    """`producers_of`, with the PATH each producer was reached by, one pair per distinct
+    path — for a reader that goes on to read other positions on that same path.
+
+    **A descent into a callee is written as the call that entered it.** The walk reaches
+    a value a helper hands back by descending into the helper's return in the frame of the
+    call it came through (`_Walk._value`); a read that starts INSIDE that helper crosses out
+    of it through its callers (`_Walk._parameter`). The two name one choice — which call
+    ran the helper — so the path carries both spellings, and a later read within it
+    (`resolve_positions(..., within=)`) reaching the helper's parameter agrees only with the
+    call the descent came through. A path that descends into ONE helper on two different
+    calls cannot be held by one binding, which is the M-1 ruling's own bound; the path
+    records which steps were written for an entry (`Path.entered`), so a reader can tell
+    that bound from two paths through different callers (`Path.two_calls_of_one_helper`)."""
+    walk = _Walk(
+        index,
+        declared=declared,
+        along_receivers=along_receivers,
+        past_accessors=past_accessors,
+    )
+    site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
+    found: list[tuple[Producer, Path]] = []
+    for trail, answer in walk.at(site, slot):
+        if answer.kind == _PRODUCED:
+            producer = replace(answer.value, inexact=True) if answer.inexact else answer.value
+        elif answer.kind == UNRESOLVED:
+            producer = Producer(reason=answer.reason)
+        else:
+            producer = Producer(ended_at=answer)
+        entered = _entered(trail, index)
+        if entered is not None:
+            found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
+    return tuple(dict.fromkeys(found))
+
+
+def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
+    """`trail` with each descent into a callee's return also written as the caller crossing
+    that call is (`producer_paths`); None where it entered one callee on two calls."""
+    entered: _Trail = trail
+    for step in trail:
+        if step.context[0] != _RETURN_OF:
+            continue
+        method, value = step.context[1], step.context[2]
+        callee = step.label.rsplit(" returns ", 1)[0]
+        for ordinal, returned_by in index.returns.get((method, value), ()):
+            if returned_by != callee:
+                continue
+            merged = _combine(entered, (_Step((_CALLER_OF, callee), f"{method}@{ordinal}"),))
+            if merged is None:
+                return None
+            entered = merged
+    return entered
 
 
 def _slots_of(site: Mapping[str, Any]) -> list[int | str]:
@@ -890,12 +1048,25 @@ class _Walk:
         index: ValueIndex,
         identities: Identities = (),
         declared: AbstractSet[tuple[str, str]] = frozenset(),
+        branches: bool = True,
+        along_receivers: bool = False,
+        past_accessors: Ancestors | None = None,
     ) -> None:
         self._index = index
+        # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
+        # the one reader that can carry a single address and must not lose the one it had
+        # (`fluent`'s assembled url, OI-134). Every other reader takes the default.
+        self._branches = branches
         self._identities = tuple(identities)
         # The producer reader's stop set (`producers_of`). Empty for the value walk, which is
         # what keeps its answers exactly what they were: `_declared_producer` matches nothing.
         self._declared = frozenset(declared)
+        # The chain reader (`producers_of(..., along_receivers=True)`): a declared call is
+        # followed on through its receiver rather than ending the path.
+        self._along_receivers = along_receivers
+        # The producer-identity reader (`producers_of(..., past_accessors=...)`): an accessor
+        # on the value does not open `escapes`. None for every other reader.
+        self._past_accessors = past_accessors
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -1137,16 +1308,29 @@ class _Walk:
         caller, ruling 1's multiplicity — and every answer is marked `inexact`, which
         `url_of_answer` publishes at `partial` and `channel_of_answer` refuses.
 
-        **A merge with no root is `non_enumerable`**: two literals on two branches, two
-        unrelated calls. Picking one would be a fact about code that may never run — the
-        Phase 2G ruling, unchanged; the candidates stay in the fact for a reader.
+        **A merge with no root whose candidates are ALL literals is `narrowed`** (ruling 7,
+        2026-10-29, amending the 2026-10-21 design): `c ? A.class : B.class`, `c ? "x" :
+        "y"`. One answer per candidate, each the literal the code states, marked `narrowed`,
+        on this path plus the choice it made — the candidates are the complete set and no
+        one of them is THE value, which is D00's `narrowed`. Picking one would still be a fact about code that
+        may never run (the Phase 2G ruling holds); listing them all is not a pick.
+
+        **Any other merge with no root is `non_enumerable`**: a literal beside a call, two
+        unrelated calls. A literal here means a candidate whose grammar kind is a literal or
+        a declaration reference AND which answers a `literal` on the spot; a candidate that
+        answers anything else — an `instance` whose identified construction is not a
+        literal, a `class` with no symbol, a value reached by crossing out of this method —
+        leaves the merge `non_enumerable` as it was.
         """
         candidates = argument.get("candidates")
         if not isinstance(candidates, list) or not candidates:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         root = self._root_of(candidates, method)
         if root is None:
-            return _only(trail, _unresolved(NON_ENUMERABLE))
+            passed = self._passed_through(candidates, method, trail, frames)
+            if passed is not None:
+                return passed
+            return self._branched(candidates, method, origin, trail, frames)
         return tuple(
             (
                 crossed,
@@ -1154,6 +1338,56 @@ class _Walk:
             )
             for crossed, answer in self._entry(root, method, origin, trail, frames)
         )
+
+    def _branched(
+        self,
+        candidates: "list[Mapping[str, Any]]",
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """A merge with no root: every candidate `narrowed` where all are literals, else ONE
+        `non_enumerable` (ruling 7; `_merged` states the rule).
+
+        **Each candidate is a CHOICE on the path, recorded as a crossing** (fix round 1, M-1).
+        Without it two reads of one branch combine in every pairing: `p = c ? "/a" : "/b";
+        … p + "/x/" + p` minted `/a/x/b`, which no execution builds. The step's context is
+        the branch — the method and its candidate list, since a `merge` carries no value id —
+        so `_combine` keeps one choice per branch on a path: the same branch read twice gives
+        `(/a, /a)` and `(/b, /b)`. Two branches with the SAME candidates in one method share a
+        context and are held to one choice too; that can drop a real pairing and never
+        invents one, which is the direction the walk is allowed to err in. Branches with
+        different candidates are independent, as nothing in the facts says otherwise.
+
+        **Candidates answering ONE value are that value, exactly** — `c ? 1 : 1L` is `1` on
+        every branch, so there is no choice to record and nothing to narrow.
+        """
+        if not self._branches:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        if not all(
+            str(candidate.get("kind")) in _LITERAL_KINDS
+            or str(candidate.get("kind")) in _DECLARATION_KINDS
+            for candidate in candidates
+        ):
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        reached = [
+            (index, crossed, answer)
+            for index, candidate in enumerate(candidates)
+            for crossed, answer in self._entry(candidate, method, origin, trail, frames)
+        ]
+        if any(answer.kind != LITERAL or crossed != trail for _, crossed, answer in reached):
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        distinct = list(dict.fromkeys(answer for _, _, answer in reached))
+        if len(distinct) == 1:
+            return _only(trail, distinct[0])
+        branch = (_BRANCH_OF, method, json.dumps(list(candidates), sort_keys=True, default=str))
+        chosen: list[_Reached] = []
+        for index, _, answer in reached:
+            merged = _combine(trail, (_Step(branch, f"branch {index}"),))
+            if merged is not None:
+                chosen.append((merged, replace(answer, narrowed=True)))
+        return tuple(dict.fromkeys(chosen))
 
     def _root_of(
         self, candidates: "list[Mapping[str, Any]]", method: str
@@ -1362,7 +1596,7 @@ class _Walk:
         # the hole itself where it reached none** (spec 2026-10-18 §3, §4). The second half
         # is what makes a partly-known address possible — an unresolvable hole no longer
         # discards the holes beside it that ARE known.
-        per_hole: list[tuple[tuple[_Trail, str | None, str, bool], ...]] = []
+        per_hole: list[tuple[tuple[_Trail, str | None, str, bool, bool], ...]] = []
         # **A hole nobody filled is NAMED after the value that fills it at runtime**, where
         # the facts name that value (ruled by the user 2026-10-18, one position over from
         # `<host>`). `"/owners/" + ownerId + "/pets"` is the most ordinary outbound address
@@ -1390,13 +1624,15 @@ class _Walk:
             # An INEXACT literal fills its hole like an exact one — the text is the value the
             # code states, read through a merge whose root it is — and taints the result
             # below: a template filled from one is never `literal`, because part of what
-            # was sent (what the call on the root did to it) was not read.
+            # was sent (what the call on the root did to it) was not read. A NARROWED literal
+            # fills its hole the same way and marks the result `narrowed` (ruling 7): one
+            # template per candidate, of which one is sent.
             settled = tuple(
-                (crossed, str(answer.value), answer.yields, answer.inexact)
+                (crossed, str(answer.value), answer.yields, answer.inexact, answer.narrowed)
                 for crossed, answer in reached
                 if answer.kind == LITERAL and answer.literal_kind == STRING
             )
-            per_hole.append(settled or ((trail, None, _ADDRESS, False),))
+            per_hole.append(settled or ((trail, None, _ADDRESS, False, False),))
         self._holes = tuple(unfilled)
 
         # Nothing anywhere: the caller carries the template unchanged, which is what it
@@ -1408,7 +1644,7 @@ class _Walk:
         # hole takes a name, the answer is strictly better than the fact —
         # `/owners/{ownerId}/pets` against `/owners/{}/pets` — and the caller must be given
         # it even though no hole was FILLED. That is why this is two tests rather than one.
-        filled = any(value is not None for hole in per_hole for _, value, _, _ in hole)
+        filled = any(value is not None for hole in per_hole for _, value, _, _, _ in hole)
         if not filled and all(hole == _HOLE for hole in unfilled):
             return None
 
@@ -1420,7 +1656,7 @@ class _Walk:
             # was never assembled by any single run.
             merged: _Trail = trail
             coherent = True
-            for crossed, _, _, _ in combination:
+            for crossed, _, _, _, _ in combination:
                 joined = _combine(merged, crossed)
                 if joined is None:
                     coherent = False
@@ -1430,12 +1666,13 @@ class _Walk:
                 continue
             text = pieces[0] + "".join(
                 (value if value is not None else hole) + piece
-                for (_, value, _, _), hole, piece in zip(
+                for (_, value, _, _, _), hole, piece in zip(
                     combination, self._holes, pieces[1:], strict=True
                 )
             )
-            whole = all(value is not None for _, value, _, _ in combination)
-            inexact = any(inexact for _, _, _, inexact in combination)
+            whole = all(value is not None for _, value, _, _, _ in combination)
+            inexact = any(inexact for _, _, _, inexact, _ in combination)
+            narrowed = any(narrowed for _, _, _, _, narrowed in combination)
             # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
             # ruling 2). `//customers-service/owners` is RFC 3986 §4.2's scheme-relative
             # reference — a real URI form, not an invention — and the `//` says exactly
@@ -1443,7 +1680,7 @@ class _Walk:
             # second shape for any consumer to learn. Only where the result carries no
             # scheme of its own: `"http://" + host + "/x"` already says where the
             # authority starts and prefixing that would be wrong.
-            if any(kind == _AUTHORITY for _, _, kind, _ in combination) and "://" not in text:
+            if any(kind == _AUTHORITY for _, _, kind, _, _ in combination) and "://" not in text:
                 text = f"//{text}"
             # **`literal` only when EVERY hole was read; otherwise `expression`**, and that
             # is the whole safety of a partial fill (§3). A half-filled template is not a
@@ -1454,9 +1691,15 @@ class _Walk:
             reached_out.append(
                 (
                     merged,
-                    Answer(kind=LITERAL, value=text, literal_kind=STRING, inexact=inexact)
+                    Answer(
+                        kind=LITERAL,
+                        value=text,
+                        literal_kind=STRING,
+                        inexact=inexact,
+                        narrowed=narrowed,
+                    )
                     if whole
-                    else Answer(kind=EXPRESSION, value=text, inexact=inexact),
+                    else Answer(kind=EXPRESSION, value=text, inexact=inexact, narrowed=narrowed),
                 )
             )
         # Deduplicated on (path, answer): several combinations routinely agree, and two
@@ -1513,14 +1756,75 @@ class _Walk:
         the window used to open before its own construction. Every `new Thing(x)` whose
         value is then used therefore answered `escapes` on the constructor itself. The
         construction is where the window opens, and `_construction` is what finds it.
+
+        **For a producer-identity reader, an ACCESSOR is not in the window** (Quartz fix
+        rounds 2-3, 2026-10-29): `producers_of(..., past_accessors=...)` only. `_accessor`
+        has the rule and why it is a reader's switch rather than the default.
         """
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
         produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
         for ordinal in self._index.receivers.get((method, value), ()):
             if ordinal > produced_at and (used_at is None or ordinal < used_at):
+                if self._accessor((method, ordinal)):
+                    continue
                 return _only(trail, _unresolved(ESCAPES))
         return self._resolve((_VALUE, method, value), trail, frames)
+
+    def _accessor(self, site_key: tuple[str, int]) -> bool:
+        """Whether a call made ON a value is an accessor: it takes no argument and hands back
+        an object of a type that is neither its owner nor one of the owner's supertypes.
+
+        **What an accessor does NOT do is change which call produced the value — and that
+        is all it is safe to say.** It does not follow that it writes nothing into the
+        value: `getJobDataMap()` hands back a LIVE view, and `.put(k, v)` on it writes into
+        the `JobDetail`; `list.listIterator().set(x)`, `map.keySet().remove(k)` and MyBatis
+        `createCriteria()` write the same way. So whether a write through a returned view
+        matters depends on the QUESTION, and this is a reader's switch like `branches` and
+        `along_receivers`, never the default:
+
+        * **which call built the value** (`producers_of(..., past_accessors=...)`: the
+          Quartz job and trigger pairing, the `fluent` execute-join) — no write after the
+          fact changes it, so the accessor is let past. RuoYi-Vue, NBlog and aurora all
+          write `jobDetail.getJobDataMap().put(KEY, job)` between building the job and
+          scheduling it, and each lost its job to the window before this.
+        * **what the value holds** (`resolve_site`, its `identified_by` producers, and every
+          `producers_of` reader that reads the producer's arguments as the value's content)
+          — a write through a view can change it: `topics = Arrays.asList("a", "b");
+          topics.listIterator().set("c"); subscribe(topics)` would publish `a`, `b` as
+          exact. The window keeps refusing it.
+
+        **Why each half of the rule is there**, for the reader that turns it on:
+
+        * **No argument.** A call taking anything (`setFilename(x)`, `map.put(k, v)`) can
+          write what its caller hands it, and stays in the window. A void call stays too
+          (`touch()`, `clear()`): with no result it has nothing to be FOR but its effect.
+        * **A result of another reference type.** A result of the owner's own type, or of
+          one of its supertypes (an inherited fluent step, an erased self-type bound), may
+          be the receiver itself — the fluent `builder.repeatForever()` — so the call may
+          have REPLACED what the reader would pair. The supertypes are read off `ancestors`,
+          which holds the types this workspace read; a jar owner's supertypes are not known
+          and only the owner itself is excluded for one. A primitive result
+          (`incrementAndGet()`) and an array are left in the window: `returned_type` names
+          no type for either.
+        """
+        ancestors = self._past_accessors
+        site = self._index.sites.get(site_key)
+        if ancestors is None or site is None or site.get("result") is None or site["arguments"]:
+            return False
+        descriptor = site.get("descriptor")
+        returned = returned_type(str(descriptor)) if descriptor else None
+        if returned is None:
+            return False
+        owner = str(site.get("owner"))
+        seen = {owner}
+        frontier = [owner]
+        while frontier:
+            for parent, _, _ in ancestors.get(frontier.pop(), ()):
+                if parent not in seen:
+                    seen.add(parent)
+                    frontier.append(parent)
+        return returned not in seen
 
     def _construction(self, method: str, value: int) -> int | None:
         """The ordinal of the call that CONSTRUCTED `value` in `method`, or None where
@@ -1620,7 +1924,7 @@ class _Walk:
         if producers:
             stopped = self._declared_producer((method, min(producers)))
             if stopped is not None:
-                return _only(trail, stopped)
+                return self._along(stopped, trail, frames)
         reached: list[_Reached] = []
         for ordinal, callee in self._index.returns.get((method, value), ()):
             for return_ordinal, entry in self._index.returned_values.get(callee, ()):
@@ -1824,6 +2128,90 @@ class _Walk:
             (_SLOT, site[0], site[1]),
             trail,
             "argument",
+        )
+
+    def _along(self, stopped: Answer, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
+        """A declared producer, as the reader asked for it: the end of the path, or — for the
+        chain reader — the last call of a chain followed on through its receiver.
+
+        The receiver is resolved on THIS path, in THIS frame stack, so a receiver that is a
+        parameter of a helper the walk descended into is the argument at the call it came
+        through. Each receiver answer that is itself a declared chain gets this call
+        appended; anything else (an unread value, a parameter nothing binds) leaves this
+        call as the first one found, not rooted.
+        """
+        producer = stopped.value
+        if not self._along_receivers or producer.caller is None or producer.ordinal is None:
+            return _only(trail, stopped)
+        here = (producer.caller, producer.ordinal)
+        row = self._index.sites.get(here)
+        if row is None or (
+            row.get("receiver") is None
+            and row.get("receiver_parameter") is None
+            and row.get("receiver_field") is None
+        ):
+            return _only(
+                trail, replace(stopped, value=replace(producer, chain=(here,), rooted=True))
+            )
+        reached: list[_Reached] = []
+        for crossed, answer in self._resolve((_SLOT, here[0], here[1], RECEIVER), trail, frames):
+            if answer.kind == _PRODUCED and answer.value.chain:
+                chained = replace(
+                    producer, chain=(*answer.value.chain, here), rooted=answer.value.rooted
+                )
+                reached.append((crossed, replace(stopped, value=chained, inexact=answer.inexact)))
+            else:
+                reached.append((crossed, replace(stopped, value=replace(producer, chain=(here,)))))
+        return tuple(reached) or _only(
+            trail, replace(stopped, value=replace(producer, chain=(here,)))
+        )
+
+    def _passed_through(
+        self,
+        candidates: "list[Mapping[str, Any]]",
+        method: str,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """For the chain reader only: a merge whose every candidate is the result of a
+        DECLARED call on one shared receiver — `c ? b.stepA() : b.stepB()` — is that
+        receiver's chain, followed on the same path, `inexact` because which step ran is not
+        known. None for any other merge, and always for every other reader, whose answers are
+        unchanged.
+
+        This is `_merged`'s shared-root rule one step further out: there the root is one of
+        the candidates (`x` beside `f(x)`); here it is what every candidate is a call ON. A
+        reader asking for the call that BUILT a value cannot be given the receiver's producer
+        in its place, so the rule stays with the reader that asked for the chain.
+        """
+        if not self._along_receivers:
+            return None
+        sites: list[tuple[str, int]] = []
+        for candidate in candidates:
+            source = candidate.get("source")
+            ordinals = (
+                self._index.producers.get((method, int(str(source))), ())
+                if source is not None
+                else ()
+            )
+            if not ordinals or self._declared_producer((method, min(ordinals))) is None:
+                return None
+            sites.append((method, min(ordinals)))
+        receivers = {
+            (
+                self._index.sites[site].get("receiver"),
+                self._index.sites[site].get("receiver_parameter"),
+                self._index.sites[site].get("receiver_field"),
+            )
+            for site in sites
+        }
+        if len(receivers) != 1 or receivers == {(None, None, None)}:
+            return None
+        return tuple(
+            (crossed, replace(answer, inexact=True))
+            for crossed, answer in self._resolve(
+                (_SLOT, sites[0][0], sites[0][1], RECEIVER), trail, frames
+            )
         )
 
     def _declared_producer(self, site: tuple[str, int]) -> Answer | None:

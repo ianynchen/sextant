@@ -164,7 +164,9 @@ def test_a_scheduled_job_of_a_conditional_bean_states_where_it_exists():
             {
                 "handler": handler,
                 "trigger": "cron",
+                "name": None,
                 "expression": "0 0 * * *",
+                "expression_source": None,
                 "resolution": "resolved",
                 "evidence": "compiler",
                 "catalog_id": "spring-scheduling",
@@ -253,7 +255,9 @@ def test_a_row_of_an_unconditional_bean_has_no_condition_lines():
             {
                 "handler": JOBS + "nightly().",
                 "trigger": "cron",
+                "name": None,
                 "expression": "0 0 * * *",
+                "expression_source": None,
                 "resolution": "resolved",
                 "evidence": "compiler",
                 "catalog_id": "spring-scheduling",
@@ -1154,7 +1158,9 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
             {
                 "handler": handler,
                 "trigger": "cron",
+                "name": None,
                 "expression": cron,
+                "expression_source": None,
                 "resolution": "unresolved",
                 "evidence": "compiler",
                 "catalog_id": "spring-scheduling",
@@ -1164,6 +1170,7 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
             {
                 "handler": handler,
                 "trigger": "cron",
+                "name": None,
                 "expression": cron,
                 "environment": environment,
                 "keys": '["jobs.nightly.cron"]',

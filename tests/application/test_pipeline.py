@@ -363,6 +363,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # tuple.
         ("GET", "/v1/orders/7"),
         ("PATCH", "/v1/orders/42"),
+        # `deleteRequest()` builds it and `viaHelper()` sends it: the execute-join finds the
+        # built value through the value walk (Quartz spec 2026-10-28 §3c, Task 6).
+        ("DELETE", "/v1/orders/42"),
         # Inbound (Phase 2D, Task 10): the three listener catalogs.
         # `method` is always NULL — a listener declares no HTTP-style verb
         # (D02 §2, amended) — so every messaging route below shares that
@@ -1115,7 +1118,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 217 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers), one inbound row each.
     # 220 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`, `GET /pricing`
     # and the outbound `POST /events`.
-    assert len(report.endpoints) == 220
+    # 221 since the execute-join crosses methods (Quartz spec 2026-10-28 §3c, Task 6):
+    # `JdkOrdersClient#deleteRequest`'s `DELETE /v1/orders/42`, sent by `viaHelper()`.
+    assert len(report.endpoints) == 221
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -2054,7 +2059,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 123 since the two conditional controllers (`conditional/OpsController`, `conditional/LegacyOrdersController`; spec 2026-10-21-conditional-controllers): two inbound rows.
         # 126 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify`,
         # `GET /pricing` and the outbound `POST /events`.
-        "http": 126,
+        # 127 since the execute-join crosses methods (Quartz spec 2026-10-28 §3c, Task 6):
+        # `JdkOrdersClient#deleteRequest`'s `DELETE /v1/orders/42`, built in the helper and
+        # sent by `viaHelper()` — a request the module really issues.
+        "http": 127,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2103,7 +2111,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         "websocket": 14,
     }
     # 220 since the conditional beans (spec 2026-10-22-conditional-beans): see the http bucket above.
-    assert sum(counts.values()) == len(report.endpoints) == 220
+    # 221 since the execute-join crosses methods (Task 6): see the http bucket above.
+    assert sum(counts.values()) == len(report.endpoints) == 221
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3940,7 +3949,10 @@ def test_the_format_ladder_answers_every_live_row(
     # with no media declared — the ladder answers nothing for a bare string, as for the others.
     # 73 since the conditional beans (spec 2026-10-22-conditional-beans): `POST /notify` returns a bare
     # `String`, `GET /pricing` a bare `long`, and `POST /events` has no format source either.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 73
+    # 74 since the execute-join crosses methods (Quartz spec 2026-10-28 §3c, Task 6):
+    # `JdkOrdersClient#deleteRequest`'s `DELETE`, which carries no body — the same honest
+    # answer the other JDK client rows get.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 74
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -4702,9 +4714,10 @@ def test_the_report_counts_the_catalogs_that_ran_per_kind_and_names_what_each_sk
 ):
     """The observability map (spec 2026-10-22 §4b) is a function of two recorded facts: how
     many catalogs that RAN feed each kind, and what each SKIPPED catalog would have fed. The
-    scheduling catalog is the one that feeds `schedule`, and it runs on the fixture."""
+    scheduling catalog and the Quartz catalog feed `schedule`, and both run on the fixture:
+    neither is dependency-gated, so Quartz runs and finds no trigger there (2026-10-29)."""
     _, report = resolved_fixture
-    assert report.catalogs_run["schedule"] == 1
+    assert report.catalogs_run["schedule"] == 2
     assert report.catalogs_run["endpoint"] > 5
     # Not catalog-fed kinds are never counted, and a count is never zero.
     assert set(report.catalogs_run) <= {

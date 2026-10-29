@@ -1,0 +1,31 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-quartz</artifactId>
+  <version>1.0.0</version>
+  <!-- Quartz, in its own module: every shape CP-55 measured that real Quartz code takes
+       (builders, the Spring bean form, a jobs table scheduled in a loop). Compiled against
+       Quartz 2.5.1 and spring-context-support 7.0.1, the versions Spring Boot 4.0.0's
+       `spring-boot-starter-quartz` manages; never run, so no scheduler starts. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>4.0.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-quartz</artifactId>
+    </dependency>
+  </dependencies>
+</project>

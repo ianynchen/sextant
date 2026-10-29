@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# CP-55. Prints the observation table of `scripts/probes/cp55_quartz_shapes.md`; nothing in that
+# section is typed by hand.
+#
+# THE COLUMN HEADERS COME FROM THE JARS' OWN MANIFESTS AND FROM THE PROCESS THAT RAN QUARTZ
+# (GUIDELINES §5.4, and CP-5's failure it exists to prevent). `probe.py` reads each jar's version
+# out of its manifest in the local Maven repository, and aborts if the JVM that loaded the same
+# classes (`module/.../Main.java`) reports another; the probe module is rebuilt with `clean`
+# first, so no cell can come from a stale build. Class files must be major version 65 (Java 21).
+#
+# Needs a JDK 21 at `$JAVA_HOME` (for `javac` via Maven, `javap` and `java`), Maven, and network
+# on the first run only (Quartz 2.5.1 and spring-context-support 7.0.1 are cached in ~/.m2
+# afterwards). Not a test: nothing in the suite runs it. It starts no scheduler.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+: "${JAVA_HOME:?JAVA_HOME must name the JDK whose javap and java the probe runs}"
+
+if ! "$JAVA_HOME/bin/java" -version 2>&1 | head -1 | grep -q 'version "21[."]'; then
+  echo "JAVA_HOME must be a JDK 21: $("$JAVA_HOME/bin/java" -version 2>&1 | head -1)" >&2
+  exit 1
+fi
+
+echo "compiling the probe module" >&2
+(cd module \
+  && { mvn -q -B -o clean package >&2 || mvn -q -B clean package >&2; } \
+  && { mvn -q -B -o dependency:build-classpath -Dmdep.outputFile=target/classpath.txt >&2 \
+       || mvn -q -B dependency:build-classpath -Dmdep.outputFile=target/classpath.txt >&2; })
+
+if [ -x ../../../.venv/bin/python ]; then PY=../../../.venv/bin/python; else PY=python3; fi
+
+exec "$PY" probe.py \
+  "CLASSES=$PWD/module/target/classes" \
+  "CLASSPATH=$PWD/module/target/classpath.txt" \
+  "JAVA_HOME=$JAVA_HOME"

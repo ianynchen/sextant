@@ -170,14 +170,14 @@ def test_metadata_and_manifest_carry_the_vocabulary_version(analyzed_workspace_c
     """End to end on the real fixture: `analyze` stamps `metadata.json` and `export` carries
     the same number into the bundle manifest's `producer`."""
     metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
-    assert metadata["boundary_vocabulary_version"] == 2
+    assert metadata["boundary_vocabulary_version"] == 3
     result = CliRunner().invoke(
         cli,
         ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)],
     )
     assert result.exit_code == 0, result.output
     manifest = json.loads((Path(result.output.strip()) / "manifest.json").read_text())
-    assert manifest["producer"]["boundary_vocabulary_version"] == 2
+    assert manifest["producer"]["boundary_vocabulary_version"] == 3
 
 
 def test_metadata_carries_the_catalog_hash_the_exporter_then_copies(
@@ -243,7 +243,8 @@ def test_catalogs_run_counts_per_kind(analyzed_workspace_copy: Path):
     catalog-fed, so they never appear; a kind nothing ran for does not appear either."""
     metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
     run = metadata["catalogs_run"]
-    assert run["schedule"] == 1
+    # `spring-scheduling` and `quartz` (2026-10-29): neither is dependency-gated, so both run.
+    assert run["schedule"] == 2
     assert run["endpoint"] > 5
     assert "module" not in run and "boundary-property" not in run
     assert all(count > 0 for count in run.values())
@@ -275,7 +276,7 @@ def test_metadata_and_manifest_carry_the_map(analyzed_workspace_copy: Path):
     metadata_path = analyzed_workspace_copy / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
     observability = metadata["observability"]
-    assert observability["boundary_vocabulary_version"] == 2
+    assert observability["boundary_vocabulary_version"] == 3
     # `metadata.json` is written with sorted keys, so the file cannot hold registry order.
     assert set(observability["kinds"]) == set(KINDS)
     # Re-measured 2026-10-22 (the cause ruling): the fixture's two skipped catalogs,

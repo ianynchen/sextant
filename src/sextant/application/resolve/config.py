@@ -61,7 +61,7 @@ it is reserved for the peer-resolution join (D01), which substitutes into an
 ENDPOINT expression, not a config value.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -83,6 +83,15 @@ UNRESOLVED_REASONS = (
 )
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
+
+
+def config_model_of(catalogs: Sequence[Catalog]) -> Mapping[str, Any]:
+    """The config model a resolve reads placeholders by: the FIRST declared one (D02 §2i:
+    one per framework family; only `spring-web.yml` declares one today), or `{}` — which
+    `placeholder_rule` reads as the defaults — where none is. The one choice, so every pass
+    that asks what a placeholder IS (the `scheduled_work` engines and
+    `resolve/resolved_schedules.py`) asks the same model and cannot disagree on the opener."""
+    return next((c.config_model for c in catalogs if c.config_model), {})
 
 
 def placeholder_rule(model: Mapping[str, Any]) -> tuple[dict[str, str], str]:

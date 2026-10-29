@@ -15,9 +15,15 @@ reaches every engine as a `lambda` naming that body with `captures: 0` — the p
 that makes a class-compiled closure indistinguishable from an `invokedynamic` one to a
 routing walk, and gives such a route its handler (`kotlin-class-lambdas`,
 `kotlin-null-handler`).
+
+Then autoboxing: javac wraps a primitive constant in `<Wrapper>.valueOf(<prim>)` (JLS 5.1.7),
+so `f(3)` reaches the facts as an argument produced by that call, and a boxed varargs as
+an array of such results. The projection reads the constant the source wrote (CP-55 row 22).
 """
 
 from pathlib import Path
+
+import pytest
 
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -769,3 +775,223 @@ def test_a_bridge_call_handing_a_lambda_class_gets_both_projections(tmp_path: Pa
     ]
     (raw,) = workspace.query("call_sites")
     assert raw["arguments"][1]["kind"] == "instance"
+
+
+# --- autoboxing: a boxing call's result is the constant it was handed -------------------
+
+INTEGER = "java/lang/Integer#"
+INTEGER_VALUE_OF = "(I)Ljava/lang/Integer;"
+TAKES = "com/x/Api#"
+TAKES_DESC = "(Ljava/lang/Integer;)V"
+
+
+def _boxed(
+    result: int,
+    value: CallArgument,
+    *,
+    owner: str = INTEGER,
+    name: str = "valueOf",
+    descriptor: str = INTEGER_VALUE_OF,
+    ordinal: int = 0,
+) -> CallSiteFact:
+    return _site(
+        CALLER, ordinal, owner, name, descriptor=descriptor, result=result, arguments=[value]
+    )
+
+
+def _boxing_facts(*sites: CallSiteFact) -> list:
+    return [_method_symbol(CALLER), *sites]
+
+
+def _bare(value):
+    """An argument as written: the loaded dict carries every grammar key, absent ones None."""
+    if isinstance(value, dict):
+        return {key: _bare(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_bare(item) for item in value]
+    return value
+
+
+def _the_call(workspace: DuckDbWorkspace, name: str) -> dict:
+    (row,) = [row for row in effective_call_sites(workspace) if row["name"] == name]
+    return {**row, "arguments": _bare(row["arguments"])}
+
+
+@pytest.mark.pins("effective-calls.AUTOBOXING-reads-as-its-constant")
+def test_a_boxed_int_argument_reads_as_the_int(tmp_path: Path):
+    """`f(Integer.valueOf(3))`: the argument is the call's result, an `unresolved` carrying
+    the producing call's `source`; the engines read the `int` the source wrote."""
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(1, CallArgument(kind="int", value=3)),
+            _site(
+                CALLER,
+                1,
+                TAKES,
+                "f",
+                descriptor=TAKES_DESC,
+                arguments=[CallArgument(kind="unresolved", source=1)],
+            ),
+        ),
+    )
+
+    assert _the_call(workspace, "f")["arguments"] == [{"kind": "int", "value": 3}]
+
+
+@pytest.mark.pins("effective-calls.AUTOBOXING-reads-as-its-constant")
+def test_boxed_varargs_elements_read_as_their_ints(tmp_path: Path):
+    """`onDaysOfTheWeek(3, 5)`: an `Integer[]` whose elements are `valueOf` results."""
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(1, CallArgument(kind="int", value=3)),
+            _boxed(2, CallArgument(kind="int", value=5), ordinal=1),
+            _site(
+                CALLER,
+                2,
+                TAKES,
+                "days",
+                descriptor="([Ljava/lang/Integer;)V",
+                arguments=[
+                    CallArgument(
+                        kind="array",
+                        elements=[
+                            CallArgument(kind="unresolved", source=1),
+                            CallArgument(kind="unresolved", source=2),
+                        ],
+                    )
+                ],
+            ),
+        ),
+    )
+
+    assert _the_call(workspace, "days")["arguments"] == [
+        {"kind": "array", "elements": [{"kind": "int", "value": 3}, {"kind": "int", "value": 5}]}
+    ]
+
+
+def test_a_valueOf_of_a_non_constant_is_left_alone(tmp_path: Path):
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(1, CallArgument(kind="parameter", value=0)),
+            _site(
+                CALLER,
+                1,
+                TAKES,
+                "f",
+                descriptor=TAKES_DESC,
+                arguments=[CallArgument(kind="unresolved", source=1)],
+            ),
+        ),
+    )
+
+    assert _the_call(workspace, "f")["arguments"] == [{"kind": "unresolved", "source": 1}]
+
+
+def test_a_string_valueOf_is_not_boxing(tmp_path: Path):
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(
+                1,
+                CallArgument(kind="int", value=3),
+                owner="java/lang/String#",
+                descriptor="(I)Ljava/lang/String;",
+            ),
+            _site(
+                CALLER,
+                1,
+                TAKES,
+                "f",
+                descriptor="(Ljava/lang/String;)V",
+                arguments=[CallArgument(kind="unresolved", source=1)],
+            ),
+        ),
+    )
+
+    assert _the_call(workspace, "f")["arguments"] == [{"kind": "unresolved", "source": 1}]
+
+
+@pytest.mark.parametrize(
+    ("wrapper", "primitive", "kind", "value"),
+    [
+        ("Boolean", "Z", "boolean", True),
+        ("Byte", "B", "int", 1),
+        ("Character", "C", "int", 65),
+        ("Short", "S", "int", 2),
+        ("Integer", "I", "int", 3),
+        ("Long", "J", "long", 4),
+    ],
+)
+def test_every_integral_boxing_method_reads_as_its_constant(
+    tmp_path: Path, wrapper: str, primitive: str, kind: str, value: object
+):
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(
+                1,
+                CallArgument(kind=kind, value=value),
+                owner=f"java/lang/{wrapper}#",
+                descriptor=f"({primitive})Ljava/lang/{wrapper};",
+            ),
+            _site(CALLER, 1, TAKES, "f", arguments=[CallArgument(kind="unresolved", source=1)]),
+        ),
+    )
+
+    assert _the_call(workspace, "f")["arguments"] == [{"kind": kind, "value": value}]
+
+
+def test_a_boxing_result_of_another_method_is_not_joined(tmp_path: Path):
+    """Value ids are per method: `source: 1` in `handle` is not the `valueOf` result 1
+    of some other method."""
+    other = "com/acme/orders/Caller#other(sig_a2)."
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method_symbol(other),
+            _site(
+                other,
+                0,
+                INTEGER,
+                "valueOf",
+                descriptor=INTEGER_VALUE_OF,
+                result=1,
+                arguments=[CallArgument(kind="int", value=3)],
+            ),
+            _site(
+                CALLER,
+                0,
+                TAKES,
+                "f",
+                descriptor=TAKES_DESC,
+                arguments=[CallArgument(kind="unresolved", source=1)],
+            ),
+        ],
+    )
+
+    assert _the_call(workspace, "f")["arguments"] == [{"kind": "unresolved", "source": 1}]
+
+
+def test_the_raw_call_sites_are_not_changed_by_the_boxing_projection(tmp_path: Path):
+    workspace = _workspace(
+        tmp_path,
+        _boxing_facts(
+            _boxed(1, CallArgument(kind="int", value=3)),
+            _site(
+                CALLER,
+                1,
+                TAKES,
+                "f",
+                descriptor=TAKES_DESC,
+                arguments=[CallArgument(kind="unresolved", source=1)],
+            ),
+        ),
+    )
+    effective_call_sites(workspace)
+
+    (raw,) = [r for r in workspace.query("call_sites") if r["name"] == "f"]
+    assert _bare(raw["arguments"]) == [{"kind": "unresolved", "source": 1}]

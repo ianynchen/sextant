@@ -68,7 +68,7 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
-**Twenty-one type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+**Twenty-six type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
 means ONE library or annotation reachable under more than one name — held by its interface
 (`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
 older package. A call site's owner is the DECLARED type, so a codebase writing the interface
@@ -90,6 +90,7 @@ The keys, by the engine that reads them:
 | `interface_implementation` | `matches.interface`, `registration.owner` |
 | `injected_client` | `field_annotation` |
 | `scheduled_work` | `annotation`, `container` |
+| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's, and so `for_job[].owner`, `job_identity_step.owner` and `job_root.owner`), `literal_expression.owner`, `pairing[].owner`, `job_key[].owner` |
 | `error_advice` | `handler_annotation`, `status_annotation` |
 | `supertype_dispatch` | `matches.supertype` |
 | `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
@@ -692,10 +693,11 @@ A style is a shape of evidence, not a framework. New frameworks reuse a style; o
 genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
-`error_advice`, Task 8, are the fourteenth and fifteenth.)
+`error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
+design of 2026-10-28, is the sixteenth.)
 
-**Fifteen sections follow, and they are NOT fifteen engines** — §5.3 requires this document
-to say which is which rather than let a reader count headings. **Thirteen have an engine**,
+**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this document
+to say which is which rather than let a reader count headings. **Fourteen have an engine**,
 each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
 catalog's `style:` is resolved against and the only place the answer lives. The other two
 are:
@@ -711,7 +713,7 @@ are:
   reasoning; nothing in it describes behaviour that runs today. Its section says so again
   at the top, in the `default_produces` model §5.3 names.
 
-The count above therefore reads: thirteen shipped engine styles, one resolve pass, one
+The count above therefore reads: fourteen shipped engine styles, one resolve pass, one
 design. *This heading read "The thirteen styles" and the two non-wire engines had no section
 at all until the 2O documentation sweep; the number counted headings, which is exactly the
 substitution §5.3 forbids.*
@@ -2159,6 +2161,16 @@ because one library reaches a wire through more than one client, `method` becaus
 client issues a built request through more than one call — the JDK's `send` OR
 `sendAsync`, one builder chain, one address — and two `build` entries in `terminal` would
 silently overwrite each other rather than widen the join. An empty list is refused at load.
+**The mapping form follows the built value through the value walk** (Quartz spec 2026-10-28
+§3c): a declared call consumes a chain's built value where `values.producers_of` on one of
+its arguments reaches that chain's terminal site, in the same method or across returns and
+parameters — `sqs.sendMessage(request())`, the request built in a private helper and
+returned. Each declared call's arguments are walked once per catalog run, from the call's
+side. A chain consumed by several declared calls is still one chain end, which lists every
+consumer (`ChainEnd.consumers`). The bare `true` stays a same-method `source` match — it
+names no executing call, so walking from any row would pair the value with any use of it —
+and so does a continuing join (`continue: true`, below), whose walk goes on in the method
+that holds the consumer.
 
 **A step's own `captures` may also name `base`** — the other half of ONE address, not a
 second address (2F). A builder states its base address once
@@ -4095,6 +4107,153 @@ and [D01](D01-graph-schema.md) §5 documents a `trace_of` walk. Neither exists a
 half of a live mechanism. **The omission becomes wrong the moment a `root_kind` producer
 ships**: a scheduled method IS a root at that point, and these rows have to be re-examined
 as roots rather than left as a table nobody traverses.
+
+### `scheduled_chain`
+
+The sixteenth style, and the **second shape of evidence for `scheduled_work`** (Quartz design
+2026-10-28 §3d): a schedule BUILT by a chain of calls rather than declared by an annotation.
+Non-wire on the same terms as `scheduled_work` — no `protocol`, no `direction`, its own
+table — and, like it, handed every catalog of the resolve so the config model decides what a
+placeholder is (`endpoints._bound`).
+
+```yaml
+# quartz.yml
+style: scheduled_chain
+detect:
+  coordinates: ["org.quartz-scheduler:quartz"]
+requires: [call_site, string_constants, chain_reconstruction]
+matches:
+  roots:                          # the chain walk's own words (`fluent`, below)
+    - { owner: org.quartz.TriggerBuilder, method: newTrigger }
+  steps:
+    - owner: org.quartz.TriggerBuilder
+      method: withIdentity
+      captures: { name: arg0, group: arg1 }
+    - owner: org.quartz.TriggerBuilder
+      method: withSchedule
+      captures: { schedule: arg0 }
+  terminal: [build]
+  default_group: DEFAULT          # the group of a key written without one
+  default_schedule:               # the schedule `build()` uses where none was handed over
+    { owner: org.quartz.SimpleScheduleBuilder, method: simpleSchedule }
+  kinds:                          # schedule builder type -> the framework's kind word
+    org.quartz.CronScheduleBuilder: cron
+    org.quartz.SimpleScheduleBuilder: simple
+  literal_expression:             # the one root whose expression is its string argument
+    { owner: org.quartz.CronScheduleBuilder, method: cronSchedule,
+      descriptor: "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;", arg: 0 }
+  field_sources: { … }            # the field ladder, as every outbound catalog spells it
+  bean_model: spring              # (top level) the container that injects a @Bean parameter
+  job_root: { owner: org.quartz.JobBuilder, method: newJob, class_arg: arg0 }
+  job_identity_step:              # a chain step, as `steps` spells one
+    { owner: org.quartz.JobBuilder, method: withIdentity, captures: { name: arg0, group: arg1 } }
+  for_job:                        # chain steps added to the trigger chain, one per overload
+    - { owner: org.quartz.TriggerBuilder, method: forJob,
+        descriptor: "(Lorg/quartz/JobDetail;)Lorg/quartz/TriggerBuilder;",
+        captures: { job_detail: arg0 } }    # also job_name/job_group, job_key
+  job_key:                        # the calls a key object is built by
+    - { owner: org.quartz.JobKey, method: jobKey, name: arg0, group: arg1 }
+  pairing:                        # the execute-join: built job and built trigger handed over
+    - { owner: org.quartz.Scheduler, method: scheduleJob,
+        descriptor: "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;",
+        job: arg0, trigger: arg1 }
+  entry_method: { name: execute, parameters: [org.quartz.JobExecutionContext], returns: void }
+  supertype_dispatch:             # a template in a jar calling a subclass method
+    - supertype: org.springframework.scheduling.quartz.QuartzJobBean
+      calls: { name: executeInternal, parameters: [org.quartz.JobExecutionContext], returns: void }
+```
+
+**The chain is the `fluent` style's walk, unchanged** (`shapes/chains.py`): `roots`, `steps`
+(owner-gated, with `argN` captures), `terminal`, folded last-wins. This style reads three
+capture fields off each chain end — `name`, `group` and `schedule` — and every chain end is
+one row: two triggers built alike are two rows, and nothing collapses them. A chain that
+reaches no terminal derives nothing.
+
+**The schedule is followed with the value walk's chain reader**
+(`values.producers_of(..., along_receivers=True)`) from the `schedule` argument: every call
+on a `kinds` type that built it, back along each call's `receiver`, root first — across
+returns, helpers and parameters, on the path's own calling contexts (a helper's parameter is
+the argument at the call the walk came through). A branch whose every candidate is such a
+call on one shared receiver passes through to that receiver, `inexact`. Then:
+
+- **`trigger`** is `kinds[root owner]`; where a builder call was found but no root, the
+  builder call's own owner's kind. Where the walk reaches no builder call at all — a factory
+  in a jar — it is `kinds[the type the producing call is declared to return]`, read off that
+  call's descriptor: a fact the compiler wrote, not a model of the call's body. Otherwise
+  NULL, and a chain with no kind and no job is not derived. A chain with **no** `schedule`
+  capture runs on the framework's own default, `default_schedule` — `{owner, method}`, a
+  static factory whose owner is one of `kinds` (Quartz's `build()` uses
+  `simpleSchedule()`): kind `kinds[owner]`, expression `method()`, `resolved`.
+- **`expression`**, for a `literal_expression` root (matched by owner, method and, where
+  declared, parameter types), is its argument as the field ladder or the value walk reads
+  it: a string literal verbatim (`resolved`, or `narrowed` for one of a branch's
+  candidates), a `${…}` placeholder verbatim (`unresolved`). Steps after that root are not
+  part of it. For every other root it is the chain written as text
+  (`shapes/chain_text.py`), constants only — none where a branch was passed through. Anything else is NULL and the row `partial`;
+  where the argument's walk ended at a call whose value is read at runtime, that call's bare
+  symbol is `expression_source`.
+- **`name`** is `group.name` where the walk reads both as one constant each, a missing
+  group being `default_group`; NULL otherwise.
+
+**A row is `resolved` only when every part comes from ONE binding of one read.** The key,
+the literal root's argument and the job root's class are read in one
+`values.resolve_positions` call, WITHIN the path the schedule took to `withSchedule` and the
+path the trigger and the job took to the pairing call (`values.producer_paths`, which writes a
+descent into a helper as the call that entered it, so a read crossing out of that helper
+agrees only with that call). A helper `addJob(jobClass, cron)` called from two places is two
+rows, never four; a trigger built in `trigger(cron)` and scheduled by each caller keeps each
+caller's cron with that caller's job. A trigger and a job whose paths to a pairing call
+disagree on a caller they crossed out to came from two executions, and are no pairing at all
+(`Path.two_calls_of_one_helper` tells this from the next case). A pairing no one path holds
+because its trigger and job each passed through one helper on a call of its own (the M-1
+bound) is read part by part, and every such row is `partial`: **a part no binding ties to the row — the name, the cron, the job's class — is
+kept only where every path agrees on it; otherwise it is NULL**, a NULL cron naming in
+`expression_source` the method whose parameter it is (each caller hands its own), or the
+call the walk stopped at. A job named by a key a `job_key` call builds is paired on the path
+the walk took to that call; a constant `forJob(name)` key and an injected bean pair on any
+path, being the same on every one.
+
+**The job** (§3c) is found from whatever pairs it with the trigger, through machinery that
+already exists, and every pairing it finds counts:
+
+- **`pairing`** entries are the chain walk's execute-join: the engine adds them to the trigger
+  chain's `terminal` as a `terminal_via_argument` `{owner, method}` join beside the plain
+  terminal, so a trigger nothing pairs still ends a chain, and each chain end lists every
+  pairing call the value walk traces its built value to (`ChainEnd.consumers`), across
+  returns and parameters. An entry is matched on its `descriptor`; the walk from its
+  `trigger` argument must reach this chain's own terminal, and the walk from its `job`
+  argument gives the job chain. A collection argument reaches a built value only where the
+  walk reaches the collection's elements: one made in a jar is `external`, and no job is
+  found from that call.
+- **`for_job`** entries are chain steps added to the trigger chain, each capturing one of four
+  fields: `job_detail` (the walk from that argument; where it is a `@Bean` method's own
+  parameter, the bean the catalog's `bean_model` injects there, `beans.injected_bean`, whose
+  method builds and returns the job chain), `job_name` with an optional `job_group` (the job
+  chain anywhere in the module with that key, a missing group being `default_group`), or
+  `job_key` (the walk to a `job_key` call, whose `name` and `group` arguments are the key).
+- **The job chain** is the same chain walk from `job_root`, with `job_identity_step` as its
+  one step and the plain `terminal`. Its class is the value walk's answer for the root's
+  `class_arg`; a branch between class literals answers each, `narrowed`.
+
+**The handler** is the body the JVM's dispatch rule picks for the job class's
+`entry_method` (`dispatch.Dispatch.resolve`; the engine walks no superclass itself). Where
+that body is in a jar, the type the search left the workspace at (`Dispatch.boundary`) is
+looked up in `supertype_dispatch` — the `supertype` + method vocabulary of
+`jakarta-servlet.yml`, one `calls` method per supertype — and that method is resolved the
+same way. Any other jar body gives no handler. A method is `{name, parameters, returns}`:
+the servlet selector plus the return type, because the JVM resolves a method by its whole
+descriptor. Several classes reaching one body are one row, at that row's own resolution;
+several bodies from one branch are one row each, `narrowed`; several pairings (paths) are
+one row per distinct body. Rows equal but for their resolution are one row, at the weaker
+word (one body reached exactly on one path and through a branch on another is `narrowed`).
+
+**`resolution`**: `resolved` where the handler and the expression are both known and the
+expression holds no placeholder; `unresolved` where the only gap is a placeholder;
+`narrowed` where the only gap is a branch; `partial` otherwise, a NULL handler included. A
+chain with neither a kind nor a job is not derived; a row with a NULL handler is not a
+trace root (`roots.py`).
+
+**Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
 
 ### `error_advice`
 

@@ -1,8 +1,11 @@
 """Effective call sites (spec 2026-09-19 §3): the `call_sites` facts as every ENGINE reads
-them, with two projections applied once per load — a compiler-emitted `$default` bridge call
-re-targeted to the function it stands for (§3a, T4) and a class-compiled lambda argument
-read as the `lambda` it is (§3b, T5). Both join on shared fields the extractor publishes on
-the declaration it scanned (`bridge_of`, `lambda_body`); nothing here names a language.
+them, with three projections applied once per load — a compiler-emitted `$default` bridge call
+re-targeted to the function it stands for (§3a, T4), a class-compiled lambda argument
+read as the `lambda` it is (§3b, T5), and a boxed constant read as the constant the source
+wrote. The first two join on shared fields the extractor publishes on the declaration it
+scanned (`bridge_of`, `lambda_body`); the third on the boxing call's own site, whose
+vocabulary is the compiler's (JLS 5.1.7), not a library's. Nothing here names a language
+or a framework.
 
 `call_sites` itself is untouched: the exported bundle, `format` and every raw-fact test
 keep the bytecode's own statement. The graph/trace readers do NOT — `call_edges` and
@@ -21,6 +24,7 @@ from sextant.domain.symbols import (
     descriptor_slots,
     method_descriptor,
     owner_of,
+    returned_type,
 )
 
 # The name suffix a compiler-emitted default-argument bridge carries (`<fn>$default`,
@@ -31,6 +35,24 @@ _DEFAULT_SUFFIX = "$default"
 _MARKER = "Ljava/lang/Object;"
 _MASK_SLOT = "I"
 _MASK_BITS = 32
+
+# The eight calls javac inserts to box a primitive (JLS 5.1.7, measured CP-55 row 22): each
+# wrapper's `valueOf(<prim>)`, keyed by its descriptor — the owner is not repeated, because
+# a boxing method returns its own owner — with the argument kinds that primitive's constant
+# is published as. `byte`, `short` and `char` constants are `int` (constant instructions
+# push an int), and `float`/`double` have no constant kind in D00 §5 yet, so theirs is
+# empty and those calls are left as they are.
+_BOXING_NAME = "valueOf"
+_BOXING: dict[str, tuple[str, ...]] = {
+    "(Z)Ljava/lang/Boolean;": ("boolean",),
+    "(B)Ljava/lang/Byte;": ("int",),
+    "(C)Ljava/lang/Character;": ("int",),
+    "(S)Ljava/lang/Short;": ("int",),
+    "(I)Ljava/lang/Integer;": ("int",),
+    "(J)Ljava/lang/Long;": ("long",),
+    "(F)Ljava/lang/Float;": (),
+    "(D)Ljava/lang/Double;": (),
+}
 
 
 def effective_call_sites(workspace: Workspace) -> list[dict[str, Any]]:
@@ -84,7 +106,8 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
     }
     bodies = _lambda_bodies(workspace)
     sites = workspace.query("call_sites")
-    if not bridges and not bodies:
+    boxed = _boxed_constants(sites)
+    if not bridges and not bodies and not boxed:
         return list(sites)
     declared = (
         {
@@ -114,8 +137,64 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
                     row = _through_bridge(site, bridge) or site
         if bodies:
             row = _with_lambdas(row, bodies)
+        if boxed:
+            row = _with_unboxed(row, boxed)
         rows.append(row)
     return rows
+
+
+def _boxed_constants(sites: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+    """Each boxing call whose one argument is a constant of its primitive's kind, keyed by
+    (caller, result) — value ids are per method — to that constant."""
+    boxed: dict[tuple[str, int], dict[str, Any]] = {}
+    for site in sites:
+        if site["name"] != _BOXING_NAME or site["result"] is None:
+            continue
+        descriptor = str(site["descriptor"])
+        kinds = _BOXING.get(descriptor)
+        arguments = site["arguments"]
+        # A boxing method is a static factory on the wrapper it returns.
+        if (
+            kinds
+            and site["owner"] == returned_type(descriptor)
+            and len(arguments) == 1
+            and arguments[0].get("kind") in kinds
+        ):
+            boxed[(str(site["caller"]), int(site["result"]))] = arguments[0]
+    return boxed
+
+
+def _with_unboxed(
+    row: dict[str, Any], boxed: dict[tuple[str, int], dict[str, Any]]
+) -> dict[str, Any]:
+    """`row` with each argument produced by a boxing call read as that call's constant,
+    or `row` itself when none is — the copy-on-change discipline `_with_lambdas` keeps."""
+    caller = str(row["caller"])
+    arguments = [_as_constant(argument, caller, boxed) for argument in row["arguments"]]
+    if all(after is before for after, before in zip(arguments, row["arguments"])):
+        return row
+    projected = dict(row)
+    projected["arguments"] = arguments
+    return projected
+
+
+def _as_constant(
+    argument: dict[str, Any], caller: str, boxed: dict[tuple[str, int], dict[str, Any]]
+) -> dict[str, Any]:
+    """The argument as the engines read it: an `unresolved` whose `source` is a boxing
+    call's result becomes the constant that call was handed; an `array`'s elements are
+    read the same way (a boxed varargs is an array of such results). Anything else is
+    returned as it is, the same dict."""
+    if argument.get("kind") == "array" and isinstance(argument.get("elements"), list):
+        elements = [_as_constant(element, caller, boxed) for element in argument["elements"]]
+        if all(after is before for after, before in zip(elements, argument["elements"])):
+            return argument
+        return {**argument, "elements": elements}
+    source = argument.get("source")
+    if argument.get("kind") != "unresolved" or source is None:
+        return argument
+    constant = boxed.get((caller, int(source)))
+    return argument if constant is None else dict(constant)
 
 
 def _lambda_bodies(workspace: Workspace) -> dict[str, str]:

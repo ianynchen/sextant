@@ -42,10 +42,12 @@ being published as the schedule itself.
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.config import config_model_of, placeholder_rule
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 
 _ANNOTATION = "annotation"
@@ -54,17 +56,8 @@ _TRIGGERS = "triggers"
 _DISABLED = "disabled"
 _REQUIRED_MATCHES = (_ANNOTATION, _CONTAINER, _TRIGGERS)
 
-# The one form of expression this pass refuses to answer for. A property
-# placeholder is resolved by the framework at startup out of configuration —
-# environment variables, a ConfigMap, a command-line argument — none of which a
-# repository can see (§8.2), so the expression is carried verbatim and the row
-# says so. Spelled here rather than in the catalog because it is the SYNTAX of
-# a placeholder shared by every property-driven framework this repository
-# reads, exactly as `resolve/config.py` already treats it.
-_PLACEHOLDER = "${"
 
-
-def run(workspace: Workspace, catalog: Catalog) -> None:
+def run(workspace: Workspace, catalog: Catalog, catalogs: Sequence[Catalog] | None = None) -> None:
     """One row per trigger attribute each claimed declaration writes.
 
     Rows are emitted in a deterministic order — declaration target, then the
@@ -74,6 +67,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     (§4a's "Quartz: later catalog, same table") writes to the same table.
     """
     triggers = _validate_matches(catalog)
+    # The one form of expression this pass refuses to answer for: a property placeholder,
+    # which the framework resolves at startup out of configuration none of which a
+    # repository can see (§8.2), so the expression is carried verbatim and the row says
+    # so. The opener is the resolve's config model's own: `config_model_of` over EVERY
+    # catalog of the resolve (the choice `resolve/resolved_schedules.py` makes), not this
+    # catalog's alone, which declares none; with no model declared anywhere it reads as the
+    # default opener. A caller handing one catalog gets that catalog's model.
+    opener = placeholder_rule(config_model_of(catalogs if catalogs is not None else [catalog]))[0][
+        "open"
+    ]
     disabled = _validate_disabled(catalog, triggers)
     rows: list[dict[str, Any]] = []
     for target, args in _declarations(workspace, catalog):
@@ -109,8 +112,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 {
                     "handler": target,
                     "trigger": str(triggers[attribute]),
+                    # An `@Scheduled` carries no name of its own, and its expression is
+                    # always a literal this pass read, so there is no source to name.
+                    "name": None,
                     "expression": expression,
-                    "resolution": ("unresolved" if _PLACEHOLDER in expression else "resolved"),
+                    "expression_source": None,
+                    "resolution": "unresolved" if opener in expression else "resolved",
                     "evidence": "compiler",
                     "catalog_id": catalog.id,
                 }

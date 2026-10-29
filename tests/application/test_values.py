@@ -26,8 +26,10 @@ import pytest
 from fixture_module import write_fixture_module_fact
 
 from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve import path_prefix
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.engines import fluent
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.shapes.arguments import channel_of_answer, url_of_answer
@@ -81,6 +83,9 @@ _PUBLISHER = _PKG + "Publisher#"
 _ARRAYS = _PKG + "Arrays#"
 _MUTATOR = _PKG + "Mutator#"
 _BUFFER = _PKG + "Buffer#"
+# `Buffer`'s supertype, as the hierarchy a producer-identity reader hands the walk names it.
+_BASE = _PKG + "Base#"
+_BUFFER_ANCESTORS = {_BUFFER: [(_BASE, "extends", True)]}
 _BINDER = _PKG + "Binder#"
 # A binding whose WRITER the facts name — the sixth edge's own shape (spec
 # 2026-10-18). `Written#<init>(String)` assigns its parameter to the field, and two
@@ -167,6 +172,7 @@ _REGISTRY_IMPL = _PKG + "RegistryImpl#"
 _WRAPPER = _PKG + "Wrapper#"
 _FORKED = _PKG + "Forked#"
 _SUBSTRING = ("java/lang/String#", "substring", "(I)Ljava/lang/String;")
+_PICKS_CLASS = "(Z)Ljava/lang/Class;"
 
 
 def _symbol(owner: str, name: str, jvm: str) -> str:
@@ -270,6 +276,41 @@ _TOUCH = "()V"
 _PAIR_TARGET = (_REGISTRY, "pair", _PAIR)
 _ONE_TARGET = (_REGISTRY, "one", _ONE)
 _MANY_TARGET = (_REGISTRY, "many", _MANY)
+
+
+def _accessed(name: str, jvm: str, call: str = "contents") -> list[Fact]:
+    """`Mutator#<name>`: a produced value, a call `call` on it described by `jvm` whose
+    result is written to, then the value used. The call's arguments follow its descriptor."""
+    caller = _symbol(_MUTATOR, name, "()V")
+    given = [CallArgument(kind="string", value="k")] if not jvm.startswith("()") else []
+    return [
+        _declared(_MUTATOR, name, "()V"),
+        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(
+            caller,
+            1,
+            (_BUFFER, call, jvm),
+            kind="virtual",
+            receiver=7,
+            arguments=given,
+            result=8,
+        ),
+        _site(
+            caller,
+            2,
+            (_PKG + "Contents#", "put", _TAKES_STRING),
+            kind="virtual",
+            receiver=8,
+            arguments=[CallArgument(kind="string", value="x")],
+        ),
+        _site(
+            caller,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+    ]
 
 
 def _facts() -> list[Fact]:
@@ -420,6 +461,17 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=7)],
         ),
+        # A call ON the value that takes nothing and hands back ANOTHER object, which is
+        # then written to (`detail.getJobDataMap().put(k, v)`, `list.listIterator().set(x)`),
+        # and its near-misses: the receiver's own type, a supertype of it, an argument, a
+        # primitive and an array.
+        *_accessed("accessed", "()L" + _PKG + "Contents;"),
+        *_accessed("viewed", "()Ljava/util/ListIterator;", call="listIterator"),
+        *_accessed("fluent", "()L" + _BUFFER[:-1] + ";"),
+        *_accessed("widened", "()L" + _BASE[:-1] + ";"),
+        *_accessed("given", "(Ljava/lang/String;)L" + _PKG + "Contents;"),
+        *_accessed("counted", "()I"),
+        *_accessed("listed", "()[Ljava/lang/String;"),
         _declared(_MUTATOR, "kept", "()V"),
         _site(_symbol(_MUTATOR, "kept", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=7),
         _site(
@@ -1419,6 +1471,147 @@ def _facts() -> list[Fact]:
                 )
             ],
         ),
+        # Ruling 7 (spec 2026-10-28 quartz §3c): `Class<?> kind(boolean c) { return c ?
+        # A.class : B.class; }` read by `use()`, and `String mixed(String s) { one(c ? "x" :
+        # s.trim()); }` — a branch whose second candidate is a call, not a literal.
+        _declared(_FORKED, "kind", _PICKS_CLASS),
+        _returns(
+            _FORKED,
+            "kind",
+            _PICKS_CLASS,
+            0,
+            CallArgument(
+                kind="merge",
+                candidates=[
+                    CallArgument(kind="class", symbol=_ORDER_WORKER),
+                    CallArgument(kind="class", symbol=_BILLING_WORKER),
+                ],
+            ),
+        ),
+        _declared(_FORKED, "use", "()V"),
+        _site(_symbol(_FORKED, "use", "()V"), 0, (_FORKED, "kind", _PICKS_CLASS), result=40),
+        _site(
+            _symbol(_FORKED, "use", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=40)],
+        ),
+        _declared(_FORKED, "mixed", _TAKES_STRING),
+        _site(
+            _symbol(_FORKED, "mixed", _TAKES_STRING),
+            0,
+            ("java/lang/String#", "trim", _MAKES_STRING),
+            kind="virtual",
+            receiver_parameter=0,
+            result=50,
+        ),
+        _site(
+            _symbol(_FORKED, "mixed", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="x"),
+                        CallArgument(kind="unresolved", source=50),
+                    ],
+                )
+            ],
+        ),
+        # Fix round 1 (M-1): `String p = c ? "/a" : "/b"; one(p + "/x" + p)` — ONE branch
+        # read twice — and `pair(c ? "/a" : "/b", d ? Order.class : Billing.class)`, two
+        # branches with nothing tying them together.
+        _declared(_FORKED, "twice", "()V"),
+        _site(
+            _symbol(_FORKED, "twice", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=60,
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+            ],
+        ),
+        _site(
+            _symbol(_FORKED, "twice", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/x{}", source=60)],
+        ),
+        _declared(_FORKED, "two", "()V"),
+        _site(
+            _symbol(_FORKED, "two", "()V"),
+            0,
+            _PAIR_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="class", symbol=_ORDER_WORKER),
+                        CallArgument(kind="class", symbol=_BILLING_WORKER),
+                    ],
+                ),
+            ],
+        ),
+        # A branch one of whose candidates is a literal KIND the walk cannot read (a class
+        # reference with no symbol), and one whose two candidates are the same value.
+        _declared(_FORKED, "unreadable", "()V"),
+        _site(
+            _symbol(_FORKED, "unreadable", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="x"),
+                        CallArgument(kind="class"),
+                    ],
+                )
+            ],
+        ),
+        _declared(_FORKED, "same", "()V"),
+        _site(
+            _symbol(_FORKED, "same", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="int", value=1),
+                        CallArgument(kind="long", value=1),
+                    ],
+                )
+            ],
+        ),
     ]
     return facts
 
@@ -1699,6 +1892,65 @@ def test_a_value_a_method_might_have_mutated_before_use_is_unresolved_escapes(wa
     it there is a call ON the value, and nothing in the facts says what it wrote."""
     bindings = _bindings(walked, _symbol(_MUTATOR, "escaped", "()V"), 2)
     assert _reasons(bindings) == ["escapes"]
+
+
+def _identity_reader(
+    workspace: DuckDbWorkspace, name: str, ancestors: Any = _BUFFER_ANCESTORS
+) -> tuple[Producer, ...]:
+    """`Mutator#<name>`'s use of the value, asked WHICH CALL built it (`Names#one`), by the
+    producer-identity reader: `past_accessors` on, with `Buffer`'s hierarchy."""
+    site = _at(workspace, _symbol(_MUTATOR, name, "()V"), 3)
+    declared = {(_NAMES, "one")}
+    return producers_of(value_index(workspace), site, 0, declared, past_accessors=ancestors)
+
+
+@pytest.mark.pins("values.an-ACCESSOR-is-not-a-write")
+def test_an_accessor_on_the_value_leaves_which_call_built_it_to_an_identity_reader(walked):
+    """`detail.getJobDataMap().put(k, v)` between `build()` and `scheduleJob`: the accessor
+    hands back another object, and nothing done through it changes which call built the
+    value. The producer-identity reader is let past it to `Names#one`."""
+    [producer] = _identity_reader(walked, "accessed")
+    assert (producer.identity, producer.ordinal) == ((_NAMES, "one"), 0)
+
+
+@pytest.mark.pins("values.past-ACCESSORS-is-a-readers-switch")
+def test_a_write_through_a_returned_view_still_escapes_for_a_content_reader(walked):
+    """The other side of the switch, and why it is one. `topics = Arrays.asList("a", "b");
+    topics.listIterator().set("c"); subscribe(topics)`: the iterator is a live view and
+    `set` writes into the list, so a reader asking what the value HOLDS must not answer
+    the producer's literals. The value walk, and `producers_of` without the switch, both
+    keep refusing."""
+    assert _reasons(_bindings(walked, _symbol(_MUTATOR, "viewed", "()V"), 3)) == ["escapes"]
+    site = _at(walked, _symbol(_MUTATOR, "viewed", "()V"), 3)
+    assert producers_of(value_index(walked), site, 0, {(_NAMES, "one")}) == (
+        Producer(reason="escapes"),
+    )
+
+
+@pytest.mark.pins("values.an-accessor-of-a-SUPERTYPE-is-not-one")
+@pytest.mark.parametrize(
+    ("name", "shape"),
+    [
+        ("fluent", "the receiver's own type: the fluent step may hand back the value itself"),
+        ("widened", "a supertype of the receiver: an inherited fluent step, the same"),
+        ("given", "an argument: what the caller hands it can be written in (`map.put`)"),
+        ("counted", "a primitive: how `incrementAndGet()` reports the write it made"),
+        ("listed", "an array: `returned_type` names no type for one"),
+    ],
+)
+def test_a_call_that_is_not_an_accessor_still_escapes_for_an_identity_reader(
+    walked, name: str, shape: str
+):
+    """The near-misses on each half of the accessor rule, with the switch ON."""
+    assert _identity_reader(walked, name) == (Producer(reason="escapes"),), shape
+
+
+def test_a_supertype_is_known_only_through_the_hierarchy_handed_in(walked):
+    """The supertype half reads `ancestors` and nothing else: handed no hierarchy, `Base`
+    is just another type and the call is an accessor — which is why a jar owner, whose
+    supertypes this workspace never read, excludes only itself."""
+    [producer] = _identity_reader(walked, "widened", ancestors={})
+    assert producer.identity == (_NAMES, "one")
 
 
 def test_the_same_chain_with_nothing_in_between_resolves(walked):
@@ -2828,12 +3080,106 @@ def test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexac
 
 
 @pytest.mark.pins("values.a-merge-without-a-ROOT-is-never-picked-from")
-def test_a_merge_of_two_literals_has_no_root_and_stays_non_enumerable(walked):
-    """Ruling 1, unchanged: two literals on two branches are two possible values and no
-    single one. The candidates are in the fact for a reader; the walk picks neither."""
-    assert _reasons(_bindings(walked, _symbol(_FORKED, "pick", _TAKES_STRING), 0)) == [
-        "non_enumerable"
+@pytest.mark.pins("values.a-BRANCH-between-literals-is-narrowed")
+def test_a_merge_of_two_literals_has_no_root_and_picks_neither(walked):
+    """Ruling 1, held: two literals on two branches are two possible values and no single
+    one, so the walk picks neither. Re-pinned by ruling 7 (2026-10-29): it now LISTS both,
+    each `narrowed` — one of these runs, which one is not known — where it answered
+    `non_enumerable` with the candidates left in the fact."""
+    bindings = _bindings(walked, _symbol(_FORKED, "pick", _TAKES_STRING), 0)
+    assert sorted((b.slots[0].value, b.slots[0].narrowed) for b in bindings) == [
+        ("/a", True),
+        ("/b", True),
     ]
+
+
+@pytest.mark.pins("values.a-BRANCH-between-literals-is-narrowed")
+def test_a_branch_between_two_class_literals_is_narrowed(walked):
+    """Ruling 7: `return c ? A.class : B.class` answers both symbols, each `narrowed`, on
+    the one path through `kind`'s return — D00's word for "one of these runs", the same
+    word `dispatch.py` uses for several bodies. Neither is exact and neither is dropped."""
+    bindings = _bindings(walked, _symbol(_FORKED, "use", "()V"), 1)
+    answers = sorted(
+        (b.slots[0].kind, b.slots[0].literal_kind, b.slots[0].value, b.slots[0].narrowed)
+        for b in bindings
+    )
+    assert answers == [
+        ("literal", "symbol", _BILLING_WORKER, True),
+        ("literal", "symbol", _ORDER_WORKER, True),
+    ]
+    # One path through `kind`'s return, told apart only by WHICH candidate it took (fix
+    # round 1): the branch is a choice the path records, like a caller or a return.
+    assert sorted(b.path[0] for b in bindings) == ["branch 0", "branch 1"]
+    assert len({b.path[1:] for b in bindings}) == 1
+
+
+@pytest.mark.pins("values.a-BRANCH-is-one-choice-per-path")
+@pytest.mark.pins("values.a-template-filled-from-a-branch-is-NARROWED")
+def test_one_branch_read_twice_is_never_paired_with_itself_crosswise(walked):
+    """M-1 for branches: `p + "/x" + p` with `p = c ? "/a" : "/b"` is `/a/x/a` or
+    `/b/x/b`. `/a/x/b` would pair two choices of ONE branch that no run makes together;
+    the branch is a crossing on the path, so `_combine` refuses it. Each template is
+    `narrowed`: it was filled from a branch, and which one runs is not known."""
+    bindings = _bindings(walked, _symbol(_FORKED, "twice", "()V"), 1)
+    assert sorted((b.slots[0].kind, b.slots[0].value, b.slots[0].narrowed) for b in bindings) == [
+        ("literal", "/a/x/a", True),
+        ("literal", "/b/x/b", True),
+    ]
+
+
+def test_two_independent_branches_on_one_site_pair_every_way(walked):
+    """`pair(c ? "/a" : "/b", d ? Order.class : Billing.class)`: two branches with different
+    candidates, and nothing in the facts says they test the same condition, so all four
+    pairings survive — each slot `narrowed`, never `resolved`. Were they the same branch
+    (the test above), only the two coherent pairings would."""
+    bindings = _bindings(walked, _symbol(_FORKED, "two", "()V"), 0)
+    assert sorted(
+        (b.slots[0].value, b.slots[1].value, b.slots[0].narrowed, b.slots[1].narrowed)
+        for b in bindings
+    ) == [
+        ("/a", _BILLING_WORKER, True, True),
+        ("/a", _ORDER_WORKER, True, True),
+        ("/b", _BILLING_WORKER, True, True),
+        ("/b", _ORDER_WORKER, True, True),
+    ]
+
+
+@pytest.mark.pins("values.a-BRANCH-with-an-unreadable-candidate-stays-non-enumerable")
+def test_a_branch_whose_candidate_reads_no_literal_stays_non_enumerable(walked):
+    """A candidate of a literal KIND that answers no literal — `class` with no symbol, here
+    `not_readable` — leaves the set incomplete, so the merge is ONE `non_enumerable` and
+    never a `narrowed` list carrying an unresolved member."""
+    bindings = _bindings(walked, _symbol(_FORKED, "unreadable", "()V"), 0)
+    assert [(b.slots[0].kind, b.slots[0].reason, b.slots[0].narrowed) for b in bindings] == [
+        ("unresolved", "non_enumerable", False)
+    ]
+
+
+@pytest.mark.pins("values.a-BRANCH-of-one-value-is-that-value-exactly")
+def test_a_branch_whose_candidates_are_one_value_is_that_value_exactly(walked):
+    """`c ? 1 : 1L` is `1` on every branch: one answer, exact, with no choice on its path."""
+    bindings = _bindings(walked, _symbol(_FORKED, "same", "()V"), 0)
+    assert [(b.slots[0].kind, b.slots[0].value, b.slots[0].narrowed, b.path) for b in bindings] == [
+        ("literal", 1, False, ())
+    ]
+
+
+def test_a_branch_with_a_non_literal_stays_non_enumerable(walked):
+    """Ruling 7 is about literals only: `c ? "x" : s.trim()` has a call on one branch and
+    no root (`"x"` is not what `trim` was called on), so it stays ONE `non_enumerable`."""
+    bindings = _bindings(walked, _symbol(_FORKED, "mixed", _TAKES_STRING), 1)
+    assert [(b.slots[0].kind, b.slots[0].reason) for b in bindings] == [
+        ("unresolved", "non_enumerable")
+    ]
+
+
+def test_a_shared_root_merge_is_still_inexact(walked):
+    """`x` or `f(x)` is unchanged by ruling 7: the root, through every caller, `inexact`
+    and never `narrowed` — the branch is one value possibly re-rendered, not several."""
+    bindings = _bindings(walked, _symbol(_WRAPPER, "send", _TAKES_STRING), 1)
+    assert sorted(
+        (str(b.slots[0].value), b.slots[0].inexact, b.slots[0].narrowed) for b in bindings
+    ) == [("/a", True, False), ("b", True, False)]
 
 
 def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
@@ -2847,6 +3193,7 @@ def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
 
 _INEXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string", inexact=True)
 _EXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string")
+_NARROWED = Answer(kind="literal", value="/billing/ledger", literal_kind="string", narrowed=True)
 
 
 @pytest.mark.pins("shapes.an-INEXACT-address-publishes-at-partial")
@@ -2864,3 +3211,34 @@ def test_an_inexact_channel_is_refused():
     it is GIVEN and a name some call may have re-rendered is not one."""
     assert channel_of_answer(_INEXACT) == (None, None, "unresolved")
     assert channel_of_answer(_EXACT) == (None, "/billing/ledger", "resolved")
+
+
+@pytest.mark.pins("shapes.a-NARROWED-address-publishes-at-narrowed")
+def test_a_narrowed_url_is_published_at_narrowed():
+    """Ruling 7 downstream: a url read off one branch of several literals is published at
+    `narrowed` — the candidate set is complete, which one is sent is not known — never at
+    `resolved`."""
+    assert url_of_answer(_NARROWED) == (None, "/billing/ledger", "narrowed")
+
+
+@pytest.mark.pins("shapes.a-NARROWED-channel-is-refused")
+def test_a_narrowed_channel_is_refused():
+    """A channel reader refuses a narrowed literal as it refuses an inexact one: a broker
+    resolves the destination it is GIVEN, and "one of these" is not one."""
+    assert channel_of_answer(_NARROWED) == (None, None, "unresolved")
+
+
+@pytest.mark.pins("path_prefix.a-NARROWED-prefix-is-refused")
+def test_a_narrowed_path_prefix_is_refused():
+    """A prefix table maps ONE prefix to a pattern; "one of these" is not one, so a narrowed
+    key is refused as the `non_enumerable` it replaced was (ruling 7)."""
+    assert path_prefix._text(_EXACT) == "/billing/ledger"
+    assert path_prefix._text(_NARROWED) is None
+
+
+@pytest.mark.pins("fluent.a-NARROWED-assembled-address-is-never-resolved")
+def test_a_narrowed_assembled_address_is_never_resolved():
+    """`fluent` hands on a single `resolved` text as the chain's whole address; a narrowed
+    one is a branch of several and says `narrowed` (ruling 7)."""
+    assert fluent._assembled_text(_EXACT) == (None, "/billing/ledger", "resolved")
+    assert fluent._assembled_text(_NARROWED) == (None, "/billing/ledger", "narrowed")

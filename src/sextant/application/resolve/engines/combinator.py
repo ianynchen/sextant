@@ -2738,7 +2738,7 @@ def _validate_continuations(catalog: Catalog) -> None:
       `pass_through`, which reads nothing and so cannot fold a subtree;
     - two entries sharing a name with no `owner` telling them apart — silent
       last-wins would hide exactly the bug the check exists for
-      (`fluent._validate_steps`, same rule for the same reason);
+      (`chains._validate_steps`, same rule for the same reason);
     - a name that is ALSO a declared composer method — an argument composer,
       a chain-form one, or a negator — on the same owner, or on any owner
       where the continuation declares none. Those two roles fold a call

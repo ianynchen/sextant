@@ -347,6 +347,8 @@ def _masked(
         projected["value"] = _each(projected["value"], lambda v: redactor.redact_value(key, v))
     if kind.name == "schedule":
         projected["expression"] = _each(projected["expression"], redactor.redact_text)
+        if projected["name"] is not None:
+            projected["name"] = redactor.redact_text(str(projected["name"]))
     if kind.name == "data-contract":
         projected["fields"] = _by_wire_name(projected["fields"])
     if kind.name in ("endpoint", "dependency"):

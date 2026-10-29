@@ -16,9 +16,9 @@ inside `contracts.py` (2E-prep design §1e).
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -436,6 +436,11 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
         # — and `resolved` would claim a rendering nobody checked.
         if answer.inexact and resolution == str(Resolution.RESOLVED):
             resolution = str(Resolution.PARTIAL)
+        # **A NARROWED literal is one of several addresses, the set complete** (ruling 7): a
+        # branch between literals, and which one is sent is not known. `narrowed` is D00
+        # §4's word for exactly that; `resolved` would claim this one is THE address.
+        if answer.narrowed and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.NARROWED)
         return peer, path, resolution
     if answer.kind == EXPRESSION:
         return url_of({"kind": EXPRESSION, "value": str(answer.value)})
@@ -617,6 +622,10 @@ def channel_of_answer(answer: "Answer | None") -> tuple[None, str | None, str]:
     # merged values, §3b): a broker resolves a destination it is GIVEN, and a topic name
     # some call may have re-rendered is not one.
     if answer.inexact:
+        return None, None, "unresolved"
+    # A NARROWED literal is refused by the same clause (ruling 7): "one of these topics" is
+    # not a destination a broker is given.
+    if answer.narrowed:
         return None, None, "unresolved"
     return None, str(answer.value), "resolved"
 
@@ -1678,3 +1687,174 @@ def _linked_constructor(
         ),
         None,
     )
+
+
+# Where a capture was read — `(caller, ordinal, slot)`, stamped by `_captured_at`, which
+# says why the walk needs all three. Spelled with no `\x00` prefix because unlike
+# `_CONTINUE` below it is not a pseudo-field of `captures`: it rides on one ARGUMENT, in
+# the same namespace as the scanner's own keys, which is why the name is unmistakable.
+_CAPTURED_AT = "captured_at"
+
+
+class _Reads(Protocol):
+    """What reading one captured argument needs — the walk's own context on the bean hop
+    (`_literal_of`), and the chain consumer's when it reads an end's captures. Read-only:
+    both are frozen dataclasses."""
+
+    @property
+    def facts(self) -> CallFacts: ...
+
+    @property
+    def field_sources(self) -> FieldFacts | None: ...
+
+    @property
+    def workspace(self) -> "Workspace | None": ...
+
+    @property
+    def values(self) -> "ValueIndex | None": ...
+
+
+def _address_read(argument: dict[str, Any] | None, context: _Reads) -> dict[str, Any] | None:
+    """One address-position argument as it should be READ (2F design §4): a
+    `field`-kind argument — or a getter's own result — that the field ladder
+    can name a configuration expression for is replaced by that expression as
+    a string literal BEFORE any existing resolution path sees it, so an
+    imperatively-fed address behaves downstream exactly as a written one. The
+    caller handed to the ladder's parameter rung is the one the argument
+    carries (`_own_parameter`) — the method whose signature the index is an
+    index into — never the chain's, which a lambda body's capture is not."""
+    if isinstance(argument, dict) and argument.get("kind") == "array":
+        # A varargs slot is one `array` argument (9.15), one destination per
+        # element (spec 2026-09-21 §3c) — and each element is an address in
+        # its own right, so each takes the ladder: `inboundAdapter(cf,
+        # this.valueQueue)` is a field-fed queue exactly as `uri(this.url)`
+        # is a field-fed address. The array itself names no expression, so
+        # before this every varargs registration fed from configuration read
+        # `unresolved` element by element.
+        return {
+            **argument,
+            "elements": [
+                _address_read(element, context) for element in argument.get("elements") or []
+            ],
+        }
+    caller = argument.get("caller") if isinstance(argument, dict) else None
+    return address_argument(argument, context.field_sources, context.facts, caller)
+
+
+def _walked_channels(
+    argument: dict[str, Any] | None,
+    context: _Reads,
+    forms: Sequence[dict[str, Any]] = (),
+) -> Sequence[tuple[str | None, str | None, str]] | None:
+    """One channel capture's destinations, resolved by the backward walk (Task 9).
+
+    `None` where the walk cannot be asked rather than where it answers nothing, and the
+    difference is the whole contract: a caller must be able to fall back to the literal
+    read it already has. So `None` means this catalog declares no hop (no index was built),
+    or the capture carries no `_captured_at` provenance, or the site it names is not one
+    this workspace holds. An empty answer from the walk itself is NOT `None` — it is an
+    answer, and `resolve_site` returning no binding means no path answered, which the
+    caller publishes as one unresolved tuple exactly as the old ladder did.
+
+    **One tuple per distinct destination, not one per path** (§1c), the same reasoning
+    `single_call` and `interface_implementation` state: several paths routinely agree about
+    this one slot, and keeping them apart would mint a second row for one registration.
+    """
+    # The provenance, the index and the site are all checked by `_walked_with`, which
+    # does the walk; what is decided HERE is only which identities it may consult.
+    if not isinstance(argument, dict):
+        return None
+    # **The identities are THIS ROW's declared producers, not the whole table**, and that
+    # is load-bearing rather than cautious. `linked_channels` followed a `source` only to a
+    # call whose owner AND method a declared form named; handed `catalog.value_model`
+    # instead, the walk follows any producer ANY catalog declared, and a row then publishes
+    # a destination its own form never reached. Two shipped guards say so —
+    # `fluent.url-via-follows-only-a-declared-call` SURVIVED its mutation, and
+    # `test_an_element_no_declared_form_reaches_is_unresolved_on_its_own` failed — so this
+    # is measured rather than argued.
+    #
+    # `single_call` could take the shared table because Task 8 gave it a TYPE GATE: its
+    # rows declare a descriptor, so a producer whose return type cannot be the declared
+    # parameter type is refused. `fluent`'s rows here carry no descriptor (22 of its 29 hop
+    # rows do not), so that gate cannot govern them and the row's own declaration is what
+    # remains. §1e is the reading: the walk answers what a value is, the catalog says which
+    # producer means the destination.
+    # `descriptor` and `arity` travel too, and dropping them was a real regression caught
+    # by `test_a_sibling_constructor_with_a_string_at_the_same_position_is_not_the_topic`:
+    # a form's descriptor is what tells one overload from its siblings, so an entry without
+    # it matches an overload whose argument 0 is something else entirely.
+    identities = [
+        {
+            "owner": form["owner"],
+            "method": form["method"],
+            "arg": form["arg"],
+            **({"descriptor": form["descriptor"]} if "descriptor" in form else {}),
+            **({"arity": form["arity"]} if "arity" in form else {}),
+        }
+        for form in forms
+        if isinstance(form, dict) and {"owner", "method", "arg"} <= set(form)
+    ]
+    if not identities:
+        return None
+    return _walked_with(argument, context, identities)
+
+
+def _walked_with(
+    argument: dict[str, Any],
+    context: _Reads,
+    identities: Sequence[dict[str, Any]],
+    reader: "Callable[[Answer | None], tuple[str | None, str | None, str]]" = channel_of_answer,
+    branches: bool = True,
+) -> Sequence[tuple[str | None, str | None, str]] | None:
+    """`_walked_channels`' walk, with the identity list decided by the caller.
+
+    `reader` turns one answer into `(peer, address, resolution)`. A CHANNEL is read with
+    `channel_of_answer`, which refuses a template — a broker needs a whole destination — and
+    an HTTP address with `url_of_answer`, which publishes the half it read (`OI-144`). The
+    default keeps every existing caller reading channels, which is what they all are.
+
+    Split out so that **an EMPTY list is reachable deliberately**, which is not the same
+    thing as the refusal above it. That refusal exists because handing the walk
+    `catalog.value_model` would let a row publish a destination its own form never
+    reached, and two shipped guards measure it. An empty list has the OPPOSITE effect: no
+    `identified_by` entry is consulted at all, so the walk can only answer values it
+    reaches over plain value edges and can never conclude "this producer MEANS the
+    destination". That is why the assembled-address caller may ask without declaring a
+    hop.
+
+    `branches` is `resolve_site`'s: False reads a branch between literals as the walk did
+    before ruling 7.
+    """
+    if context.values is None or context.workspace is None:
+        return None
+    captured = argument.get(_CAPTURED_AT)
+    if captured is None:
+        return None
+    caller, ordinal, slot = captured
+    site = context.values.sites.get((str(caller), int(str(ordinal))))
+    if site is None:
+        return None
+    walked = list(
+        dict.fromkeys(
+            reader(binding.slots.get(slot))
+            for binding in resolve_site(
+                context.workspace, site, context.values, identities, branches
+            )
+        )
+    )
+    return walked or [(None, None, "unresolved")]
+
+
+def _string_value(argument: dict[str, Any] | None) -> str | None:
+    """A captured argument's own string literal, or None for anything else —
+    `url_of`'s own test, needed on its own here because composition works on
+    the two halves' TEXT before either is read as an address. "Anything
+    else" includes the catalog's own literal spellings (`none`, `{bean_via:
+    …}`) and both poisons, none of which is a `string` argument."""
+    if (
+        isinstance(argument, dict)
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        return str(argument["value"])
+    return None

@@ -1368,7 +1368,9 @@ def _job(handler: str, expression: str, trigger: str = "cron") -> dict[str, obje
     return {
         "handler": handler,
         "trigger": trigger,
+        "name": None,
         "expression": expression,
+        "expression_source": None,
         "resolution": "unresolved",
         "evidence": "compiler",
         "catalog_id": "spring-scheduling",
@@ -1388,6 +1390,7 @@ def _configured(
     return {
         "handler": handler,
         "trigger": trigger,
+        "name": None,
         "expression": expression,
         "environment": environment,
         "keys": json.dumps(list(keys)),
@@ -1415,7 +1418,10 @@ def test_a_placeholder_schedule_states_its_value_per_environment():
         [_job(SWEEP, SWEEP_CRON)],
         [_configured("default", "0 0 * * * *"), _configured("prod", "0 */5 * * * *")],
     )
-    assert f"| `com/acme/OrderSweeper#sweep().` | cron | `{SWEEP_CRON}` | unresolved |" in text
+    assert (
+        f"| `com/acme/OrderSweeper#sweep().` | cron | not in the code | `{SWEEP_CRON}` | unresolved |"
+        in text
+    )
     assert (
         f"- `com/acme/OrderSweeper#sweep().` — cron `{SWEEP_CRON}`\n"
         "  - as configured in this repository: `0 0 * * * *` in `default`; "
@@ -1494,6 +1500,83 @@ def test_two_placeholder_jobs_on_one_method_are_each_stated_under_their_own_head
     ) in text
 
 
+def test_a_null_expression_renders_not_in_the_code_with_its_source():
+    """A Quartz trigger whose schedule is read at runtime: no handler to name, no
+    expression the code states. Every NULL cell reads `not in the code`, and the block under
+    the table says where the walk stopped, in the words the spec gives."""
+    source = "s maven c 1 com/acme/Jobs#cronFromDb()."
+    row = {
+        **_job(SWEEP, "x"),
+        "handler": None,
+        "name": "nightly",
+        "expression": None,
+        "expression_source": source,
+        "resolution": "partial",
+    }
+    text = _schedules_document([row], [])
+    assert "| Handler | Trigger | Name | Expression | Resolution |" in text
+    assert "| not in the code | cron | nightly | not in the code | partial |" in text
+    assert "the schedule is read at runtime from `com/acme/Jobs#cronFromDb().`\n" in text
+
+
+def test_a_partial_row_with_an_expression_has_no_runtime_line():
+    """The runtime line is for a schedule with NO expression: a `partial` row that did read
+    one has nothing to say about where the rest comes from."""
+    row = {**_job(SWEEP, "0 0 * * * *"), "resolution": "partial", "expression_source": None}
+    assert "read at runtime" not in _schedules_document([row], [])
+
+
+def test_configured_values_are_attributed_by_the_triggers_name():
+    """Two Quartz triggers alike in handler, trigger and expression and told apart by name
+    each get their own values: a configured row for one never lands under the other."""
+    first, second = _job(SWEEP, SWEEP_CRON), _job(SWEEP, SWEEP_CRON)
+    first["name"], second["name"] = "a", "b"
+    other = {**_configured("prod", "0 */5 * * * *"), "name": "b"}
+    text = _schedules_document([first, second], [other])
+    assert text.count("as configured in this repository") == 1
+    assert "`0 */5 * * * *` in `prod`" in text
+
+
+@pytest.mark.pins("schedules.a-NAME-is-masked-at-every-exit")
+def test_a_trigger_name_passes_the_render_redactor_in_the_table_and_the_header():
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    job = {**_job(SWEEP, SWEEP_CRON), "name": "nightly-ACME_A1B2"}
+    configured = {**_configured("prod", "0 */5 * * * *"), "name": "nightly-ACME_A1B2"}
+    text = _schedules_document([job], [configured], redactor)
+    assert "ACME_A1B2" not in text
+    assert f"| cron | nightly-{REDACTED} |" in text
+    assert f"— cron nightly-{REDACTED} `{SWEEP_CRON}`\n" in text
+
+
+def test_the_detail_header_names_the_whole_identity_of_each_named_trigger():
+    """Two triggers on one job alike in everything but their names, each with its own
+    configured value: two distinct headers, the name between trigger and expression."""
+    first, second = _job(SWEEP, SWEEP_CRON), _job(SWEEP, SWEEP_CRON)
+    first["name"], second["name"] = "a", "b"
+    text = _schedules_document(
+        [first, second],
+        [
+            {**_configured("prod", "0 1 * * * *"), "name": "a"},
+            {**_configured("prod", "0 2 * * * *"), "name": "b"},
+        ],
+    )
+    head = "- `com/acme/OrderSweeper#sweep().` — cron "
+    assert f"{head}a `{SWEEP_CRON}`\n  - as configured in this repository: `0 1 * * * *`" in text
+    assert f"{head}b `{SWEEP_CRON}`\n  - as configured in this repository: `0 2 * * * *`" in text
+
+
+def test_the_header_of_a_handlerless_job_names_each_part_once_and_never_dangles():
+    row = {**_job(SWEEP, SWEEP_CRON), "handler": None, "name": "nightly"}
+    configured = {**_configured("prod", "0 */5 * * * *", handler=None), "name": "nightly"}  # type: ignore[arg-type]
+    text = _schedules_document([row], [configured])
+    assert f"- not in the code — cron nightly `{SWEEP_CRON}`\n" in text
+    assert "— cron nightly — cron" not in text
+    nameless = {**row, "name": None, "expression_source": "s maven c 1 com/acme/J#x()."}
+    nameless["resolution"], nameless["expression"] = "partial", None
+    for line in _schedules_document([nameless], []).splitlines():
+        assert not line.rstrip().endswith("—")
+
+
 def test_a_configured_schedule_value_passes_the_render_redactor():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
     text = _schedules_document(
@@ -1551,5 +1634,8 @@ def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_d
         redactor,
     )
     assert "ACME_A1B2" not in text
-    assert f"| `com/acme/OrderSweeper#sweep().` | cron | `{shown}` | unresolved |" in text
+    assert (
+        f"| `com/acme/OrderSweeper#sweep().` | cron | not in the code | `{shown}` | unresolved |"
+        in text
+    )
     assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text

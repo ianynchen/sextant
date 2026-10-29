@@ -6,6 +6,7 @@ refuses any catalog naming a style that is not in it."""
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 from sextant.application.boundary.observability import (
     SKIP_MISSING_CAPABILITY,
@@ -26,6 +27,7 @@ from sextant.application.resolve.engines import (
     fluent,
     injected_client,
     interface_implementation,
+    scheduled_chain,
     scheduled_work,
     schema_operations,
     single_call,
@@ -143,7 +145,10 @@ def derive_endpoints_with_runs(
     # engine that does not exist is a broken file, and a broken file must not
     # leave a half-emptied endpoints table behind it.
     engines = [
-        (catalog, _engine_for(_wire_identity_checked(_shape_checked(catalog))))
+        (
+            catalog,
+            _bound(_engine_for(_wire_identity_checked(_shape_checked(catalog))), catalog, catalogs),
+        )
         for catalog in catalogs
     ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
@@ -328,7 +333,7 @@ def _derives_rows(catalog: Catalog) -> int:
 
 # The styles that derive into a table of their own rather than into
 # `endpoints` (2O design §4).
-_NON_WIRE = frozenset({"scheduled_work", "error_advice"})
+_NON_WIRE = frozenset({"scheduled_work", "scheduled_chain", "error_advice"})
 
 
 def _derives_endpoint_rows(catalog: Catalog) -> bool:
@@ -512,6 +517,25 @@ def _wire_identity_checked(catalog: Catalog) -> Catalog:
     return catalog
 
 
+# The engines that read the RESOLVE's config model rather than their own catalog's, by
+# style: both `scheduled_work` engines decide what a placeholder is (`config_model_of`).
+_READS_THE_CONFIG_MODEL: dict[str, Callable[..., None]] = {
+    "scheduled_work": scheduled_work.run,
+    "scheduled_chain": scheduled_chain.run,
+}
+
+
+def _bound(
+    engine: "Callable[[Workspace, Catalog], None]", catalog: Catalog, catalogs: list[Catalog]
+) -> "Callable[[Workspace, Catalog], None]":
+    """`engine`, handed every catalog of the resolve when its style reads the config model:
+    which placeholder opener to read is the RESOLVE's config model, chosen across catalogs
+    (`config_model_of`), and the engine's own catalog declares none."""
+    if catalog.style in _READS_THE_CONFIG_MODEL:
+        return partial(_READS_THE_CONFIG_MODEL[catalog.style], catalogs=catalogs)
+    return engine
+
+
 def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
     """Resolves the engine for a catalog's declared style, or refuses it.
 
@@ -573,5 +597,9 @@ _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
     # rows another engine minted. Their own tables are emptied once per resolve
     # by the pipeline, for the reason `_NON_WIRE` states.
     "scheduled_work": scheduled_work.run,
+    # Quartz spec 2026-10-28 §3d: the second shape of evidence for `scheduled_work`, a
+    # schedule BUILT by a chain of calls rather than declared by an annotation. Non-wire,
+    # and outside `_RUNS_LAST`, on the same terms as the annotation engine above.
+    "scheduled_chain": scheduled_chain.run,
     "error_advice": error_advice.run,
 }

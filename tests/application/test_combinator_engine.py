@@ -3633,7 +3633,7 @@ def test_half_a_nest_shaped_continuation_is_refused(tmp_path: Path):
 
 
 def test_two_continuations_sharing_a_name_need_distinct_owners(tmp_path: Path):
-    """`fluent._validate_steps`' rule, for the same reason: silent last-wins
+    """`chains._validate_steps`' rule, for the same reason: silent last-wins
     would hide exactly the bug the check exists for. An owner-free entry
     matches every owner, so it collides with any sibling regardless of what
     that sibling declares."""

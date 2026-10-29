@@ -40,8 +40,8 @@ _MODULE = {
 }
 _PROVENANCE = {"commit": "630906a7", "sextant_version": "0.1.0", "fact_schema_version": 2}
 _METADATA = {
-    "schema_version": 8,
-    "boundary_vocabulary_version": 2,
+    "schema_version": 9,
+    "boundary_vocabulary_version": 3,
     "catalog_hash": "sha256:catalogs",
     "module": _MODULE,
     "provenance": _PROVENANCE,
@@ -655,6 +655,55 @@ def _secret_schedule(workspace: DuckDbWorkspace) -> None:
             catalog_id="spring-scheduling")  # fmt: skip
 
 
+def _named_schedule(*names: str | None):
+    def build(workspace: DuckDbWorkspace) -> None:
+        for name in names:
+            _insert(workspace, "scheduled_work", handler="A#run().", trigger="cron", name=name,
+                    expression="0 0 * * * *", resolution="resolved", evidence="compiler",
+                    catalog_id="quartz")  # fmt: skip
+
+    return build
+
+
+@pytest.mark.pins("vocabulary.schedule-identity-includes-NAME")
+def test_schedule_identity_includes_the_name(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """Two Quartz triggers of one kind on one job, alike in everything but their own names,
+    are two schedules: added, each its own entry. With the name out of the identity they are
+    one entry whose expression and resolution agree, and a second trigger would diff as
+    nothing at all."""
+    one = sources(_built(tmp_path / "one", _named_schedule("nightly")))
+    two = sources(_built(tmp_path / "two", _named_schedule("nightly", "weekly")))
+    empty = sources(_built(tmp_path / "empty", lambda w: None))
+    assert KINDS["schedule"].identity == ("handler", "trigger", "name")
+    assert [r["name"] for r in two.rows(KINDS["schedule"])] == ["nightly", "weekly"]
+    entries = diff_sources(empty, two, REDACTOR, REDACTOR).entries
+    assert [(e.kind, e.change, e.identity["name"]) for e in entries] == [
+        ("schedule", "added", "nightly"),
+        ("schedule", "added", "weekly"),
+    ]
+    (entry,) = diff_sources(one, two, REDACTOR, REDACTOR).entries
+    assert (entry.change, entry.identity["name"]) == ("added", "weekly")
+
+
+@pytest.mark.pins("schedules.a-NAME-is-masked-at-every-exit")
+def test_a_schedule_name_masked_by_the_bundle_diffs_empty_and_prints_masked(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The bundle masks `scheduled_work.name` through `redact_text` as it does `expression`,
+    so the diff makes the same call on a workspace's: bundle and workspace diff empty, and a
+    name the diff prints is masked."""
+    secret = "nightly-https://ops:hunter2@billing.internal"
+    workspace = _built(tmp_path / "w", _named_schedule(secret))
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "empty", lambda w: None))
+    (entry,) = diff_sources(empty, verbatim, REDACTOR, REDACTOR).entries
+    assert entry.identity["name"] == "nightly-https://billing.internal"
+
+
 @pytest.mark.pins("schedules.an-EXPRESSION-is-masked-in-the-DIFF")
 def test_a_schedule_expression_masked_by_the_bundle_diffs_empty_and_prints_masked(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
@@ -738,7 +787,7 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
     with pytest.raises(
-        DiffRefused, match="both sides are graph_schema_version 4 and this build is 8"
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 9"
     ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
@@ -825,7 +874,7 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
-    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 8") as refused:
+    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 9") as refused:
         diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 
@@ -837,7 +886,7 @@ def test_different_fact_schema_and_vocabulary_versions_refuse_by_name(tmp_path: 
     with pytest.raises(DiffRefused) as refused:
         diff_sources(a, b, REDACTOR, REDACTOR)
     assert "fact_schema_version 1 vs 2" in str(refused.value)
-    assert "boundary_vocabulary_version 1 vs 2" in str(refused.value)
+    assert "boundary_vocabulary_version 1 vs 3" in str(refused.value)
     assert set(refused.value.stamps) == {"fact_schema_version", "boundary_vocabulary_version"}
 
 
@@ -1013,7 +1062,7 @@ def test_to_json_has_exactly_the_spec_keys(
     assert list(document) == [
         "boundary_vocabulary_version", "a", "b", "producer_changed", "entries", "summary",
     ]  # fmt: skip
-    assert document["boundary_vocabulary_version"] == 2
+    assert document["boundary_vocabulary_version"] == 3
     assert document["a"]["commit"] == "630906a7" and document["b"]["commit"] == "778285e8"  # type: ignore[index]
     assert set(document["a"]) == {"module", "commit", "producer"}  # type: ignore[arg-type]
     assert document["a"]["module"] == "com.acme:orders-service"  # type: ignore[index]

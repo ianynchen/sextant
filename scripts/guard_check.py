@@ -143,6 +143,9 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+# The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
+# whole, with the guards on the walk's own rules.
+_CHAINS = "sextant/application/resolve/shapes/chains.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
@@ -154,6 +157,10 @@ _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
+_EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
+_CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
+_SCHEDULED_CHAIN = "sextant/application/resolve/engines/scheduled_chain.py"
+_QUARTZ_CATALOG = "sextant/catalogs/quartz.yml"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -180,6 +187,386 @@ _QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
+    "values.a-branch-of-calls-on-one-receiver-passes-through": Guard(
+        what="for the chain reader, a merge whose every candidate is a declared call on one "
+        "shared receiver passes through to that receiver's chain",
+        why="RuoYi, aurora and NBlog pass the cron builder through a misfire helper that "
+        "branches between two builder calls on its parameter; without the pass-through the "
+        "walk stops at the branch and the trigger names no source for its runtime cron",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if not self._along_receivers:\n            return None\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            return None\n",
+            ),
+        ),
+    ),
+    "values.a-passed-through-branch-keeps-its-calling-context": Guard(
+        what="the pass-through resolves the shared receiver on the same path and frames, so "
+        "a helper's parameter is the argument at the call the walk came through",
+        why="`misfire` is called from `createJob` and from `updateJob`; resolved with no "
+        "calling context its parameter reaches both callers' builders, and the rebuilt "
+        "trigger's schedule would be attached to the new trigger's entry",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                (_SLOT, sites[0][0], sites[0][1], RECEIVER), trail, frames\n",
+                replace="                (_SLOT, sites[0][0], sites[0][1], RECEIVER), (), ()\n",
+            ),
+        ),
+    ),
+    "quartz.a-REBUILT-trigger-is-not-an-entry": Guard(
+        what="only a `newTrigger()` root is a trigger entry; `trigger.getTriggerBuilder()` "
+        "rebuilds an existing trigger and starts none",
+        why="NBlog's and RuoYi's update method rebuilds the trigger it already scheduled for "
+        "`rescheduleJob`; reading that chain as a root would publish one schedule twice, as "
+        "two triggers, contradicting ruling 3's one entry per new trigger",
+        edits=(
+            Edit(
+                path=_QUARTZ_CATALOG,
+                find="    - { owner: org.quartz.TriggerBuilder, method: newTrigger }\n",
+                replace="    - { owner: org.quartz.TriggerBuilder, method: newTrigger }\n"
+                "    - { owner: [org.quartz.Trigger, org.quartz.CronTrigger], "
+                "method: getTriggerBuilder }\n",
+            ),
+        ),
+    ),
+    "quartz.KIND-from-the-declared-return-type": Guard(
+        what="where the walk to the schedule builder ends before a root, the kind is the type "
+        "the producing call is declared to return",
+        why="RuoYi, aurora and NBlog pass the cron builder through a misfire helper that "
+        "branches; without the declared type their one trigger has no kind and no job here, "
+        "and is not derived at all",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find='    return context.kinds.get(returned_type(str(producer["descriptor"])) or "")',
+                replace="    return None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-runtime-cron-is-PARTIAL-not-dropped": Guard(
+        what="a cron argument the walk reads no value for keeps its entry, `partial`, naming "
+        "the call it stopped at",
+        why="every real Quartz application reads its cron off a database row (ruling 2); "
+        "dropping those entries would report no schedule for any of them",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            expression, resolution, source = _expression(answers.get(_VALUE), "
+                "root, slot, context)\n",
+                replace="            expression, resolution, source = _expression(answers.get(_VALUE), "
+                "root, slot, context)\n            if expression is None:\n                continue"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.forJob-DEFAULT-group-only": Guard(
+        what="`forJob(name)` names the job whose key is that name in the default group, and "
+        "no other group's job of the same name",
+        why="Quartz's `Key` puts a key written with no group in `DEFAULT` (CP-55 rows 10-18); "
+        "matching by name alone would pair a trigger with a job in another group, which "
+        "Quartz never runs for it",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        found.extend((job, path) for job in (context.jobs_by_key or {})"
+                ".get(named, ()))",
+                replace="        found.extend((job, path) for key, jobs in (context.jobs_by_key "
+                'or {}).items() if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in '
+                "jobs)  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.QUARTZJOBBEAN-runs-executeInternal": Guard(
+        what="where the job's `execute` body is in a jar type the catalog's "
+        "`supertype_dispatch` names, the handler is the method that template calls",
+        why="every Spring Boot Quartz job extends `QuartzJobBean` and writes "
+        "`executeInternal`; without the template every one has no handler and starts no "
+        "trace (CP-55 row 19)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        template = context.rules.templates.get(",
+                replace="        template = {}.get(  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-JAR-base-gives-NO-handler": Guard(
+        what="a job whose `execute` body is in a jar type the catalog does NOT name gets no "
+        "handler",
+        why="what an unread base class's `execute` does is not known; assuming it calls a "
+        "subclass method would name a handler the framework may never run",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        template = context.rules.templates.get(",
+                replace="        template = next(iter(context.rules.templates.values())) or "
+                "context.rules.templates.get(  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.equal-HANDLERS-collapse": Guard(
+        what="several job classes reaching one body are one row",
+        why="RuoYi, aurora and NBlog pick between two classes that inherit one `execute`; "
+        "without collapsing, one trigger reads as two schedules of the same work",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler)",
+                replace="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
+                "id(row))  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.several-PATHS-are-exact": Guard(
+        what="job classes reaching the job on SEPARATE paths (several callers) are a row each "
+        "at their own resolution, not `narrowed`",
+        why="a closed set of paths is exact (§3c, the walk's multiplicity); marking each "
+        "narrowed would say only one of them runs, when every caller's job does",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="                narrowed=narrowed,\n            )\n        )\n    return found\n",
+                replace="                narrowed=True,  # guard disabled by scripts/guard_check.py\n"
+                "            )\n        )\n    return found\n",
+            ),
+        ),
+    ),
+    "quartz.different-BODIES-are-narrowed": Guard(
+        what="job classes on one branch reaching different bodies are a row each, `narrowed`",
+        why="one of them runs and which is not known; publishing each at `resolved` would "
+        "claim both run",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="row.narrowed and len(branched) > 1",
+                replace="False",
+            ),
+        ),
+    ),
+    "quartz.one-PATH-ties-the-cron-to-its-job": Guard(
+        what="the trigger's key, the literal cron and the job's class are read together on "
+        "each path, so a value stays with the values its own path gives",
+        why="the `QuartzManager.addJob(jobClass, cron)` helper is called with a job and a cron "
+        "per caller; read apart, every cron pairs with every job, and two callers publish "
+        "four `resolved` rows, two of them a job at a time nobody scheduled it",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        resolve_positions(context.workspace, positions, context.index, "
+                "within=anchor)\n",
+                replace="        [dict(zip(positions, combo)) for combo in __import__('itertools')"
+                ".product(*([answers[label] for answers in resolve_positions(context.workspace, "
+                "{label: at}, context.index)] for label, at in positions.items()))]"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.a-row-is-RESOLVED-only-from-one-binding": Guard(
+        what="a row's key, cron and job class are read within the path its trigger and job "
+        "took to the call that paired them, so every part comes from one binding",
+        why="a trigger built in `trigger(cron)` and scheduled by several callers, each with "
+        "its own job, reaches every caller's cron; read without the pairing's path, every "
+        "cron is published `resolved` beside every job (R19: seven rows, four false)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        resolve_positions(context.workspace, positions, context.index, "
+                "within=anchor)\n",
+                replace="        resolve_positions(context.workspace, positions, context.index)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.a-NAME-is-read-on-its-schedules-path": Guard(
+        what="the trigger's key and cron are read within the path the schedule builder took "
+        "to `withSchedule`",
+        why="`trigger(name, sb)` called with `(n1, cronSchedule(c1))` and `(n2, "
+        "cronSchedule(c2))`: read apart from the schedule's path, every name is published "
+        "`resolved` beside every cron, two of four rows false",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            anchor = schedule.path.joined(path)",
+                replace="            anchor = path  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-name-is-NULL": Guard(
+        what="in a row no one binding holds, the name is the one every path agrees on, or NULL",
+        why="a name read on one path, beside a cron and a job read on others, states a "
+        "pairing of name and schedule nothing in the code makes",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            name=_key(end.captures.get(_NAME), end.captures.get(_GROUP), "
+                "context),",
+                replace="            name=_key_of(resolve_positions(context.workspace, {_NAME: "
+                "positions[_NAME]}, context.index)[0], context) if _NAME in positions else None,"
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-KEYED-job-is-paired-on-its-keys-path": Guard(
+        what="a job named by a key a `job_key` call builds is paired on the path the walk "
+        "took to that call",
+        why="`t(JobKey k, String cron)` called with `(jobKey(a), c1)` and `(jobKey(b), c2)`: "
+        "paired on any path, each keyed job is published `resolved` beside each caller's "
+        "cron, two of four rows false (R20)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="    for named, path in keys:\n        found.extend((job, path) for job in "
+                "(context.jobs_by_key or {}).get(named, ()))",
+                replace="    for named, path in keys:\n        found.extend((job, _ANY_PATH) for job "
+                "in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
+                "scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-part-is-kept-only-where-every-path-agrees": Guard(
+        what="in a row no one binding holds, the cron is kept only where every path gives "
+        "the same one; otherwise it is NULL",
+        why="`scheduleJob(id(job), id(trigger(cron)))` in two callers: each cron published "
+        "beside each job states pairings no execution builds, even at `partial` (R20)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            if len(expressions) == 1\n",
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.paths-through-DIFFERENT-callers-pair-nothing": Guard(
+        what="a job and a trigger whose paths to a pairing call disagree on a caller they "
+        "crossed out to are no pairing; only two calls of one helper are read apart",
+        why="`sched(JobDetail j, Trigger t)` called by x with (A, c1) and y with (B, c2): "
+        "treating every failed join as untied publishes A@c2 and B@c1, pairings no "
+        "execution builds, callers-squared of them (R21: four callers, twelve false rows)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="trigger.two_calls_of_one_helper(path) for trigger in triggers",
+                replace="True for trigger in triggers  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.no-withSchedule-is-the-DEFAULT-schedule": Guard(
+        what="a trigger built with no `withSchedule` is an entry on the catalog's "
+        "`default_schedule`",
+        why="Quartz's `TriggerBuilder.build()` uses `simpleSchedule()` where no schedule was "
+        "handed to it, and `newTrigger().withIdentity(..).startNow().build()` is its own "
+        "first example; without the default that trigger, and the job it runs, is missing",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        return [context.default_schedule]",
+                replace="        return []  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-call-ON-the-value-names-where-it-came-from": Guard(
+        what="a no-argument call handing back its own receiver's type is read past, and the "
+        "call that produced its receiver is the named source",
+        why="`cronSchedule(row.getCron().trim())` would name `String#trim()` as where the cron "
+        "is read at runtime, which says nothing about where it comes from",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find='        if not (call["arguments"] or []) and returned_type(',
+                replace='        if False and not (call["arguments"] or []) and returned_type(  '
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.one-HANDLER-is-one-row-at-the-weaker-word": Guard(
+        what="one body reached exactly on one path and through a branch on another is one "
+        "row, at the weaker resolution",
+        why="two rows for one handler, `resolved` and `narrowed`, state the one trigger twice "
+        "and claim the body both certainly and possibly runs",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            resolution if key not in rows_by_key else "
+                "_weaker(rows_by_key[key], resolution)\n",
+                replace="            resolution  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.an-enum-constant-is-written-as-its-type-and-name": Guard(
+        what="an `enum` argument (a named constant of its own type) is written as "
+        "`Type.CONSTANT` rather than leaving the chain without text",
+        why="`withInterval(1, IntervalUnit.HOUR)` is a constant the source wrote; without "
+        "the branch the whole chain of the Spring Boot smoke test has no text and its row "
+        "goes `partial`, contradicting ruling 4's constants-as-literal-text",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    if kind == "enum":',
+                replace="    if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-chain-with-a-non-constant-argument-has-no-text": Guard(
+        what="a builder chain with an argument that is neither a constant nor a nested call "
+        "of constants has no text at all",
+        why="a chain written with one hole filled in or skipped reads as a complete "
+        "schedule: `withIntervalInSeconds(<read from a row>)` published as "
+        "`withIntervalInSeconds()` states a schedule nobody wrote, at a confidence the "
+        "reader cannot tell from a real one (ruling 4)",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="\n    return None\n",
+                replace="\n    return ''  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.a-nested-call-is-written-WITH-its-receiver": Guard(
+        what="a nested call is written with what it was called on (its type for a static "
+        "call, a constant of its own type, a nested call written too), else the chain has "
+        "no text",
+        why="`withIntervalInMilliseconds(TimeUnit.MINUTES.toMillis(5))` written without its "
+        "receiver reads `TimeUnit.toMillis(5)`, a call nobody wrote, published `resolved`",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    return None if receiver is None else f"{receiver}.{name}({written})"',
+                replace="    return f\"{short_class_name(str(site['owner']))}.{name}({written})\""
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-construction-is-written-as-NEW": Guard(
+        what="a nested constructor call is written `new Type(args)`",
+        why="`startingDailyAt(new TimeOfDay(9, 0))` written as `TimeOfDay.<init>(9, 0)` is "
+        "no code anyone wrote",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="        return f\"new {short_class_name(str(site['owner']))}({written})\"",
+                replace="        return f\"{short_class_name(str(site['owner']))}.{name}({written})\""
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-NESTED-type-is-written-with-a-dot": Guard(
+        what="a nested type in a written chain reads `Outer.Inner`, as the source writes it",
+        why="the Spring Boot smoke test's row read `DateBuilder$IntervalUnit.HOUR`, the "
+        "binary name, which no source spells (OI-223)",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="from sextant.domain.symbols import bare_descriptor, member_name, owner_of, "
+                "short_class_name\n",
+                replace="from sextant.domain.symbols import bare_descriptor, member_name, owner_of, "
+                "simple_name\n\n\ndef short_class_name(symbol):  # guard disabled by "
+                "scripts/guard_check.py\n    return simple_name(bare_descriptor(symbol))\n",
+            ),
+        ),
+    ),
     # --- the backward value walk and what it is allowed to answer ----------
     "values.a-construction-hands-nothing-back": Guard(
         what="a call site is read as the CONSTRUCTION of a value only when it produced no "
@@ -202,6 +589,54 @@ GUARDS: dict[str, Guard] = {
                 '        return None if site is None or site.get("result") is not None '
                 "else min(ordinals)",
                 replace="        return min(ordinals)",
+            ),
+        ),
+    ),
+    "values.an-ACCESSOR-is-not-a-write": Guard(
+        what="for a producer-identity reader (`past_accessors`), a call on the value that "
+        "takes no argument and hands back an object of another type than its owner does not "
+        "open the `escapes` window: it cannot change which call built the value",
+        why="RuoYi-Vue, NBlog and aurora all write `jobDetail.getJobDataMap().put(KEY, job)` "
+        "between building the job and scheduling it. Without this the accessor is read as "
+        "a possible write, the job argument answers `escapes`, and the Quartz handler is "
+        "NULL on 3 of the 6 real corpora measured (Quartz Task 11, finding F1)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if self._accessor((method, ordinal)):\n"
+                "                    continue\n",
+                replace="",
+            ),
+        ),
+    ),
+    "values.past-ACCESSORS-is-a-readers-switch": Guard(
+        what="only a reader that passes `past_accessors` lets an accessor past the `escapes` "
+        "window; the value walk and every other `producers_of` reader keep refusing it",
+        why='an accessor can hand back a LIVE view: `topics = Arrays.asList("a", "b"); '
+        'topics.listIterator().set("c"); subscribe(topics)` writes into the list through '
+        "it. As the default (Quartz fix round 2), the `identified_by` reader published "
+        "`a`, `b` as exact topics. Whether that write matters depends on the question: "
+        "it cannot change which call BUILT the value, and it can change what it HOLDS",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        ancestors = self._past_accessors\n",
+                replace="        ancestors = self._past_accessors if self._past_accessors is not None "
+                "else {}\n",
+            ),
+        ),
+    ),
+    "values.an-accessor-of-a-SUPERTYPE-is-not-one": Guard(
+        what="a no-argument call handing back a SUPERTYPE of its owner, read off the "
+        "hierarchy the reader hands in, stays in the `escapes` window",
+        why="an inherited fluent step or an erased self-type bound returns the receiver "
+        "itself typed as its supertype, so the call may have replaced the value; only the "
+        "owner's own type was excluded before (Quartz fix round 3)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            for parent, _, _ in ancestors.get(frontier.pop(), ()):\n",
+                replace="            for parent, _, _ in ancestors.get(frontier.pop() + '!', ()):\n",
             ),
         ),
     ),
@@ -668,7 +1103,8 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.a-merge-without-a-ROOT-is-never-picked-from": Guard(
-        what="a merge whose candidates share no root is `non_enumerable`; nothing picks a branch",
+        what="a merge whose candidates share no root is never picked from: `non_enumerable`, "
+        "or every literal candidate `narrowed` (ruling 7)",
         why="ruling 1 of the value-resolution design: two literals on two branches are two "
         "possible values and no single one, and publishing the first would be a confident "
         "wrong address at `resolved` — the one fabrication this whole work risks",
@@ -736,6 +1172,144 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-BRANCH-between-literals-is-narrowed": Guard(
+        what="a merge with no root whose candidates are all literals answers every candidate, "
+        "each `narrowed`, one path per branch choice",
+        why="ruling 7 (2026-10-29): `c ? A.class : B.class` is one of two values, the set "
+        "complete — D00's `narrowed`. Answering `non_enumerable` hides a closed set the code "
+        "states, and RuoYi's job-class ternary is exactly that set",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="            return self._branched(candidates, method, origin, trail, frames)\n",
+                replace="            return _only(trail, _unresolved(NON_ENUMERABLE))  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-is-one-choice-per-path": Guard(
+        what="each candidate of a branch is a crossing on the path, so one branch read twice "
+        "pairs only with itself",
+        why='fix round 1 of ruling 7 (M-1): `p + "/x" + p` with `p = c ? "/a" : "/b"` '
+        "minted `/a/x/b`, which no execution builds; the path is the unit of resolution",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find='            merged = _combine(trail, (_Step(branch, f"branch {index}"),))\n',
+                replace="            merged = trail  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-template-filled-from-a-branch-is-NARROWED": Guard(
+        what="`_joined` marks a template filled from a narrowed literal `narrowed`",
+        why="ruling 7: a template built from one branch of several is one of several "
+        "templates; unmarked it is a whole literal the url reader publishes at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="            narrowed = any(narrowed for _, _, _, _, narrowed in combination)\n",
+                replace="            narrowed = False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-with-an-unreadable-candidate-stays-non-enumerable": Guard(
+        what="a branch is `narrowed` only where every candidate answers a literal on this "
+        "path; otherwise it is ONE `non_enumerable`",
+        why="ruling 7 lists a COMPLETE set; a candidate that reads no literal, or a value "
+        "reached by crossing out of the method, leaves it incomplete, and a `narrowed` list "
+        "carrying an unresolved member claims a set nobody read",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if any(answer.kind != LITERAL or crossed != trail for _, crossed, answer in reached):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-of-one-value-is-that-value-exactly": Guard(
+        what="a branch whose candidates answer one value answers it exactly, unmarked",
+        why="`c ? 1 : 1L` is `1` on every branch; `narrowed` would call a known value one of "
+        "several",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if len(distinct) == 1:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-BRANCHED-assembled-address-keeps-its-unfilled-template": Guard(
+        what="a fluent chain whose assembled url answers only branch literals keeps the "
+        "template it published before ruling 7, its hole unfilled, at `partial`",
+        why="the engine carries ONE address per chain (OI-134) and the walk may never take an "
+        "answer away: without this the chain fell from `partial` to `unresolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if address is None and any(\n",
+                replace="            if False and any(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "shapes.a-NARROWED-address-publishes-at-narrowed": Guard(
+        what="`url_of_answer` publishes a narrowed literal at `narrowed`, never `resolved`",
+        why="ruling 7: one of several branch literals is sent and which one is not known; "
+        "`resolved` would publish each as THE address",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="        if answer.narrowed and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "shapes.a-NARROWED-channel-is-refused": Guard(
+        what="`channel_of_answer` refuses a narrowed literal as a destination",
+        why="ruling 7: consumers that refuse an inexact answer keep refusing a narrowed one — a "
+        "broker resolves the destination it is GIVEN, and 'one of these' is not one",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='    if answer.narrowed:\n        return None, None, "unresolved"\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        return None, None, "unresolved"\n',
+            ),
+        ),
+    ),
+    "single_call.a-NARROWED-slot-makes-the-row-narrowed": Guard(
+        what="a row whose walked verb or path is narrowed says `narrowed`, never `resolved`",
+        why="ruling 7: `exchange(url, c ? GET : POST, …)` lists both verbs; the address alone "
+        "reads `resolved`, and without this each verb's row would claim to be THE call",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    if narrowed and resolution == str(Resolution.RESOLVED):\n        return peer, path, str(Resolution.NARROWED)\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return peer, path, str(Resolution.NARROWED)\n",
+            ),
+        ),
+    ),
+    "path_prefix.a-NARROWED-prefix-is-refused": Guard(
+        what="a narrowed prefix key is refused, as the `non_enumerable` it replaced was",
+        why="ruling 7: a prefix table maps ONE prefix to its pattern; publishing each branch's "
+        "literal as a resolved prefix would put endpoints under a prefix that may never apply",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/path_prefix.py",
+                find="    if answer.narrowed:\n        return None\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return None\n",
+            ),
+        ),
+    ),
+    "fluent.a-NARROWED-assembled-address-is-never-resolved": Guard(
+        what="`fluent`'s assembled-address reader answers a narrowed literal at `narrowed`",
+        why="ruling 7: the arm hands on a single `resolved` text as the chain's whole address; "
+        "counting branch literals as resolved changes which address a chain publishes",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if answer.narrowed and (\n",
+                replace="    if False and (  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "single_call.the-VERB-rides-the-same-binding-as-the-path": Guard(
         what="where the verb argument is a parameter, the row's verb is read from the same "
         "walked binding as its path",
@@ -745,7 +1319,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/single_call.py",
-                find="                            else _verb_from_answer(binding.slots.get(method_slot)),\n",
+                find="                            else _verb_from_answer(binding.slots.get(verb_slot)),\n",
                 replace="                            else None,  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1971,7 +2545,7 @@ GUARDS: dict[str, Guard] = {
                 find="""        if producers:
             stopped = self._declared_producer((method, min(producers)))
             if stopped is not None:
-                return _only(trail, stopped)
+                return self._along(stopped, trail, frames)
         reached: list[_Reached] = []
 """,
                 replace="        reached: list[_Reached] = []\n",
@@ -2111,7 +2685,7 @@ GUARDS: dict[str, Guard] = {
         "there is an outbound call nothing makes",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find='            and site["name"] == root["method"]\n',
                 replace="            and True  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2128,7 +2702,7 @@ GUARDS: dict[str, Guard] = {
         "`resolved`/`compiler` on evidence about a type the catalog never read",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find='            if site["owner"] in root["owners"]\n',
                 replace="            if True  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2145,10 +2719,42 @@ GUARDS: dict[str, Guard] = {
         "where nothing downstream can tell it from one the module really issues",
         edits=(
             Edit(
-                path=_FLUENT,
-                find="        and _has_execute_join(site, context.sites, "
-                "context.via_argument_names[name])",
-                replace="        and True  # guard disabled by scripts/guard_check.py",
+                path=_CHAINS,
+                find="        name in context.via_argument_names and _has_execute_join(site, context)",
+                replace="        name in context.via_argument_names  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "chains.a-MODULE-call-never-stops-the-join-walk": Guard(
+        what="the execute-join's producer walk stops only at a terminal-named call whose body "
+        "is NOT in the module; the module's own `build()` is crossed to the library call inside",
+        why="a module helper or class named like the terminal — `sendMessage(build())`, "
+        "dolphinscheduler's `QuartzJobDetailBuilder.build()` wrapping `newJob(…)…build()` — "
+        "would end the walk at the module call, pairing the executing call with a site no chain "
+        "walk reaches as a terminal; the real chain inside then derives nothing, and nothing "
+        "reports the missing boundary",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    terminals -= in_module\n",
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.the-EXECUTE-JOIN-crosses-methods": Guard(
+        what="the execute-join pairs a built value with a declared executing call wherever "
+        "the value walk (`values.producers_of`) traces that call's argument back to the "
+        "terminal site — in the same method, or across returns and parameters",
+        why="a request built in a helper and returned to the method that sends it is a "
+        "request the module issues. Matching only an argument's own `source` in the same "
+        "method drops it: `sqs.sendMessage(request())` and `client.send(deleteRequest(), …)` "
+        "publish no outbound row at all, and a Quartz trigger built in a helper never pairs "
+        "with the `scheduleJob` that registers it — a missing boundary nothing reports",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for consumer in context.joined.get(_site_key(site), ()):\n",
+                replace="    for consumer in ():  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -2167,10 +2773,10 @@ GUARDS: dict[str, Guard] = {
         "catalog's terminal; this id is named for the near-miss that pins it",
         edits=(
             Edit(
-                path=_FLUENT,
-                find="    elif reached_terminal:\n        _derive(captures, context)",
+                path=_CHAINS,
+                find="    elif terminal is not None:\n        context.ends.append(",
                 replace="    elif True:  # guard disabled by scripts/guard_check.py\n"
-                "        _derive(captures, context)",
+                "        context.ends.append(",
             ),
         ),
     ),
@@ -2813,6 +3419,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "effective-calls.AUTOBOXING-reads-as-its-constant": Guard(
+        what="an argument produced by one of the eight javac boxing calls (`<Wrapper>.valueOf"
+        "(<prim>)`) handed a constant is read by every engine as that constant, in an array's "
+        "elements as much as in a single slot",
+        why="Quartz spec 2026-10-28, CP-55 rows 20-22. javac wraps `onDaysOfTheWeek(3, 5)` as an "
+        "`Integer[]` of `valueOf` results, each an `unresolved` the value walk cannot read. "
+        "With the projection skipped, a weekday set and every boxed constant handed to a "
+        "builder is a hole in the schedule the source states plainly: the entry publishes no "
+        "days, or marks a fully constant schedule unresolved",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_CALLS,
+                find="        if boxed:\n            row = _with_unboxed(row, boxed)",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            row = _with_unboxed(row, boxed)",
+            ),
+        ),
+    ),
     # --- the body rule (`shapes/contracts.py`) ------------------------------
     "contracts.sole-unbound-measures-bound-by": Guard(
         what="under `sole_unbound`, a parameter is bound by an annotation only when that "
@@ -3311,7 +3935,7 @@ GUARDS: dict[str, Guard] = {
                 path=_WORKSPACE,
                 find='            "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "\n'
                 '            "UNION SELECT DISTINCT expression FROM resolved_schedules "\n'
-                '            "WHERE expression IS NOT NULL"\n',
+                '            "WHERE expression IS NOT NULL "\n',
                 replace='            ""  # guard disabled\n',
             ),
         ),
@@ -3324,13 +3948,37 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            _code(redactor.redact_text(str(row["expression"]))),\n',
-                replace='            _code(str(row["expression"])),  # guard disabled\n',
+                find='            _scheduled_cell(\n                row["expression"], lambda value: redactor.redact_text(str(value)), True\n            ),\n',
+                replace='            _scheduled_cell(row["expression"], lambda value: str(value), True),  # guard disabled\n',
             ),
             Edit(
                 path="sextant/egress/render/document.py",
-                find='                redactor.redact_text(str(row["expression"]))\n            )\n',
-                replace='                str(row["expression"])  # guard disabled\n            )\n',
+                find='        header += _code(redactor.redact_text(str(row["expression"])))\n',
+                replace='        header += _code(str(row["expression"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.a-NAME-is-masked-at-every-exit": Guard(
+        what="a trigger's `name` leaves the bundle, the document and the diff through "
+        "`redact_text`, as `expression` does",
+        why="the name is a `withIdentity(name, group)` literal, which the bundle masks in "
+        "`call_sites.arguments`; printed raw by any exit it ships the literal another file "
+        "withheld",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="        SELECT w.handler, w.trigger, coalesce(n.masked, w.name) AS name,\n",
+                replace="        SELECT w.handler, w.trigger, w.name AS name,  -- guard disabled\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='            _scheduled_cell(row["name"], lambda value: redactor.redact_text(str(value)), False),\n',
+                replace='            _scheduled_cell(row["name"], str, False),  # guard disabled\n',
+            ),
+            Edit(
+                path="sextant/application/boundary/diff.py",
+                find='            projected["name"] = redactor.redact_text(str(projected["name"]))\n',
+                replace='            projected["name"] = projected["name"]  # guard disabled\n',
             ),
         ),
     ),
@@ -4333,6 +4981,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "roots.a-NULL-handler-is-NOT-a-root": Guard(
+        what="a `scheduled_work` row becomes a root only where it NAMES a handler — a "
+        "schedule declared whose job was not found has none",
+        why="the missing value does not stay missing. Read anyway it becomes a root handler "
+        "named for no symbol any fact declared, and a walk starts at a method that does not "
+        "exist, finding nothing and saying nothing about why",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='        if row["handler"] is not None\n    }',
+                replace="        if True  # guard disabled\n    }",
+            ),
+        ),
+    ),
     "roots.only-a-row-the-module-exposes-is-a-root": Guard(
         what="only an endpoint row the module EXPOSES becomes a root — a row the module "
         "calls is a call it makes, whatever method the row happens to name",
@@ -4695,6 +5357,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "vocabulary.schedule-identity-includes-NAME": Guard(
+        what="a schedule is identified by its handler, its trigger kind AND its own name "
+        "(spec 2026-10-28-quartz, ruling 5)",
+        why="two Quartz triggers of one kind on one job differ only by name. With the name "
+        "out of the identity they are one entry whose expression and resolution agree, so a "
+        "second trigger added to a job is reported as no change at all",
+        edits=(
+            Edit(
+                path=_VOCABULARY,
+                find='        identity=("handler", "trigger", "name"),\n',
+                replace='        identity=("handler", "trigger"),  # guard disabled\n',
+            ),
+        ),
+    ),
     "boundary.a-REQUIRED-request-field-added-is-breaking": Guard(
         what="a request field that is required on the new side and was not on the old is a "
         "`breaking` change (M06 step 3 read forwards in time)",
@@ -4936,7 +5612,7 @@ GUARDS: dict[str, Guard] = {
         "every inlined client call derives with `path` NULL at `unresolved`",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find="            by_receiver.setdefault(_receiver_of(site, extension_steps), []).append(site)\n",
                 replace='            by_receiver.setdefault(site["receiver"], []).append(site)  # guard disabled by scripts/guard_check.py\n',
             ),
@@ -5027,7 +5703,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    client = captures.get(_CLIENT)\n",
+                find="    client = _client_of(captures, context)\n",
                 replace="    client = None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -5159,7 +5835,7 @@ GUARDS: dict[str, Guard] = {
         "the first publishes that client's service for a row that may be the other's",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find="    if len(executing) != 1:\n",
                 replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -5616,6 +6292,10 @@ def copy_tree(destination: Path) -> Path:
         # protoc's own generated gRPC classes, which the inherited-member read is pinned on:
         # only real generated code puts the handlers on `<Service>Grpc$AsyncService`.
         "grpc-probe",
+        # Quartz's triggers (spec 2026-10-28): the shapes its guards are pinned on cross
+        # methods — a cron read off a getter in the caller, a builder through a helper — and
+        # only the value walk over real facts crosses them.
+        "orders-quartz",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

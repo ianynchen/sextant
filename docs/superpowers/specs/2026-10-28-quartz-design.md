@@ -1,0 +1,517 @@
+# Quartz — design
+
+**Status: BUILT 2026-10-29** (branch `cov/quartz`, "As built" below). Plane SEXTANT-177,
+Java/Kotlin framework order 2 (`docs/COVERAGE.md` "Priority order"). Moves COVERAGE §5.12's
+Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```delivery Async row
+(`docs/java-kotlin-delivery-list.md:63`). The Async cell does not reach ✅ from this item:
+`akka-pekko-actors` (order 4) stays on that row.
+
+## 1. The rulings (2026-10-28)
+
+| # | Question | Ruling |
+|---|---|---|
+| 1 | Corpora | **Pull open-source projects, as usual.** No user codebase. |
+| 2 | Schedules kept in a database table | **Stop at the dispatcher.** *"We don't assume we can read the database. Leave the schedule as a value unknown. The scheduling part should be a partial."* Seed SQL in the repo is not read. |
+| 3 | Several triggers on one job | **Each trigger is its own entry,** *"so that user is aware there are multiple triggers for the same job."* |
+| 5 | Telling two entries on one job apart | **A: by the trigger's own name,** the way Quartz identifies triggers (`TriggerKey`). OI-183 (`@Schedules`) stays open. |
+| 7 | A branch between literals in the value walk (2026-10-29) | **`narrowed`, with its candidates.** Changes the 2026-10-21 merged-values answer for a merge with no common root whose candidates are all literals; every consumer of the walk sees it. |
+| 6 | How it is built | **Holistically.** *"We shouldn't be building these as separate pieces. Call chains are the same, assignments are the same."* Quartz reuses the chain, value and trace machinery every other catalog uses (§3d). |
+| 4 | Non-cron schedules | **The builder chain, as written.** No English summary: that needs an LLM (optional in Sextant) or a template per builder method ([one rule, not one parser per method], 2026-10-21). *"We want deterministic logic where applicable."* |
+
+## 2. Measured first
+
+### 2a. The six corpora
+
+All cloned shallow into `examples/` (git-ignored).
+
+| Corpus | Commit | Form | Trigger sites in `src/main` |
+|---|---|---|---|
+| `spring-boot`, `smoke-test/spring-boot-smoke-test-quartz` (sparse) | `6922eaa` | **in code:** `@Bean JobDetail` + `@Bean Trigger`, joined by `forJob(name, group)` | 5 |
+| `quartz`, `examples/` module | `741ccc3` | **in code:** builders passed together to `scheduler.scheduleJob(job, trigger)`; also `quartz_data.xml` | many (15 examples) |
+| `RuoYi-Vue` | `13db1fc` | **database table** `sys_job`, seeded by `sql/ry_*.sql` | 1 |
+| `ruoyi-vue-pro` | `ac022b1` | **database table** `infra_job`, seeded by `sql/*/ruoyi-vue-pro.sql`; ~25 `JobHandler` beans picked by name | 2 (infra + iot) |
+| `NBlog` | `b8e537c` | **database table** `schedule_job`, seeded by `blog-api/nblog.sql` | 1 |
+| `aurora` | `07e9524` | **database table** `t_job`, seeded by `aurora-springboot/sql/aurora.sql` | 1 |
+| `dolphinscheduler` | `21968bc` | **database table**, rows made by users at runtime, none seeded | 1 |
+
+**Every real application keeps its schedules in a database table.** Only the two official
+samples write them in code. In the table form the code holds exactly one `JobBuilder` chain
+and one `TriggerBuilder` chain: the cron is an argument read off a row object
+(`job.getCronExpression()`), and the job class is a generic dispatcher that looks its target
+up by a name from the same row (a bean name, or a string like `ryTask.ryParams('ry')`).
+
+### 2b. Bytecode, from the smoke test
+
+Compiled with JDK 21 against `spring-boot-starter-quartz` (Spring Boot 4.0.0) in a scratch
+Maven module. Each chain arrives in order inside one method, with constant arguments:
+
+```
+everyTwoSecTrigger():
+  invokestatic  TriggerBuilder.newTrigger()
+  ldc "helloJob"; ldc "samples"
+  invokevirtual TriggerBuilder.forJob(String, String)
+  ldc "sampleTrigger"
+  invokevirtual TriggerBuilder.withIdentity(String)
+  invokestatic  SimpleScheduleBuilder.simpleSchedule()
+  iconst_2
+  invokevirtual SimpleScheduleBuilder.withIntervalInSeconds(int)
+  invokevirtual SimpleScheduleBuilder.repeatForever()
+  invokevirtual TriggerBuilder.withSchedule(ScheduleBuilder)
+  invokevirtual TriggerBuilder.build()
+
+helloJobDetail():
+  ldc class SampleJob
+  invokestatic  JobBuilder.newJob(Class)
+  ldc "helloJob"; ldc "samples"
+  invokevirtual JobBuilder.withIdentity(String, String)
+  …usingJobData, storeDurably, build
+```
+
+Two facts the design depends on:
+- **The schedule builder is a nested chain,** the argument of `withSchedule(...)`, not a step
+  of the trigger chain.
+- **Named constants are gone.** `Calendar.TUESDAY` compiles to `iconst_3`, and
+  `atHourAndMinuteOnGivenDaysOfWeek(3, 0, 1, 2, 3, 4, 5)` compiles to an `Integer[]` built
+  element by element. The recorded chain says `3`, not `TUESDAY`.
+
+### 2c. The real dispatchers are spread across methods
+
+Found by the builder check and confirmed in the sources. In every real corpus, the trigger, the
+job and their pairing are in different methods, and sometimes in different classes:
+
+| Corpus | Job class | Trigger | Paired by |
+|---|---|---|---|
+| RuoYi-Vue, aurora | a helper `getQuartzJobClass(job)` returns a ternary of two class literals (`QuartzJobExecution` / `QuartzDisallowConcurrentExecution`, both inheriting `AbstractQuartzJob.execute`) | in `createScheduleJob`; the cron builder passes through a helper `handleCronScheduleMisfirePolicy(job, cb)` | `scheduler.scheduleJob(jobDetail, trigger)` |
+| ruoyi-vue-pro | `newJob(JobHandlerInvoker.class)` in `addJob`; the IoT manager's `newJob(jobClass)` takes a parameter | built and returned by a private `buildTrigger(...)` | `scheduleJob(jobDetail, trigger)` in `addJob` |
+| dolphinscheduler | `QuartzJobDetailBuilder.build()`: `newJob(ProcessScheduleTask.class)` | `QuartzCornTriggerBuilder.build()`, another class; the schedule builder comes from a factory call | `scheduleJob(jobDetail, Sets.newHashSet(trigger), true)` |
+| NBlog | as RuoYi | as RuoYi; plus `updateScheduleJob` rebuilds an existing trigger with `trigger.getTriggerBuilder()…build()` for `rescheduleJob` | `scheduleJob(jobDetail, trigger)` |
+
+So a rule confined to one method finds no job for any real application. The value walk
+(`resolve/values.py`, spec 2026-09-22) already crosses returns, parameters and callers, and the
+standing rule is to follow a value as far as anything Sextant parses. §3 uses it.
+
+## 3. What changes
+
+### 3a. One entry per new trigger
+
+Each `TriggerBuilder.newTrigger()` root in the module's own code, followed forward to its
+`build()`, is one entry in `scheduled_work`. A trigger rebuilt from an existing one
+(`trigger.getTriggerBuilder()`, for `rescheduleJob`) is the same trigger with a new schedule,
+not another one, so it is not an entry (NBlog's `updateScheduleJob`). A `newTrigger()` chain
+whose job and schedule kind are both unknown says nothing and is not derived.
+
+| Column | Value |
+|---|---|
+| `handler` | the method Quartz runs for the job (§3c), or NULL where the job is not found |
+| `trigger` | the schedule kind (§3b), or NULL where it is not found |
+| `expression` | the schedule (§3b), or NULL where it is not a value in the code |
+| `resolution` | `resolved` when handler and expression are both known and the expression holds no placeholder; `unresolved` when the only gap is a `${…}` placeholder; `narrowed` when the job class is one of several on a branch and they reach different handlers (§3c); `partial` otherwise |
+| `evidence` | `compiler` |
+| `catalog_id` | `quartz` |
+
+### 3b. The schedule
+
+The argument of `withSchedule(...)` is followed with the value walk to the root of its own
+builder chain, across returns and helpers.
+
+**Kind.** The catalog maps the root's owner to the kind:
+
+| Root owner | `trigger` |
+|---|---|
+| `org.quartz.CronScheduleBuilder` | `cron` |
+| `org.quartz.SimpleScheduleBuilder` | `simple` |
+| `org.quartz.CalendarIntervalScheduleBuilder` | `calendarInterval` |
+| `org.quartz.DailyTimeIntervalScheduleBuilder` | `dailyTimeInterval` |
+
+Where the walk ends before a root (a helper whose body passes the builder through, a factory in
+a jar), the kind is read from the **declared type** of the value that reached `withSchedule`:
+the return type of the call that produced it, as the descriptor states. A helper declared to
+return `CronScheduleBuilder` produces a `cron` schedule whatever it does inside. That is a fact
+the compiler wrote, not a model of the helper. Only a value typed as the interface
+`ScheduleBuilder` leaves the kind NULL.
+
+**Expression.**
+- **`cronSchedule(String)`:** the string the walk finds, verbatim, exactly as `@Scheduled(cron
+  = …)` is recorded today. Steps after the root (`withMisfireHandling…()`, `inTimeZone(…)`) are
+  not part of it, as they are not for `@Scheduled`. An `@Value` field or parameter gives its
+  `${…}` expression, `unresolved`, and `resolved_schedules` picks it up with no change there.
+- **Every other root, including the other `CronScheduleBuilder` factories:** the whole chain,
+  written as `root(args).step(args)…`: method names as compiled; constants as their literal text
+  (strings quoted, numbers in decimal, a class literal as its simple name, an array as its
+  elements); a nested builder argument written the same way
+  (`startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0))`). Ruling 4.
+- **Any argument the walk does not resolve to a constant** (`job.getCronExpression()`, a value
+  read from a row): the expression is NULL and the row is `partial`. Ruling 2.
+
+### 3c. The job
+
+The trigger's job is found from whatever pairs them, as Quartz pairs them. The value walk
+runs backward, so each pairing call is the starting point: from its arguments the walk reaches
+the `build()` of a trigger chain and of a job chain. A `newTrigger()` chain no pairing call
+reaches is still an entry (§3a), with its job unknown.
+
+The pairing calls are the `fluent` engine's existing **execute-join** (`terminal_via_argument`,
+`_JoinFilter`): a built value handed to the call that consumes it, the shape that already
+pairs an SQS request with `SqsClient.sendMessage(request)`. The join is within one method
+today. Here it finds its arguments through the value walk, which lets it cross methods; that
+is a change to the join, so it applies to every catalog that uses it.
+1. **`Scheduler.scheduleJob(JobDetail, Trigger)`:** the walk from the trigger argument reaches
+   this trigger's `build()`, and the walk from the job argument gives the `JobDetail`.
+2. **`Scheduler.scheduleJob(JobDetail, Set<Trigger>, boolean)`** and
+   **`scheduleJobs(Map<JobDetail, Set<Trigger>>, boolean)`:** the same, through the collection's
+   elements. Where the collection is made in a jar (`Sets.newHashSet(trigger)`), the walk
+   answers `external` and the job is not found from this consumer.
+3. **`forJob(JobDetail)`:** the walk from that argument, including a `@Bean` method reference.
+4. **`forJob(String name, String group)`, `forJob(String name)`, `forJob(JobKey)`**, with
+   arguments the walk resolves to constants: the `JobBuilder` chain anywhere in the module whose
+   `withIdentity` names the same key. A missing group is Quartz's `DEFAULT`, as `JobKey`
+   defines it.
+
+From the `JobDetail` chain, the walk from `newJob(...)`'s argument gives the job class.
+
+**The handler** is the method Quartz calls, mirroring the framework (DR-6). Quartz calls
+`Job.execute(JobExecutionContext)` on an instance of the job class, so the handler is the body
+the JVM's dispatch rule picks for that receiver class. `resolve/dispatch.py` already computes
+that, over `ancestry_of`, and is used; nothing here walks superclasses on its own.
+
+When that body is in a jar, the chain stops there, as it does for any call into a jar. Spring's
+`QuartzJobBean.execute` is the case that matters: it calls the subclass's
+`executeInternal(JobExecutionContext)`. Which method a framework's template calls on a subclass
+is catalog data, in the vocabulary `jakarta-servlet.yml` already uses for `HttpServlet.service`
+calling `doGet`: a `supertype` and its `dispatch` list. The Quartz catalog states
+`QuartzJobBean` → `executeInternal`.
+
+**Several job classes.**
+- **Several paths** (callers passing different classes): one entry per path, each `resolved`.
+  This is the walk's existing multiplicity, and a closed set is exact.
+- **One path with a branch** (RuoYi's ternary, a `merge` with no common root whose candidates
+  are all literals): the value walk answers `narrowed` and lists the candidates (ruling 7).
+  This is a change to `values.py` for every consumer, not a Quartz rule: a merge whose
+  candidates are not all literals stays `non_enumerable`, and consumers that refuse an inexact
+  answer (`channel_of_answer`) keep refusing it. `dispatch.py` then gives each candidate's
+  body. Where every candidate reaches the same body (RuoYi: both inherit
+  `AbstractQuartzJob.execute`), the entry is one row; otherwise one row per body, `narrowed`.
+  Nothing in the Quartz catalog or engine reads the merge's candidates around the walk.
+
+**After the handler, the call graph does the rest.** The dispatcher is a root, and the trace
+continues through `call_edges` as it does from any root:
+- **ruoyi-vue-pro:** `JobHandlerInvoker.executeInternal` calls `jobHandler.execute(param)`
+  through the `JobHandler` interface. The dispatch rule resolves that call to every in-module
+  `JobHandler` implementation, `narrowed`, so all ~25 job beans are reached from the dispatcher
+  with no Quartz-specific rule.
+- **RuoYi-Vue, aurora, NBlog:** the dispatcher calls its target by reflection
+  (`Method.invoke(bean, …)`), which names no callee. The trace stops there, correctly.
+
+### 3d. Engine and catalog (ruling 6)
+
+Quartz is a catalog on machinery that already exists. Each existing piece keeps its one job:
+
+| Concern | Existing component | What Quartz uses it for |
+|---|---|---|
+| Reading a builder chain: roots, steps, captures, `argN` | the `fluent` chain walk | `newTrigger()`, `newJob(…)` and schedule builder chains |
+| Pairing a built value with the call that consumes it | `fluent`'s execute-join (`terminal_via_argument`) | `scheduleJob(job, trigger)` and its overloads |
+| A value that crosses methods | `resolve/values.py` | a trigger returned by a helper, a class from a helper, a cron from a getter |
+| An `@Value` field or parameter to its `${…}` | the field ladder, `shapes/arguments.py` | a configured cron |
+| Which body runs for a receiver class | `resolve/dispatch.py` | the job's handler |
+| A framework template calling a subclass method | the `supertype` + `dispatch` catalog vocabulary | `QuartzJobBean` → `executeInternal` |
+| Compiler-emitted artefacts read as the source wrote them | `resolve/effective_calls.py` | autoboxing (§3g) |
+| Per-environment values for a `${…}` | `resolve/resolved_schedules.py` + `placeholder_rule` | configured crons, unchanged |
+| What the job does | `call_edges` + every other catalog | Kafka, REST, event bus or reactive calls inside the job |
+
+**The one structural change: the chain walk leaves `fluent.py`.** Today the walk lives inside
+the `fluent` engine, and its context also carries what only endpoints need (client bases,
+metadata, channel bindings, verbs). Adding a `scheduled_work` output to that engine would put
+scheduling and endpoint derivation in one module. So:
+1. **Move, with no change in behaviour,** the chain walk (roots, steps, captures, folding,
+   joins, bean hops) into its own module under `resolve/shapes/`. It produces the folded
+   captures for each chain and knows nothing about what row they become. `fluent` keeps the
+   endpoint derivation and calls the walk. This step is pinned by the existing suite and by
+   `scripts/field_check.py` on every pin, before any Quartz work starts.
+2. **Add the scheduled-work derivation** as its own engine, which turns a chain's captures into
+   `scheduled_work` rows. The annotation engine (`engines/scheduled_work.py`) stays as it is. The
+   two are different shapes of evidence for one table, D02's rule that a style is a shape of
+   evidence, not a framework.
+
+The catalog `src/sextant/catalogs/quartz.yml` holds every owner, method, consumer signature
+and the kind map; neither engine names a Quartz type. Writing a chain as text (§3b) is a pure
+function in `resolve/shapes/`, beside the walk, not inside an engine. Placeholder detection uses
+the config model's `placeholder_rule`, not a hard-coded `${`.
+
+### 3e. Schema
+
+`scheduled_work` today promises that `expression` is never NULL and that `resolution` is
+`resolved` or `unresolved`. Both promises change: `handler`, `trigger` and `expression` may be
+NULL, and `resolution` may be `partial` or `narrowed`. `GRAPH_SCHEMA_VERSION` goes 8 → 9, and
+the D01 version table gains its row. A row with a NULL handler is not a trace root (`roots.py`
+skips it).
+
+**A new column, `name`** (ruling 5): the trigger's key as Quartz builds it from
+`withIdentity(name, group)` or `withIdentity(name)` (group `DEFAULT`, as `TriggerKey`
+defines it), written `group.name`, when the walk resolves both to constants; NULL otherwise
+(RuoYi's runtime `getTriggerKey(jobId, …)`, and every `@Scheduled` row). The boundary
+vocabulary's `schedule` identity becomes `(handler, trigger, name)`, the `resolved_schedules`
+join gains `name`, and `BOUNDARY_VOCABULARY_VERSION` is bumped. Two rows that still share all
+three are OI-183's case, which stays open.
+
+The document's "Scheduled work" table shows a NULL cell as "not in the code". A `partial` row
+whose expression is NULL says why in its detail block, naming where the walk stopped: for
+example, "read at runtime from `SysJob.getCronExpression()`". The source is stored in a nullable
+column `expression_source` (the symbol the walk stopped at), set only when `expression` is NULL
+(settled while planning).
+
+### 3f. Fixture
+
+`fixtures/orders-quartz`, a Spring Boot module on Quartz 2.5.x, JDK 21, primed in
+`tests/fixture_build.py`. It reproduces the forms measured above, across methods as the
+corpora have them:
+- a `@Bean JobDetail` and two `@Bean Trigger`s on it by `forJob(name, group)`, one `simple`
+  and one `cron` literal (ruling 3);
+- a trigger joined by `forJob(jobDetailBean())`;
+- a cron from `@Value("${orders.sweep.cron}")`, with the key in `application.properties`;
+- a `dailyTimeInterval` chain with a nested `TimeOfDay` argument and a boxed `onDaysOfTheWeek`;
+- the RuoYi shape: a helper returning a two-class ternary, a trigger built from a row getter
+  through a misfire helper typed `CronScheduleBuilder`, `scheduleJob(job, trigger)`, and an
+  update method using `getTriggerBuilder()`;
+- the ruoyi-vue-pro shape: the trigger built and returned by a private method;
+- the dolphinscheduler shape: job and trigger built in two other classes and paired through
+  `scheduleJob(job, Set, true)`, with the set made by `java.util.Set.of(trigger)`, which is
+  also in a jar;
+- one job extending `QuartzJobBean`, one implementing `Job` through an abstract superclass.
+
+The failing intention test goes in `tests/e2e/test_async_delivered.py` (the Async feature
+already owns it) and asserts on `render` output, which is an intention marker.
+
+### 3g. Settled after the builder check (my calls)
+
+- **Values the compiler boxed are read as their constants.** `onDaysOfTheWeek(3, 5)` compiles
+  to `Integer.valueOf(3)` per element, and the extractor records each as `unresolved` today.
+  javac inserts these calls for autoboxing (JLS 5.1.7); the source wrote `3`. Reading them back
+  is a third projection in `resolve/effective_calls.py`, the one place compiler-emitted
+  artefacts are already undone (the Kotlin `$default` bridge, class-compiled lambdas). The
+  rule covers the eight boxing conversions only: a `<Wrapper>.valueOf(<its primitive>)` whose
+  argument is a constant is that constant. The extractor is unchanged, and raw `call_sites` keep
+  the bytecode's own statement. Engines read the projection, so `scripts/field_check.py` runs
+  on the pins.
+- **The kind from the declared return type** (§3b): a compiler fact, not a model of the helper.
+- **Entries come from `newTrigger()` roots** (§3a); `getTriggerBuilder()` rebuilds are not new
+  triggers.
+- **The chain walk moves out of `fluent.py` before Quartz is added** (§3d), so endpoint and
+  scheduling derivation stay in separate modules.
+- **The handler comes from `dispatch.py`; `QuartzJobBean` → `executeInternal` is catalog
+  data** in the servlet `dispatch` vocabulary (§3c).
+- **Pairing reuses the execute-join,** made to find its arguments through the value walk
+  (§3c).
+
+## 4. What it does NOT do
+
+- **Read seed SQL or any database** (ruling 2).
+- **Add any rule for the dispatcher's targets.** Where the dispatcher calls them through an
+  interface (ruoyi-vue-pro), the call graph already reaches them. Where it uses reflection
+  (RuoYi-Vue, aurora, NBlog), the trace stops, as for any reflective call.
+- **`quartz_data.xml` and `quartz.properties` jobs.** Stated as a COVERAGE boundary; none of
+  the real corpora uses them.
+- **`@DisallowConcurrentExecution`, `@PersistJobDataAfterExecution`, job data maps.**
+  Concurrency and state policy, not a schedule. The §5.12 row's wording is corrected.
+- **Jobs with no trigger** (`storeDurably()` jobs run on demand by `scheduler.triggerJob`).
+  No schedule, so no entry.
+- **Kotlin.** The same bytecode, but no corpus and no fixture; COVERAGE says so.
+- **Spring's `JobDetailFactoryBean` / `CronTriggerFactoryBean`.** Zero uses in all six
+  corpora. Stated, not built.
+
+## 5. Cost (§8.7)
+
+One read of `call_sites` filtered to the catalog's owners per resolve, and one module-wide map
+of `withIdentity` keys. The corpora have 1–5 `newTrigger()` roots per module. Each root starts
+at most three value walks (the schedule argument, the consumer's job argument, `newJob`'s
+argument), on the `ValueIndex` the resolve already builds. No per-row query.
+
+## 6. Predictions: verify what it closes
+
+These are predictions until the "As built" section measures them.
+
+| Corpus | Predicted entries |
+|---|---|
+| spring-boot smoke test | 5: `helloJob` ×3 and `anotherJob` ×2, all `SampleJob.executeInternal`, all `resolved` |
+| RuoYi-Vue, aurora, NBlog | 1 each: `cron`, expression NULL, `partial`. Handler: the inherited `execute` (one row; both branches reach the same body). |
+| ruoyi-vue-pro | 2: `JobHandlerInvoker.executeInternal` and the IoT manager's job (handler from its callers' class arguments), `cron`, expression NULL, `partial`. The trace from the first reaches all ~25 `JobHandler` implementations. |
+| dolphinscheduler | 1: handler NULL (the trigger set is made in Guava), `cron` from the factory's declared type, expression NULL, `partial`. Not a trace root. |
+
+## 7. Open — for the user
+
+Nothing. Ruling 7 closed the last question.
+
+## As built
+
+### What the fixture pins
+
+`fixtures/orders-quartz` is built with JDK 21 against `spring-boot-starter-quartz` (Spring
+Boot 4.0.0, Quartz 2.5.1). `tests/e2e/test_async_delivered.py::test_quartz_triggers_are_scheduled_work_delivered`
+reads the rendered "Scheduled work" section off one `analyze` and one `render`. Its seven rows,
+exact:
+- **`QuartzConfig` builders:**
+  - `SweepJob#executeInternal`, simple `orders.every30s`,
+    `simpleSchedule().withIntervalInSeconds(30).repeatForever()`, `resolved`;
+  - the same handler, cron `orders.nightly` `0 0 2 * * ?`, `resolved`;
+  - `AuditJob#execute`, cron `${orders.sweep.cron}`, `unresolved`, with its configured
+    `0 */5 * * * ?` stated under it;
+  - `SweepJob#executeInternal`, dailyTimeInterval, the chain as written, with
+    `Calendar.TUESDAY` as the `3` javac compiled.
+- **The jobs-table cron (RuoYi):** `BaseRowJob#execute`, `partial`, `OrderJobRow#getCron`
+  named. The trace from it reaches `ConcurrentRowJob#run` and `SerialRowJob#run`.
+- **The private-method trigger (ruoyi-vue-pro):** `AuditJob#execute`, `partial`.
+- **The `Set` pair (dolphinscheduler):** handler NULL, cron, `partial`.
+
+`updateJob`'s `trigger.getTriggerBuilder()…build()` re-schedules an existing trigger and is not
+an entry.
+
+### Deviation: a call on the built job before it is scheduled (fix round, 2026-10-29)
+
+The first corpus run found the handler NULL on RuoYi-Vue, NBlog and aurora.
+- **The shared line.** All three write `jobDetail.getJobDataMap().put(KEY, row)` between the
+  job's `build()` and `scheduler.scheduleJob(jobDetail, trigger)`.
+- **Why the job was lost.** Calling a method on a value between making it and using it
+  counted as a possible change to it, so the code stopped looking for where the job argument
+  came from, and the trigger was paired with no job.
+- **The fix (da732af0, c497c2db).** When matching a built job or trigger to the call that
+  uses it, a call on it that takes no argument and hands back something of another type
+  (`getJobDataMap()`) is ignored: it does not change which `build()` made the value. Reading
+  what a value *holds* still counts such a call, because writing through the map or list it
+  hands back changes the value.
+- **What it moved,** as the fix commits' messages report it (not re-run here): the six pinned
+  field corpora (`scripts/field_check.py`) are unchanged, and a run of
+  `measure_value_walk` over 44 modules gives the same rows as before the fix.
+- **The fixture.** `RowScheduler.createJob` gains the RuoYi line.
+
+### The real corpora
+
+**How they were built.** Each corpus was copied (without `.git`) to a scratchpad directory,
+built there with its own POM (`mvn -DskipTests compile`, JDK 21), and analysed with `sextant
+module analyze` on the module that holds its Quartz code. Nothing was written inside
+`examples/`. The exceptions:
+- **The Spring Boot smoke test** went through a scratchpad Maven module on Spring Boot 4.0.0,
+  whose sources are byte-identical to the corpus's.
+- **NBlog, aurora and dolphinscheduler** carry a Lombok (1.18.20 or older) that cannot run on
+  JDK 21. NBlog and dolphinscheduler were built with `-Dlombok.version=1.18.34`;
+  dolphinscheduler also with `-Dspotless.skip=true -Dcheckstyle.skip=true` and
+  `-pl dolphinscheduler-scheduler-plugin/dolphinscheduler-scheduler-quartz -am`. aurora's
+  copied POM had its Lombok version pinned to 1.18.34, because a BOM import manages it.
+- **ruoyi-vue-pro's IoT module** is commented out of the corpus's reactor. The copy's root POM
+  re-enables it, and it was built with `-pl yudao-module-iot/yudao-module-iot-biz -am`.
+
+| Corpus | Commit | Module | Entries |
+|---|---|---|---|
+| spring-boot smoke test | `6922eaa` | `smoke-test/spring-boot-smoke-test-quartz` | **5, all `SampleJob#executeInternal`, all `resolved`:** simple `DEFAULT.sampleTrigger` `simpleSchedule().withIntervalInSeconds(2).repeatForever()`; simple `samples.every-day` `repeatHourlyForever(24)`; cron `samples.3am-weekdays` `atHourAndMinuteOnGivenDaysOfWeek(3, 0, 1, 2, 3, 4, 5)`; calendarInterval `samples.once-a-week` `calendarIntervalSchedule().withIntervalInWeeks(1)`; dailyTimeInterval `samples.every-hour-tue-thu` `dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5).startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0)).endingDailyAt(TimeOfDay.hourAndMinuteOfDay(18, 0)).withInterval(1, DateBuilder.IntervalUnit.HOUR)` (re-measured after the final review's fix wave; it read `DateBuilder$IntervalUnit.HOUR` before, OI-223) |
+| RuoYi-Vue | `13db1fc` | `ruoyi-quartz` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `SysJob#getCronExpression`, `partial` |
+| NBlog | `b8e537c` | `blog-api` | 1: `ScheduleJob#executeInternal`, cron, expression NULL from `ScheduleJob#getCron`, `partial` |
+| aurora | `07e9524` | `aurora-springboot` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `Job#getCronExpression`, `partial` |
+| ruoyi-vue-pro | `ac022b1` | `yudao-spring-boot-starter-job` | 1: `JobHandlerInvoker#executeInternal`, cron, expression NULL, `partial` |
+| ruoyi-vue-pro | `ac022b1` | `yudao-module-iot/yudao-module-iot-biz` | **2 Quartz rows** (beside two `@Scheduled` rows from `yudao-spring-boot-starter-mq`): `IotSceneRuleJob#executeInternal`, cron, expression NULL from `IotSceneRuleDO$Trigger#getCronExpression`, `partial` (the IoT manager's job, from its one caller's `IotSceneRuleJob.class`); also the starter's `JobHandlerInvoker#executeInternal` row, read from the sibling module it compiles against |
+| dolphinscheduler | `21968bc` | `dolphinscheduler-scheduler-plugin/dolphinscheduler-scheduler-quartz` | **2:** handler NULL, cron, expression NULL from `Schedule#getCrontab`, `partial`; and handler NULL, cron, `0 0 0 * * ? *`, `partial` (below) |
+
+The Quartz library's own `examples/` module (optional in §2a) was not measured.
+
+**Against §6:**
+- **Smoke test.** As predicted: helloJob ×3 and anotherJob ×2, as the trigger keys in the
+  source pair them.
+  - `withIdentity("sampleTrigger")` has no group, so the key is in Quartz's `DEFAULT` group.
+  - `atHourAndMinuteOnGivenDaysOfWeek` is a `CronScheduleBuilder` static, so it is a `cron` row
+    carried as the builder chain (ruling 4). It is not a cron string.
+- **RuoYi-Vue and aurora.** As predicted, after the fix round: both job classes inherit
+  `AbstractQuartzJob#execute`, so they are one row.
+- **NBlog.** The prediction was wrong. §6 said "the inherited `execute`", but NBlog's job
+  `ScheduleJob` extends `QuartzJobBean`, and the handler is its `executeInternal`. The code was
+  right and the prediction was not.
+- **ruoyi-vue-pro.** As predicted: one row for the starter's dispatcher, and one for the IoT
+  manager, whose `newJob(jobClass)` takes the class its one caller passes.
+- **dolphinscheduler.** The handler is NULL as predicted, and the job is not paired (the
+  trigger `Set` is built in Guava). Two things differ from the prediction:
+  - **The kind** comes from walking into the three `CronScheduleBuilderFactory`
+    implementations, each rooted at `cronSchedule(schedule.getCrontab())`, rather than from
+    the factory's declared type.
+  - **A second, wrong row** (OI-222). Following `schedule.getCrontab()` back leads to the
+    field `crontab` and to the one place the code writes it: `CronUtils.getSelfFireDateList`
+    sets `Constants.DEFAULT_CRON_STRING` on a `new Schedule()` it makes for its own fallback
+    (`dolphinscheduler-service`, read because this module compiles against it). A field read
+    on an object the module never builds is answered with every value written to that field
+    anywhere, which spec 2026-10-18 states as a known over-report (telling objects apart is its
+    unbuilt step 2). So the entry is two rows: the right `partial` row from the getter, and a
+    row whose expression is `0 0 0 * * ? *`, a value that never reaches this trigger.
+
+### ruoyi-vue-pro: what the dispatcher's trace reaches
+
+§3c said that the dispatch rule resolves `jobHandler.execute(param)` "to every in-module
+`JobHandler` implementation", so all ~25 job beans are reached. **That was wrong as stated.**
+The corpus has 31 `implements JobHandler` classes, in 13 modules (ai 2, crm 1, hrm 3, im 2,
+infra 3, iot 2, mall/promotion 2, mall/statistics 2, mall/trade 4, oa 2, pay 5, pms 1,
+system 2). None of them is in `yudao-spring-boot-starter-job`, the module that holds the
+dispatcher. Sextant analyses one module at a time, reading as siblings the reactor modules
+that module compiles against, so the count depends on the module analysed. Measured:
+
+| Module analysed | `JobHandler` implementations reached | Of those on its compile path |
+|---|---|---|
+| `yudao-spring-boot-starter-job` | **0**: the trace stops at `JobHandler#execute`, whose implementations are not on this module's path | 0 |
+| `yudao-server` (the deployable; the reactor builds system and infra) | **5**: infra's `JobLogCleanJob`, `AccessLogCleanJob`, `ErrorLogCleanJob`; system's `DemoJob`, `TokenCleanJob` | 5 |
+| `yudao-module-iot-biz` | **7**: the five above plus iot's `IotDeviceOfflineCheckJob`, `IotOtaUpgradeJob` | 7 |
+
+How measured: each row is the set of `JobHandler#execute` targets in the trace from
+`JobHandlerInvoker#executeInternal` (`application.query.trace.traces_of`) on that module's own
+workspace; the 31 and the per-module split are `grep -rl "implements JobHandler"` over the
+corpus. Every implementation on the analysed module's compile path is reached, each `narrowed`,
+with no Quartz-specific rule. The other 24 are in eight modules that the corpus's root
+`pom.xml` lists only inside comments (ai 2, crm 1, hrm 3, im 2, mall 8, oa 2, pay 5, pms 1);
+they were not built here, so no analysis reached them.
+
+### Findings, logged in Plane
+
+- **OI-222** (SEXTANT-215): dolphinscheduler's trigger gains a false cron from an unrelated
+  field writer, above.
+- **OI-223** (SEXTANT-216): a nested type in a written chain read `Outer$Inner`, not
+  `Outer.Inner` (`DateBuilder$IntervalUnit.HOUR` in the smoke test). Fixed in the final
+  review's fix wave, below; the smoke test now reads `DateBuilder.IntervalUnit.HOUR`.
+- **OI-229** (SEXTANT-222): a trigger chain must reach `build()` in its own method, and a
+  configured cron is read only as the builder's direct argument.
+- OI-224 to OI-228 and OI-230 are follow-ups from the branch's reviews of the shared code.
+- **An environment note, not an issue:** NBlog, aurora and dolphinscheduler need Lombok
+  1.18.30 or later to build on JDK 21.
+
+### The final review's fix wave (2026-10-29)
+
+- **One path at a time.** A trigger's key, its literal cron and its job's class were read
+  separately and crossed, so the common `addJob(jobClass, cron)` helper called from two
+  places gave four `resolved` rows, two of them false. They are now read together on each
+  path (`values.resolve_positions`): two rows. **Second wave (R19):** that read is made
+  WITHIN the path the schedule took to `withSchedule` and the path the trigger and the job
+  took to the call that paired them (`values.producer_paths`), so a trigger built in a helper
+  and scheduled by each of its callers keeps each caller's cron and name with that caller's
+  job. A pairing no one path holds is read part by part, `partial`, its name NULL unless
+  every path agrees. The first wave's row-shape check (every schedule with every handler)
+  is gone. **Third wave (R20):** a job named by a built `JobKey` is paired on the path to
+  that `jobKey` call, and in a row no binding holds every part — name, cron, class — is
+  kept only where every path agrees, else NULL. **Fourth wave (R21):** a trigger and a job
+  whose paths to the pairing call disagree on a caller they crossed out to are no pairing
+  (they are two executions); only the "two calls of one helper" bound is read apart.
+- **A trigger with no `withSchedule`** is an entry on the catalog's `default_schedule`:
+  Quartz 2.5.1's `TriggerBuilder.build()` sets `SimpleScheduleBuilder.simpleSchedule()` when
+  no schedule was handed to it (`javap -c`), so the row is `simple`, `simpleSchedule()`.
+- **A written chain** names a nested call's receiver (`TimeUnit.MINUTES.toMillis(5)`), or
+  has no text where the receiver cannot be written; a constructor reads `new TimeOfDay(9, 0)`;
+  a nested type reads `Outer.Inner` (OI-223).
+- **A cron read off `getCron().trim()`** names `getCron`, not `String#trim()`.
+- **One handler** found exactly on one path and through a branch on another is one row, at
+  the weaker word.
+- **What it moved:** the six pinned field corpora are unchanged. The smoke test was
+  re-analysed, and the other six modules in the table above re-derived on their Task 11
+  workspaces: every row is unchanged except the smoke test's `DateBuilder.IntervalUnit.HOUR`.
+
+### Not done, stated
+
+- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅, with its one known wrong row
+  (OI-222) stated beside the ✅, and five stated boundaries:
+  - `quartz_data.xml` / `quartz.properties`;
+  - `JobDetailFactoryBean` / `CronTriggerFactoryBean` / `SimpleTriggerFactoryBean`;
+  - Kotlin;
+  - a job with no trigger (`storeDurably()`, run on demand by `triggerJob`): no entry;
+  - a dispatcher that calls its target by reflection (RuoYi-Vue, aurora, NBlog): the trace
+    stops there.
+- `quartz` left the delivery register (CI run pending). The Async ```delivery row lists only
+  `akka-pekko-actors`.

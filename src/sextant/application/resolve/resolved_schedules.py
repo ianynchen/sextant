@@ -6,7 +6,7 @@
 verbatim: the schedule that runs is the deployment's. What the REPOSITORY configures for it
 is a value, environment by environment, and this pass writes it beside the job — one
 `resolved_schedules` row per (job whose expression holds the placeholder opener, environment
-of `resolved_config`), carrying the job's own `handler`, `trigger` and `expression`.
+of `resolved_config`), carrying the job's own `handler`, `trigger`, `name` and `expression`.
 
 **One placeholder rule.** The expression is substituted by `resolve/config.py::substitute`,
 the walk `resolve_config` itself uses, with the config model's own delimiters and
@@ -32,7 +32,7 @@ from collections.abc import Callable, Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.config import placeholder_rule, substitute
+from sextant.application.resolve.config import config_model_of, placeholder_rule, substitute
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.redaction import REDACTED, Redactor
 
@@ -49,14 +49,14 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
     model and a second family's would be looked up under the first's rule. With no model
     declared there is no `resolved_config` either, and so nothing to read."""
     workspace.derive("resolved_schedules_reset")
-    model = next((c.config_model for c in catalogs if c.config_model), None)
-    if model is None:
+    model = config_model_of(catalogs)
+    if not model:
         return
     placeholders, key_matching = placeholder_rule(model)
     jobs = [
         job
         for job in workspace.query("scheduled_work")
-        if placeholders["open"] in str(job["expression"])
+        if job["expression"] is not None and placeholders["open"] in str(job["expression"])
     ]
     if not jobs:
         return
@@ -75,6 +75,7 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
                 {
                     "handler": job["handler"],
                     "trigger": job["trigger"],
+                    "name": job["name"],
                     "expression": job["expression"],
                     "environment": environment,
                     "keys": json.dumps(list(dict.fromkeys(asked))),

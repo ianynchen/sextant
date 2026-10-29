@@ -171,6 +171,9 @@ def record_roots(workspace: Workspace) -> None:
         # is no protocol, verb or path to carry (`RootIdentity`'s own rule).
         (str(row["handler"]), RootKind.SCHEDULED, None, None, None)
         for row in workspace.query("scheduled_work")
+        # A schedule whose job was not found has no handler: there is no code to start a
+        # trace at, and a root named "None" would claim one.
+        if row["handler"] is not None
     }
     rows = [
         {

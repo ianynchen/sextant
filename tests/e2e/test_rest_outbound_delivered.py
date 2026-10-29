@@ -221,10 +221,12 @@ def test_the_jdk_http_client_derives_every_request_it_builds_and_sends(outbound_
     and `test_an_outbound_path_two_engines_call_keeps_every_caller` pins both.
 
     `deleteRequest()`'s chain reaches `build()` in the helper and `send` is in
-    `viaHelper()` — a request built in one method and sent in another. `fluent`'s stated
-    rule (D02 §4, `okhttp.yml`: a built request is not an issued one) is that the chain
-    never reaches a terminal and derives NOTHING; spec §13 case 9 records that the JDK
-    client follows it. Asserted absent so the day the rule changes, this moves."""
+    `viaHelper()` — a request built in one method and sent in another. It derived NOTHING
+    until the execute-join found its arguments through the value walk (Quartz spec
+    2026-10-28 §3c, Task 6): the helper returns the built request and `send`'s argument is
+    that return, so the request is issued, and the row is the helper's chain at `resolved`
+    — a literal address, no body. A built request no executing call reaches still derives
+    nothing (`fluent.a-built-request-is-not-an-issued-one`)."""
     rows = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in outbound_rows
@@ -235,6 +237,7 @@ def test_the_jdk_http_client_derives_every_request_it_builds_and_sends(outbound_
         ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
         ("GET", None, None, "unresolved"),
         ("PATCH", "orders.example.com", "/v1/orders/42", "unresolved"),
+        ("DELETE", "orders.example.com", "/v1/orders/42", "resolved"),
     }, sorted(rows, key=str)
     assert all(
         r["request_shape"] is None for r in outbound_rows if r["catalog_id"] == "jdk-httpclient"

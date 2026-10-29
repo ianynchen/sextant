@@ -2301,9 +2301,9 @@ def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     secret = "https://u:hunter2@h/0 0 * * * *"
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'prod', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'prod', "
         "'[\"orders.sweep.cron\"]', ?, NULL), "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'default', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'default', "
         "'[\"orders.sweep.cron\"]', '0 0 * * * *', NULL)",
         [secret],
     )
@@ -2331,12 +2331,13 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     expression = "${orders.sweep.cron:ACME_A1B2}"
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'unresolved', 'compiler', 'spring-scheduling')",
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, NULL, 'unresolved', 'compiler', "
+        "'spring-scheduling')",
         [expression],
     )
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'prod', '[\"orders.sweep.cron\"]', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, 'prod', '[\"orders.sweep.cron\"]', "
         "'0 0 * * * *', NULL)",
         [expression],
     )
@@ -2356,6 +2357,41 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     masked = [(f"${{orders.sweep.cron:{REDACTED}}}",)]
     assert exported == {"scheduled_work": masked, "resolved_schedules": masked}
     assert kept == [expression, expression]
+
+
+@pytest.mark.pins("schedules.a-NAME-is-masked-at-every-exit")
+def test_a_schedule_name_is_masked_on_export(tmp_path: Path):
+    """A trigger's name is a `withIdentity(name, group)` literal, which `call_sites.arguments`
+    masks on the way out, so `scheduled_work.name` and `resolved_schedules.name` leave
+    through the same address map `expression` does. The workspace keeps it verbatim."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    name = "nightly-ACME_A1B2"
+    workspace._connection.execute(
+        "INSERT INTO scheduled_work VALUES "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, '0 0 * * * *', NULL, 'resolved', "
+        "'compiler', 'quartz')",
+        [name],
+    )
+    workspace._connection.execute(
+        "INSERT INTO resolved_schedules VALUES "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, '${k}', 'prod', '[\"k\"]', "
+        "'0 0 * * * *', NULL)",
+        [name],
+    )
+    bundle = tmp_path / "bundle"
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    workspace.export_tables(bundle, redactor)
+    exported = {
+        table: duckdb.sql(
+            f"SELECT name FROM read_parquet('{bundle / 'graph' / (table + '.parquet')}')"
+        ).fetchall()
+        for table in ("scheduled_work", "resolved_schedules")
+    }
+    kept = [row["name"] for row in workspace.query("scheduled_work")]
+    workspace.close()
+    masked = [(f"nightly-{REDACTED}",)]
+    assert exported == {"scheduled_work": masked, "resolved_schedules": masked}
+    assert kept == [name]
 
 
 def test_the_bundle_carries_rpc_hops_with_its_path_masked_as_the_endpoints_is(tmp_path: Path):

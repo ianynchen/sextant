@@ -241,7 +241,7 @@ def _index(value: Any, where: str) -> None:
 # (not modelled, CP-54 row 86). The same word `metadata.KNOWN_GAPS` publishes for the class.
 UNTRACED = "computed_base_addresses_not_traced"
 # Where an engine stamps the position it READ an argument at, `(caller, ordinal, slot)` —
-# the key `fluent._captured_at` writes, and what the walk names a position by.
+# the key `chains._captured_at` writes, and what the walk names a position by.
 _READ_AT = "captured_at"
 
 # The base each construction answers, per workspace for one resolve: `N` calls on one client

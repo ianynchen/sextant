@@ -16,11 +16,13 @@ fixture shape, and that the questions left are exactly the unfed channels.
 """
 
 import json
+import re
 
 import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from sextant.application.query.trace import traces_of
 from sextant.cli.app import cli
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -960,3 +962,151 @@ def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
         ("orders.mutiny.created", "local", "true", "OrderConsumers.onMutinyOrderEnvelope", None),
         ("orders.mutiny.headers", "local", "true", "OrderConsumers.onMutinyHeaderOrder", None),
     }
+
+
+# --- Quartz: fixtures/orders-quartz (spec 2026-10-28) ----------------------------------
+#
+# Every shape real Quartz code takes — the builder chains of a `@Configuration`, the Spring
+# `QuartzJobBean` form, a jobs table scheduled in a loop (RuoYi), a trigger returned from a
+# private method (ruoyi-vue-pro) and a job and trigger built apart and paired in a `Set`
+# (dolphinscheduler) — read off one analysis and one render, asserted on the rendered
+# "Scheduled work" section.
+
+QUARTZ_FIXTURE = FIXTURES / "orders-quartz"
+
+# A NULL cell: the table says so in words rather than leaving a blank (spec §3).
+_NOT_IN_THE_CODE = "not in the code"
+
+
+@pytest.fixture(scope="module")
+def quartz(tmp_path_factory: pytest.TempPathFactory) -> tuple[str, list]:
+    """The rendered document and every trace, from one `analyze` and one `render`."""
+    workspace_dir = tmp_path_factory.mktemp("quartz")
+    compile_fixture(QUARTZ_FIXTURE)
+    runner = CliRunner()
+    for command in ("analyze", "render"):
+        result = runner.invoke(
+            cli, ["module", command, str(QUARTZ_FIXTURE), "--workspace", str(workspace_dir)]
+        )
+        assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        document = (workspace_dir / "render" / "architecture.md").read_text(encoding="utf-8")
+        return document, traces_of(workspace)
+    finally:
+        workspace.close()
+
+
+def _scheduled_section(document: str) -> str:
+    return document.split("## Scheduled work", 1)[1].split("\n## ", 1)[0]
+
+
+def _handler_cell(cell: str) -> str | None:
+    """A handler cell as `Class#method` — the module coordinates and signature of the
+    symbol are the fixture build's, not this test's subject — or None for a NULL cell."""
+    text = cell.strip().strip("`")
+    if text == _NOT_IN_THE_CODE:
+        return None
+    return text.split("/")[-1].split("(", 1)[0]
+
+
+def _cell(cell: str) -> str | None:
+    text = cell.strip().strip("`")
+    return None if text == _NOT_IN_THE_CODE else text
+
+
+def _detail_blocks(section: str, handler: str, trigger: str) -> list[str]:
+    """The detail blocks of the section whose header names `handler` (as `Class#method`)
+    and whose header ENDS with `trigger` — the kind, and the expression where the header
+    carries one — each with the lines indented under it."""
+    blocks = [
+        block for block in re.split(r"^- ", section, flags=re.MULTILINE)[1:] if " — " in block
+    ]
+    found = []
+    for block in blocks:
+        header = block.splitlines()[0]
+        named, _, rest = header.partition(" — ")
+        if _handler_cell(named) == handler and rest.strip() == trigger:
+            found.append(block)
+    return found
+
+
+def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
+    """One entry per `newTrigger()` root (ruling 3): the three builder triggers of
+    `QuartzConfig` that name a job by key, the one that names it by bean, the jobs-table
+    cron (RuoYi), the private-method trigger (ruoyi-vue-pro) and the `Set` pair
+    (dolphinscheduler). The `QuartzJobBean` handler is `executeInternal`; the name is
+    `group.name` where the code states one and NULL where it does not. A non-cron schedule
+    is its builder chain as written (ruling 4), with `Calendar.TUESDAY` as the `3` javac
+    compiled it to. `updateJob`'s `trigger.getTriggerBuilder()` chain is a re-schedule of an
+    existing trigger, not a new one: no entry."""
+    document, traces = quartz
+    section = _scheduled_section(document)
+    rows = [
+        [cell for cell in line.strip().strip("|").split(" | ")]
+        for line in section.splitlines()
+        if line.startswith(("| `", f"| {_NOT_IN_THE_CODE}"))
+    ]
+    # Handler, Trigger, Name, Expression, Resolution
+    derived = [
+        (_handler_cell(r[0]), r[1].strip(), _cell(r[2]), _cell(r[3]), r[4].strip()) for r in rows
+    ]
+    # None in the expected expression of a `partial` row the brief does not spell is
+    # compared as "whatever it is"; every other cell is exact.
+    wildcard = object()
+    expected = [
+        (
+            "SweepJob#executeInternal",
+            "simple",
+            "orders.every30s",
+            "simpleSchedule().withIntervalInSeconds(30).repeatForever()",
+            "resolved",
+        ),
+        ("SweepJob#executeInternal", "cron", "orders.nightly", "0 0 2 * * ?", "resolved"),
+        ("AuditJob#execute", "cron", None, "${orders.sweep.cron}", "unresolved"),
+        (
+            "SweepJob#executeInternal",
+            "dailyTimeInterval",
+            None,
+            (
+                "dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5)"
+                ".startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0)).withIntervalInHours(1)"
+            ),
+            "resolved",
+        ),
+        ("BaseRowJob#execute", "cron", None, None, "partial"),
+        ("AuditJob#execute", "cron", None, wildcard, "partial"),
+        (None, "cron", None, wildcard, "partial"),
+    ]
+    assert len(derived) == len(expected), derived
+    remaining = list(derived)
+    for want in expected:
+        match = next(
+            (
+                got
+                for got in remaining
+                if all(w is wildcard or w == g for w, g in zip(want, got, strict=True))
+            ),
+            None,
+        )
+        assert match is not None, f"no entry for {want}; derived {derived}"
+        remaining.remove(match)
+
+    # The configured value rides in the detail block of the placeholder entry itself.
+    [configured] = _detail_blocks(section, "AuditJob#execute", "cron `${orders.sweep.cron}`")
+    assert "0 */5 * * * ?" in configured, section
+    # Each partial entry whose cron is read off a row names the method it is read from, in
+    # its own detail block: the jobs-table cron (RuoYi) and the private-method trigger
+    # (ruoyi-vue-pro).
+    for handler in ("BaseRowJob#execute", "AuditJob#execute"):
+        [partial] = _detail_blocks(section, handler, "cron")
+        assert re.search(r"OrderJobRow[#.]getCron", partial), section
+
+    [trace] = [t for t in traces if t.root.handler.split("/")[-1].startswith("BaseRowJob#execute")]
+    reached = {
+        str(name).split("/")[-1].split("(")[0]
+        for step in trace.steps
+        for name in (step.callee, step.target)
+        if name is not None
+    }
+    assert {"ConcurrentRowJob#run", "SerialRowJob#run"} <= reached, sorted(reached)

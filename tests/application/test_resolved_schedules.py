@@ -191,6 +191,52 @@ def test_a_placeholder_cron_is_read_in_each_environment(tmp_path: Path):
     )
 
 
+def test_resolved_schedules_joins_on_name(tmp_path: Path):
+    """Two triggers alike in handler, trigger and expression and told apart by their own
+    names are two jobs, each with its own row per environment carrying that name."""
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${orders.sweep.cron}"},
+        {"application.yml": {"orders.sweep.cron": "0 0 * * * *"}},
+    )
+    [job] = workspace.query("scheduled_work")
+    assert job["name"] is None
+    workspace.derive("scheduled_work_insert", rows=[{**job, "name": "nightly"}])
+    record_resolved_schedules(workspace, _catalogs())
+    rows = [
+        (r["name"], r["expression"], r["environment"])
+        for r in workspace.query("resolved_schedules")
+    ]
+    workspace.close()
+    assert rows == [
+        ("nightly", "${orders.sweep.cron}", "default"),
+        (None, "${orders.sweep.cron}", "default"),
+    ]
+
+
+def test_the_engine_and_this_pass_read_one_placeholder_opener(tmp_path: Path):
+    """The opener is chosen once for the resolve (`config_model_of`): with the config
+    model's opener set to `@{`, the engine calls `@{k}` a placeholder and `${k}` a literal,
+    and this pass substitutes exactly the `@{` one. Neither reads the default `${`."""
+    catalogs = [
+        replace(c, config_model={**c.config_model, "placeholders": {"open": "@{", "close": "}"}})
+        if c.config_model
+        else c
+        for c in _catalogs()
+    ]
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "@{orders.sweep.cron}"},
+        {"application.yml": {"orders.sweep.cron": "0 0 * * * *"}},
+        catalogs,
+    )
+    [job] = workspace.query("scheduled_work")
+    rows = _rows(workspace)
+    workspace.close()
+    assert job["resolution"] == "unresolved"
+    assert [(r[2], r[4]) for r in rows] == [("@{orders.sweep.cron}", "0 0 * * * *")]
+
+
 @pytest.mark.pins("schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key")
 def test_an_annotation_default_applies_where_no_environment_sets_the_key(tmp_path: Path):
     workspace = _resolved(

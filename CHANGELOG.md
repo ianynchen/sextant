@@ -17,6 +17,57 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Quartz: each new trigger is a scheduled entry point** (spec 2026-10-28-quartz; probe
+  CP-55, Quartz 2.5.1).
+  - **One row per trigger.** Each `TriggerBuilder.newTrigger()…build()` is one
+    `scheduled_work` row (catalog `quartz.yml`, engine `scheduled_chain.py`).
+  - **What the row carries:**
+    - the trigger kind;
+    - the trigger's own key, `group.name`;
+    - the schedule: a cron expression verbatim (a `${…}` one also gets `resolved_schedules`
+      rows), or any other schedule as its builder chain as written, for example
+      `simpleSchedule().withIntervalInSeconds(2).repeatForever()`;
+    - the handler Quartz runs for the job paired with the trigger.
+  - **How the job is found.** It is found wherever it is paired: `scheduleJob(job, trigger)`,
+    `forJob(name, group)`, `forJob(JobKey)` or an injected `@Bean JobDetail`, across methods
+    and classes. The handler is the body the JVM dispatches for the job class's `execute`, or
+    `executeInternal` under `QuartzJobBean`.
+  - **Schedules kept in a database table** (RuoYi-Vue, NBlog, aurora, ruoyi-vue-pro,
+    dolphinscheduler) give a `partial` row that names the getter that reads the cron. Seed SQL
+    is never read.
+  - **Measured on six corpora.**
+    - The Spring Boot smoke test is 5 rows, all `resolved`.
+    - RuoYi-Vue, NBlog, aurora and ruoyi-vue-pro each give their cron row, with the handler
+      found.
+    - dolphinscheduler's trigger gives **two rows**, both with no handler (its job and trigger
+      are paired in a Guava `Set`, which is not read). The first is the expected `partial` row.
+      The second is wrong: it carries `0 0 0 * * ? *`, a default cron that an unrelated method
+      sets on its own `new Schedule()`. A value read from a field of an object the module never
+      builds is answered with every value the code writes to that field anywhere (OI-222).
+  - **COVERAGE.** §5.12's Quartz row reads ✅, with five stated boundaries:
+    `quartz_data.xml` / `quartz.properties`, Spring's trigger factory beans, Kotlin, a job with
+    no trigger (run on demand by `triggerJob`), and a job that calls its target by reflection,
+    where the trace stops. `quartz` leaves the delivery register, so the Async row's only
+    blocker is `akka-pekko-actors`.
+  - **`GRAPH_SCHEMA_VERSION` moves 8 → 9 and `BOUNDARY_VOCABULARY_VERSION` 2 → 3.**
+    `scheduled_work` gains `name` and `expression_source`, and an entry may be `partial`.
+    Re-analyse the workspace.
+- **Changes under the Quartz rows that every catalog gets:**
+  - **A choice between two literals now answers with both** (`narrowed`, ruling 7). Before,
+    it answered nothing: `concurrent ? JobA.class : JobB.class` gave no class at all.
+  - **A value built in one method and used in another is followed across methods.** This is
+    how a trigger built in a helper and scheduled elsewhere is matched to its job. The code
+    that follows a builder chain now lives in `shapes/chains.py`.
+  - **A boxed constant reads as the constant the source wrote.** `Integer.valueOf(3)` reads
+    as `3`.
+  - **An enum constant argument is written as its type and name.**
+  - **A call on the job before it is scheduled no longer hides which class built it.**
+    RuoYi-Vue, NBlog and aurora write `jobDetail.getJobDataMap().put(…)` between building the
+    job and scheduling it, and their handler was lost. A no-argument call that hands back
+    something of another type is now ignored, but only when matching a built job or trigger
+    to where it is used. Reading what a value holds still counts such a call, because writing
+    through the map it returns changes the value.
+
 - **Quarkus messaging: SmallRye Reactive Messaging channels become boundaries, wired as Quarkus
   wires them** (spec 2026-10-24-quarkus-messaging-and-grpc, rulings 1-2; probes CP-49–CP-51).
   `@Incoming`/`@Outgoing` (and their repeatable containers) and `@Channel` on an injected

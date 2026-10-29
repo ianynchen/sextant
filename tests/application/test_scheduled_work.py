@@ -151,7 +151,9 @@ def test_a_cron_schedule_derives_one_row_carrying_the_expression_verbatim(tmp_pa
         {
             "handler": _MODULE + SWEEP,
             "trigger": "cron",
+            "name": None,
             "expression": "0 0 3 * * *",
+            "expression_source": None,
             "resolution": "resolved",
             "evidence": "compiler",
             "catalog_id": "spring-scheduling",

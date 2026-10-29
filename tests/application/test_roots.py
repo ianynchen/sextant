@@ -442,6 +442,36 @@ def test_a_scheduled_method_is_a_root_of_its_own_kind(tmp_path: Path):
     assert rows == [_scheduled_row()]
 
 
+@pytest.mark.pins("roots.a-NULL-handler-is-NOT-a-root")
+def test_a_scheduled_row_may_have_no_handler_and_is_not_a_root(tmp_path: Path):
+    """A schedule can be declared while the code that runs when it fires is not found (a
+    Quartz trigger whose job was never reached): `scheduled_work.handler` is then NULL.
+    Read anyway it becomes a root handler named "None" — a symbol no fact declared — so the
+    row is no root. The positive control is the `@Scheduled` root in the same workspace, so
+    "no root from this row" is a refusal rather than an empty run."""
+    workspace = _scheduled_workspace(tmp_path)
+    workspace.derive(
+        "scheduled_work_insert",
+        rows=[
+            {
+                "handler": None,
+                "trigger": "cron",
+                "name": "nightly",
+                "expression": "0 0 3 * * *",
+                "expression_source": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+                "catalog_id": "test-scheduling",
+            }
+        ],
+    )
+    record_roots(workspace)
+    assert [row["handler"] for row in workspace.query("scheduled_work")].count(None) == 1
+    rows = workspace.query("roots")
+    workspace.close()
+    assert rows == [_scheduled_row()]
+
+
 def test_a_method_that_is_both_scheduled_and_exposed_is_two_roots(tmp_path: Path):
     """Two kinds are two answers to "what starts this", so they are two rows.
     The row key is (handler, kind): collapsing on the handler alone would lose

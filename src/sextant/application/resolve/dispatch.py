@@ -138,19 +138,38 @@ class Dispatch:
 
         The two arms are therefore walked separately and in order.
         """
+        declaring, reason, _ = self._search(owner, name, descriptor)
+        return declaring, reason
+
+    def boundary(self, owner: str, name: str, descriptor: str) -> str | None:
+        """Where `resolve`'s search LEFT the workspace: the first type, in JVMS 5.4.3.3's
+        order, that it reached and could not read — the owner itself, else the first
+        unread class on the superclass chain, else the first unread superinterface. None
+        wherever `resolve` answers anything but `owner_not_scanned` or
+        `ancestor_not_scanned`.
+
+        `resolve` says THAT the declaration is in something unread; a reader whose catalog
+        states what one particular jar type does with the call (a framework template
+        calling a subclass method) needs to know WHICH. One search answers both, so the two
+        can never disagree about the order."""
+        return self._search(owner, name, descriptor)[2]
+
+    def _search(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str, str | None]:
+        """`resolve`'s answer, and `boundary`'s beside it."""
         if method_descriptor(owner, name, descriptor) in self.declared:
-            return owner, MethodResolution.DECLARED_HERE
+            return owner, MethodResolution.DECLARED_HERE, None
         if owner not in self.scanned:
             # Never read this type at all. The genuine third-party boundary: the call IS
             # the terminal, and nothing further is knowable from this workspace.
-            return None, MethodResolution.OWNER_NOT_SCANNED
+            return None, MethodResolution.OWNER_NOT_SCANNED, owner
         if name in _NOT_INHERITED:
             # A constructor is not inherited (JLS 8.8), so walking ancestors for one
             # could only ever produce a wrong answer. No corpus has yet contained a call
             # that would, which is why this is stated rather than discovered later.
-            return None, MethodResolution.NO_DECLARATION_FOUND
+            return None, MethodResolution.NO_DECLARATION_FOUND, None
 
-        unscanned = False
+        # The first type the search could not read, in search order (`boundary`).
+        unscanned: str | None = None
         # Step 2: the superclass chain, to exhaustion, before any interface.
         chain: list[str] = []
         current: str | None = owner
@@ -165,10 +184,10 @@ class Dispatch:
             if parent is None:
                 break
             if parent not in self.scanned:
-                unscanned = True
+                unscanned = parent
                 break
             if method_descriptor(parent, name, descriptor) in self.declared:
-                return parent, MethodResolution.INHERITED
+                return parent, MethodResolution.INHERITED, None
             current = parent
 
         # Step 3: the superinterfaces of the class and of every superclass on that
@@ -187,17 +206,17 @@ class Dispatch:
                 continue
             visited.add(interface)
             if interface not in self.scanned:
-                unscanned = True
+                unscanned = unscanned or interface
                 continue
             if method_descriptor(interface, name, descriptor) in self.declared:
-                return interface, MethodResolution.INHERITED
+                return interface, MethodResolution.INHERITED, None
             frontier.extend(a for a, _kind, _ in self.ancestors.get(interface, ()))
 
-        if unscanned:
+        if unscanned is not None:
             # We know MORE than "external": the body is inherited from something we did
             # not open, and `type_hierarchy` names which type that is.
-            return None, MethodResolution.ANCESTOR_NOT_SCANNED
-        return None, MethodResolution.NO_DECLARATION_FOUND
+            return None, MethodResolution.ANCESTOR_NOT_SCANNED, unscanned
+        return None, MethodResolution.NO_DECLARATION_FOUND, None
 
     def candidates(self, site: dict[str, object]) -> list[str]:
         """Every method `site` can run and whose body this workspace read, as

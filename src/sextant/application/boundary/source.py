@@ -265,6 +265,7 @@ class BoundarySource:
         return {
             "handler": members[0]["handler"],
             "trigger": members[0]["trigger"],
+            "name": members[0]["name"],
             **_attributes(members, "expression", "resolution"),
             **self._handler_evidence(members),
         }
@@ -290,12 +291,13 @@ class BoundarySource:
         }
 
     def _handler_evidence(self, members: list[dict[str, object]]) -> dict[str, object]:
-        handler = str(members[0]["handler"])
-        documents = self._documents_of_symbol(handler)
+        # A schedule whose job was not found has no handler: no symbol, no document.
+        handler = None if members[0]["handler"] is None else str(members[0]["handler"])
+        documents = [] if handler is None else self._documents_of_symbol(handler)
         catalogs = sorted({str(row["catalog_id"]) for row in members if row["catalog_id"]})
         return {
             "evidence": {
-                "symbols": [handler],
+                "symbols": [] if handler is None else [handler],
                 "documents": _paths(documents),
                 "catalogs": catalogs,
             },

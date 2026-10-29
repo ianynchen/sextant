@@ -27,6 +27,7 @@ caller holds is a view over it plus the caller's own channel names.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -152,11 +153,56 @@ class BeanTable:
         return Unresolved("none")
 
 
+def injected_bean(
+    beans: BeanTable,
+    method: str,
+    parameters: Sequence[Mapping[str, Any]],
+    index: int,
+    model: dict[str, Any],
+) -> BeanRef | Unresolved:
+    """The bean the container injects into parameter `index` of the factory method
+    `method`, read off its declared signature (`declared_parameters_of`'s entries): the
+    slot's erased type, its declared name and its qualifier, by `bean_of`'s rungs. `none`
+    for a slot the signature does not have, or one whose type it does not name."""
+    if index >= len(parameters):
+        return Unresolved("none")
+    declared = parameters[index]
+    erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
+    if not isinstance(erased, str):
+        return Unresolved("none")
+    name = declared.get("name")
+    return beans.bean_of(
+        Parameter(
+            method=method,
+            index=index,
+            erased_type=erased,
+            name=str(name) if isinstance(name, str) else None,
+            qualifier=qualifier_of(list(declared.get("annotations") or []), model),
+        )
+    )
+
+
+def known_channels(workspace: Workspace) -> frozenset[str]:
+    """The names the channel index knows, read for the bean fold's name rung for a channel
+    reference (§3a): the `read_by` end of the channel edge (spec 2026-09-21 §3b). The
+    container auto-creates a channel under any referenced name, so a name a handler's
+    annotation carries is a channel whether or not a factory method declares it. Only a
+    RESOLVED reader's name counts: one still spelled as a placeholder configuration never
+    answered names nothing. The rows are there when the chain walk runs because
+    `resolve/endpoints.py` runs the index's catalog first (`_writes_only_the_channel_edge`).
+    Moved verbatim from `engines/fluent.py` with the walk that reads it."""
+    return frozenset(
+        str(row["channel"])
+        for row in workspace.query("channel_bindings")
+        if row["role"] == "read_by" and row["resolution"] == "resolved"
+    )
+
+
 def bean_table(workspace: Workspace, catalog: Catalog, known_channels: frozenset[str]) -> BeanTable:
     """The declared beans of the module under `catalog`'s bean model, plus
-    `known_channels` — the channel names the caller's own index holds (fluent hands it
-    the `channel_bindings` readers, spec §3b), which a channel reference may resolve to
-    without any method declaring them.
+    `known_channels` — the channel names the caller's own index holds (the chain walk hands
+    it the `channel_bindings` readers, `known_channels` above, spec §3b), which a channel
+    reference may resolve to without any method declaring them.
 
     Refuses a catalog naming no `bean_model`, by file: a `bean_via` capture on such a
     catalog would resolve nothing and say nothing.

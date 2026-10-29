@@ -18,11 +18,12 @@ def test_the_seven_kinds_in_their_order():
     ]
 
 
-def test_the_vocabulary_version_is_two():
+def test_the_vocabulary_version_is_three():
     """The stamp lives in `domain/version.py` with the other three; the registry does not
     keep a second copy of it (the Step 0 lesson: copies of one stamp drift). Version 2 is
-    `dependency` gaining `conditions` (spec 2026-10-23-deployment-set-conditions, ruling 2)."""
-    assert BOUNDARY_VOCABULARY_VERSION == 2
+    `dependency` gaining `conditions` (spec 2026-10-23-deployment-set-conditions, ruling 2);
+    version 3 is `schedule`'s identity gaining `name` (spec 2026-10-28-quartz, ruling 5)."""
+    assert BOUNDARY_VOCABULARY_VERSION == 3
 
 
 @pytest.mark.pins("boundary.a-DEPENDENCY-carries-its-callers-conditions")
@@ -84,6 +85,7 @@ def test_no_column_is_both_an_identity_and_an_attribute_or_evidence():
 
 def test_which_kinds_a_catalog_feeds():
     assert kinds_fed_by("scheduled_work", None, False) == ("schedule",)
+    assert kinds_fed_by("scheduled_chain", None, False) == ("schedule",)
     assert kinds_fed_by("error_advice", None, False) == ("error-handler",)
     assert kinds_fed_by("annotation_driven", "inbound", True) == ("endpoint", "data-contract")
     assert kinds_fed_by("single_call", "outbound", False) == ("dependency",)
