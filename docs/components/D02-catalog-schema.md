@@ -68,7 +68,7 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
-**Twenty-seven type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+**Twenty-six type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
 means ONE library or annotation reachable under more than one name — held by its interface
 (`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
 older package. A call site's owner is the DECLARED type, so a codebase writing the interface
@@ -90,7 +90,7 @@ The keys, by the engine that reads them:
 | `interface_implementation` | `matches.interface`, `registration.owner` |
 | `injected_client` | `field_annotation` |
 | `scheduled_work` | `annotation`, `container` |
-| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's, and so `for_job[].owner`, `job_identity_step.owner` and `job_root.owner`), `kinds`' keys, `literal_expression.owner`, `pairing[].owner`, `job_key[].owner` |
+| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's, and so `for_job[].owner`, `job_identity_step.owner` and `job_root.owner`), `literal_expression.owner`, `pairing[].owner`, `job_key[].owner` |
 | `error_advice` | `handler_annotation`, `status_annotation` |
 | `supertype_dispatch` | `matches.supertype` |
 | `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
@@ -4195,12 +4195,16 @@ call on one shared receiver passes through to that receiver, `inexact`. Then:
 - **`name`** is `group.name` where the walk reads both as one constant each, a missing
   group being `default_group`; NULL otherwise.
 
-**The key, the literal root's argument and the job root's class are read TOGETHER, one path
-at a time** (`values.resolve_positions`): a helper `addJob(jobClass, cron)` called from two
-places is two rows, each caller's cron with its own job, never the four a separate read of
-each would cross. Where no path ties them — several schedules, several handlers, and every
-schedule with every handler, as when the trigger is built in a helper and paired with a
-different job in each caller — every row is `partial`.
+**A row is `resolved` only when every part comes from ONE binding of one read.** The key,
+the literal root's argument and the job root's class are read in one
+`values.resolve_positions` call, WITHIN the path the schedule took to `withSchedule` and the
+path the trigger and the job took to the pairing call (`values.producer_paths`, which writes a
+descent into a helper as the call that entered it, so a read crossing out of that helper
+agrees only with that call). A helper `addJob(jobClass, cron)` called from two places is two
+rows, never four; a trigger built in `trigger(cron)` and scheduled by each caller keeps each
+caller's cron with that caller's job. A pairing no one path holds (its trigger and job
+passing through one helper on two calls) is read part by part: every such row is `partial`,
+the cron kept, the name NULL unless every path agrees.
 
 **The job** (§3c) is found from whatever pairs it with the trigger, through machinery that
 already exists, and every pairing it finds counts:

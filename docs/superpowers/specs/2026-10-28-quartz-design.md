@@ -479,8 +479,13 @@ they were not built here, so no analysis reached them.
 - **One path at a time.** A trigger's key, its literal cron and its job's class were read
   separately and crossed, so the common `addJob(jobClass, cron)` helper called from two
   places gave four `resolved` rows, two of them false. They are now read together on each
-  path (`values.resolve_positions`): two rows. Where no path ties schedules to jobs (each
-  reaches each), every row is `partial`.
+  path (`values.resolve_positions`): two rows. **Second wave (R19):** that read is made
+  WITHIN the path the schedule took to `withSchedule` and the path the trigger and the job
+  took to the call that paired them (`values.producer_paths`), so a trigger built in a helper
+  and scheduled by each of its callers keeps each caller's cron and name with that caller's
+  job. A pairing no one path holds is read part by part, `partial`, its name NULL unless
+  every path agrees. The first wave's row-shape check (every schedule with every handler)
+  is gone.
 - **A trigger with no `withSchedule`** is an entry on the catalog's `default_schedule`:
   Quartz 2.5.1's `TriggerBuilder.build()` sets `SimpleScheduleBuilder.simpleSchedule()` when
   no schedule was handed to it (`javap -c`), so the row is `simple`, `simpleSchedule()`.

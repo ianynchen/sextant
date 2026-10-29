@@ -749,6 +749,7 @@ def resolve_positions(
     positions: Mapping[str, tuple[Mapping[str, Any], int | str]],
     index: ValueIndex | None = None,
     identities: "Identities" = (),
+    within: "Path | None" = None,
 ) -> list[dict[str, Answer]]:
     """Slots of SEVERAL sites, resolved together on one coherent path.
 
@@ -778,10 +779,17 @@ def resolve_positions(
     the outer order. A label whose position no path reaches at all yields no dict rather than
     an `unresolved` entry — the empty list is the M-1 ruling's own answer, as it is in
     `resolve_site`.
+
+    `within` is a path another read took (`producer_paths`), and every answer here must
+    agree with it: the positions are read as further steps of THAT path. A cron read where
+    a trigger was built, within the path the trigger took to the call that scheduled it,
+    is the cron of that one scheduling.
     """
     fold = index if index is not None else value_index(workspace)
     walk = _Walk(fold, identities)
-    combined: list[tuple[_Trail, dict[str, Answer]]] = [((), {})]
+    combined: list[tuple[_Trail, dict[str, Answer]]] = [
+        (within.trail if within is not None else (), {})
+    ]
     for label, (named, slot) in positions.items():
         # Projected for the reason `resolve_site` states: a caller that hands in a raw
         # `call_sites` row for a bridge call is otherwise answered with the bridge's own
@@ -863,6 +871,79 @@ def producers_of(
         else:
             found.append(Producer(ended_at=answer))
     return tuple(dict.fromkeys(found))
+
+
+@dataclass(frozen=True)
+class Path:
+    """One path a read took, as the coherence rule compares paths (`_combine`) — opaque to
+    a caller, which only joins two (`joined`) or reads further within one
+    (`resolve_positions(..., within=...)`)."""
+
+    trail: "_Trail" = ()
+
+    def joined(self, other: "Path") -> "Path | None":
+        """Both paths as one, or None where they made different choices somewhere."""
+        merged = _combine(self.trail, other.trail)
+        return None if merged is None else Path(merged)
+
+
+def producer_paths(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int | str,
+    declared: AbstractSet[tuple[str, str]],
+    along_receivers: bool = False,
+    past_accessors: Ancestors | None = None,
+) -> tuple[tuple[Producer, Path], ...]:
+    """`producers_of`, with the PATH each producer was reached by, one pair per distinct
+    path — for a reader that goes on to read other positions on that same path.
+
+    **A descent into a callee is written as the call that entered it.** The walk reaches
+    a value a helper hands back by descending into the helper's return in the frame of the
+    call it came through (`_Walk._value`); a read that starts INSIDE that helper crosses out
+    of it through its callers (`_Walk._parameter`). The two name one choice — which call
+    ran the helper — so the path carries both spellings, and a later read within it
+    (`resolve_positions(..., within=)`) reaching the helper's parameter agrees only with the
+    call the descent came through. A path that descends into ONE helper on two different
+    calls cannot be held by one binding, which is the M-1 ruling's own bound."""
+    walk = _Walk(
+        index,
+        declared=declared,
+        along_receivers=along_receivers,
+        past_accessors=past_accessors,
+    )
+    site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
+    found: list[tuple[Producer, Path]] = []
+    for trail, answer in walk.at(site, slot):
+        if answer.kind == _PRODUCED:
+            producer = replace(answer.value, inexact=True) if answer.inexact else answer.value
+        elif answer.kind == UNRESOLVED:
+            producer = Producer(reason=answer.reason)
+        else:
+            producer = Producer(ended_at=answer)
+        entered = _entered(trail, index)
+        if entered is not None:
+            found.append((producer, Path(entered)))
+    return tuple(dict.fromkeys(found))
+
+
+def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
+    """`trail` with each descent into a callee's return also written as the caller crossing
+    that call is (`producer_paths`); None where it entered one callee on two calls."""
+    entered: _Trail = trail
+    for step in trail:
+        if step.context[0] != _RETURN_OF:
+            continue
+        method, value = step.context[1], step.context[2]
+        callee = step.label.rsplit(" returns ", 1)[0]
+        for ordinal, returned_by in index.returns.get((method, value), ()):
+            if returned_by != callee:
+                continue
+            merged = _combine(entered, (_Step((_CALLER_OF, callee), f"{method}@{ordinal}"),))
+            if merged is None:
+                return None
+            entered = merged
+    return entered
 
 
 def _slots_of(site: Mapping[str, Any]) -> list[int | str]:

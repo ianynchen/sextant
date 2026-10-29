@@ -12,7 +12,7 @@ the chain walk every builder catalog uses (`shapes/chains.py`): the catalog's `r
 (the trigger's key) and `schedule` (the builder handed to it). Each chain end is one entry
 (ruling 3): two triggers built alike are two rows, and nothing here collapses them. The
 schedule builder is a nested chain, the ARGUMENT of a step (§2b), so it is followed with
-the value walk's chain reader (`values.producers_of(..., along_receivers=True)`): every
+the value walk's chain reader (`values.producer_paths(..., along_receivers=True)`): every
 builder call that built it, back along `receiver` links to its root, across returns, helpers
 and parameters, in the path's own calling contexts. A cron handed in
 as a configured field or parameter reads through the field ladder (`shapes/arguments.py`),
@@ -61,11 +61,14 @@ hands the handler to that method, resolved the same way; any other unread body g
 Several job classes reaching ONE body are one row, at the row's own resolution; several
 bodies from one branch are a row each, `narrowed` (§3c).
 
-**One path at a time.** The key, the literal root's argument and the job root's class are
-read together (`values.resolve_positions`), so each row holds the values ONE path gives:
-`addJob(jobClass, cron)` called twice is two rows, never four. Where no path ties schedules
-to jobs (each reaches each), every row is `partial`; rows equal but for their resolution
-are one, at the weaker word.
+**A row is `resolved` only from ONE binding.** The key, the literal root's argument and the
+job root's class are read in one `values.resolve_positions` call, WITHIN the path the
+schedule took to `withSchedule` and the path the trigger and the job took to the call that
+paired them (`values.producer_paths`): each row holds the values one path gives.
+`addJob(jobClass, cron)` called twice is two rows, never four, and a trigger built in a
+helper and scheduled by each caller keeps each caller's cron with that caller's job. A
+pairing no one path holds is read part by part, `partial`, its name NULL unless every path
+agrees; rows equal but for their resolution are one, at the weaker word.
 
 **`resolution`** (§3a): `resolved` with handler and expression both known and no
 placeholder; `unresolved` where the only gap is a placeholder; `narrowed` where the only gap
@@ -108,8 +111,10 @@ from sextant.application.resolve.values import (
     STRING,
     SYMBOL,
     Answer,
+    Path,
     ValueIndex,
     cached_value_index,
+    producer_paths,
     producers_of,
     resolve_positions,
 )
@@ -149,6 +154,9 @@ _ARG = re.compile(r"^arg(\d+)$")
 # root's argument and the job root's class.
 _VALUE = "value"
 _CLASS = "class"
+
+# The path that constrains nothing: a value read on it may be on any path.
+_ANY_PATH = Path()
 
 _RESOLVED = "resolved"
 _UNRESOLVED = "unresolved"
@@ -360,6 +368,9 @@ class _Schedule:
     # together with the trigger's key and the job's class (`_on_paths`); None where the
     # expression above is already the answer.
     literal: tuple[str, int] | None = None
+    # The path the walk took from `withSchedule` to the builder chain: the trigger's key
+    # and the literal's argument are read within it.
+    path: Path = _ANY_PATH
 
 
 @dataclass(frozen=True)
@@ -373,44 +384,57 @@ class _Found:
     source: str | None
     handler: str | None
     narrowed: bool
+    # Every part above came from ONE binding of one read (`_on_paths`); False where they
+    # were read apart (`_apart`), which is never `resolved`.
+    tied: bool = True
 
 
 def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
     """The rows of one chain end, one per distinct row the paths give.
 
-    **The trigger's key, its expression and its job's class are read TOGETHER, one path at
-    a time** (`_on_paths`), so a value stays with the values its own path gives: the
-    `addJob(jobClass, cron)` helper two callers call is two rows, each caller's cron with
-    its own job, never the four a separate read of each would cross. Where the pairing is
-    made somewhere no path shares — the trigger built in one method and paired with jobs in
-    its callers — every schedule reaches every job and nothing says which go together:
-    those rows are all `partial` (`_crossed`)."""
-    jobs: list[ChainEnd | None] = [*_jobs_of(end, context)] or [None]
-    found = [
-        row
-        for schedule in _schedules(end.captures, context)
-        for job in jobs
-        for row in _on_paths(end, schedule, job, context)
-        # Neither a kind nor a job: the chain says nothing a reader could use (§3a), and a
-        # row of NULLs would claim work nobody can name.
-        if row.trigger is not None or row.handler is not None
-    ]
+    **A row is `resolved` only when every part of it comes from ONE binding of one read**
+    (`_on_paths`): the trigger's key, the literal cron and the job's class, read together
+    WITHIN the path the schedule took to the trigger and the path the trigger and the job
+    took to the call that paired them (`_pairings`). So the `addJob(jobClass, cron)` helper
+    two callers call is two rows, and a trigger built in `trigger(cron)` and scheduled by
+    each of its callers keeps each caller's cron with that caller's job. A pairing no path
+    can hold is read part by part (`_apart`), and such a row is never `resolved`."""
+    pairings = _pairings(end, context)
+    found: list[_Found] = []
+    for schedule in _schedules(end.captures, context):
+        rows: list[_Found] = []
+        for job, path in pairings:
+            if path is None:
+                rows.extend(_apart(end, schedule, job, context))
+                continue
+            anchor = schedule.path.joined(path)
+            # A schedule and a pairing on paths that disagree are never one trigger's: no
+            # row.
+            if anchor is not None:
+                rows.extend(_on_paths(end, schedule, job, anchor, context))
+        # A schedule no pairing's path reaches is a trigger nothing on its path schedules:
+        # its row names no job.
+        found.extend(rows or _on_paths(end, schedule, None, schedule.path, context))
+    # Neither a kind nor a job: the chain says nothing a reader could use (§3a), and a row
+    # of NULLs would claim work nobody can name.
+    found = [row for row in found if row.trigger is not None or row.handler is not None]
     # Classes on one branch (`narrowed` answers) reaching ONE body are one row at its own
     # resolution; reaching several, each row is `narrowed` (§3c).
     branched = {row.handler for row in found if row.narrowed}
-    crossed = _crossed(found)
-    rows: dict[tuple[str | None, ...], str] = {}
+    rows_by_key: dict[tuple[str | None, ...], str] = {}
     for row in found:
         resolution = (
-            _PARTIAL
-            if crossed
-            else _row_resolution(row.handler, row.narrowed and len(branched) > 1, row.resolution)
+            _row_resolution(row.handler, row.narrowed and len(branched) > 1, row.resolution)
+            if row.tied
+            else _PARTIAL
         )
         key = (row.name, row.trigger, row.expression, row.source, row.handler)
         # One body found exactly on one path and through a branch on another is one row,
         # at the weaker word: that it may not run is the true half.
-        rows[key] = resolution if key not in rows else _weaker(rows[key], resolution)
-    for (name, trigger, expression, source, handler), resolution in rows.items():
+        rows_by_key[key] = (
+            resolution if key not in rows_by_key else _weaker(rows_by_key[key], resolution)
+        )
+    for (name, trigger, expression, source, handler), resolution in rows_by_key.items():
         yield TriggerEntry(
             caller=end.caller,
             row={
@@ -426,12 +450,11 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
         )
 
 
-def _on_paths(
+def _positions(
     end: ChainEnd, schedule: _Schedule, job: ChainEnd | None, context: _Context
-) -> Iterator[_Found]:
-    """A row per path through the trigger's key, the schedule's literal argument and the
-    job root's class, read together (`values.resolve_positions`): on each path, the values
-    that path gives and no other's."""
+) -> tuple[dict[str, tuple[Mapping[str, Any], int | str]], Mapping[str, Any] | None]:
+    """The positions a row is read from — the trigger's key, the literal root's argument,
+    the job root's class — and the literal root, where the schedule has one."""
     positions: dict[str, tuple[Mapping[str, Any], int | str]] = {}
     name = _position(end.captures.get(_NAME), context)
     group = _position(end.captures.get(_GROUP), context)
@@ -439,43 +462,101 @@ def _on_paths(
         positions[_NAME] = name
         if group is not None:
             positions[_GROUP] = group
-    slot = int(context.literal["arg"])
     root = None if schedule.literal is None else context.index.sites[schedule.literal]
+    slot = int(context.literal["arg"])
     if root is not None and slot < len(root["arguments"] or []):
         positions[_VALUE] = (root, slot)
     if job is not None and context.rules.class_arg < len(job.root["arguments"] or []):
         positions[_CLASS] = (job.root, context.rules.class_arg)
-    # No single path reaching every position at once leaves one row with nothing paired,
-    # rather than a pairing no path makes.
+    return positions, root
+
+
+def _on_paths(
+    end: ChainEnd,
+    schedule: _Schedule,
+    job: ChainEnd | None,
+    anchor: Path,
+    context: _Context,
+) -> list[_Found]:
+    """A row per binding of ONE read of every position (`values.resolve_positions`),
+    within `anchor`: on each, the values that binding gives and no other's. Where no
+    binding reaches every position at once, the parts are read apart (`_apart`)."""
+    positions, root = _positions(end, schedule, job, context)
     paths = (
-        resolve_positions(context.workspace, positions, context.index) if positions else []
-    ) or [{}]
+        resolve_positions(context.workspace, positions, context.index, within=anchor)
+        if positions
+        else [{}]
+    )
+    if not paths:
+        return _apart(end, schedule, job, context)
+    slot = int(context.literal["arg"])
+    found: list[_Found] = []
     for answers in paths:
         expression, resolution, source = schedule.expression, schedule.resolution, schedule.source
         if root is not None:
             expression, resolution, source = _expression(answers.get(_VALUE), root, slot, context)
         job_class, narrowed = _job_class(answers.get(_CLASS))
-        yield _Found(
-            name=_key_of(answers, context),
+        found.append(
+            _Found(
+                name=_key_of(answers, context),
+                trigger=schedule.kind,
+                expression=expression,
+                resolution=resolution,
+                source=source,
+                handler=None if job_class is None else _handler(job_class, context),
+                narrowed=narrowed,
+            )
+        )
+    return found
+
+
+def _apart(
+    end: ChainEnd, schedule: _Schedule, job: ChainEnd | None, context: _Context
+) -> list[_Found]:
+    """The rows of a pairing no single binding holds: each part read on its own, every row
+    `partial`. A name that differs between paths says nothing about this row, so it is the
+    one every path agrees on, or NULL (`_key`); the cron and the class are each read on
+    their own, and kept rather than dropped."""
+    positions, root = _positions(end, schedule, job, context)
+    slot = int(context.literal["arg"])
+    expressions = [(schedule.expression, schedule.resolution, schedule.source)]
+    if root is not None:
+        read = (
+            resolve_positions(
+                context.workspace,
+                {_VALUE: positions[_VALUE]},
+                context.index,
+                within=schedule.path,
+            )
+            if _VALUE in positions
+            else []
+        )
+        expressions = list(
+            dict.fromkeys(
+                _expression(answers.get(_VALUE), root, slot, context) for answers in read or [{}]
+            )
+        )
+    read = (
+        resolve_positions(context.workspace, {_CLASS: positions[_CLASS]}, context.index)
+        if _CLASS in positions
+        else []
+    )
+    classes = list(dict.fromkeys(_job_class(answers.get(_CLASS)) for answers in read or [{}]))
+    name = _key(end.captures.get(_NAME), end.captures.get(_GROUP), context)
+    return [
+        _Found(
+            name=name,
             trigger=schedule.kind,
             expression=expression,
             resolution=resolution,
             source=source,
             handler=None if job_class is None else _handler(job_class, context),
             narrowed=narrowed,
+            tied=False,
         )
-
-
-def _crossed(found: list[_Found]) -> bool:
-    """Whether the paths left schedules and jobs unpaired: several schedules, several
-    handlers, and every schedule with every handler — what a read of each alone gives, so
-    the paths decided nothing about which go together. (A helper called with every
-    combination on purpose gives the same rows and is `partial` too: from the rows alone
-    the two are one shape.)"""
-    schedules = {(row.name, row.trigger, row.expression, row.source) for row in found}
-    handlers = {row.handler for row in found}
-    pairs = {(row.name, row.trigger, row.expression, row.source, row.handler) for row in found}
-    return len(schedules) > 1 and len(handlers) > 1 and len(pairs) == len(schedules) * len(handlers)
+        for expression, resolution, source in expressions
+        for job_class, narrowed in classes
+    ]
 
 
 # The resolution words from the strongest claim to the weakest.
@@ -496,67 +577,94 @@ def _row_resolution(handler: str | None, narrowed: bool, expression: str) -> str
     return expression
 
 
-def _jobs_of(end: ChainEnd, context: _Context) -> list[ChainEnd]:
-    """The job chains the trigger of `end` runs, by every pairing Quartz honours (§3c), in
-    order and once each: the pairing calls its built value reaches, then its `forJob`."""
-    found: list[ChainEnd] = []
+def _pairings(end: ChainEnd, context: _Context) -> list[tuple[ChainEnd | None, Path | None]]:
+    """The job chains the trigger of `end` runs, by every pairing Quartz honours (§3c), each
+    with the path that ties it to the trigger, in order and once each: the pairing calls its
+    built value reaches, then its `forJob`. `(None, _ANY_PATH)` where no job is found.
+
+    A pairing call's path is the trigger's path to it JOINED with the job's: both values
+    are what one call was handed. Where every join disagrees, no one path holds the call's
+    pairing and the path is None (`_apart` reads the row). A job named by its key, or
+    injected as a bean, is paired by that name itself, on any path."""
+    found: list[tuple[ChainEnd | None, Path | None]] = []
     for consumer in end.consumers:
         for pairing in context.rules.pairing:
             if not (
                 consumer["owner"] in pairing.owners
                 and consumer["name"] == pairing.method
                 and consumer.get("descriptor") == pairing.descriptor
-                and _builds(consumer, pairing.trigger, end, context)
             ):
                 continue
-            found.extend(_built_jobs(consumer, pairing.job, context))
+            triggers = _trigger_paths(consumer, pairing.trigger, end, context)
+            for job, path in _built_jobs(consumer, pairing.job, context) if triggers else []:
+                joined = [
+                    both for trigger in triggers if (both := trigger.joined(path)) is not None
+                ]
+                found.extend((job, both) for both in joined)
+                if not joined:
+                    found.append((job, None))
     position = _position(end.captures.get(_JOB_DETAIL), context)
     if position is not None:
         found.extend(_built_jobs(*position, context))
-        found.extend(_injected_jobs(*position, context))
+        found.extend((job, _ANY_PATH) for job in _injected_jobs(*position, context))
     key = _key(end.captures.get(_JOB_NAME), end.captures.get(_JOB_GROUP), context)
     position = _position(end.captures.get(_JOB_KEY_FIELD), context)
     keys = [key] if key is not None else []
     if position is not None:
         keys.extend(_built_keys(*position, context))
     for named in keys:
-        found.extend((context.jobs_by_key or {}).get(named, ()))
-    return list({_site_key(job.terminal): job for job in found if job.terminal}.values())
+        found.extend((job, _ANY_PATH) for job in (context.jobs_by_key or {}).get(named, ()))
+    unique = {
+        (None if job is None or job.terminal is None else _site_key(job.terminal), path): (
+            job,
+            path,
+        )
+        for job, path in found
+    }
+    return list(unique.values()) or [(None, _ANY_PATH)]
 
 
-def _builds(consumer: Mapping[str, Any], slot: int, end: ChainEnd, context: _Context) -> bool:
-    """Whether the value walk from `consumer`'s argument at `slot` reaches `end`'s own
-    `build()`: a pairing call joins the trigger it is handed in its trigger argument."""
+def _trigger_paths(
+    consumer: Mapping[str, Any], slot: int, end: ChainEnd, context: _Context
+) -> list[Path]:
+    """The paths by which the value walk from `consumer`'s argument at `slot` reaches
+    `end`'s own `build()`: a pairing call joins the trigger it is handed in its trigger
+    argument, on each such path."""
     if end.terminal is None:
-        return False
+        return []
     terminal = _site_key(end.terminal)
-    return any(
-        (producer.caller, producer.ordinal) == terminal
-        for producer in producers_of(
+    return [
+        path
+        for producer, path in producer_paths(
             context.index,
             consumer,
             slot,
             context.built,
             past_accessors=context.dispatch.ancestors,
         )
-    )
+        if (producer.caller, producer.ordinal) == terminal
+    ]
 
 
-def _built_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> list[ChainEnd]:
+def _built_jobs(
+    site: Mapping[str, Any], slot: int, context: _Context
+) -> list[tuple[ChainEnd, Path]]:
     """The job chains whose `build()` the value walk from `site`'s argument at `slot`
-    reaches, in this method or across returns and parameters.
+    reaches, in this method or across returns and parameters, each with its path.
 
     An accessor on the built detail is let past (`past_accessors`): RuoYi's
     `jobDetail.getJobDataMap().put(KEY, job)` does not change which `build()` made it.
-    `_builds` asks the same question of the trigger and walks the same way."""
-    reached = {
-        (producer.caller, producer.ordinal)
-        for producer in producers_of(
+    `_trigger_paths` asks the same question of the trigger and walks the same way."""
+    ends = {_site_key(job.terminal): job for job in context.job_ends if job.terminal}
+    return [
+        (ends[(producer.caller, producer.ordinal)], path)
+        for producer, path in producer_paths(
             context.index, site, slot, context.built, past_accessors=context.dispatch.ancestors
         )
         if producer.caller is not None
-    }
-    return [job for job in context.job_ends if job.terminal and _site_key(job.terminal) in reached]
+        and producer.ordinal is not None
+        and (producer.caller, producer.ordinal) in ends
+    ]
 
 
 def _injected_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> list[ChainEnd]:
@@ -733,7 +841,8 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     """Each distinct schedule the walk finds handed to the trigger, in its order; the
     catalog's `default_schedule` where none is (Quartz's own `build()`, CP-55).
 
-    The builder chain is read by the value walk ALONG RECEIVERS (`producers_of`): every call
+    The builder chain is read by the value walk ALONG RECEIVERS (`producer_paths`), each
+    with the path it took: every call
     on a `kinds` type that built the value, root first, across returns and helpers and in
     the path's own calling contexts — a helper's parameter is the argument at the call the
     walk came through, never another caller's."""
@@ -746,27 +855,31 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     declared_kind = _declared_kind(site, slot, context)
     found: list[_Schedule] = []
     chains = [
-        producer
-        for producer in producers_of(
+        (producer, path)
+        for producer, path in producer_paths(
             context.index, site, slot, context.builder_calls, along_receivers=True
         )
         if producer.chain
     ]
-    for producer in chains:
+    for producer, path in chains:
         sites = [context.index.sites[key] for key in producer.chain]
         if not producer.rooted:
             # A builder call was found and its root was not: the kind is the builder call's
             # own type, which is a `kinds` key by construction of the stop set.
-            found.append(_Schedule(context.kinds.get(str(sites[0]["owner"]))))
+            found.append(_Schedule(context.kinds.get(str(sites[0]["owner"])), path=path))
             continue
         kind = context.kinds[str(sites[0]["owner"])]
         if _is_literal_root(sites[0], context):
-            found.append(_literal(sites[0], kind, context))
+            found.append(replace(_literal(sites[0], kind, context), path=path))
             continue
         # A chain passed through a branch is not the chain as written: which step ran is not
         # known, so it has no text.
         text = None if producer.inexact else _text(sites, context)
-        found.append(_Schedule(kind, text, _RESOLVED) if text is not None else _Schedule(kind))
+        found.append(
+            _Schedule(kind, text, _RESOLVED, path=path)
+            if text is not None
+            else _Schedule(kind, path=path)
+        )
     if not chains:
         # The walk ends before any builder call (§3b): a factory in a jar, a helper whose body
         # it cannot read. The kind is still the type the producing call is declared to return.

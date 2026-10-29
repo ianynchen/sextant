@@ -271,10 +271,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        found.extend((context.jobs_by_key or {}).get(named, ()))",
-                replace="        found.extend(job for key, jobs in (context.jobs_by_key or {}).items()"
-                ' if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in jobs)'
-                "  # guard disabled by scripts/guard_check.py",
+                find="        found.extend((job, _ANY_PATH) for job in (context.jobs_by_key or {})"
+                ".get(named, ()))",
+                replace="        found.extend((job, _ANY_PATH) for key, jobs in (context.jobs_by_key "
+                'or {}).items() if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in '
+                "jobs)  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -327,8 +328,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            narrowed=narrowed,",
-                replace="            narrowed=True,  # guard disabled by scripts/guard_check.py",
+                find="                narrowed=narrowed,\n            )\n        )\n    return found\n",
+                replace="                narrowed=True,  # guard disabled by scripts/guard_check.py\n"
+                "            )\n        )\n    return found\n",
             ),
         ),
     ),
@@ -353,26 +355,56 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        resolve_positions(context.workspace, positions, context.index) if "
-                "positions else []\n",
+                find="        resolve_positions(context.workspace, positions, context.index, "
+                "within=anchor)\n",
                 replace="        [dict(zip(positions, combo)) for combo in __import__('itertools')"
                 ".product(*([answers[label] for answers in resolve_positions(context.workspace, "
-                "{label: at}, context.index)] for label, at in positions.items()))] if positions "
-                "else []  # guard disabled by scripts/guard_check.py\n",
+                "{label: at}, context.index)] for label, at in positions.items()))]"
+                "  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "quartz.an-UNTIED-pairing-is-partial": Guard(
-        what="where no path ties schedules to jobs (every schedule reaches every job), the "
-        "rows are `partial`",
-        why="a trigger built in a helper and paired with a different job in each caller "
-        "reaches every caller's job with every caller's cron; publishing each pairing "
-        "`resolved` states schedules that are false for half of them",
+    "quartz.a-row-is-RESOLVED-only-from-one-binding": Guard(
+        what="a row's key, cron and job class are read within the path its trigger and job "
+        "took to the call that paired them, so every part comes from one binding",
+        why="a trigger built in `trigger(cron)` and scheduled by several callers, each with "
+        "its own job, reaches every caller's cron; read without the pairing's path, every "
+        "cron is published `resolved` beside every job (R19: seven rows, four false)",
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="    crossed = _crossed(found)",
-                replace="    crossed = False  # guard disabled by scripts/guard_check.py",
+                find="        resolve_positions(context.workspace, positions, context.index, "
+                "within=anchor)\n",
+                replace="        resolve_positions(context.workspace, positions, context.index)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.a-NAME-is-read-on-its-schedules-path": Guard(
+        what="the trigger's key and cron are read within the path the schedule builder took "
+        "to `withSchedule`",
+        why="`trigger(name, sb)` called with `(n1, cronSchedule(c1))` and `(n2, "
+        "cronSchedule(c2))`: read apart from the schedule's path, every name is published "
+        "`resolved` beside every cron, two of four rows false",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            anchor = schedule.path.joined(path)",
+                replace="            anchor = path  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-name-is-NULL": Guard(
+        what="in a row no one binding holds, the name is the one every path agrees on, or NULL",
+        why="a name read on one path, beside a cron and a job read on others, states a "
+        "pairing of name and schedule nothing in the code makes",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="    name = _key(end.captures.get(_NAME), end.captures.get(_GROUP), context)",
+                replace="    name = _key_of(resolve_positions(context.workspace, {_NAME: "
+                "positions[_NAME]}, context.index)[0], context) if _NAME in positions else None"
+                "  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -412,9 +444,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        rows[key] = resolution if key not in rows else "
-                "_weaker(rows[key], resolution)",
-                replace="        rows[key] = resolution  # guard disabled by scripts/guard_check.py",
+                find="            resolution if key not in rows_by_key else "
+                "_weaker(rows_by_key[key], resolution)\n",
+                replace="            resolution  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
