@@ -990,10 +990,18 @@ column between them.
 
 **`scheduled_work`** carries `handler` (the method's own symbol), `trigger` (the framework's
 own word for the schedule kind — `cron`, `fixedRate`, `fixedDelay`, catalog vocabulary
-rather than one of [D00](D00-fact-schema.md) §4's closed sets), `expression` (the declared
+rather than one of [D00](D00-fact-schema.md) §4's closed sets), `name` (the trigger's own
+name where the framework gives one, part of the identity beside `handler` and `trigger`;
+NULL for `@Scheduled`), `expression` (the declared
 schedule **verbatim** — a cron string normalised or a delay re-spelled names a different
-schedule from the one that runs), `resolution`, `evidence` and `catalog_id`. `resolution`
-is `unresolved` where the expression is a property placeholder this analysis did not
+schedule from the one that runs), `expression_source` (the SCIP symbol of the method or
+field the walk to the expression stopped at; set only when `expression` is NULL),
+`resolution`, `evidence` and `catalog_id`. `handler`, `trigger`, `name`, `expression` and
+`expression_source` are nullable: a NULL is a fact the code does not state, and the
+document prints it as `not in the code`. A row with no `handler` is not a root.
+`resolution` is `resolved`, `unresolved`, `partial` (part of the schedule is read, part is
+not; a `partial` row with no expression is rendered with `the schedule is read at runtime
+from <expression_source>`) or `narrowed` (one of several candidates). It is `unresolved` where the expression is a property placeholder this analysis did not
 substitute, with the placeholder carried exactly as written; the value comes from
 configuration a deployment overwrites, so substituting one would publish a schedule the
 repository cannot know.
@@ -1001,14 +1009,14 @@ repository cannot know.
 **`resolved_schedules`** is what the repository's own configuration says instead, beside
 the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
 (`scheduled_work` row whose expression holds the config model's placeholder opener,
-environment of `resolved_config`), carrying `handler`, `trigger`, `expression`,
+environment of `resolved_config`), carrying `handler`, `trigger`, `name`, `expression`,
 `environment`, `keys`, `value` and `unresolved_reason` — the last one of the closed set
 `resolved_config` uses, `value` NULL exactly when it is set. `keys` is a JSON array of every
 key the substitution asked that environment's configuration for, in the order it asked: a
 schedule is the value of the key that configures it, so every exit masks `value` whole where
-one of them names a secret, as `resolved_config` masks that key's own value. The first three are the job's
+one of them names a secret, as `resolved_config` masks that key's own value. The first four are the job's
 `scheduled_work` columns verbatim and together are its identity: a method with two
-schedules of one kind (`@Schedules`) is two jobs sharing `handler` and `trigger`, and only
+schedules of one kind (`@Schedules`) is two jobs sharing the others, and only
 `expression` attributes a value to its own. The expression is substituted by the same placeholder rule
 `resolved_config` itself is (`:default` included, relaxed or exact matching as the model
 says), looked up in that one environment's resolved rows. A literal or a SpEL `#{…}`
@@ -1159,7 +1167,7 @@ compared by nothing).
 | `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
 | `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
-| `schedule` | `scheduled_work` | handler, trigger | expression, resolution | catalog |
+| `schedule` | `scheduled_work` | handler, trigger, name | expression, resolution | catalog |
 | `error-handler` | `error_handlers` | handler, exception | advice, scope, status, response shape | catalog |
 
 **The wire is the identity; the handler is evidence.** Measured on six months of
@@ -1368,6 +1376,7 @@ own cadence.
 | 6 | No table change: condition verdicts a deployment can change are no longer decided (spec `2026-10-23-deployment-set-conditions-design.md`). A `profile` or `property` condition is `unresolved` unless the environment's own name decides it, and the module's own reading is its evidence | refused by its stamp exactly as at 5, so a workspace holding the older decided verdicts is re-analysed rather than read beside new ones (user ruling, spec §6) |
 | 7 | `resolved_schedules`, a new derived table: a scheduled job's placeholder expression per environment, read from the module's configuration through the one placeholder rule (spec `2026-10-23-configured-schedules-design.md`); `scheduled_work` keeps one row per job and its `unresolved` | refused by its stamp exactly as at 5 and 6, so a workspace without the table is re-analysed rather than read as one whose jobs have no configured values |
 | 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
+| 9 | `scheduled_work` gains `name` and `expression_source`; `handler`, `trigger` and `expression` may be NULL; `resolution` may be `partial` or `narrowed`; `resolved_schedules` gains `name` (spec `2026-10-28-quartz-design.md` §3e) | refused by its stamp exactly as at 5 to 8, so a workspace without the columns is re-analysed rather than read as one whose schedules have no names |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

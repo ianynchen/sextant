@@ -21,16 +21,19 @@
 -- survives to this table is evidence and not noise.
 --
 -- Parameters:
---   $rows -- {handler, trigger, expression, resolution, evidence, catalog_id}
+--   $rows -- {handler, trigger, name, expression, expression_source, resolution,
+--            evidence, catalog_id}
 --            rows, one per trigger attribute the declaration writes. A
 --            declaration naming no trigger at all contributes none: there is
 --            no expression to carry, and a row with an empty schedule would
 --            claim work the framework never runs.
-INSERT INTO scheduled_work (handler, trigger, expression, resolution, evidence, catalog_id)
-SELECT r.handler, r.trigger, r.expression, r.resolution, r.evidence, r.catalog_id
+INSERT INTO scheduled_work (handler, trigger, name, expression, expression_source,
+                            resolution, evidence, catalog_id)
+SELECT r.handler, r.trigger, r.name, r.expression, r.expression_source, r.resolution,
+       r.evidence, r.catalog_id
 FROM (SELECT UNNEST(
     $rows::STRUCT(
-        handler VARCHAR, trigger VARCHAR, expression VARCHAR,
-        resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR
+        handler VARCHAR, trigger VARCHAR, name VARCHAR, expression VARCHAR,
+        expression_source VARCHAR, resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR
     )[]
 ) AS r);

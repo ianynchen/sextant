@@ -2349,6 +2349,25 @@ def test_conditional_beans_state_where_they_exist_in_the_document(full_run: Path
     assert pricing.count("| narrowed |") == 2
 
 
+def test_an_at_scheduled_module_renders_as_before(full_run: Path):
+    """`orders-service`'s "Scheduled work" section is what it was before `scheduled_work`
+    gained a name, bar the one new column: the same handlers, triggers, expressions and
+    resolutions in the same order, and `Name` reading `not in the code` on every row because
+    `@Scheduled` names nothing."""
+    document = (full_run / "render" / "architecture.md").read_text()
+    section = document.split("## Scheduled work", 1)[1].split("\n## ", 1)[0]
+    table = [line for line in section.splitlines() if line.startswith("|")]
+    cells = [[cell.strip() for cell in line.strip("|").split("|")] for line in table]
+    assert cells[0] == ["Handler", "Trigger", "Name", "Expression", "Resolution"]
+    sweep = "`com/acme/orders/scheduling/OrderSweeper#sweep(sig_da8c82d5).`"
+    purge = "`com/acme/orders/scheduling/OrderSweeper#purge(sig_da8c82d5).`"
+    assert [(row[0], row[1], row[3], row[4]) for row in cells[2:]] == [
+        (purge, "fixedRate", "`${orders.purge.rate}`", "unresolved"),
+        (sweep, "cron", "`${orders.sweep.cron:0 0 * * * *}`", "unresolved"),
+    ]
+    assert {row[2] for row in cells[2:]} == {"not in the code"}
+
+
 def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_run: Path):
     """The document is the result (ruling 2026-10-17), for COVERAGE §5.12's `@Scheduled` row 3
     (spec 2026-10-23-configured-schedules). `scheduling/OrderSweeper` has two jobs written with
@@ -2359,8 +2378,14 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
     document = (full_run / "render" / "architecture.md").read_text()
     sweep = "`com/acme/orders/scheduling/OrderSweeper#sweep(sig_da8c82d5).`"
     purge = "`com/acme/orders/scheduling/OrderSweeper#purge(sig_da8c82d5).`"
-    assert f"| {sweep} | cron | `${{orders.sweep.cron:0 0 * * * *}}` | unresolved |" in document
-    assert f"| {purge} | fixedRate | `${{orders.purge.rate}}` | unresolved |" in document
+    assert (
+        f"| {sweep} | cron | not in the code | `${{orders.sweep.cron:0 0 * * * *}}` | unresolved |"
+        in document
+    )
+    assert (
+        f"| {purge} | fixedRate | not in the code | `${{orders.purge.rate}}` | unresolved |"
+        in document
+    )
     assert (
         f"- {sweep} — cron `${{orders.sweep.cron:0 0 * * * *}}`\n"
         "  - as configured in this repository: `0 0 * * * *` in `default`; "

@@ -2301,9 +2301,9 @@ def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     secret = "https://u:hunter2@h/0 0 * * * *"
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'prod', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'prod', "
         "'[\"orders.sweep.cron\"]', ?, NULL), "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', '${orders.sweep.cron}', 'default', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'default', "
         "'[\"orders.sweep.cron\"]', '0 0 * * * *', NULL)",
         [secret],
     )
@@ -2331,12 +2331,13 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     expression = "${orders.sweep.cron:ACME_A1B2}"
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'unresolved', 'compiler', 'spring-scheduling')",
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, NULL, 'unresolved', 'compiler', "
+        "'spring-scheduling')",
         [expression],
     )
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
-        "('mod com/acme/A#sweep(sig_1).', 'cron', ?, 'prod', '[\"orders.sweep.cron\"]', "
+        "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, 'prod', '[\"orders.sweep.cron\"]', "
         "'0 0 * * * *', NULL)",
         [expression],
     )

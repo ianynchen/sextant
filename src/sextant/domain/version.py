@@ -119,6 +119,12 @@ SEXTANT_VERSION = version("sextant")
 #     8       `rpc_hops`: where a gRPC client stub's call to an RPC this module serves
 #             lands, its handler named (spec 2026-10-25-quarkus-mutiny-grpc §3d), a new
 #             derived table beside `call_edges`, which is untouched.
+#     9       `scheduled_work` gains `name` (the trigger's own name) and
+#             `expression_source` (where a walk to the expression stopped, set only when
+#             `expression` is NULL); `handler`, `trigger` and `expression` may be NULL; and
+#             `resolution` may be `partial` or `narrowed` (spec 2026-10-28-quartz §3e).
+#             `resolved_schedules` carries `name`. A workspace of the older vintage has
+#             neither column, so it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -131,6 +137,10 @@ SEXTANT_VERSION = version("sextant")
 #             reads this stamp to know whether the same words were used on both sides.
 #     2       `dependency` gains `conditions`; `conditions` is the declared
 #             `{kind, expression}` set (spec 2026-10-23, rulings 2 and 3).
+#     3       `schedule`'s identity gains `name`: `(handler, trigger, name)` (spec
+#             2026-10-28-quartz, ruling 5). Two Quartz triggers of one kind on one job, told
+#             apart only by their own names, are two entries rather than one with two
+#             disagreeing expressions.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 8
-BOUNDARY_VOCABULARY_VERSION = 2
+GRAPH_SCHEMA_VERSION = 9
+BOUNDARY_VOCABULARY_VERSION = 3

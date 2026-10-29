@@ -3517,8 +3517,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            _code(redactor.redact_text(str(row["expression"]))),\n',
-                replace='            _code(str(row["expression"])),  # guard disabled\n',
+                find='            _scheduled_cell(\n                row["expression"], lambda value: redactor.redact_text(str(value)), True\n            ),\n',
+                replace='            _scheduled_cell(row["expression"], lambda value: str(value), True),  # guard disabled\n',
             ),
             Edit(
                 path="sextant/egress/render/document.py",
@@ -4526,6 +4526,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "roots.a-NULL-handler-is-NOT-a-root": Guard(
+        what="a `scheduled_work` row becomes a root only where it NAMES a handler — a "
+        "schedule declared whose job was not found has none",
+        why="the missing value does not stay missing. Read anyway it becomes a root handler "
+        "named for no symbol any fact declared, and a walk starts at a method that does not "
+        "exist, finding nothing and saying nothing about why",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='        if row["handler"] is not None\n    }',
+                replace="        if True  # guard disabled\n    }",
+            ),
+        ),
+    ),
     "roots.only-a-row-the-module-exposes-is-a-root": Guard(
         what="only an endpoint row the module EXPOSES becomes a root — a row the module "
         "calls is a call it makes, whatever method the row happens to name",
@@ -4885,6 +4899,20 @@ GUARDS: dict[str, Guard] = {
                 path=_VOCABULARY,
                 find='        identity=("protocol", "method", "path"),\n',
                 replace='        identity=("protocol", "method", "path", "handler"),  # guard disabled\n',
+            ),
+        ),
+    ),
+    "vocabulary.schedule-identity-includes-NAME": Guard(
+        what="a schedule is identified by its handler, its trigger kind AND its own name "
+        "(spec 2026-10-28-quartz, ruling 5)",
+        why="two Quartz triggers of one kind on one job differ only by name. With the name "
+        "out of the identity they are one entry whose expression and resolution agree, so a "
+        "second trigger added to a job is reported as no change at all",
+        edits=(
+            Edit(
+                path=_VOCABULARY,
+                find='        identity=("handler", "trigger", "name"),\n',
+                replace='        identity=("handler", "trigger"),  # guard disabled\n',
             ),
         ),
     ),

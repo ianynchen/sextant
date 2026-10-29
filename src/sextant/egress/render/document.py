@@ -1729,12 +1729,17 @@ def assemble_module_document(
     )
 
 
-_SCHEDULED_HEADERS = ("Handler", "Trigger", "Expression", "Resolution")
+_SCHEDULED_HEADERS = ("Handler", "Trigger", "Name", "Expression", "Resolution")
 _ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Response")
 # Never a bare blank cell, the `_MEDIA_NONE_RECORDED` precedent: an empty cell
 # reads as a formatting slip, while an em dash reads as "nothing recorded",
 # which is what a NULL in either table means.
 _NONE_RECORDED = "—"
+# What a `scheduled_work` cell reads where the code does not say: a Quartz trigger the walk
+# found no job for has no handler, a `@Scheduled` has no name, a schedule read at runtime
+# has no expression. In words rather than a dash, because here the absence is itself the
+# finding (`partial`), not an unrecorded value.
+_NOT_IN_THE_CODE = "not in the code"
 
 
 def _scheduled_work_sections(
@@ -1769,22 +1774,40 @@ def _scheduled_work_sections(
         return [MachineParagraph(_runs("None found."))]
     table = tuple(
         (
-            _code(bare_descriptor(str(row["handler"]))),
-            _text(str(row["trigger"])),
-            _code(redactor.redact_text(str(row["expression"]))),
+            _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True),
+            _scheduled_cell(row["trigger"], str, False),
+            _scheduled_cell(row["name"], str, False),
+            _scheduled_cell(
+                row["expression"], lambda value: redactor.redact_text(str(value)), True
+            ),
             _text(str(row["resolution"])),
         )
         for row in rows
     )
     sections: list[Section] = [MachineTable(_SCHEDULED_HEADERS, table)]
-    by_job: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    by_job: dict[tuple[object, ...], list[dict[str, object]]] = {}
     for value in configured:
-        job = (str(value["handler"]), str(value["trigger"]), str(value["expression"]))
-        by_job.setdefault(job, []).append(value)
+        by_job.setdefault(_job_key(value), []).append(value)
     for row in rows:
-        handler = _code(bare_descriptor(str(row["handler"])))
-        values = by_job.get((str(row["handler"]), str(row["trigger"]), str(row["expression"])))
+        handler = _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True)
+        values = by_job.get(_job_key(row))
         entries = _condition_entries(row["handler"], beans)
+        if row["handler"] is None:
+            # No handler to head the block with: the schedule's own kind and name do.
+            handler += _text(" — " + " ".join(str(row[k]) for k in ("trigger", "name") if row[k]))
+        if (
+            row["resolution"] == "partial"
+            and row["expression"] is None
+            and row["expression_source"]
+        ):
+            entries = [
+                DetailEntry(
+                    _text("the schedule is read at runtime from ")
+                    + _code(bare_descriptor(str(row["expression_source"]))),
+                    None,
+                    None,
+                )
+            ] + entries
         if values:
             handler += _text(f" — {row['trigger']} ") + _code(
                 redactor.redact_text(str(row["expression"]))
@@ -1795,6 +1818,21 @@ def _scheduled_work_sections(
             header = DetailEntry(handler, None, None)
             sections.append(MachineDetail((header, *entries)))
     return sections
+
+
+def _job_key(row: dict[str, object]) -> tuple[object, ...]:
+    """A scheduled job's identity as `resolved_schedules` carries it: the columns of
+    `scheduled_work` a configured value joins back on. NULL stays NULL, so two jobs that
+    differ only in a NULL column are not confused with one another."""
+    return tuple(row[column] for column in ("handler", "trigger", "name", "expression"))
+
+
+def _scheduled_cell(value: object, show: Callable[[object], str], code: bool) -> tuple[Run, ...]:
+    """One `scheduled_work` cell: `show` of the value, as code where it is code, or
+    `not in the code` for a NULL."""
+    if value is None:
+        return _text(_NOT_IN_THE_CODE)
+    return _code(show(value)) if code else _text(show(value))
 
 
 def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) -> str:

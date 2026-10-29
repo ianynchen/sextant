@@ -191,6 +191,29 @@ def test_a_placeholder_cron_is_read_in_each_environment(tmp_path: Path):
     )
 
 
+def test_resolved_schedules_joins_on_name(tmp_path: Path):
+    """Two triggers alike in handler, trigger and expression and told apart by their own
+    names are two jobs, each with its own row per environment carrying that name."""
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${orders.sweep.cron}"},
+        {"application.yml": {"orders.sweep.cron": "0 0 * * * *"}},
+    )
+    [job] = workspace.query("scheduled_work")
+    assert job["name"] is None
+    workspace.derive("scheduled_work_insert", rows=[{**job, "name": "nightly"}])
+    record_resolved_schedules(workspace, _catalogs())
+    rows = [
+        (r["name"], r["expression"], r["environment"])
+        for r in workspace.query("resolved_schedules")
+    ]
+    workspace.close()
+    assert rows == [
+        ("nightly", "${orders.sweep.cron}", "default"),
+        (None, "${orders.sweep.cron}", "default"),
+    ]
+
+
 @pytest.mark.pins("schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key")
 def test_an_annotation_default_applies_where_no_environment_sets_the_key(tmp_path: Path):
     workspace = _resolved(

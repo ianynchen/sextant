@@ -190,24 +190,37 @@ CREATE TABLE IF NOT EXISTS open_questions (
 -- owned by the engine would leave only whichever ran last.
 CREATE TABLE IF NOT EXISTS scheduled_work (
     -- The scheduled method's own symbol (D00 §5a), module coordinates
-    -- included, exactly as the annotation's target names it.
+    -- included, exactly as the annotation's target names it. NULL where the
+    -- schedule is declared but the code that runs when it fires is not
+    -- reachable from the declaration (a Quartz trigger whose job was not
+    -- found): the row is then not a root.
     handler    TEXT,
     -- Which KIND of schedule the declaration names, as the catalog's own
     -- `triggers` map spells it — `cron`, `fixedRate` or `fixedDelay` today.
     -- Catalog vocabulary rather than a D00 closed set: the framework owns the
     -- word, so it lives in the catalog file with every other framework name
-    -- (D02's "there is no `if spring` anywhere in Sextant").
+    -- (D02's "there is no `if spring` anywhere in Sextant"). NULL where the
+    -- kind is not in the code.
     trigger    TEXT,
+    -- The trigger's own name where the framework gives one (a Quartz
+    -- trigger's identity), part of the schedule's identity beside `handler`
+    -- and `trigger` (Quartz design, ruling 5). NULL for `@Scheduled`, which
+    -- has none.
+    name       TEXT,
     -- The trigger's declared expression, VERBATIM (2O design §4a) — the cron
     -- string, or the delay/rate as it was written. Never normalised, never
     -- evaluated: a `${...}` placeholder is preserved exactly as declared and
-    -- `resolution` says `unresolved` beside it.
+    -- `resolution` says `unresolved` beside it. NULL where the walk could not
+    -- reach a literal; `expression_source` then says where it stopped.
     expression TEXT,
+    -- The SCIP symbol of the method or field the walk to the expression
+    -- stopped at. Set only when `expression` is NULL.
+    expression_source TEXT,
     -- D00's resolution set. `resolved` where the expression is the literal the
     -- framework will schedule on; `unresolved` where it is a property
     -- placeholder this analysis did not substitute (COVERAGE names the
-    -- boundary). NULL never appears here — a row with no expression at all is
-    -- not derived.
+    -- boundary); `partial` where part of the schedule is read and part is
+    -- not; `narrowed` where it is one of several candidates.
     resolution TEXT,
     -- D00's evidence set. Always `compiler`: every column above is read off
     -- the annotation the compiler wrote into the class file.
@@ -233,12 +246,13 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
 -- through reset_resolved_schedules.sql + insert_resolved_schedules.sql, both run by
 -- its one writing pass (`resolve/resolved_schedules.py`), the `return_flows` pairing.
 CREATE TABLE IF NOT EXISTS resolved_schedules (
-    -- `scheduled_work.handler`, `.trigger` and `.expression`, verbatim, so a reader joins
-    -- straight back. `expression` is part of the job's identity, not decoration: a method
-    -- carrying two schedules of one kind (`@Schedules`) is two `scheduled_work` rows that
-    -- share the other two, and only the expression says which job a value belongs to.
+    -- `scheduled_work.handler`, `.trigger`, `.name` and `.expression`, verbatim, so a reader
+    -- joins straight back. `expression` is part of the job's identity, not decoration: a
+    -- method carrying two schedules of one kind (`@Schedules`) is two `scheduled_work` rows
+    -- that share the others, and only the expression says which job a value belongs to.
     handler           TEXT,
     trigger           TEXT,
+    name              TEXT,
     expression        TEXT,
     -- One of `resolved_config`'s environments.
     environment       TEXT,

@@ -712,9 +712,11 @@ _NAMED_QUERIES = {
     # tells them apart — so the handler leads, and `catalog_id` closes the tie
     # a second catalog claiming the same annotation would otherwise leave open.
     "scheduled_work": """
-        SELECT handler, trigger, expression, resolution, evidence, catalog_id
+        SELECT handler, trigger, name, expression, expression_source, resolution, evidence,
+               catalog_id
         FROM scheduled_work
-        ORDER BY handler, trigger, expression, resolution, evidence, catalog_id
+        ORDER BY handler, trigger, name, expression, expression_source, resolution, evidence,
+                 catalog_id
     """,
     # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
     # read as `scheduled_work` is — the job's own (handler, trigger, expression) leads —
@@ -722,9 +724,9 @@ _NAMED_QUERIES = {
     # (NFR-1): a job has one row per environment, and two schedules of one kind on one
     # method (`@Schedules`) differ in `expression`.
     "resolved_schedules": """
-        SELECT handler, trigger, expression, environment, keys, value, unresolved_reason
+        SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason
         FROM resolved_schedules
-        ORDER BY handler, trigger, expression, environment
+        ORDER BY handler, trigger, name, expression, environment
     """,
     # `scope` is cast to text in the ORDER BY for the reason `open_questions`
     # casts `candidates`: it is a JSON document, DuckDB has no ordering for
@@ -772,8 +774,8 @@ _NAMED_QUERIES = {
         ORDER BY key, environment, value, unresolved_reason, source
     """,
     "boundary_schedule": """
-        SELECT handler, trigger, expression, resolution, catalog_id FROM scheduled_work
-        ORDER BY handler, trigger, expression, resolution, catalog_id
+        SELECT handler, trigger, name, expression, resolution, catalog_id FROM scheduled_work
+        ORDER BY handler, trigger, name, expression, resolution, catalog_id
     """,
     "boundary_error_handler": """
         SELECT handler, exception, advice, scope, status, response_shape, catalog_id
@@ -1421,11 +1423,12 @@ _EXPORT_QUERIES = {
     # `resolved_schedules.expression` takes the same map, being this column carried. Ordered
     # on the table's own columns, the `endpoints` reasoning, so masking cannot reorder rows.
     "scheduled_work": f"""
-        SELECT w.handler, w.trigger, coalesce(a.masked, w.expression) AS expression,
-               w.resolution, w.evidence, w.catalog_id
+        SELECT w.handler, w.trigger, w.name, coalesce(a.masked, w.expression) AS expression,
+               w.expression_source, w.resolution, w.evidence, w.catalog_id
         FROM scheduled_work w
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = w.expression
-        ORDER BY w.handler, w.trigger, w.expression, w.resolution, w.evidence, w.catalog_id
+        ORDER BY w.handler, w.trigger, w.name, w.expression, w.expression_source, w.resolution,
+                 w.evidence, w.catalog_id
     """,
     # `error_handlers` exports through its named query verbatim, and the reason is that it
     # carries no masked column: a scope attribute is a package or a type, an exception and
@@ -1442,13 +1445,13 @@ _EXPORT_QUERIES = {
     # are configuration key NAMES, exported as `resolved_config.key` is. `expression` is
     # `scheduled_work.expression` carried, and masks by that column's map.
     "resolved_schedules": f"""
-        SELECT s.handler, s.trigger, coalesce(a.masked, s.expression) AS expression,
+        SELECT s.handler, s.trigger, s.name, coalesce(a.masked, s.expression) AS expression,
                s.environment, s.keys, coalesce(v.masked, s.value) AS value,
                s.unresolved_reason
         FROM resolved_schedules s
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.expression
         LEFT JOIN {_REDACTED_SCHEDULE_VALUES} v ON v.keys = s.keys AND v.value = s.value
-        ORDER BY s.handler, s.trigger, s.expression, s.environment
+        ORDER BY s.handler, s.trigger, s.name, s.expression, s.environment
     """,
     # `arguments` and `args` carry JSON the analysis read out of code, and a
     # hardcoded `https://user:pass@host` literal lands in one whole. They pass
