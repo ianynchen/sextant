@@ -53,6 +53,7 @@ from sextant.application.resolve.beans import (
     known_channels,
 )
 from sextant.application.resolve.conditions import annotation_index
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
     CallFacts,
@@ -285,7 +286,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
-    joined = _joined_through_values(walk_index, via_argument_names)
+    joined = _joined_through_values(workspace, walk_index, via_argument_names)
     # The steps that join through an argument (`receiver_arg`), by name — empty for every
     # catalog declaring none, which then indexes each site by its own `receiver` exactly as
     # before and pays nothing for the rule (GUIDELINES §8.7).
@@ -1774,7 +1775,7 @@ def _executing_calls(site: dict[str, Any], context: _ChainContext) -> list[dict[
 
 
 def _joined_through_values(
-    values: ValueIndex, via_argument_names: dict[str, _JoinFilter | None]
+    workspace: Workspace, values: ValueIndex, via_argument_names: dict[str, _JoinFilter | None]
 ) -> dict[tuple[str, int], tuple[dict[str, Any], ...]]:
     """The execute-join, found through the value walk: each terminal site, by `(caller,
     ordinal)`, mapped to the declared executing calls whose arguments `values.producers_of`
@@ -1801,7 +1802,11 @@ def _joined_through_values(
     the mapping form exists to exclude — and it stays the same-method `source` match. A
     continuing join (`continue: true`) stays there too: the walk continues from its consumer
     in THIS caller's sites, and a consumer in another method could be counted but never
-    continued, which would derive the chain's pre-continuation captures as a row."""
+    continued, which would derive the chain's pre-continuation captures as a row.
+
+    **The walk lets an accessor on the built value past** (`past_accessors`): the join asks
+    only WHICH `build()` made the argument, and `request.headers().put(k, v)` between the
+    build and the send writes into the request without changing which call built it."""
     declared = {
         name: join_filter
         for name, join_filter in via_argument_names.items()
@@ -1809,6 +1814,7 @@ def _joined_through_values(
     }
     if not declared:
         return {}
+    ancestors = workspace.once(dispatch_of).ancestors
     terminals: set[tuple[str, str]] = set()
     in_module: set[tuple[str, str]] = set()
     executing: list[Mapping[str, Any]] = []
@@ -1826,7 +1832,9 @@ def _joined_through_values(
     joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for consumer in executing:
         for slot in range(len(consumer["arguments"] or [])):
-            for producer in producers_of(values, consumer, slot, terminals):
+            for producer in producers_of(
+                values, consumer, slot, terminals, past_accessors=ancestors
+            ):
                 if producer.caller is None or producer.ordinal is None or producer.identity is None:
                     continue
                 if not _joins(consumer, declared[producer.identity[1]]):

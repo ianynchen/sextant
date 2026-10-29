@@ -400,9 +400,9 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.an-ACCESSOR-is-not-a-write": Guard(
-        what="a call on the value that takes no argument and hands back an object of "
-        "another type than its receiver's is a READ of the value, so it does not open the "
-        "`escapes` window",
+        what="for a producer-identity reader (`past_accessors`), a call on the value that "
+        "takes no argument and hands back an object of another type than its owner does not "
+        "open the `escapes` window: it cannot change which call built the value",
         why="RuoYi-Vue, NBlog and aurora all write `jobDetail.getJobDataMap().put(KEY, job)` "
         "between building the job and scheduling it. Without this the accessor is read as "
         "a possible write, the job argument answers `escapes`, and the Quartz handler is "
@@ -413,6 +413,37 @@ GUARDS: dict[str, Guard] = {
                 find="                if self._accessor((method, ordinal)):\n"
                 "                    continue\n",
                 replace="",
+            ),
+        ),
+    ),
+    "values.past-ACCESSORS-is-a-readers-switch": Guard(
+        what="only a reader that passes `past_accessors` lets an accessor past the `escapes` "
+        "window; the value walk and every other `producers_of` reader keep refusing it",
+        why='an accessor can hand back a LIVE view: `topics = Arrays.asList("a", "b"); '
+        'topics.listIterator().set("c"); subscribe(topics)` writes into the list through '
+        "it. As the default (Quartz fix round 2), the `identified_by` reader published "
+        "`a`, `b` as exact topics. Whether that write matters depends on the question: "
+        "it cannot change which call BUILT the value, and it can change what it HOLDS",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        ancestors = self._past_accessors\n",
+                replace="        ancestors = self._past_accessors if self._past_accessors is not None "
+                "else {}\n",
+            ),
+        ),
+    ),
+    "values.an-accessor-of-a-SUPERTYPE-is-not-one": Guard(
+        what="a no-argument call handing back a SUPERTYPE of its owner, read off the "
+        "hierarchy the reader hands in, stays in the `escapes` window",
+        why="an inherited fluent step or an erased self-type bound returns the receiver "
+        "itself typed as its supertype, so the call may have replaced the value; only the "
+        "owner's own type was excluded before (Quartz fix round 3)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            for parent, _, _ in ancestors.get(frontier.pop(), ()):\n",
+                replace="            for parent, _, _ in ancestors.get(frontier.pop() + '!', ()):\n",
             ),
         ),
     ),

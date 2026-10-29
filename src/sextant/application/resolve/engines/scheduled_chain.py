@@ -400,16 +400,28 @@ def _builds(consumer: Mapping[str, Any], slot: int, end: ChainEnd, context: _Con
     terminal = _site_key(end.terminal)
     return any(
         (producer.caller, producer.ordinal) == terminal
-        for producer in producers_of(context.index, consumer, slot, context.built)
+        for producer in producers_of(
+            context.index,
+            consumer,
+            slot,
+            context.built,
+            past_accessors=context.dispatch.ancestors,
+        )
     )
 
 
 def _built_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> list[ChainEnd]:
     """The job chains whose `build()` the value walk from `site`'s argument at `slot`
-    reaches, in this method or across returns and parameters."""
+    reaches, in this method or across returns and parameters.
+
+    An accessor on the built detail is let past (`past_accessors`): RuoYi's
+    `jobDetail.getJobDataMap().put(KEY, job)` does not change which `build()` made it.
+    `_builds` asks the same question of the trigger and walks the same way."""
     reached = {
         (producer.caller, producer.ordinal)
-        for producer in producers_of(context.index, site, slot, context.built)
+        for producer in producers_of(
+            context.index, site, slot, context.built, past_accessors=context.dispatch.ancestors
+        )
         if producer.caller is not None
     }
     return [job for job in context.job_ends if job.terminal and _site_key(job.terminal) in reached]

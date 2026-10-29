@@ -226,6 +226,11 @@ _BRANCH_OF = "branch-of"
 # the module docstring states, and the reason the parameter exists at all.
 Identities = Sequence[Mapping[str, Any]]
 
+# A type's DIRECT supertypes, by bare type descriptor, as `dispatch.Dispatch.ancestors` holds
+# them: `(supertype, kind, scanned)` in the JVM's search order. Handed to `producers_of` by a
+# reader that turns `past_accessors` on; this module never reads the hierarchy itself.
+Ancestors = Mapping[str, Sequence[tuple[str, str, bool]]]
+
 # The key a hoisted WRAPPER entry carries and a `_via` entry deliberately does not, and
 # what it decides here. `role` says "argument N of this producer is the CHANNEL" or "the
 # PAYLOAD" — a statement about one of several things a constructed value holds, which the
@@ -798,6 +803,7 @@ def producers_of(
     slot: int | str,
     declared: AbstractSet[tuple[str, str]],
     along_receivers: bool = False,
+    past_accessors: Ancestors | None = None,
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -828,11 +834,25 @@ def producers_of(
     candidate is a declared call on one shared receiver passes through to that receiver
     (`_Walk._passed_through`), marked `inexact`.
 
+    **`past_accessors` lets an ACCESSOR on the value past the `escapes` window** (Quartz fix
+    rounds 2-3, 2026-10-29), for a reader whose whole question is WHICH CALL built the
+    value: `jobDetail.getJobDataMap().put(k, v)` between `build()` and `scheduleJob` writes
+    into the detail through the map it handed back, and that does not change which `build()`
+    made it. `_Walk._accessor` has the rule; the value is the type hierarchy it needs
+    (`Dispatch.ancestors`). None, the default, keeps every call in the window — the right
+    answer for a reader that reads the producer's ARGUMENTS as what the value holds, which a
+    write through a returned view can change.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
     """
-    walk = _Walk(index, declared=declared, along_receivers=along_receivers)
+    walk = _Walk(
+        index,
+        declared=declared,
+        along_receivers=along_receivers,
+        past_accessors=past_accessors,
+    )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
     for _, answer in walk.at(site, slot):
@@ -928,6 +948,7 @@ class _Walk:
         declared: AbstractSet[tuple[str, str]] = frozenset(),
         branches: bool = True,
         along_receivers: bool = False,
+        past_accessors: Ancestors | None = None,
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -941,6 +962,9 @@ class _Walk:
         # The chain reader (`producers_of(..., along_receivers=True)`): a declared call is
         # followed on through its receiver rather than ending the path.
         self._along_receivers = along_receivers
+        # The producer-identity reader (`producers_of(..., past_accessors=...)`): an accessor
+        # on the value does not open `escapes`. None for every other reader.
+        self._past_accessors = past_accessors
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -1631,11 +1655,9 @@ class _Walk:
         value is then used therefore answered `escapes` on the constructor itself. The
         construction is where the window opens, and `_construction` is what finds it.
 
-        **An ACCESSOR is not in the window** (Quartz fix round, 2026-10-29): a call on the
-        value that takes no argument and hands back an object of another type than its
-        receiver's — `detail.getJobDataMap()`, `_accessor` has the rule and why each half
-        of it is there. What is then done to its result (`.put(k, v)`) is a call on THAT
-        object, which is not this value's id and was never in this window.
+        **For a producer-identity reader, an ACCESSOR is not in the window** (Quartz fix
+        rounds 2-3, 2026-10-29): `producers_of(..., past_accessors=...)` only. `_accessor`
+        has the rule and why it is a reader's switch rather than the default.
         """
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
@@ -1648,51 +1670,59 @@ class _Walk:
         return self._resolve((_VALUE, method, value), trail, frames)
 
     def _accessor(self, site_key: tuple[str, int]) -> bool:
-        """Whether a call made ON a value only READS it: it takes no argument and hands
-        back an object whose type is not its receiver's own.
+        """Whether a call made ON a value is an accessor: it takes no argument and hands back
+        an object of a type that is neither its owner nor one of the owner's supertypes.
 
-        `escapes` exists because a call on the value may write into it, and nothing in the
-        facts says what it wrote. A call can write two kinds of thing: what its caller hands
-        it, and what its own body decides. **Each half of the rule shuts one of them, as
-        far as the facts can say it:**
+        **What an accessor does NOT do is change which call produced the value — and that
+        is all it is safe to say.** It does not follow that it writes nothing into the
+        value: `getJobDataMap()` hands back a LIVE view, and `.put(k, v)` on it writes into
+        the `JobDetail`; `list.listIterator().set(x)`, `map.keySet().remove(k)` and MyBatis
+        `createCriteria()` write the same way. So whether a write through a returned view
+        matters depends on the QUESTION, and this is a reader's switch like `branches` and
+        `along_receivers`, never the default:
 
-        * **No argument.** Nothing from the caller can go in, which is the write the window
-          exists for — `result.setFilename(x)`, and `map.put(k, v)` too, though `put`
-          hands back another object (the old value). A void call stays in as well
-          (`touch()`, `clear()`): a call with no result has nothing to be FOR but its effect.
-        * **A result of another reference type.** A call handing back its receiver's own
-          type may be handing back the receiver itself, changed — the fluent step
-          (`builder.repeatForever()`) — and a primitive result is how a counter or a
-          collection reports the write it just made (`incrementAndGet()`, `add(x)`). A
-          result of another type is a different object, so the call is the JavaBeans
-          getter: what it is FOR is the object it hands back. An array result is left in
-          the window: `returned_type` names no type for one, and nothing needs it yet.
+        * **which call built the value** (`producers_of(..., past_accessors=...)`: the
+          Quartz job and trigger pairing, the `fluent` execute-join) — no write after the
+          fact changes it, so the accessor is let past. RuoYi-Vue, NBlog and aurora all
+          write `jobDetail.getJobDataMap().put(KEY, job)` between building the job and
+          scheduling it, and each lost its job to the window before this.
+        * **what the value holds** (`resolve_site`, its `identified_by` producers, and every
+          `producers_of` reader that reads the producer's arguments as the value's content)
+          — a write through a view can change it: `topics = Arrays.asList("a", "b");
+          topics.listIterator().set("c"); subscribe(topics)` would publish `a`, `b` as
+          exact. The window keeps refusing it.
 
-        **It is an approximation, stated as one.** A no-argument call can still change its
-        receiver and hand back another object (`queue.poll()`, `iterator.next()`), and a
-        type erased to a supertype (`Object`, a generic self-type's bound) can still be the
-        receiver itself. The window keeps refusing every other call on the value.
-        MEASURED (`scripts/measure_value_walk.py`, 44 modules, 2026-10-29): of the 1,800
-        positions a catalog asks about, 15 move: 8 `ResponseEntity` bodies in
-        `jhipster-sample-app` read through a getter first (`escapes` → `external`, and once
-        → the constructed type `User`), and 7 `Env` arguments in `apollo-portal` read
-        through a getter first (`escapes` → `external`). No string or number appears. Over
-        every slot, `escapes` answers fall 9,968 → 8,547, and 7,030 of the 7,334 calls let
-        through are named `get`/`is`/`has`/`to…`. No `scripts/field_check.py` count moves.
-        What it buys:
-        RuoYi-Vue, NBlog and aurora all write `jobDetail.getJobDataMap().put(KEY, job)`
-        between building the job and scheduling it, and each lost its job to this window.
+        **Why each half of the rule is there**, for the reader that turns it on:
 
-        It is the DEFAULT, not a reader's switch, because it is about the call and not about
-        the question: a call that writes nothing into the value changes neither what the
-        value is nor which call produced it, whichever of the two a reader is asking.
+        * **No argument.** A call taking anything (`setFilename(x)`, `map.put(k, v)`) can
+          write what its caller hands it, and stays in the window. A void call stays too
+          (`touch()`, `clear()`): with no result it has nothing to be FOR but its effect.
+        * **A result of another reference type.** A result of the owner's own type, or of
+          one of its supertypes (an inherited fluent step, an erased self-type bound), may
+          be the receiver itself — the fluent `builder.repeatForever()` — so the call may
+          have REPLACED what the reader would pair. The supertypes are read off `ancestors`,
+          which holds the types this workspace read; a jar owner's supertypes are not known
+          and only the owner itself is excluded for one. A primitive result
+          (`incrementAndGet()`) and an array are left in the window: `returned_type` names
+          no type for either.
         """
+        ancestors = self._past_accessors
         site = self._index.sites.get(site_key)
-        if site is None or site.get("result") is None or site["arguments"]:
+        if ancestors is None or site is None or site.get("result") is None or site["arguments"]:
             return False
         descriptor = site.get("descriptor")
         returned = returned_type(str(descriptor)) if descriptor else None
-        return returned is not None and returned != site.get("owner")
+        if returned is None:
+            return False
+        owner = str(site.get("owner"))
+        seen = {owner}
+        frontier = [owner]
+        while frontier:
+            for parent, _, _ in ancestors.get(frontier.pop(), ()):
+                if parent not in seen:
+                    seen.add(parent)
+                    frontier.append(parent)
+        return returned not in seen
 
     def _construction(self, method: str, value: int) -> int | None:
         """The ordinal of the call that CONSTRUCTED `value` in `method`, or None where
