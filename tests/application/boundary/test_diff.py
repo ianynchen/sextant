@@ -687,6 +687,23 @@ def test_schedule_identity_includes_the_name(
     assert (entry.change, entry.identity["name"]) == ("added", "weekly")
 
 
+@pytest.mark.pins("schedules.a-NAME-is-masked-at-every-exit")
+def test_a_schedule_name_masked_by_the_bundle_diffs_empty_and_prints_masked(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """The bundle masks `scheduled_work.name` through `redact_text` as it does `expression`,
+    so the diff makes the same call on a workspace's: bundle and workspace diff empty, and a
+    name the diff prints is masked."""
+    secret = "nightly-https://ops:hunter2@billing.internal"
+    workspace = _built(tmp_path / "w", _named_schedule(secret))
+    bundle = _bundled(workspace, tmp_path / "bundle")
+    verbatim, masked = sources(workspace), sources(bundle)
+    assert diff_sources(masked, verbatim, REDACTOR, REDACTOR).entries == ()
+    empty = sources(_built(tmp_path / "empty", lambda w: None))
+    (entry,) = diff_sources(empty, verbatim, REDACTOR, REDACTOR).entries
+    assert entry.identity["name"] == "nightly-https://billing.internal"
+
+
 @pytest.mark.pins("schedules.an-EXPRESSION-is-masked-in-the-DIFF")
 def test_a_schedule_expression_masked_by_the_bundle_diffs_empty_and_prints_masked(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]

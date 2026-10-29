@@ -50,7 +50,7 @@ _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
     "schema_version": 9,
-    "boundary_vocabulary_version": 2,
+    "boundary_vocabulary_version": 3,
     "catalog_hash": "sha256:catalogs",
     "module": {
         "id": "com.acme:orders-service",
@@ -696,7 +696,7 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
             "graph_schema_version": 9,
-            "boundary_vocabulary_version": 2,
+            "boundary_vocabulary_version": 3,
             "catalog_hash": "sha256:catalogs",
         }
 

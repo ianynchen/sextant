@@ -32,7 +32,7 @@ from collections.abc import Callable, Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.config import placeholder_rule, substitute
+from sextant.application.resolve.config import config_model_of, placeholder_rule, substitute
 from sextant.domain.config_keys import normalize_key
 from sextant.domain.redaction import REDACTED, Redactor
 
@@ -49,8 +49,8 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
     model and a second family's would be looked up under the first's rule. With no model
     declared there is no `resolved_config` either, and so nothing to read."""
     workspace.derive("resolved_schedules_reset")
-    model = next((c.config_model for c in catalogs if c.config_model), None)
-    if model is None:
+    model = config_model_of(catalogs)
+    if not model:
         return
     placeholders, key_matching = placeholder_rule(model)
     jobs = [

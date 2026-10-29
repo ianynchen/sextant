@@ -1537,6 +1537,46 @@ def test_configured_values_are_attributed_by_the_triggers_name():
     assert "`0 */5 * * * *` in `prod`" in text
 
 
+@pytest.mark.pins("schedules.a-NAME-is-masked-at-every-exit")
+def test_a_trigger_name_passes_the_render_redactor_in_the_table_and_the_header():
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
+    job = {**_job(SWEEP, SWEEP_CRON), "name": "nightly-ACME_A1B2"}
+    configured = {**_configured("prod", "0 */5 * * * *"), "name": "nightly-ACME_A1B2"}
+    text = _schedules_document([job], [configured], redactor)
+    assert "ACME_A1B2" not in text
+    assert f"| cron | nightly-{REDACTED} |" in text
+    assert f"— cron nightly-{REDACTED} `{SWEEP_CRON}`\n" in text
+
+
+def test_the_detail_header_names_the_whole_identity_of_each_named_trigger():
+    """Two triggers on one job alike in everything but their names, each with its own
+    configured value: two distinct headers, the name between trigger and expression."""
+    first, second = _job(SWEEP, SWEEP_CRON), _job(SWEEP, SWEEP_CRON)
+    first["name"], second["name"] = "a", "b"
+    text = _schedules_document(
+        [first, second],
+        [
+            {**_configured("prod", "0 1 * * * *"), "name": "a"},
+            {**_configured("prod", "0 2 * * * *"), "name": "b"},
+        ],
+    )
+    head = "- `com/acme/OrderSweeper#sweep().` — cron "
+    assert f"{head}a `{SWEEP_CRON}`\n  - as configured in this repository: `0 1 * * * *`" in text
+    assert f"{head}b `{SWEEP_CRON}`\n  - as configured in this repository: `0 2 * * * *`" in text
+
+
+def test_the_header_of_a_handlerless_job_names_each_part_once_and_never_dangles():
+    row = {**_job(SWEEP, SWEEP_CRON), "handler": None, "name": "nightly"}
+    configured = {**_configured("prod", "0 */5 * * * *", handler=None), "name": "nightly"}  # type: ignore[arg-type]
+    text = _schedules_document([row], [configured])
+    assert f"- not in the code — cron nightly `{SWEEP_CRON}`\n" in text
+    assert "— cron nightly — cron" not in text
+    nameless = {**row, "name": None, "expression_source": "s maven c 1 com/acme/J#x()."}
+    nameless["resolution"], nameless["expression"] = "partial", None
+    for line in _schedules_document([nameless], []).splitlines():
+        assert not line.rstrip().endswith("—")
+
+
 def test_a_configured_schedule_value_passes_the_render_redactor():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
     text = _schedules_document(

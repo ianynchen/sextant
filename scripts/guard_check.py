@@ -3504,7 +3504,7 @@ GUARDS: dict[str, Guard] = {
                 path=_WORKSPACE,
                 find='            "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "\n'
                 '            "UNION SELECT DISTINCT expression FROM resolved_schedules "\n'
-                '            "WHERE expression IS NOT NULL"\n',
+                '            "WHERE expression IS NOT NULL "\n',
                 replace='            ""  # guard disabled\n',
             ),
         ),
@@ -3522,8 +3522,32 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path="sextant/egress/render/document.py",
-                find='                redactor.redact_text(str(row["expression"]))\n            )\n',
-                replace='                str(row["expression"])  # guard disabled\n            )\n',
+                find='        header += _code(redactor.redact_text(str(row["expression"])))\n',
+                replace='        header += _code(str(row["expression"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.a-NAME-is-masked-at-every-exit": Guard(
+        what="a trigger's `name` leaves the bundle, the document and the diff through "
+        "`redact_text`, as `expression` does",
+        why="the name is a `withIdentity(name, group)` literal, which the bundle masks in "
+        "`call_sites.arguments`; printed raw by any exit it ships the literal another file "
+        "withheld",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/workspace.py",
+                find="        SELECT w.handler, w.trigger, coalesce(n.masked, w.name) AS name,\n",
+                replace="        SELECT w.handler, w.trigger, w.name AS name,  -- guard disabled\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='            _scheduled_cell(row["name"], lambda value: redactor.redact_text(str(value)), False),\n',
+                replace='            _scheduled_cell(row["name"], str, False),  # guard disabled\n',
+            ),
+            Edit(
+                path="sextant/application/boundary/diff.py",
+                find='            projected["name"] = redactor.redact_text(str(projected["name"]))\n',
+                replace='            projected["name"] = projected["name"]  # guard disabled\n',
             ),
         ),
     ),

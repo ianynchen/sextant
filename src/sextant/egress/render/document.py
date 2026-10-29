@@ -1776,7 +1776,7 @@ def _scheduled_work_sections(
         (
             _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True),
             _scheduled_cell(row["trigger"], str, False),
-            _scheduled_cell(row["name"], str, False),
+            _scheduled_cell(row["name"], lambda value: redactor.redact_text(str(value)), False),
             _scheduled_cell(
                 row["expression"], lambda value: redactor.redact_text(str(value)), True
             ),
@@ -1789,12 +1789,8 @@ def _scheduled_work_sections(
     for value in configured:
         by_job.setdefault(_job_key(value), []).append(value)
     for row in rows:
-        handler = _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True)
         values = by_job.get(_job_key(row))
         entries = _condition_entries(row["handler"], beans)
-        if row["handler"] is None:
-            # No handler to head the block with: the schedule's own kind and name do.
-            handler += _text(" — " + " ".join(str(row[k]) for k in ("trigger", "name") if row[k]))
         if (
             row["resolution"] == "partial"
             and row["expression"] is None
@@ -1809,14 +1805,12 @@ def _scheduled_work_sections(
                 )
             ] + entries
         if values:
-            handler += _text(f" — {row['trigger']} ") + _code(
-                redactor.redact_text(str(row["expression"]))
-            )
             body = _runs(_configured_values(values, redactor))
             entries = [DetailEntry(_text("as configured in this repository"), body, None)] + entries
         if entries:
-            header = DetailEntry(handler, None, None)
-            sections.append(MachineDetail((header, *entries)))
+            sections.append(
+                MachineDetail((DetailEntry(_job_header(row, redactor), None, None), *entries))
+            )
     return sections
 
 
@@ -1825,6 +1819,25 @@ def _job_key(row: dict[str, object]) -> tuple[object, ...]:
     `scheduled_work` a configured value joins back on. NULL stays NULL, so two jobs that
     differ only in a NULL column are not confused with one another."""
     return tuple(row[column] for column in ("handler", "trigger", "name", "expression"))
+
+
+def _job_header(row: dict[str, object], redactor: Redactor) -> tuple[Run, ...]:
+    """A scheduled job's detail-block header: its whole identity, once — handler (or `not in
+    the code`), then trigger, name where it has one, and expression where it has one. Under
+    `@Schedules` one method is several jobs and under Quartz one job has several named
+    triggers, so a shorter header would put two jobs' lines under one name. A job with no
+    expression ends at what it has, never at a dangling dash."""
+    header = _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True)
+    words = [str(row["trigger"])] if row["trigger"] is not None else []
+    if row["name"] is not None:
+        words.append(redactor.redact_text(str(row["name"])))
+    if words:
+        header += _text(" — " + " ".join(words) + (" " if row["expression"] is not None else ""))
+    elif row["expression"] is not None:
+        header += _text(" — ")
+    if row["expression"] is not None:
+        header += _code(redactor.redact_text(str(row["expression"])))
+    return header
 
 
 def _scheduled_cell(value: object, show: Callable[[object], str], code: bool) -> tuple[Run, ...]:

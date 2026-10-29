@@ -709,7 +709,8 @@ _NAMED_QUERIES = {
     # rows carry no wire identity to order by, and an ordering with ties is one
     # that can change between runs (NFR-1). Two `@Scheduled` methods sharing a
     # trigger and an expression are two real rows — nothing but the handler
-    # tells them apart — so the handler leads, and `catalog_id` closes the tie
+    # tells them apart — so the handler leads, then the trigger and its `name`
+    # (two Quartz triggers of one kind differ only there), and `catalog_id` closes the tie
     # a second catalog claiming the same annotation would otherwise leave open.
     "scheduled_work": """
         SELECT handler, trigger, name, expression, expression_source, resolution, evidence,
@@ -719,10 +720,10 @@ _NAMED_QUERIES = {
                  catalog_id
     """,
     # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
-    # read as `scheduled_work` is — the job's own (handler, trigger, expression) leads —
+    # read as `scheduled_work` is — the job's own (handler, trigger, name, expression) leads —
     # and then by environment, so one job's environments read as adjacent rows. Total
     # (NFR-1): a job has one row per environment, and two schedules of one kind on one
-    # method (`@Schedules`) differ in `expression`.
+    # method (`@Schedules`) differ in `expression`, two named triggers in `name`.
     "resolved_schedules": """
         SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason
         FROM resolved_schedules
@@ -1423,10 +1424,12 @@ _EXPORT_QUERIES = {
     # `resolved_schedules.expression` takes the same map, being this column carried. Ordered
     # on the table's own columns, the `endpoints` reasoning, so masking cannot reorder rows.
     "scheduled_work": f"""
-        SELECT w.handler, w.trigger, w.name, coalesce(a.masked, w.expression) AS expression,
+        SELECT w.handler, w.trigger, coalesce(n.masked, w.name) AS name,
+               coalesce(a.masked, w.expression) AS expression,
                w.expression_source, w.resolution, w.evidence, w.catalog_id
         FROM scheduled_work w
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = w.expression
+        LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = w.name
         ORDER BY w.handler, w.trigger, w.name, w.expression, w.expression_source, w.resolution,
                  w.evidence, w.catalog_id
     """,
@@ -1445,11 +1448,13 @@ _EXPORT_QUERIES = {
     # are configuration key NAMES, exported as `resolved_config.key` is. `expression` is
     # `scheduled_work.expression` carried, and masks by that column's map.
     "resolved_schedules": f"""
-        SELECT s.handler, s.trigger, s.name, coalesce(a.masked, s.expression) AS expression,
+        SELECT s.handler, s.trigger, coalesce(n.masked, s.name) AS name,
+               coalesce(a.masked, s.expression) AS expression,
                s.environment, s.keys, coalesce(v.masked, s.value) AS value,
                s.unresolved_reason
         FROM resolved_schedules s
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.expression
+        LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = s.name
         LEFT JOIN {_REDACTED_SCHEDULE_VALUES} v ON v.keys = s.keys AND v.value = s.value
         ORDER BY s.handler, s.trigger, s.name, s.expression, s.environment
     """,
@@ -2594,6 +2599,8 @@ class DuckDbWorkspace:
         # map is what keeps a shadow row and the row it anticipates spelled alike.
         # Empty on every analysis but a `--shadow` one, which costs this UNION a
         # scan of an empty table.
+        # A trigger's `name` joins for the same reason: it is a `withIdentity(name, group)`
+        # literal, which `call_sites.arguments` masks.
         # A schedule's `expression` joins because it is the annotation literal
         # `annotations.args` masks (spec 2026-10-23-configured-schedules, final review):
         # one string, so `redact_text`'s map rather than the grammar's.
@@ -2610,7 +2617,9 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM rpc_hops WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM resolved_schedules "
-            "WHERE expression IS NOT NULL"
+            "WHERE expression IS NOT NULL "
+            "UNION SELECT DISTINCT name FROM scheduled_work WHERE name IS NOT NULL "
+            "UNION SELECT DISTINCT name FROM resolved_schedules WHERE name IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,
