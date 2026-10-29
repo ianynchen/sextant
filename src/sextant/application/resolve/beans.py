@@ -27,6 +27,7 @@ caller holds is a view over it plus the caller's own channel names.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -150,6 +151,35 @@ class BeanTable:
         if is_channel and name in self._known_channels:
             return BeanRef(method=None, name=name, erased_return=None)
         return Unresolved("none")
+
+
+def injected_bean(
+    beans: BeanTable,
+    method: str,
+    parameters: Sequence[Mapping[str, Any]],
+    index: int,
+    model: dict[str, Any],
+) -> BeanRef | Unresolved:
+    """The bean the container injects into parameter `index` of the factory method
+    `method`, read off its declared signature (`declared_parameters_of`'s entries): the
+    slot's erased type, its declared name and its qualifier, by `bean_of`'s rungs. `none`
+    for a slot the signature does not have, or one whose type it does not name."""
+    if index >= len(parameters):
+        return Unresolved("none")
+    declared = parameters[index]
+    erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
+    if not isinstance(erased, str):
+        return Unresolved("none")
+    name = declared.get("name")
+    return beans.bean_of(
+        Parameter(
+            method=method,
+            index=index,
+            erased_type=erased,
+            name=str(name) if isinstance(name, str) else None,
+            qualifier=qualifier_of(list(declared.get("annotations") or []), model),
+        )
+    )
 
 
 def known_channels(workspace: Workspace) -> frozenset[str]:

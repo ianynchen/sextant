@@ -47,11 +47,10 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import (
     BeanRef,
     BeanTable,
-    Parameter,
     Unresolved,
     bean_table,
+    injected_bean,
     known_channels,
-    qualifier_of,
 )
 from sextant.application.resolve.conditions import annotation_index
 from sextant.application.resolve.shapes.arguments import (
@@ -1347,25 +1346,12 @@ def _bean_reference(
     if context.beans is None or argument is None:
         return Unresolved("none")
     if argument.get("kind") == "parameter" and isinstance(argument.get("value"), int):
-        index = int(argument["value"])
-        parameters = context.facts.caller_parameters
-        if index >= len(parameters):
-            return Unresolved("none")
-        declared = parameters[index]
-        erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
-        if not isinstance(erased, str):
-            return Unresolved("none")
-        name = declared.get("name")
-        return context.beans.bean_of(
-            Parameter(
-                method=context.caller,
-                index=index,
-                erased_type=erased,
-                name=str(name) if isinstance(name, str) else None,
-                qualifier=qualifier_of(
-                    list(declared.get("annotations") or []), context.catalog.bean_model
-                ),
-            )
+        return injected_bean(
+            context.beans,
+            context.caller,
+            context.facts.caller_parameters,
+            int(argument["value"]),
+            context.catalog.bean_model,
         )
     source = argument.get("source")
     if source is None:

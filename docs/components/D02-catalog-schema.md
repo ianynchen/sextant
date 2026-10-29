@@ -90,7 +90,7 @@ The keys, by the engine that reads them:
 | `interface_implementation` | `matches.interface`, `registration.owner` |
 | `injected_client` | `field_annotation` |
 | `scheduled_work` | `annotation`, `container` |
-| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's), `kinds`' keys, `literal_expression.owner` |
+| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's, and so `for_job[].owner`, `job_identity_step.owner` and `job_root.owner`), `kinds`' keys, `literal_expression.owner`, `pairing[].owner`, `job_key[].owner` |
 | `error_advice` | `handler_annotation`, `status_annotation` |
 | `supertype_dispatch` | `matches.supertype` |
 | `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
@@ -4141,6 +4141,24 @@ matches:
     { owner: org.quartz.CronScheduleBuilder, method: cronSchedule,
       descriptor: "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;", arg: 0 }
   field_sources: { … }            # the field ladder, as every outbound catalog spells it
+  bean_model: spring              # (top level) the container that injects a @Bean parameter
+  job_root: { owner: org.quartz.JobBuilder, method: newJob, class_arg: arg0 }
+  job_identity_step:              # a chain step, as `steps` spells one
+    { owner: org.quartz.JobBuilder, method: withIdentity, captures: { name: arg0, group: arg1 } }
+  for_job:                        # chain steps added to the trigger chain, one per overload
+    - { owner: org.quartz.TriggerBuilder, method: forJob,
+        descriptor: "(Lorg/quartz/JobDetail;)Lorg/quartz/TriggerBuilder;",
+        captures: { job_detail: arg0 } }    # also job_name/job_group, job_key
+  job_key:                        # the calls a key object is built by
+    - { owner: org.quartz.JobKey, method: jobKey, name: arg0, group: arg1 }
+  pairing:                        # the execute-join: built job and built trigger handed over
+    - { owner: org.quartz.Scheduler, method: scheduleJob,
+        descriptor: "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;",
+        job: arg0, trigger: arg1 }
+  entry_method: { name: execute, parameters: [org.quartz.JobExecutionContext], returns: void }
+  supertype_dispatch:             # a template in a jar calling a subclass method
+    - supertype: org.springframework.scheduling.quartz.QuartzJobBean
+      calls: { name: executeInternal, parameters: [org.quartz.JobExecutionContext], returns: void }
 ```
 
 **The chain is the `fluent` style's walk, unchanged** (`shapes/chains.py`): `roots`, `steps`
@@ -4160,7 +4178,7 @@ call on one shared receiver passes through to that receiver, `inexact`. Then:
   builder call's own owner's kind. Where the walk reaches no builder call at all — a factory
   in a jar — it is `kinds[the type the producing call is declared to return]`, read off that
   call's descriptor: a fact the compiler wrote, not a model of the call's body. Otherwise
-  NULL, and a chain with no kind is not derived.
+  NULL, and a chain with no kind and no job is not derived.
 - **`expression`**, for a `literal_expression` root (matched by owner, method and, where
   declared, parameter types), is its argument as the field ladder or the value walk reads
   it: a string literal verbatim (`resolved`, or `narrowed` for one of a branch's
@@ -4172,9 +4190,44 @@ call on one shared receiver passes through to that receiver, `inexact`. Then:
 - **`name`** is `group.name` where the walk reads both as one constant each, a missing
   group being `default_group`; NULL otherwise.
 
-**`handler` is NULL in every row this style writes today** — pairing a trigger with its job
-is the design's next step (§3c), not yet built — and so `resolution` speaks for the
-expression alone. Such rows are not trace roots (`roots.py`).
+**The job** (§3c) is found from whatever pairs it with the trigger, through machinery that
+already exists, and every pairing it finds counts:
+
+- **`pairing`** entries are the chain walk's execute-join: the engine adds them to the trigger
+  chain's `terminal` as a `terminal_via_argument` `{owner, method}` join beside the plain
+  terminal, so a trigger nothing pairs still ends a chain, and each chain end lists every
+  pairing call the value walk traces its built value to (`ChainEnd.consumers`), across
+  returns and parameters. An entry is matched on its `descriptor`; the walk from its
+  `trigger` argument must reach this chain's own terminal, and the walk from its `job`
+  argument gives the job chain. A collection argument reaches a built value only where the
+  walk reaches the collection's elements: one made in a jar is `external`, and no job is
+  found from that call.
+- **`for_job`** entries are chain steps added to the trigger chain, each capturing one of four
+  fields: `job_detail` (the walk from that argument; where it is a `@Bean` method's own
+  parameter, the bean the catalog's `bean_model` injects there, `beans.injected_bean`, whose
+  method builds and returns the job chain), `job_name` with an optional `job_group` (the job
+  chain anywhere in the module with that key, a missing group being `default_group`), or
+  `job_key` (the walk to a `job_key` call, whose `name` and `group` arguments are the key).
+- **The job chain** is the same chain walk from `job_root`, with `job_identity_step` as its
+  one step and the plain `terminal`. Its class is the value walk's answer for the root's
+  `class_arg`; a branch between class literals answers each, `narrowed`.
+
+**The handler** is the body the JVM's dispatch rule picks for the job class's
+`entry_method` (`dispatch.Dispatch.resolve`; the engine walks no superclass itself). Where
+that body is in a jar, the type the search left the workspace at (`Dispatch.boundary`) is
+looked up in `supertype_dispatch` — the `supertype` + method vocabulary of
+`jakarta-servlet.yml`, one `calls` method per supertype — and that method is resolved the
+same way. Any other jar body gives no handler. A method is `{name, parameters, returns}`:
+the servlet selector plus the return type, because the JVM resolves a method by its whole
+descriptor. Several classes reaching one body are one row, at that row's own resolution;
+several bodies from one branch are one row each, `narrowed`; several pairings (paths) are
+one row per distinct body.
+
+**`resolution`**: `resolved` where the handler and the expression are both known and the
+expression holds no placeholder; `unresolved` where the only gap is a placeholder;
+`narrowed` where the only gap is a branch; `partial` otherwise, a NULL handler included. A
+chain with neither a kind nor a job is not derived; a row with a NULL handler is not a
+trace root (`roots.py`).
 
 **Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
 

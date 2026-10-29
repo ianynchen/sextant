@@ -9,6 +9,11 @@ style: scheduled_chain
 detect:
   coordinates: ["org.quartz-scheduler:quartz"]
 
+# Spring injects a `@Bean` method's parameters: `auditTrigger(JobDetail auditDetail)` is
+# handed the declared `JobDetail` bean the container picks for that parameter (spec §3c,
+# `forJob(JobDetail)` below), read by the bean model's own rungs (`resolve/beans.py`).
+bean_model: spring
+
 # The trigger chain is read off call sites, linked `result -> receiver` (D00 §5), with
 # its constant arguments: the `fluent` style's own three.
 requires: [call_site, string_constants, chain_reconstruction]
@@ -35,6 +40,84 @@ matches:
       method: withSchedule
       captures: { schedule: arg0 }
   terminal: [build]
+
+  # THE JOB A TRIGGER RUNS (spec §3c), found from whatever pairs them, as Quartz pairs them.
+  #
+  # The job's chain is the same chain walk: `newJob(Class)` is its root (CP-55 row 1), and
+  # the class argument is the job class. A `JobBuilder` key step reads like the trigger's
+  # own, owner-gated for the same reason, and a key written with no group is in
+  # `default_group` as well (`JobKey` is a `Key`).
+  job_root: { owner: org.quartz.JobBuilder, method: newJob, class_arg: arg0 }
+  job_identity_step:
+    owner: org.quartz.JobBuilder
+    method: withIdentity
+    captures: { name: arg0, group: arg1 }
+
+  # `TriggerBuilder.forJob`, each overload a step of the trigger chain (by descriptor: the
+  # four take different things). Every one sets the trigger's one `jobKey`:
+  # - a `JobDetail`: the job is the value the walk finds there, a `@Bean` the container
+  #   injects included;
+  # - a name and a group, or a name alone in `default_group`: the `JobBuilder` chain
+  #   anywhere in the module whose key is that key;
+  # - a `JobKey`: the key the walk finds that key built from (`job_key` below).
+  for_job:
+    - owner: org.quartz.TriggerBuilder
+      method: forJob
+      descriptor: "(Lorg/quartz/JobDetail;)Lorg/quartz/TriggerBuilder;"
+      captures: { job_detail: arg0 }
+    - owner: org.quartz.TriggerBuilder
+      method: forJob
+      descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
+      captures: { job_name: arg0, job_group: arg1 }
+    - owner: org.quartz.TriggerBuilder
+      method: forJob
+      descriptor: "(Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
+      captures: { job_name: arg0 }
+    - owner: org.quartz.TriggerBuilder
+      method: forJob
+      descriptor: "(Lorg/quartz/JobKey;)Lorg/quartz/TriggerBuilder;"
+      captures: { job_key: arg0 }
+
+  # The calls a `JobKey` is built by, with the argument each half of the key is.
+  job_key:
+    - { owner: org.quartz.JobKey, method: jobKey, name: arg0, group: arg1 }
+    - { owner: org.quartz.JobKey, method: <init>, name: arg0, group: arg1 }
+
+  # The calls that pair a built job with a built trigger: the execute-join
+  # (`terminal_via_argument`, D02), whose built value is the trigger, with the argument the
+  # job is in. `scheduleJob(JobDetail, Trigger)` sets the trigger's job to that job. The
+  # collection forms hand over SETS, and the walk reaches a trigger through one only where
+  # it reaches the set's elements: a set made in a jar (`Set.of(trigger)`, dolphinscheduler's
+  # `Sets.newHashSet`) is `external`, and no job is found from that call.
+  pairing:
+    - owner: org.quartz.Scheduler
+      method: scheduleJob
+      descriptor: "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+      job: arg0
+      trigger: arg1
+    - owner: org.quartz.Scheduler
+      method: scheduleJob
+      descriptor: "(Lorg/quartz/JobDetail;Ljava/util/Set;Z)V"
+      job: arg0
+      trigger: arg1
+    - owner: org.quartz.Scheduler
+      method: scheduleJobs
+      descriptor: "(Ljava/util/Map;Z)V"
+      job: arg0
+      trigger: arg0
+
+  # THE HANDLER: what Quartz calls on an instance of the job class, `Job.execute`, and
+  # whichever body the JVM's dispatch rule picks for that class (`resolve/dispatch.py`).
+  # `returns` with `parameters`, because the JVM identifies a method by its whole descriptor.
+  entry_method: { name: execute, parameters: [org.quartz.JobExecutionContext], returns: void }
+
+  # A framework TEMPLATE in a jar that calls a subclass method, in the `supertype` +
+  # `dispatch` vocabulary of `jakarta-servlet.yml`: where the body dispatch picks is
+  # `QuartzJobBean.execute`, unread, it calls the subclass's `executeInternal`, which is
+  # then the handler, resolved the same way. Any other unread body gives no handler.
+  supertype_dispatch:
+    - supertype: org.springframework.scheduling.quartz.QuartzJobBean
+      calls: { name: executeInternal, parameters: [org.quartz.JobExecutionContext], returns: void }
 
   # The group a key written without one lands in: `Key.DEFAULT_GROUP`, declared once on
   # `org.quartz.utils.Key` and substituted by `Key`'s constructor for a null group

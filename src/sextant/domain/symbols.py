@@ -1,6 +1,7 @@
 """The SCIP symbol grammar as a string format (D00 §1). No indexer involved."""
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 NOT_APPLICABLE = "."
@@ -250,6 +251,36 @@ def type_descriptor(dotted: str) -> str:
         dotted = dotted[: -len(_ARRAY_SUFFIX)]
         depth += 1
     return dotted.replace(".", "/") + "#" + _ARRAY_SUFFIX * depth
+
+
+# JVMS 4.3.2's base types, by the name a catalog writes them in.
+_BASE_TYPES = {
+    "void": "V",
+    "boolean": "Z",
+    "byte": "B",
+    "char": "C",
+    "short": "S",
+    "int": "I",
+    "long": "J",
+    "float": "F",
+    "double": "D",
+}
+
+
+def method_type_descriptor(parameters: Sequence[str], returns: str) -> str:
+    """A catalog's dotted parameter and return types as the JVM method descriptor a call
+    site carries (JVMS 4.3.3): `([org.quartz.JobExecutionContext], void)` is
+    `(Lorg/quartz/JobExecutionContext;)V`. The JVM resolves a method by its name AND this
+    whole descriptor, return type included, so a reader asking `dispatch.py` which body
+    runs needs it; a nested type keeps its binary `$` name, and a trailing `[]` is an array
+    of the element type."""
+
+    def field(dotted: str) -> str:
+        if dotted.endswith(_ARRAY_SUFFIX):
+            return "[" + field(dotted[: -len(_ARRAY_SUFFIX)])
+        return _BASE_TYPES.get(dotted) or f"L{dotted.replace('.', '/')};"
+
+    return "(" + "".join(field(parameter) for parameter in parameters) + ")" + field(returns)
 
 
 def parameter_types(descriptor: str) -> str:

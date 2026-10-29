@@ -302,6 +302,10 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **`quartz` joined at (3, 4) on 2026-10-29** (Quartz spec §3d), a new catalog: its three
 # chain steps' and roots' `argN` captures read by shape — `withIdentity`'s `name: arg0` and
 # `group: arg1`, `withSchedule`'s `schedule: arg0` — plus `literal_expression`'s `arg: 0`.
+# **(8, 11) on 2026-10-29, Task 10**: the job's chain steps, read by the same shape —
+# `job_identity_step`'s `name`/`group` (one ask, two slots) and the four `for_job` overloads'
+# captures (four asks, five slots: `job_detail`, `job_name`+`job_group`, `job_name`,
+# `job_key`).
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -328,7 +332,7 @@ _ASKS_PER_CATALOG = {
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
     "pekko-connectors-kafka": (15, 15),
-    "quartz": (3, 4),
+    "quartz": (8, 11),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
     "spring-integration-amqp": (38, 38),
@@ -386,8 +390,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # factory's rung, same comment. **+2 on 2026-10-26**: its two `may_set_base` plugin
     # positions, same comment. **+62 on 2026-10-26**: the two new Ktor WebSocket and SSE
     # client catalogs, 23 and 39, same comment. **+3 on 2026-10-29**: the new `quartz`
-    # catalog, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 890
+    # catalog, same comment. **+5 on 2026-10-29**: its job steps, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 895
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

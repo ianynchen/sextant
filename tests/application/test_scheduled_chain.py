@@ -6,8 +6,9 @@ Most read `fixtures/orders-quartz`, analysed once through `module analyze`, beca
 shapes that matter cross methods — a cron from a getter two calls away, a schedule builder
 handed through a helper — and the value walk is what crosses them. The two shapes the
 fixture does not hold (a name with no group, two identical unnamed triggers) are hand-built
-facts in the `test_call_engines.py` style. Every row is `handler` NULL here: which job a
-trigger runs is the next task's.
+facts in the `test_call_engines.py` style. The job a trigger runs is found from whatever
+pairs them (§3c): `forJob(...)` on the chain, or a `scheduleJob(job, trigger)` the value walk
+reaches, and the handler is the body the JVM's dispatch rule picks for the job class.
 """
 
 from pathlib import Path
@@ -79,7 +80,8 @@ def _entries_in(analyzed: Path, method: str) -> list[dict]:
 
 def test_each_new_trigger_is_one_entry(analyzed: Path):
     """`QuartzConfig` builds four triggers, one per `newTrigger()`; its two `newJob()` chains
-    are no triggers."""
+    are no triggers. Every one names its job, so every one has a handler (re-pinned
+    2026-10-29, Task 10: the handler was NULL before the job was looked for)."""
     rows = [
         row
         for method in ("sweepEvery30s", "sweepNightly", "auditTrigger", "officeHours")
@@ -87,7 +89,7 @@ def test_each_new_trigger_is_one_entry(analyzed: Path):
     ]
     assert len(rows) == 4, rows
     assert {row["trigger"] for row in rows} == {"simple", "cron", "dailyTimeInterval"}
-    assert all(row["handler"] is None and row["catalog_id"] == "quartz" for row in rows)
+    assert all(row["handler"] is not None and row["catalog_id"] == "quartz" for row in rows)
     assert _entries_in(analyzed, "QuartzConfig#sweepDetail") == []
 
 
@@ -375,7 +377,9 @@ def test_a_builder_chain_continued_on_a_helpers_parameter_is_written_whole(tmp_p
     """`withSchedule(forever(simpleSchedule().withIntervalInSeconds(30)))` with `forever(b)`
     returning `b.repeatForever()`: the chain's last call is on the helper's PARAMETER, so its
     root is in the caller. The reader continues through that receiver in the calling context
-    and the chain is written whole, across the two methods."""
+    and the chain is written whole, across the two methods. Nothing pairs the trigger with a
+    job, so the row is `partial` (§3a: `resolved` needs the handler too; re-pinned 2026-10-29,
+    Task 10)."""
     forever_jvm = f"({_SIMPLE_TYPE}){_SIMPLE_TYPE}"
     helper = _MODULE + method_descriptor(_TRIGGERS, "forever", forever_jvm)
     caller = _MODULE + method_descriptor(_TRIGGERS, "every30s", "()Lorg/quartz/Trigger;")
@@ -429,8 +433,9 @@ def test_a_builder_chain_continued_on_a_helpers_parameter_is_written_whole(tmp_p
     assert (row["trigger"], row["expression"], row["resolution"]) == (
         "simple",
         "simpleSchedule().withIntervalInSeconds(30).repeatForever()",
-        "resolved",
+        "partial",
     )
+    assert row["handler"] is None
 
 
 @pytest.mark.pins("quartz.KIND-from-the-declared-return-type")
@@ -456,3 +461,360 @@ def test_the_kind_comes_from_a_helpers_declared_return_type(tmp_path: Path):
     )
     [row] = _scheduled(tmp_path, facts)
     assert (row["trigger"], row["expression"], row["resolution"]) == ("cron", None, "partial")
+
+
+# --- the job and its handler (§3c) ---------------------------------------------------------
+
+
+def _handler_of(row: dict) -> str | None:
+    """A handler as `Class#method`, or None for a NULL one."""
+    handler = row["handler"]
+    return None if handler is None else str(handler).split("/")[-1].split("(")[0]
+
+
+def test_forJob_by_name_and_group_finds_the_job(analyzed: Path):
+    """`forJob("sweep", "orders")` names the `JobBuilder` chain whose `withIdentity` is
+    `orders.sweep`, in another method: both `sweep` triggers run `SweepJob`, a
+    `QuartzJobBean`, whose handler is its `executeInternal`."""
+    rows = [
+        row
+        for method in ("sweepEvery30s", "sweepNightly")
+        for row in _entries_in(analyzed, f"QuartzConfig#{method}")
+    ]
+    assert [(_handler_of(row), row["resolution"]) for row in rows] == [
+        ("SweepJob#executeInternal", "resolved"),
+        ("SweepJob#executeInternal", "resolved"),
+    ]
+
+
+def test_forJob_by_detail_follows_the_bean_reference(analyzed: Path):
+    """`auditTrigger(JobDetail auditDetail, …)` is a `@Bean` method, so Spring injects its
+    parameter: of the two `@Bean JobDetail`s, the one named like the parameter
+    (`auditDetail`), as the container picks it. Its chain is `newJob(AuditJob.class)`; the
+    configured cron keeps the row `unresolved`."""
+    [row] = _entries_in(analyzed, "QuartzConfig#auditTrigger")
+    assert (_handler_of(row), row["resolution"]) == ("AuditJob#execute", "unresolved")
+
+
+def test_scheduleJob_pairs_across_a_returned_trigger(analyzed: Path):
+    """The ruoyi-vue-pro shape: `buildTrigger` returns the trigger, and `register` hands it
+    to `scheduleJob(newJob(AuditJob.class).build(), …)`. The value walk pairs them across
+    the return; the cron is read off a row, so the row is `partial`."""
+    [row] = _entries_in(analyzed, "TriggerFactory#buildTrigger")
+    assert (_handler_of(row), row["resolution"]) == ("AuditJob#execute", "partial")
+
+
+@pytest.mark.pins("quartz.equal-HANDLERS-collapse")
+def test_a_ternary_job_class_with_one_inherited_body_is_one_row(analyzed: Path):
+    """The RuoYi shape: `newJob(jobClass(row))`, `jobClass` returning `concurrent ?
+    ConcurrentRowJob.class : SerialRowJob.class`. The walk answers both, `narrowed`; both
+    inherit `BaseRowJob.execute`, so the one body is one row, at its own resolution."""
+    [row] = _entries_in(analyzed, "RowScheduler#createJob")
+    assert (_handler_of(row), row["trigger"], row["resolution"]) == (
+        "BaseRowJob#execute",
+        "cron",
+        "partial",
+    )
+
+
+def test_a_set_built_in_a_jar_leaves_the_handler_null(analyzed: Path):
+    """The dolphinscheduler shape: `scheduleJob(job, Set.of(trigger), true)`. The set is
+    made in the JDK, so the walk from the consumer answers `external` and reaches no
+    trigger: the job is not found, the row is `partial`, and it starts no trace."""
+    [row] = _entries_in(analyzed, "TriggerMaker#make")
+    assert (row["handler"], row["trigger"], row["resolution"]) == (None, "cron", "partial")
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        scheduled = [row for row in workspace.query("scheduled_work")]
+        roots = {
+            str(root["handler"])
+            for root in workspace.query("roots")
+            if root["root_kind"] == "scheduled"
+        }
+    finally:
+        workspace.close()
+    assert roots == {str(row["handler"]) for row in scheduled if row["handler"] is not None}
+
+
+# Hand-built job classes and chains, for the shapes the fixture does not hold.
+_JOBS = "com/acme/jobs/"
+JOB_BUILDER = "org/quartz/JobBuilder#"
+_JOB_BUILDER_TYPE = "Lorg/quartz/JobBuilder;"
+_EXECUTE = "(Lorg/quartz/JobExecutionContext;)V"
+_QUARTZ_JOB_BEAN = "org/springframework/scheduling/quartz/QuartzJobBean#"
+
+
+def _job_class(
+    name: str,
+    *,
+    superclass: str | None = None,
+    interfaces: tuple[str, ...] = (),
+    declares: tuple[str, ...] = (),
+) -> list:
+    """A job class `com/acme/jobs/<name>`, with a body for each method in `declares`
+    (each taking a `JobExecutionContext`)."""
+    owner = f"{_JOBS}{name}#"
+    facts: list = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + owner,
+            construct_kind="class",
+            superclass=superclass,
+            interfaces=list(interfaces),
+        )
+    ]
+    for method in declares:
+        symbol = _MODULE + method_descriptor(owner, method, _EXECUTE)
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind="method",
+                enclosing=_MODULE + owner,
+            ),
+            MethodReturnFact(document_id="doc_1", method=symbol, ordinal=0, value=None),
+        ]
+    return facts
+
+
+def _job_chain(caller: str, job: str, *identity: str) -> list[CallSiteFact]:
+    """`newJob(<job>.class)[.withIdentity(…identity)].build()` in `caller`, its result
+    value 3."""
+    sites = [
+        _site(
+            caller,
+            0,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=1,
+            arguments=(CallArgument(kind="class", symbol=f"{_JOBS}{job}#"),),
+        )
+    ]
+    current = 1
+    if identity:
+        sites.append(
+            _site(
+                caller,
+                1,
+                JOB_BUILDER,
+                "withIdentity",
+                f"({'Ljava/lang/String;' * len(identity)}){_JOB_BUILDER_TYPE}",
+                receiver=1,
+                result=2,
+                arguments=tuple(CallArgument(kind="string", value=part) for part in identity),
+            )
+        )
+        current = 2
+    sites.append(
+        _site(
+            caller, 2, JOB_BUILDER, "build", "()Lorg/quartz/JobDetail;", receiver=current, result=3
+        )
+    )
+    return sites
+
+
+def _trigger_for_job(caller: str, *key: str) -> list[CallSiteFact]:
+    """`newTrigger().forJob(…key).withSchedule(cronSchedule("0 0 * * * ?")).build()`."""
+    builder = "Lorg/quartz/TriggerBuilder;"
+    return [
+        _site(caller, 0, TRIGGER_BUILDER, "newTrigger", f"(){builder}", result=1),
+        _site(
+            caller,
+            1,
+            TRIGGER_BUILDER,
+            "forJob",
+            f"({'Ljava/lang/String;' * len(key)}){builder}",
+            receiver=1,
+            result=2,
+            arguments=tuple(CallArgument(kind="string", value=part) for part in key),
+        ),
+        _site(
+            caller,
+            2,
+            CRON_BUILDER,
+            "cronSchedule",
+            "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;",
+            result=3,
+            arguments=(CallArgument(kind="string", value="0 0 * * * ?"),),
+        ),
+        _site(
+            caller,
+            3,
+            TRIGGER_BUILDER,
+            "withSchedule",
+            f"(Lorg/quartz/ScheduleBuilder;){builder}",
+            receiver=2,
+            result=4,
+            arguments=(CallArgument(kind="unresolved", source=3),),
+        ),
+        _site(caller, 4, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=4, result=5),
+    ]
+
+
+@pytest.mark.pins("quartz.forJob-DEFAULT-group-only")
+def test_forJob_by_name_alone_uses_the_default_group_only(tmp_path: Path):
+    """`forJob("x")` is `JobKey("x", DEFAULT)` (Quartz's `Key`): it names the job written
+    `withIdentity("x")`, and not the one written `withIdentity("x", "other")`, whose key is
+    another."""
+    job = ("org/quartz/Job#",)
+    facts = [
+        *_job_class("OtherJob", interfaces=job, declares=("execute",)),
+        *_job_class("DefaultJob", interfaces=job, declares=("execute",)),
+        *_job_chain(f"{_JOBS}Jobs#other().", "OtherJob", "x", "other"),
+        *_job_chain(f"{_JOBS}Jobs#plain().", "DefaultJob", "x"),
+        *_trigger_for_job(f"{_JOBS}Triggers#hourly().", "x"),
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (_handler_of(row), row["resolution"]) == ("DefaultJob#execute", "resolved")
+
+
+@pytest.mark.pins("quartz.different-BODIES-are-narrowed")
+def test_a_ternary_job_class_with_two_bodies_is_a_row_each_narrowed(tmp_path: Path):
+    """`newJob(c ? FastJob.class : SlowJob.class)`, each class with its own `execute`: one
+    of the two runs and which is not known, so each body is a row, `narrowed` (§3c)."""
+    job = ("org/quartz/Job#",)
+    caller = f"{_JOBS}Jobs#either()."
+    chain = _job_chain(caller, "FastJob", "x", "g")
+    chain[0] = _site(
+        caller,
+        0,
+        JOB_BUILDER,
+        "newJob",
+        f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+        result=1,
+        arguments=(
+            CallArgument(
+                kind="merge",
+                candidates=[
+                    CallArgument(kind="class", symbol=f"{_JOBS}FastJob#"),
+                    CallArgument(kind="class", symbol=f"{_JOBS}SlowJob#"),
+                ],
+            ),
+        ),
+    )
+    facts = [
+        *_job_class("FastJob", interfaces=job, declares=("execute",)),
+        *_job_class("SlowJob", interfaces=job, declares=("execute",)),
+        *chain,
+        *_trigger_for_job(f"{_JOBS}Triggers#hourly().", "x", "g"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["resolution"]) for row in rows] == [
+        ("FastJob#execute", "narrowed"),
+        ("SlowJob#execute", "narrowed"),
+    ]
+
+
+def test_forJob_by_JobKey_reads_the_key_it_is_built_from(tmp_path: Path):
+    """`forJob(JobKey.jobKey("x", "g"))`: the walk from the argument reaches the call that
+    built the key (the catalog's `job_key`), whose name and group are the job's key."""
+    job = ("org/quartz/Job#",)
+    caller = f"{_JOBS}Triggers#hourly()."
+    builder = "Lorg/quartz/TriggerBuilder;"
+    sites = _trigger_for_job(caller, "x", "g")
+    sites[1] = _site(
+        caller,
+        1,
+        TRIGGER_BUILDER,
+        "forJob",
+        f"(Lorg/quartz/JobKey;){builder}",
+        receiver=1,
+        result=2,
+        arguments=(CallArgument(kind="unresolved", source=9),),
+    )
+    key = _site(
+        caller,
+        0,
+        "org/quartz/JobKey#",
+        "jobKey",
+        "(Ljava/lang/String;Ljava/lang/String;)Lorg/quartz/JobKey;",
+        result=9,
+        arguments=(CallArgument(kind="string", value="x"), CallArgument(kind="string", value="g")),
+    )
+    sites = [key, *(site.model_copy(update={"ordinal": site.ordinal + 1}) for site in sites)]
+    facts = [
+        *_job_class("KeyedJob", interfaces=job, declares=("execute",)),
+        *_job_chain(f"{_JOBS}Jobs#keyed().", "KeyedJob", "x", "g"),
+        *sites,
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (_handler_of(row), row["resolution"]) == ("KeyedJob#execute", "resolved")
+
+
+@pytest.mark.pins("quartz.QUARTZJOBBEAN-runs-executeInternal")
+def test_QuartzJobBean_runs_executeInternal(tmp_path: Path):
+    """A job extending Spring's `QuartzJobBean` declares no `execute`: the JVM runs the
+    one `QuartzJobBean` has, in a jar, which calls the subclass's `executeInternal` (the
+    catalog's `supertype_dispatch`). That is the handler."""
+    facts = [
+        *_job_class("BeanJob", superclass=_QUARTZ_JOB_BEAN, declares=("executeInternal",)),
+        *_job_chain(f"{_JOBS}Jobs#bean().", "BeanJob", "x", "g"),
+        *_trigger_for_job(f"{_JOBS}Triggers#hourly().", "x", "g"),
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (_handler_of(row), row["resolution"]) == ("BeanJob#executeInternal", "resolved")
+
+
+@pytest.mark.pins("quartz.a-JAR-base-gives-NO-handler")
+def test_another_jar_base_class_gives_no_handler(tmp_path: Path):
+    """The same class on any OTHER jar base: what that base's `execute` does is not
+    known, so the job's own `executeInternal` is not assumed to run. Handler NULL,
+    `partial`."""
+    facts = [
+        *_job_class("VendorJob", superclass="com/vendor/BaseJob#", declares=("executeInternal",)),
+        *_job_chain(f"{_JOBS}Jobs#vendor().", "VendorJob", "x", "g"),
+        *_trigger_for_job(f"{_JOBS}Triggers#hourly().", "x", "g"),
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (row["handler"], row["trigger"], row["resolution"]) == (None, "cron", "partial")
+
+
+def test_a_trigger_reaching_two_consumers_is_one_entry(tmp_path: Path):
+    """`trigger()` builds and returns one trigger, and `first()` and `second()` each hand
+    it to `scheduleJob(newJob(AJob.class).build(), trigger())`: one `newTrigger()`, so one
+    entry (ruling 3), its job found through both consumers alike."""
+    trigger_jvm = "()Lorg/quartz/Trigger;"
+    helper = _MODULE + method_descriptor(_TRIGGERS, "trigger", trigger_jvm)
+    scheduler = "org/quartz/Scheduler#"
+    schedule_jvm = "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+
+    def consumer(name: str) -> list:
+        caller = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        return [
+            _method_symbol(name, "()V"),
+            *_job_chain(caller, "AJob"),
+            _site(caller, 3, _TRIGGERS, "trigger", trigger_jvm, result=4),
+            _site(
+                caller,
+                4,
+                scheduler,
+                "scheduleJob",
+                schedule_jvm,
+                receiver=9,
+                result=5,
+                arguments=(
+                    CallArgument(kind="unresolved", source=3),
+                    CallArgument(kind="unresolved", source=4),
+                ),
+            ),
+        ]
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        _method_symbol("trigger", trigger_jvm),
+        *_cron_trigger(helper),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=5),
+        ),
+        *consumer("first"),
+        *consumer("second"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["expression"], row["resolution"]) for row in rows] == [
+        ("AJob#execute", "0 0 * * * ?", "resolved")
+    ]

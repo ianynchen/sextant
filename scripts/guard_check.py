@@ -259,6 +259,76 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "quartz.forJob-DEFAULT-group-only": Guard(
+        what="`forJob(name)` names the job whose key is that name in the default group, and "
+        "no other group's job of the same name",
+        why="Quartz's `Key` puts a key written with no group in `DEFAULT` (CP-55 rows 10-18); "
+        "matching by name alone would pair a trigger with a job in another group, which "
+        "Quartz never runs for it",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        found.extend((context.jobs_by_key or {}).get(named, ()))",
+                replace="        found.extend(job for key, jobs in (context.jobs_by_key or {}).items()"
+                ' if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in jobs)'
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.QUARTZJOBBEAN-runs-executeInternal": Guard(
+        what="where the job's `execute` body is in a jar type the catalog's "
+        "`supertype_dispatch` names, the handler is the method that template calls",
+        why="every Spring Boot Quartz job extends `QuartzJobBean` and writes "
+        "`executeInternal`; without the template every one has no handler and starts no "
+        "trace (CP-55 row 19)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        template = context.rules.templates.get(",
+                replace="        template = {}.get(  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-JAR-base-gives-NO-handler": Guard(
+        what="a job whose `execute` body is in a jar type the catalog does NOT name gets no "
+        "handler",
+        why="what an unread base class's `execute` does is not known; assuming it calls a "
+        "subclass method would name a handler the framework may never run",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        template = context.rules.templates.get(",
+                replace="        template = next(iter(context.rules.templates.values())) or "
+                "context.rules.templates.get(  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.equal-HANDLERS-collapse": Guard(
+        what="several job classes reaching one body are one row",
+        why="RuoYi, aurora and NBlog pick between two classes that inherit one `execute`; "
+        "without collapsing, one trigger reads as two schedules of the same work",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        dict.fromkeys((handler, narrowed and len(branched) > 1) for "
+                "handler, narrowed in found)",
+                replace="        [(handler, narrowed and len(branched) > 1) for handler, narrowed "
+                "in found]  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.different-BODIES-are-narrowed": Guard(
+        what="job classes on one branch reaching different bodies are a row each, `narrowed`",
+        why="one of them runs and which is not known; publishing each at `resolved` would "
+        "claim both run",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="narrowed and len(branched) > 1",
+                replace="False",
+            ),
+        ),
+    ),
     "schedules.an-enum-constant-is-written-as-its-type-and-name": Guard(
         what="an `enum` argument (a named constant of its own type) is written as "
         "`Type.CONSTANT` rather than leaving the chain without text",

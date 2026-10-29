@@ -1015,7 +1015,22 @@ def _cell(cell: str) -> str | None:
     return None if text == _NOT_IN_THE_CODE else text
 
 
-@pytest.mark.xfail(strict=True, reason="Quartz not built — plan 2026-10-29")
+def _detail_blocks(section: str, handler: str, trigger: str) -> list[str]:
+    """The detail blocks of the section whose header names `handler` (as `Class#method`)
+    and whose header ENDS with `trigger` — the kind, and the expression where the header
+    carries one — each with the lines indented under it."""
+    blocks = [
+        block for block in re.split(r"^- ", section, flags=re.MULTILINE)[1:] if " — " in block
+    ]
+    found = []
+    for block in blocks:
+        header = block.splitlines()[0]
+        named, _, rest = header.partition(" — ")
+        if _handler_cell(named) == handler and rest.strip() == trigger:
+            found.append(block)
+    return found
+
+
 def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
     """One entry per `newTrigger()` root (ruling 3): the three builder triggers of
     `QuartzConfig` that name a job by key, the one that names it by bean, the jobs-table
@@ -1077,10 +1092,15 @@ def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
         assert match is not None, f"no entry for {want}; derived {derived}"
         remaining.remove(match)
 
-    # The configured value rides in the detail block of the placeholder entry.
-    assert "0 */5 * * * ?" in section, section
-    # The partial entry names the method the schedule is read from.
-    assert re.search(r"OrderJobRow[#.]getCron", section), section
+    # The configured value rides in the detail block of the placeholder entry itself.
+    [configured] = _detail_blocks(section, "AuditJob#execute", "cron `${orders.sweep.cron}`")
+    assert "0 */5 * * * ?" in configured, section
+    # Each partial entry whose cron is read off a row names the method it is read from, in
+    # its own detail block: the jobs-table cron (RuoYi) and the private-method trigger
+    # (ruoyi-vue-pro).
+    for handler in ("BaseRowJob#execute", "AuditJob#execute"):
+        [partial] = _detail_blocks(section, handler, "cron")
+        assert re.search(r"OrderJobRow[#.]getCron", partial), section
 
     [trace] = [t for t in traces if t.root.handler.split("/")[-1].startswith("BaseRowJob#execute")]
     reached = {
