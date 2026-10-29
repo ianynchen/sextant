@@ -158,6 +158,7 @@ _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
+_CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -184,6 +185,21 @@ _QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
+    "schedules.a-chain-with-a-non-constant-argument-has-no-text": Guard(
+        what="a builder chain with an argument that is neither a constant nor a nested call "
+        "of constants has no text at all",
+        why="a chain written with one hole filled in or skipped reads as a complete "
+        "schedule: `withIntervalInSeconds(<read from a row>)` published as "
+        "`withIntervalInSeconds()` states a schedule nobody wrote, at a confidence the "
+        "reader cannot tell from a real one (ruling 4)",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="\n    return None\n",
+                replace="\n    return ''  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- the backward value walk and what it is allowed to answer ----------
     "values.a-construction-hands-nothing-back": Guard(
         what="a call site is read as the CONSTRUCTION of a value only when it produced no "
