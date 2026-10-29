@@ -152,11 +152,27 @@ class BeanTable:
         return Unresolved("none")
 
 
+def known_channels(workspace: Workspace) -> frozenset[str]:
+    """The names the channel index knows, read for the bean fold's name rung for a channel
+    reference (§3a): the `read_by` end of the channel edge (spec 2026-09-21 §3b). The
+    container auto-creates a channel under any referenced name, so a name a handler's
+    annotation carries is a channel whether or not a factory method declares it. Only a
+    RESOLVED reader's name counts: one still spelled as a placeholder configuration never
+    answered names nothing. The rows are there when the chain walk runs because
+    `resolve/endpoints.py` runs the index's catalog first (`_writes_only_the_channel_edge`).
+    Moved verbatim from `engines/fluent.py` with the walk that reads it."""
+    return frozenset(
+        str(row["channel"])
+        for row in workspace.query("channel_bindings")
+        if row["role"] == "read_by" and row["resolution"] == "resolved"
+    )
+
+
 def bean_table(workspace: Workspace, catalog: Catalog, known_channels: frozenset[str]) -> BeanTable:
     """The declared beans of the module under `catalog`'s bean model, plus
-    `known_channels` — the channel names the caller's own index holds (fluent hands it
-    the `channel_bindings` readers, spec §3b), which a channel reference may resolve to
-    without any method declaring them.
+    `known_channels` — the channel names the caller's own index holds (the chain walk hands
+    it the `channel_bindings` readers, `known_channels` above, spec §3b), which a channel
+    reference may resolve to without any method declaring them.
 
     Refuses a catalog naming no `bean_model`, by file: a `bean_via` capture on such a
     catalog would resolve nothing and say nothing.

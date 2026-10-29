@@ -143,6 +143,9 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+# The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
+# whole, with the guards on the walk's own rules.
+_CHAINS = "sextant/application/resolve/shapes/chains.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
@@ -2111,7 +2114,7 @@ GUARDS: dict[str, Guard] = {
         "there is an outbound call nothing makes",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find='            and site["name"] == root["method"]\n',
                 replace="            and True  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2128,7 +2131,7 @@ GUARDS: dict[str, Guard] = {
         "`resolved`/`compiler` on evidence about a type the catalog never read",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find='            if site["owner"] in root["owners"]\n',
                 replace="            if True  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2145,7 +2148,7 @@ GUARDS: dict[str, Guard] = {
         "where nothing downstream can tell it from one the module really issues",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find="        and _has_execute_join(site, context.sites, "
                 "context.via_argument_names[name])",
                 replace="        and True  # guard disabled by scripts/guard_check.py",
@@ -2167,10 +2170,10 @@ GUARDS: dict[str, Guard] = {
         "catalog's terminal; this id is named for the near-miss that pins it",
         edits=(
             Edit(
-                path=_FLUENT,
-                find="    elif reached_terminal:\n        _derive(captures, context)",
+                path=_CHAINS,
+                find="    elif terminal is not None:\n        context.ends.append(",
                 replace="    elif True:  # guard disabled by scripts/guard_check.py\n"
-                "        _derive(captures, context)",
+                "        context.ends.append(",
             ),
         ),
     ),
@@ -4936,7 +4939,7 @@ GUARDS: dict[str, Guard] = {
         "every inlined client call derives with `path` NULL at `unresolved`",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find="            by_receiver.setdefault(_receiver_of(site, extension_steps), []).append(site)\n",
                 replace='            by_receiver.setdefault(site["receiver"], []).append(site)  # guard disabled by scripts/guard_check.py\n',
             ),
@@ -5027,7 +5030,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    client = captures.get(_CLIENT)\n",
+                find="    client = _client_of(captures, context)\n",
                 replace="    client = None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -5159,7 +5162,7 @@ GUARDS: dict[str, Guard] = {
         "the first publishes that client's service for a row that may be the other's",
         edits=(
             Edit(
-                path=_FLUENT,
+                path=_CHAINS,
                 find="    if len(executing) != 1:\n",
                 replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
             ),
