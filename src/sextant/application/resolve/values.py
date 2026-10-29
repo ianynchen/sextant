@@ -134,7 +134,7 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
-from sextant.domain.symbols import with_descriptor
+from sextant.domain.symbols import returned_type, with_descriptor
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
@@ -1630,14 +1630,69 @@ class _Walk:
         the window used to open before its own construction. Every `new Thing(x)` whose
         value is then used therefore answered `escapes` on the constructor itself. The
         construction is where the window opens, and `_construction` is what finds it.
+
+        **An ACCESSOR is not in the window** (Quartz fix round, 2026-10-29): a call on the
+        value that takes no argument and hands back an object of another type than its
+        receiver's — `detail.getJobDataMap()`, `_accessor` has the rule and why each half
+        of it is there. What is then done to its result (`.put(k, v)`) is a call on THAT
+        object, which is not this value's id and was never in this window.
         """
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
         produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
         for ordinal in self._index.receivers.get((method, value), ()):
             if ordinal > produced_at and (used_at is None or ordinal < used_at):
+                if self._accessor((method, ordinal)):
+                    continue
                 return _only(trail, _unresolved(ESCAPES))
         return self._resolve((_VALUE, method, value), trail, frames)
+
+    def _accessor(self, site_key: tuple[str, int]) -> bool:
+        """Whether a call made ON a value only READS it: it takes no argument and hands
+        back an object whose type is not its receiver's own.
+
+        `escapes` exists because a call on the value may write into it, and nothing in the
+        facts says what it wrote. A call can write two kinds of thing: what its caller hands
+        it, and what its own body decides. **Each half of the rule shuts one of them, as
+        far as the facts can say it:**
+
+        * **No argument.** Nothing from the caller can go in, which is the write the window
+          exists for — `result.setFilename(x)`, and `map.put(k, v)` too, though `put`
+          hands back another object (the old value). A void call stays in as well
+          (`touch()`, `clear()`): a call with no result has nothing to be FOR but its effect.
+        * **A result of another reference type.** A call handing back its receiver's own
+          type may be handing back the receiver itself, changed — the fluent step
+          (`builder.repeatForever()`) — and a primitive result is how a counter or a
+          collection reports the write it just made (`incrementAndGet()`, `add(x)`). A
+          result of another type is a different object, so the call is the JavaBeans
+          getter: what it is FOR is the object it hands back. An array result is left in
+          the window: `returned_type` names no type for one, and nothing needs it yet.
+
+        **It is an approximation, stated as one.** A no-argument call can still change its
+        receiver and hand back another object (`queue.poll()`, `iterator.next()`), and a
+        type erased to a supertype (`Object`, a generic self-type's bound) can still be the
+        receiver itself. The window keeps refusing every other call on the value.
+        MEASURED (`scripts/measure_value_walk.py`, 44 modules, 2026-10-29): of the 1,800
+        positions a catalog asks about, 15 move: 8 `ResponseEntity` bodies in
+        `jhipster-sample-app` read through a getter first (`escapes` → `external`, and once
+        → the constructed type `User`), and 7 `Env` arguments in `apollo-portal` read
+        through a getter first (`escapes` → `external`). No string or number appears. Over
+        every slot, `escapes` answers fall 9,968 → 8,547, and 7,030 of the 7,334 calls let
+        through are named `get`/`is`/`has`/`to…`. No `scripts/field_check.py` count moves.
+        What it buys:
+        RuoYi-Vue, NBlog and aurora all write `jobDetail.getJobDataMap().put(KEY, job)`
+        between building the job and scheduling it, and each lost its job to this window.
+
+        It is the DEFAULT, not a reader's switch, because it is about the call and not about
+        the question: a call that writes nothing into the value changes neither what the
+        value is nor which call produced it, whichever of the two a reader is asking.
+        """
+        site = self._index.sites.get(site_key)
+        if site is None or site.get("result") is None or site["arguments"]:
+            return False
+        descriptor = site.get("descriptor")
+        returned = returned_type(str(descriptor)) if descriptor else None
+        return returned is not None and returned != site.get("owner")
 
     def _construction(self, method: str, value: int) -> int | None:
         """The ordinal of the call that CONSTRUCTED `value` in `method`, or None where

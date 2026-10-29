@@ -399,6 +399,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.an-ACCESSOR-is-not-a-write": Guard(
+        what="a call on the value that takes no argument and hands back an object of "
+        "another type than its receiver's is a READ of the value, so it does not open the "
+        "`escapes` window",
+        why="RuoYi-Vue, NBlog and aurora all write `jobDetail.getJobDataMap().put(KEY, job)` "
+        "between building the job and scheduling it. Without this the accessor is read as "
+        "a possible write, the job argument answers `escapes`, and the Quartz handler is "
+        "NULL on 3 of the 6 real corpora measured (Quartz Task 11, finding F1)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if self._accessor((method, ordinal)):\n"
+                "                    continue\n",
+                replace="",
+            ),
+        ),
+    ),
     "values.an-identity-entry-with-a-role-is-not-an-identity": Guard(
         what="only a ROLE-FREE `identified_by` entry answers what a produced value IS; an "
         "entry carrying a `role` is passed over",

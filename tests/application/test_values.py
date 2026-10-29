@@ -275,6 +275,41 @@ _ONE_TARGET = (_REGISTRY, "one", _ONE)
 _MANY_TARGET = (_REGISTRY, "many", _MANY)
 
 
+def _accessed(name: str, jvm: str) -> list[Fact]:
+    """`Mutator#<name>`: a produced value, a call on it described by `jvm` whose result is
+    written to, then the value used. The call's arguments follow its descriptor."""
+    caller = _symbol(_MUTATOR, name, "()V")
+    given = [CallArgument(kind="string", value="k")] if not jvm.startswith("()") else []
+    return [
+        _declared(_MUTATOR, name, "()V"),
+        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(
+            caller,
+            1,
+            (_BUFFER, "contents", jvm),
+            kind="virtual",
+            receiver=7,
+            arguments=given,
+            result=8,
+        ),
+        _site(
+            caller,
+            2,
+            (_PKG + "Contents#", "put", _TAKES_STRING),
+            kind="virtual",
+            receiver=8,
+            arguments=[CallArgument(kind="string", value="x")],
+        ),
+        _site(
+            caller,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+    ]
+
+
 def _facts() -> list[Fact]:
     """One fact set, one arm per rule the walk implements.
 
@@ -423,6 +458,12 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=7)],
         ),
+        # A call ON the value that takes nothing and hands back ANOTHER object, which is
+        # then written to (`detail.getJobDataMap().put(k, v)`), and its two near-misses: the
+        # same call handing back the receiver's own type, and one taking an argument.
+        *_accessed("accessed", "()L" + _PKG + "Contents;"),
+        *_accessed("fluent", "()L" + _BUFFER[:-1] + ";"),
+        *_accessed("given", "(Ljava/lang/String;)L" + _PKG + "Contents;"),
         _declared(_MUTATOR, "kept", "()V"),
         _site(_symbol(_MUTATOR, "kept", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=7),
         _site(
@@ -1842,6 +1883,32 @@ def test_a_value_a_method_might_have_mutated_before_use_is_unresolved_escapes(wa
     """§1d's `escapes`. Between the call that produced the value and the call that uses
     it there is a call ON the value, and nothing in the facts says what it wrote."""
     bindings = _bindings(walked, _symbol(_MUTATOR, "escaped", "()V"), 2)
+    assert _reasons(bindings) == ["escapes"]
+
+
+@pytest.mark.pins("values.an-ACCESSOR-is-not-a-write")
+def test_an_accessor_on_the_value_whose_result_is_written_to_still_resolves(walked):
+    """A call ON the value that takes nothing and hands back another object is an accessor
+    (`detail.getJobDataMap()`): it reads the value and writes nothing into it from the
+    caller, and what is then done to its result is a call on THAT object. So it does not
+    open `escapes`, and the value still answers what produced it."""
+    bindings = _bindings(walked, _symbol(_MUTATOR, "accessed", "()V"), 3)
+    assert [b.slots[0].value for b in bindings] == ["solo"]
+
+
+def test_a_call_handing_back_the_receivers_own_type_still_escapes(walked):
+    """The near-miss on the result: a no-argument call returning the receiver's own type is
+    the fluent shape (`builder.repeatForever()` returns the builder it changed), so the
+    result may be the value itself and the call a write to it."""
+    bindings = _bindings(walked, _symbol(_MUTATOR, "fluent", "()V"), 3)
+    assert _reasons(bindings) == ["escapes"]
+
+
+def test_a_call_handing_back_another_object_but_taking_an_argument_still_escapes(walked):
+    """The near-miss on the arguments: what a caller hands a call on the value can be
+    written into it (`map.put(k, v)` returns the old value, another object), so a call
+    taking anything stays inside the window."""
+    bindings = _bindings(walked, _symbol(_MUTATOR, "given", "()V"), 3)
     assert _reasons(bindings) == ["escapes"]
 
 

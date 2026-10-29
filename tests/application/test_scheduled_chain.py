@@ -517,6 +517,25 @@ def test_a_ternary_job_class_with_one_inherited_body_is_one_row(analyzed: Path):
     )
 
 
+def test_an_accessor_called_on_the_built_job_keeps_its_job(analyzed: Path):
+    """The line RuoYi, NBlog and aurora all write between `build()` and `scheduleJob`:
+    `detail.getJobDataMap().put("row", row)`. `getJobDataMap()` is a call ON the built
+    `JobDetail`, but it hands back another object and takes nothing, so it does not change
+    which call built the detail: the job, and its handler, are still found."""
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        accessed = [
+            site
+            for site in workspace.query("call_sites")
+            if "/RowScheduler#createJob(" in str(site["caller"]) and site["name"] == "getJobDataMap"
+        ]
+    finally:
+        workspace.close()
+    assert len(accessed) == 1, "the fixture must call the accessor on the built detail"
+    [row] = _entries_in(analyzed, "RowScheduler#createJob")
+    assert _handler_of(row) == "BaseRowJob#execute"
+
+
 def test_a_set_built_in_a_jar_leaves_the_handler_null(analyzed: Path):
     """The dolphinscheduler shape: `scheduleJob(job, Set.of(trigger), true)`. The set is
     made in the JDK, so the walk from the consumer answers `external` and reaches no

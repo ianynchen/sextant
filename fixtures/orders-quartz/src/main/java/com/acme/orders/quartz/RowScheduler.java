@@ -20,6 +20,7 @@ public class RowScheduler {
         CronScheduleBuilder builder = misfire(row, CronScheduleBuilder.cronSchedule(row.getCron()));
         Trigger trigger =
                 newTrigger().withIdentity(row.getName(), row.getGroup()).withSchedule(builder).build();
+        detail.getJobDataMap().put("row", row);
         scheduler.scheduleJob(detail, trigger);
     }
 
