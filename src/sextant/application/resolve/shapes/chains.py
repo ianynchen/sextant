@@ -1800,6 +1800,16 @@ def _joined_through_values(
     on whatever owner the module calls it, so a path ends at the `build()` that made the
     value and never reads past it.
 
+    **Only a call whose body is NOT in the module stops it** (`values.reached`). A catalog's
+    terminal is a library call, so the module's own `build()` — a helper, or a class whose
+    `build()` wraps the real chain (dolphinscheduler's `QuartzJobDetailBuilder`, Quartz spec
+    §2c) — is never one, and stopping there would pair the executing call with a site no
+    chain walk reaches as a terminal: the real chain inside would derive nothing, silently.
+    Not stopping, the walk crosses that body's return as it crosses any other, to the
+    library `build()` the chain does reach. A rule about where the body is, not a list of
+    owners: the terminal's owner is often no root's or step's (`SendMessageRequest.builder()`
+    roots the chain, `SendMessageRequest$Builder.build()` ends it, and steps are owner-free).
+
     Only an `{owner, method}` join takes part. A bare `true` names no executing call, so
     walking from "any row" would pair a built value with any use of it — the log statement
     the mapping form exists to exclude — and it stays the same-method `source` match. A
@@ -1814,13 +1824,19 @@ def _joined_through_values(
     if not declared:
         return {}
     terminals: set[tuple[str, str]] = set()
+    in_module: set[tuple[str, str]] = set()
     executing: list[Mapping[str, Any]] = []
     for site in values.sites.values():
         name = str(site["name"])
         if name in declared:
             terminals.add((str(site["owner"]), name))
+            # One call to it whose body was read puts the method in the module, at every
+            # site that calls it.
+            if _site_key(site) in values.reached:
+                in_module.add((str(site["owner"]), name))
         if any(_joins(site, join_filter) for join_filter in declared.values()):
             executing.append(site)
+    terminals -= in_module
     joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for consumer in executing:
         for slot in range(len(consumer["arguments"] or [])):

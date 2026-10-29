@@ -2294,6 +2294,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-MODULE-call-never-stops-the-join-walk": Guard(
+        what="the execute-join's producer walk stops only at a terminal-named call whose body "
+        "is NOT in the module; the module's own `build()` is crossed to the library call inside",
+        why="a module helper or class named like the terminal — `sendMessage(build())`, "
+        "dolphinscheduler's `QuartzJobDetailBuilder.build()` wrapping `newJob(…)…build()` — "
+        "would end the walk at the module call, pairing the executing call with a site no chain "
+        "walk reaches as a terminal; the real chain inside then derives nothing, and nothing "
+        "reports the missing boundary",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    terminals -= in_module\n",
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "chains.the-EXECUTE-JOIN-crosses-methods": Guard(
         what="the execute-join pairs a built value with a declared executing call wherever "
         "the value walk (`values.producers_of`) traces that call's argument back to the "

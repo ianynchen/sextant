@@ -6614,17 +6614,22 @@ def _sqs_send(caller: str, ordinal: int, source: int) -> CallSiteFact:
     )
 
 
-def _sqs_built_by_a_helper(senders: list[str]) -> tuple[str, list]:
-    """The helper `request()` building and returning the request, and one method per name
-    in `senders` doing `sqsClient.sendMessage(request())`."""
-    helper = _sqs_method("request", _SQS_REQUEST_JVM)
+def _sqs_built_by_a_helper(
+    senders: list[str], owner: str = _SQS_PRODUCER, name: str = "request"
+) -> tuple[str, list]:
+    """The helper `owner.name()` building and returning the request, and one method per name
+    in `senders` doing `sqsClient.sendMessage(helper())`. On `_SQS_PRODUCER` the helper is
+    a static method of the sending class; on another `owner` it is an instance method of a
+    module class the sender holds (`factory.build()`)."""
+    helper = _MODULE + method_descriptor(owner, name, _SQS_REQUEST_JVM)
+    on_the_sender = owner == _SQS_PRODUCER
     facts: list = [
         SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
         SymbolFact(
             document_id="doc_1",
             symbol=helper,
             construct_kind="method",
-            enclosing=_MODULE + _SQS_PRODUCER,
+            enclosing=_MODULE + owner,
         ),
         *_sqs_request_chain(helper),
         MethodReturnFact(
@@ -6634,8 +6639,12 @@ def _sqs_built_by_a_helper(senders: list[str]) -> tuple[str, list]:
             value=CallArgument(kind="unresolved", source=3),
         ),
     ]
-    for name in senders:
-        sender = _sqs_method(name)
+    if not on_the_sender:
+        facts.append(
+            SymbolFact(document_id="doc_1", symbol=_MODULE + owner, construct_kind="class")
+        )
+    for sending in senders:
+        sender = _sqs_method(sending)
         facts += [
             SymbolFact(
                 document_id="doc_1",
@@ -6646,10 +6655,11 @@ def _sqs_built_by_a_helper(senders: list[str]) -> tuple[str, list]:
             CallSiteFact(
                 document_id="doc_1",
                 caller=sender,
-                target=CallTarget(owner=_SQS_PRODUCER, name="request", descriptor=_SQS_REQUEST_JVM),
-                invoke_kind="static",
+                target=CallTarget(owner=owner, name=name, descriptor=_SQS_REQUEST_JVM),
+                invoke_kind="static" if on_the_sender else "virtual",
                 ordinal=0,
-                receiver=None,
+                # The factory the sender holds: a value no fact names, as a field read is.
+                receiver=None if on_the_sender else 80,
                 result=5,
             ),
             _sqs_send(sender, 1, source=5),
@@ -6704,6 +6714,30 @@ def test_a_chain_reaching_two_consumers_is_one_end(tmp_path: Path):
     assert [(c["caller"], c["ordinal"], c["name"]) for c in end.consumers] == [
         (_sqs_method("issue"), 1, "sendMessage"),
         (_sqs_method("retry"), 1, "sendMessage"),
+    ]
+
+
+@pytest.mark.pins("chains.a-MODULE-call-never-stops-the-join-walk")
+@pytest.mark.parametrize(
+    "owner",
+    [_SQS_PRODUCER, "com/acme/msg/RequestFactory#"],
+    ids=["a-method-named-build", "a-class-whose-build-wraps-the-chain"],
+)
+def test_a_module_method_named_build_still_joins_the_chain_inside_it(tmp_path: Path, owner: str):
+    """The helper is NAMED like the terminal: `sendMessage(build())`, or `sendMessage(
+    factory.build())` on a module class whose `build()` wraps the real chain — the
+    dolphinscheduler shape (`QuartzJobDetailBuilder.build()` around `newJob(…)…build()`,
+    Quartz spec 2026-10-28 §2c). The module's own `build()` has its body here, so the
+    producer walk reads through it to the SDK's `build()` inside; stopping at it would pair
+    the send with a call no chain walk reaches as a terminal, and the real chain would
+    derive nothing, silently. One row, the helper's, as for a helper named anything else."""
+    helper, facts = _sqs_built_by_a_helper(["issue"], owner=owner, name="build")
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("aws-sqs-sdk"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["caller"], r["protocol"], r["path"]) for r in rows] == [
+        (helper, "sqs", "/acme/orders")
     ]
 
 
