@@ -271,9 +271,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        found.extend((job, _ANY_PATH) for job in (context.jobs_by_key or {})"
+                find="        found.extend((job, path) for job in (context.jobs_by_key or {})"
                 ".get(named, ()))",
-                replace="        found.extend((job, _ANY_PATH) for key, jobs in (context.jobs_by_key "
+                replace="        found.extend((job, path) for key, jobs in (context.jobs_by_key "
                 'or {}).items() if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in '
                 "jobs)  # guard disabled by scripts/guard_check.py",
             ),
@@ -401,10 +401,41 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="    name = _key(end.captures.get(_NAME), end.captures.get(_GROUP), context)",
-                replace="    name = _key_of(resolve_positions(context.workspace, {_NAME: "
-                "positions[_NAME]}, context.index)[0], context) if _NAME in positions else None"
+                find="            name=_key(end.captures.get(_NAME), end.captures.get(_GROUP), "
+                "context),",
+                replace="            name=_key_of(resolve_positions(context.workspace, {_NAME: "
+                "positions[_NAME]}, context.index)[0], context) if _NAME in positions else None,"
                 "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-KEYED-job-is-paired-on-its-keys-path": Guard(
+        what="a job named by a key a `job_key` call builds is paired on the path the walk "
+        "took to that call",
+        why="`t(JobKey k, String cron)` called with `(jobKey(a), c1)` and `(jobKey(b), c2)`: "
+        "paired on any path, each keyed job is published `resolved` beside each caller's "
+        "cron, two of four rows false (R20)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="    for named, path in keys:\n        found.extend((job, path) for job in "
+                "(context.jobs_by_key or {}).get(named, ()))",
+                replace="    for named, path in keys:\n        found.extend((job, _ANY_PATH) for job "
+                "in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
+                "scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-part-is-kept-only-where-every-path-agrees": Guard(
+        what="in a row no one binding holds, the cron is kept only where every path gives "
+        "the same one; otherwise it is NULL",
+        why="`scheduleJob(id(job), id(trigger(cron)))` in two callers: each cron published "
+        "beside each job states pairings no execution builds, even at `partial` (R20)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            if len(expressions) == 1\n",
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

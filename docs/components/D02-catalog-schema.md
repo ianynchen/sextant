@@ -4203,8 +4203,13 @@ descent into a helper as the call that entered it, so a read crossing out of tha
 agrees only with that call). A helper `addJob(jobClass, cron)` called from two places is two
 rows, never four; a trigger built in `trigger(cron)` and scheduled by each caller keeps each
 caller's cron with that caller's job. A pairing no one path holds (its trigger and job
-passing through one helper on two calls) is read part by part: every such row is `partial`,
-the cron kept, the name NULL unless every path agrees.
+passing through one helper on two calls) is read part by part, and every such row is
+`partial`: **a part no binding ties to the row — the name, the cron, the job's class — is
+kept only where every path agrees on it; otherwise it is NULL**, a NULL cron naming in
+`expression_source` the method whose parameter it is (each caller hands its own), or the
+call the walk stopped at. A job named by a key a `job_key` call builds is paired on the path
+the walk took to that call; a constant `forJob(name)` key and an injected bean pair on any
+path, being the same on every one.
 
 **The job** (§3c) is found from whatever pairs it with the trigger, through machinery that
 already exists, and every pairing it finds counts:

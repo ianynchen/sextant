@@ -67,8 +67,10 @@ schedule took to `withSchedule` and the path the trigger and the job took to the
 paired them (`values.producer_paths`): each row holds the values one path gives.
 `addJob(jobClass, cron)` called twice is two rows, never four, and a trigger built in a
 helper and scheduled by each caller keeps each caller's cron with that caller's job. A
-pairing no one path holds is read part by part, `partial`, its name NULL unless every path
-agrees; rows equal but for their resolution are one, at the weaker word.
+pairing no one path holds is read part by part, `partial`, and a part no binding ties to
+the row — the name, the cron, the job's class — is kept only where every path agrees on it,
+else NULL; rows equal but for their resolution are one, at the weaker word. A job named by a
+key a `job_key` call builds is paired on the path to that call.
 
 **`resolution`** (§3a): `resolved` with handler and expression both known and no
 placeholder; `unresolved` where the only gap is a placeholder; `narrowed` where the only gap
@@ -119,6 +121,7 @@ from sextant.application.resolve.values import (
     resolve_positions,
 )
 from sextant.domain.symbols import (
+    bare_descriptor,
     method_descriptor,
     method_type_descriptor,
     parameter_types,
@@ -513,13 +516,16 @@ def _on_paths(
 def _apart(
     end: ChainEnd, schedule: _Schedule, job: ChainEnd | None, context: _Context
 ) -> list[_Found]:
-    """The rows of a pairing no single binding holds: each part read on its own, every row
-    `partial`. A name that differs between paths says nothing about this row, so it is the
-    one every path agrees on, or NULL (`_key`); the cron and the class are each read on
-    their own, and kept rather than dropped."""
+    """The row of a pairing no single binding holds, every part read on its own, `partial`.
+
+    **A part no binding ties to the row is kept only where every path agrees on it;
+    otherwise it is NULL** — the name (`_key`), the cron, the job's class alike. Two paths
+    giving two values say nothing about which one THIS pairing ran with, and publishing each
+    beside the other parts would state pairings no execution builds. A cron that varies is
+    NULL with `expression_source` naming where the walk stopped (`_varies_at`)."""
     positions, root = _positions(end, schedule, job, context)
     slot = int(context.literal["arg"])
-    expressions = [(schedule.expression, schedule.resolution, schedule.source)]
+    expression, resolution, source = schedule.expression, schedule.resolution, schedule.source
     if root is not None:
         read = (
             resolve_positions(
@@ -531,21 +537,24 @@ def _apart(
             if _VALUE in positions
             else []
         )
-        expressions = list(
-            dict.fromkeys(
-                _expression(answers.get(_VALUE), root, slot, context) for answers in read or [{}]
-            )
+        expressions = {
+            _expression(answers.get(_VALUE), root, slot, context) for answers in read or [{}]
+        }
+        expression, resolution, source = (
+            expressions.pop()
+            if len(expressions) == 1
+            else (None, _PARTIAL, _varies_at(root, slot, context))
         )
     read = (
         resolve_positions(context.workspace, {_CLASS: positions[_CLASS]}, context.index)
         if _CLASS in positions
         else []
     )
-    classes = list(dict.fromkeys(_job_class(answers.get(_CLASS)) for answers in read or [{}]))
-    name = _key(end.captures.get(_NAME), end.captures.get(_GROUP), context)
+    classes = {_job_class(answers.get(_CLASS)) for answers in read or [{}]}
+    job_class, narrowed = classes.pop() if len(classes) == 1 else (None, False)
     return [
         _Found(
-            name=name,
+            name=_key(end.captures.get(_NAME), end.captures.get(_GROUP), context),
             trigger=schedule.kind,
             expression=expression,
             resolution=resolution,
@@ -554,9 +563,18 @@ def _apart(
             narrowed=narrowed,
             tied=False,
         )
-        for expression, resolution, source in expressions
-        for job_class, narrowed in classes
     ]
+
+
+def _varies_at(root: Mapping[str, Any], slot: int, context: _Context) -> str | None:
+    """Where the walk to a cron that differs between paths stopped being one value: the
+    method whose PARAMETER the argument is, where it is one (each caller hands its own), as
+    its bare symbol; else the call `_source` names."""
+    arguments = root["arguments"] or []
+    argument = arguments[slot] if slot < len(arguments) else None
+    if isinstance(argument, Mapping) and argument.get("kind") == "parameter":
+        return bare_descriptor(str(root["caller"]))
+    return _source(root, slot, context)
 
 
 # The resolution words from the strongest claim to the weakest.
@@ -606,14 +624,19 @@ def _pairings(end: ChainEnd, context: _Context) -> list[tuple[ChainEnd | None, P
     position = _position(end.captures.get(_JOB_DETAIL), context)
     if position is not None:
         found.extend(_built_jobs(*position, context))
+        # A bean is the one the container injects, whichever path reached the method that
+        # takes it: the pairing holds on any path.
         found.extend((job, _ANY_PATH) for job in _injected_jobs(*position, context))
+    # A `forJob(name[, group])` key is one constant on EVERY path (`_key`), so the job it
+    # names is paired on any path; a key built by a `job_key` call is paired on the path
+    # the walk took to that call (`_built_keys`).
     key = _key(end.captures.get(_JOB_NAME), end.captures.get(_JOB_GROUP), context)
     position = _position(end.captures.get(_JOB_KEY_FIELD), context)
-    keys = [key] if key is not None else []
+    keys = [(key, _ANY_PATH)] if key is not None else []
     if position is not None:
         keys.extend(_built_keys(*position, context))
-    for named in keys:
-        found.extend((job, _ANY_PATH) for job in (context.jobs_by_key or {}).get(named, ()))
+    for named, path in keys:
+        found.extend((job, path) for job in (context.jobs_by_key or {}).get(named, ()))
     unique = {
         (None if job is None or job.terminal is None else _site_key(job.terminal), path): (
             job,
@@ -706,16 +729,18 @@ def _injected_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> lis
     ]
 
 
-def _built_keys(site: Mapping[str, Any], slot: int, context: _Context) -> list[str]:
-    """The keys a `JobKey` argument is built from: the value walk to the catalog's
-    `job_key` call that made it, and that call's name and group as constants."""
+def _built_keys(site: Mapping[str, Any], slot: int, context: _Context) -> list[tuple[str, Path]]:
+    """The keys a `JobKey` argument is built from, each with the path the walk took to it:
+    the value walk to the catalog's `job_key` call that made it, and that call's name and
+    group as constants on that path. A key handed into a helper by several callers is one
+    key per caller, and the path keeps each with its own caller's other arguments."""
     declared = {
         (owner, builder.method)
         for builder in context.rules.key_builders
         for owner in builder.owners
     }
-    keys: list[str] = []
-    for producer in producers_of(context.index, site, slot, declared):
+    keys: list[tuple[str, Path]] = []
+    for producer, path in producer_paths(context.index, site, slot, declared):
         if producer.caller is None or producer.ordinal is None or producer.identity is None:
             continue
         built = context.index.sites[(producer.caller, producer.ordinal)]
@@ -728,9 +753,10 @@ def _built_keys(site: Mapping[str, Any], slot: int, context: _Context) -> list[s
                 (built, builder.name) if builder.name < arity else None,
                 (built, group) if group is not None and group < arity else None,
                 context,
+                within=path,
             )
             if key is not None:
-                keys.append(key)
+                keys.append((key, path))
     return keys
 
 
@@ -784,10 +810,11 @@ def _key_at(
     name: tuple[Mapping[str, Any], int] | None,
     group: tuple[Mapping[str, Any], int] | None,
     context: _Context,
+    within: Path | None = None,
 ) -> str | None:
-    """`group.name` where the walk reads both as one string each, on every path; a key with
-    no group is in the default group (Quartz's `Key`, CP-55 rows 10-18). NULL for no name,
-    or a key read at runtime."""
+    """`group.name` where the walk reads both as one string each, on every path (within
+    `within`, where given); a key with no group is in the default group (Quartz's `Key`,
+    CP-55 rows 10-18). NULL for no name, or a key read at runtime."""
     if name is None:
         return None
     positions = {_NAME: name}
@@ -795,7 +822,7 @@ def _key_at(
         positions[_GROUP] = group
     names = {
         key
-        for answers in resolve_positions(context.workspace, positions, context.index)
+        for answers in resolve_positions(context.workspace, positions, context.index, within=within)
         if (key := _key_of(answers, context)) is not None
     }
     return names.pop() if len(names) == 1 else None
