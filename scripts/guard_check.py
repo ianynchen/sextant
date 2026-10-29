@@ -672,7 +672,8 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.a-merge-without-a-ROOT-is-never-picked-from": Guard(
-        what="a merge whose candidates share no root is `non_enumerable`; nothing picks a branch",
+        what="a merge whose candidates share no root is never picked from: `non_enumerable`, "
+        "or every literal candidate `narrowed` (ruling 7)",
         why="ruling 1 of the value-resolution design: two literals on two branches are two "
         "possible values and no single one, and publishing the first would be a confident "
         "wrong address at `resolved` — the one fabrication this whole work risks",
@@ -740,6 +741,80 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-BRANCH-between-literals-is-narrowed": Guard(
+        what="a merge with no root whose candidates are all literals answers every candidate, "
+        "each `narrowed`, on the one path",
+        why="ruling 7 (2026-10-29): `c ? A.class : B.class` is one of two values, the set "
+        "complete — D00's `narrowed`. Answering `non_enumerable` hides a closed set the code "
+        "states, and RuoYi's job-class ternary is exactly that set",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="            return self._branched(candidates, method, origin, trail, frames)\n",
+                replace="            return _only(trail, _unresolved(NON_ENUMERABLE))  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "shapes.a-NARROWED-address-publishes-at-narrowed": Guard(
+        what="`url_of_answer` publishes a narrowed literal at `narrowed`, never `resolved`",
+        why="ruling 7: one of several branch literals is sent and which one is not known; "
+        "`resolved` would publish each as THE address",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="        if answer.narrowed and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "shapes.a-NARROWED-channel-is-refused": Guard(
+        what="`channel_of_answer` refuses a narrowed literal as a destination",
+        why="ruling 7: consumers that refuse an inexact answer keep refusing a narrowed one — a "
+        "broker resolves the destination it is GIVEN, and 'one of these' is not one",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find='    if answer.narrowed:\n        return None, None, "unresolved"\n',
+                replace='    if False:  # guard disabled by scripts/guard_check.py\n        return None, None, "unresolved"\n',
+            ),
+        ),
+    ),
+    "single_call.a-NARROWED-slot-makes-the-row-narrowed": Guard(
+        what="a row whose walked verb or path is narrowed says `narrowed`, never `resolved`",
+        why="ruling 7: `exchange(url, c ? GET : POST, …)` lists both verbs; the address alone "
+        "reads `resolved`, and without this each verb's row would claim to be THE call",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="    if narrowed and resolution == str(Resolution.RESOLVED):\n        return peer, path, str(Resolution.NARROWED)\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return peer, path, str(Resolution.NARROWED)\n",
+            ),
+        ),
+    ),
+    "path_prefix.a-NARROWED-prefix-is-refused": Guard(
+        what="a narrowed prefix key is refused, as the `non_enumerable` it replaced was",
+        why="ruling 7: a prefix table maps ONE prefix to its pattern; publishing each branch's "
+        "literal as a resolved prefix would put endpoints under a prefix that may never apply",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/path_prefix.py",
+                find="    if answer.narrowed:\n        return None\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return None\n",
+            ),
+        ),
+    ),
+    "fluent.a-NARROWED-assembled-address-is-never-resolved": Guard(
+        what="`fluent`'s assembled-address reader answers a narrowed literal at `narrowed`",
+        why="ruling 7: the arm hands on a single `resolved` text as the chain's whole address; "
+        "counting branch literals as resolved changes which address a chain publishes",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if answer.narrowed:\n            return None, str(answer.value), str(Resolution.NARROWED)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return None, str(answer.value), str(Resolution.NARROWED)\n",
+            ),
+        ),
+    ),
     "single_call.the-VERB-rides-the-same-binding-as-the-path": Guard(
         what="where the verb argument is a parameter, the row's verb is read from the same "
         "walked binding as its path",
@@ -749,7 +824,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/single_call.py",
-                find="                            else _verb_from_answer(binding.slots.get(method_slot)),\n",
+                find="                            else _verb_from_answer(binding.slots.get(verb_slot)),\n",
                 replace="                            else None,  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

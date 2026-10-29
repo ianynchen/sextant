@@ -107,6 +107,13 @@ ruling 1's multiplicity gives 68 answers — **marked inexact**: "an address der
 value was sent; its exact rendering was not read." A merge with no root is
 `unresolved(non_enumerable)`, exactly as ruled; its candidates stay in the fact for a reader.
 
+> **Amended 2026-10-29 by ruling 7** (`2026-10-28-quartz-design.md` §1, §3c): a merge with no
+> root whose candidates are ALL literals (string, int, bool, or a declaration symbol) answers
+> each candidate, marked `narrowed`, on the one path — D00's word for "one of these runs".
+> Carried through later hops and joins like `inexact`; `url_of_answer` publishes it at
+> `narrowed`, `channel_of_answer` refuses it. A merge with any other candidate stays
+> `non_enumerable`, and a rooted merge is unchanged.
+
 **What inexact does downstream.** An inexact literal fills a concat hole like an exact one
 and makes the join's result an `expression`; `url_of_answer` publishes an inexact address at
 **`partial`** — the word the resolution set already has for "part of this address was read",
@@ -167,7 +174,7 @@ fan-out the data shows to matter arrives as a reason word with the measurement b
 
 | # | decision | ruling |
 |---|---|---|
-| 1 | the extractor reports a merge's candidates (`kind: merge`); a merge with no common root stays `unresolved`, candidates in the fact | **agreed** |
+| 1 | the extractor reports a merge's candidates (`kind: merge`); a merge with no common root stays `unresolved`, candidates in the fact | **agreed** — amended 2026-10-29 by ruling 7: all-literal candidates answer `narrowed` (§3b) |
 | 2 | a merge of `x` and calls-on-`x` resolves to `x`'s answers at `partial`; nothing is evaluated, no method is modelled | **agreed** — "take your partial approach" |
 | 3 | a `substring` transform or identity entry | **dropped** — one parser per string manipulation is not enumerable |
 

@@ -351,6 +351,94 @@ def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pai
     assert rows == [("GET", "<host>/a", "partial"), ("POST", "<host>b", "partial")]
 
 
+def _branched_exchange(url_operand: CallArgument, verb: CallArgument) -> tuple[str, list]:
+    """`exchange("http://h" + operand, verb, null, OrderView.class)` in one method, the url
+    a concat so the engine reads it through the walk."""
+    caller = _MODULE + method_descriptor(_WRAPPER, "branch", "(Z)V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _WRAPPER, construct_kind="class"),
+        _declared_method(_WRAPPER, "branch", "(Z)V"),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner="java/lang/invoke/StringConcatFactory#",
+                name="makeConcatWithConstants",
+                descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=19,
+            arguments=[url_operand],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=RESTTEMPLATE, name="exchange", descriptor=_EXCHANGE_JVM),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=3,
+            result=12,
+            arguments=[
+                CallArgument(kind="concat", source=19, value="http://h{}"),
+                verb,
+                CallArgument(kind="null"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+                CallArgument(kind="array", elements=[]),
+            ],
+        ),
+    ]
+    return caller, facts
+
+
+_GET = CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#GET.")
+_POST = CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#POST.")
+
+
+@pytest.mark.pins("single_call.a-NARROWED-slot-makes-the-row-narrowed")
+def test_a_branch_between_two_verbs_publishes_each_at_narrowed(tmp_path: Path):
+    """Ruling 7 through the engine: `exchange(url, c ? GET : POST, …)`. The walk lists both
+    verbs, each `narrowed`, and the row for each is `narrowed` — one of the two is sent —
+    where the address alone, read whole, would have said `resolved`."""
+    caller, facts = _branched_exchange(
+        CallArgument(kind="string", value="/x"),
+        CallArgument(kind="merge", candidates=[_GET, _POST]),
+    )
+    workspace = _resolve_walked(tmp_path, facts)
+    rows = sorted(
+        (e["method"], e["peer"], e["path"], e["resolution"])
+        for e in workspace.query("endpoints")
+        if e["caller"] == caller
+    )
+    workspace.close()
+    assert rows == [("GET", "h", "/x", "narrowed"), ("POST", "h", "/x", "narrowed")]
+
+
+def test_a_branch_between_two_paths_publishes_each_at_narrowed(tmp_path: Path):
+    """Ruling 7 through `_joined`: `"http://h" + (c ? "/a" : "/b")` fills its hole with each
+    candidate and both templates are `narrowed`."""
+    caller, facts = _branched_exchange(
+        CallArgument(
+            kind="merge",
+            candidates=[
+                CallArgument(kind="string", value="/a"),
+                CallArgument(kind="string", value="/b"),
+            ],
+        ),
+        _GET,
+    )
+    workspace = _resolve_walked(tmp_path, facts)
+    rows = sorted(
+        (e["method"], e["peer"], e["path"], e["resolution"])
+        for e in workspace.query("endpoints")
+        if e["caller"] == caller
+    )
+    workspace.close()
+    assert rows == [("GET", "h", "/a", "narrowed"), ("GET", "h", "/b", "narrowed")]
+
+
 # --- 2. exchange: an enum verb, the HttpEntity hop, and the PTR response --
 
 

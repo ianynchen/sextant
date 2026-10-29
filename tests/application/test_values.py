@@ -26,8 +26,10 @@ import pytest
 from fixture_module import write_fixture_module_fact
 
 from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve import path_prefix
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.engines import fluent
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.shapes.arguments import channel_of_answer, url_of_answer
@@ -167,6 +169,7 @@ _REGISTRY_IMPL = _PKG + "RegistryImpl#"
 _WRAPPER = _PKG + "Wrapper#"
 _FORKED = _PKG + "Forked#"
 _SUBSTRING = ("java/lang/String#", "substring", "(I)Ljava/lang/String;")
+_PICKS_CLASS = "(Z)Ljava/lang/Class;"
 
 
 def _symbol(owner: str, name: str, jvm: str) -> str:
@@ -1415,6 +1418,56 @@ def _facts() -> list[Fact]:
                     candidates=[
                         CallArgument(kind="parameter", value=0),
                         CallArgument(kind="unresolved", source=20),
+                    ],
+                )
+            ],
+        ),
+        # Ruling 7 (spec 2026-10-28 quartz §3c): `Class<?> kind(boolean c) { return c ?
+        # A.class : B.class; }` read by `use()`, and `String mixed(String s) { one(c ? "x" :
+        # s.trim()); }` — a branch whose second candidate is a call, not a literal.
+        _declared(_FORKED, "kind", _PICKS_CLASS),
+        _returns(
+            _FORKED,
+            "kind",
+            _PICKS_CLASS,
+            0,
+            CallArgument(
+                kind="merge",
+                candidates=[
+                    CallArgument(kind="class", symbol=_ORDER_WORKER),
+                    CallArgument(kind="class", symbol=_BILLING_WORKER),
+                ],
+            ),
+        ),
+        _declared(_FORKED, "use", "()V"),
+        _site(_symbol(_FORKED, "use", "()V"), 0, (_FORKED, "kind", _PICKS_CLASS), result=40),
+        _site(
+            _symbol(_FORKED, "use", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=40)],
+        ),
+        _declared(_FORKED, "mixed", _TAKES_STRING),
+        _site(
+            _symbol(_FORKED, "mixed", _TAKES_STRING),
+            0,
+            ("java/lang/String#", "trim", _MAKES_STRING),
+            kind="virtual",
+            receiver_parameter=0,
+            result=50,
+        ),
+        _site(
+            _symbol(_FORKED, "mixed", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="x"),
+                        CallArgument(kind="unresolved", source=50),
                     ],
                 )
             ],
@@ -2828,12 +2881,52 @@ def test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexac
 
 
 @pytest.mark.pins("values.a-merge-without-a-ROOT-is-never-picked-from")
-def test_a_merge_of_two_literals_has_no_root_and_stays_non_enumerable(walked):
-    """Ruling 1, unchanged: two literals on two branches are two possible values and no
-    single one. The candidates are in the fact for a reader; the walk picks neither."""
-    assert _reasons(_bindings(walked, _symbol(_FORKED, "pick", _TAKES_STRING), 0)) == [
-        "non_enumerable"
+@pytest.mark.pins("values.a-BRANCH-between-literals-is-narrowed")
+def test_a_merge_of_two_literals_has_no_root_and_picks_neither(walked):
+    """Ruling 1, held: two literals on two branches are two possible values and no single
+    one, so the walk picks neither. Re-pinned by ruling 7 (2026-10-29): it now LISTS both,
+    each `narrowed` — one of these runs, which one is not known — where it answered
+    `non_enumerable` with the candidates left in the fact."""
+    bindings = _bindings(walked, _symbol(_FORKED, "pick", _TAKES_STRING), 0)
+    assert sorted((b.slots[0].value, b.slots[0].narrowed) for b in bindings) == [
+        ("/a", True),
+        ("/b", True),
     ]
+
+
+@pytest.mark.pins("values.a-BRANCH-between-literals-is-narrowed")
+def test_a_branch_between_two_class_literals_is_narrowed(walked):
+    """Ruling 7: `return c ? A.class : B.class` answers both symbols, each `narrowed`, on
+    the one path through `kind`'s return — D00's word for "one of these runs", the same
+    word `dispatch.py` uses for several bodies. Neither is exact and neither is dropped."""
+    bindings = _bindings(walked, _symbol(_FORKED, "use", "()V"), 1)
+    answers = sorted(
+        (b.slots[0].kind, b.slots[0].literal_kind, b.slots[0].value, b.slots[0].narrowed)
+        for b in bindings
+    )
+    assert answers == [
+        ("literal", "symbol", _BILLING_WORKER, True),
+        ("literal", "symbol", _ORDER_WORKER, True),
+    ]
+    assert len({b.path for b in bindings}) == 1
+
+
+def test_a_branch_with_a_non_literal_stays_non_enumerable(walked):
+    """Ruling 7 is about literals only: `c ? "x" : s.trim()` has a call on one branch and
+    no root (`"x"` is not what `trim` was called on), so it stays ONE `non_enumerable`."""
+    bindings = _bindings(walked, _symbol(_FORKED, "mixed", _TAKES_STRING), 1)
+    assert [(b.slots[0].kind, b.slots[0].reason) for b in bindings] == [
+        ("unresolved", "non_enumerable")
+    ]
+
+
+def test_a_shared_root_merge_is_still_inexact(walked):
+    """`x` or `f(x)` is unchanged by ruling 7: the root, through every caller, `inexact`
+    and never `narrowed` — the branch is one value possibly re-rendered, not several."""
+    bindings = _bindings(walked, _symbol(_WRAPPER, "send", _TAKES_STRING), 1)
+    assert sorted(
+        (str(b.slots[0].value), b.slots[0].inexact, b.slots[0].narrowed) for b in bindings
+    ) == [("/a", True, False), ("b", True, False)]
 
 
 def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
@@ -2847,6 +2940,7 @@ def test_a_merge_with_a_call_that_is_not_on_the_root_has_no_root(walked):
 
 _INEXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string", inexact=True)
 _EXACT = Answer(kind="literal", value="/billing/ledger", literal_kind="string")
+_NARROWED = Answer(kind="literal", value="/billing/ledger", literal_kind="string", narrowed=True)
 
 
 @pytest.mark.pins("shapes.an-INEXACT-address-publishes-at-partial")
@@ -2864,3 +2958,34 @@ def test_an_inexact_channel_is_refused():
     it is GIVEN and a name some call may have re-rendered is not one."""
     assert channel_of_answer(_INEXACT) == (None, None, "unresolved")
     assert channel_of_answer(_EXACT) == (None, "/billing/ledger", "resolved")
+
+
+@pytest.mark.pins("shapes.a-NARROWED-address-publishes-at-narrowed")
+def test_a_narrowed_url_is_published_at_narrowed():
+    """Ruling 7 downstream: a url read off one branch of several literals is published at
+    `narrowed` — the candidate set is complete, which one is sent is not known — never at
+    `resolved`."""
+    assert url_of_answer(_NARROWED) == (None, "/billing/ledger", "narrowed")
+
+
+@pytest.mark.pins("shapes.a-NARROWED-channel-is-refused")
+def test_a_narrowed_channel_is_refused():
+    """A channel reader refuses a narrowed literal as it refuses an inexact one: a broker
+    resolves the destination it is GIVEN, and "one of these" is not one."""
+    assert channel_of_answer(_NARROWED) == (None, None, "unresolved")
+
+
+@pytest.mark.pins("path_prefix.a-NARROWED-prefix-is-refused")
+def test_a_narrowed_path_prefix_is_refused():
+    """A prefix table maps ONE prefix to a pattern; "one of these" is not one, so a narrowed
+    key is refused as the `non_enumerable` it replaced was (ruling 7)."""
+    assert path_prefix._text(_EXACT) == "/billing/ledger"
+    assert path_prefix._text(_NARROWED) is None
+
+
+@pytest.mark.pins("fluent.a-NARROWED-assembled-address-is-never-resolved")
+def test_a_narrowed_assembled_address_is_never_resolved():
+    """`fluent` hands on a single `resolved` text as the chain's whole address; a narrowed
+    one is a branch of several and says `narrowed` (ruling 7)."""
+    assert fluent._assembled_text(_EXACT) == (None, "/billing/ledger", "resolved")
+    assert fluent._assembled_text(_NARROWED) == (None, "/billing/ledger", "narrowed")

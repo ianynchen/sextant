@@ -436,6 +436,11 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
         # — and `resolved` would claim a rendering nobody checked.
         if answer.inexact and resolution == str(Resolution.RESOLVED):
             resolution = str(Resolution.PARTIAL)
+        # **A NARROWED literal is one of several addresses, the set complete** (ruling 7): a
+        # branch between literals, and which one is sent is not known. `narrowed` is D00
+        # §4's word for exactly that; `resolved` would claim this one is THE address.
+        if answer.narrowed and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.NARROWED)
         return peer, path, resolution
     if answer.kind == EXPRESSION:
         return url_of({"kind": EXPRESSION, "value": str(answer.value)})
@@ -617,6 +622,10 @@ def channel_of_answer(answer: "Answer | None") -> tuple[None, str | None, str]:
     # merged values, §3b): a broker resolves a destination it is GIVEN, and a topic name
     # some call may have re-rendered is not one.
     if answer.inexact:
+        return None, None, "unresolved"
+    # A NARROWED literal is refused by the same clause (ruling 7): "one of these topics" is
+    # not a destination a broker is given.
+    if answer.narrowed:
         return None, None, "unresolved"
     return None, str(answer.value), "resolved"
 

@@ -308,6 +308,13 @@ class Answer:
     # inexact address at `partial`, `channel_of_answer` refuses one, and `_joined` makes a
     # template filled from one an `expression`. Never set on an exact answer.
     inexact: bool = False
+    # **"One of these runs; which one is not known"** (ruling 7, spec 2026-10-28 quartz §3c) —
+    # D00's `narrowed`, the word `dispatch.py` uses for several bodies. Set only by `_merged`,
+    # on each candidate of a merge with no root whose candidates are ALL literals, and
+    # carried through every hop after, like `inexact`. The candidates are the complete set,
+    # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
+    # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
+    narrowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1137,22 +1144,59 @@ class _Walk:
         caller, ruling 1's multiplicity — and every answer is marked `inexact`, which
         `url_of_answer` publishes at `partial` and `channel_of_answer` refuses.
 
-        **A merge with no root is `non_enumerable`**: two literals on two branches, two
-        unrelated calls. Picking one would be a fact about code that may never run — the
-        Phase 2G ruling, unchanged; the candidates stay in the fact for a reader.
+        **A merge with no root whose candidates are ALL literals is `narrowed`** (ruling 7,
+        2026-10-29, amending the 2026-10-21 design): `c ? A.class : B.class`, `c ? "x" :
+        "y"`. One answer per candidate, each the literal the code states, marked `narrowed`,
+        on this same path — the candidates are the complete set and no one of them is THE
+        value, which is D00's `narrowed`. Picking one would still be a fact about code that
+        may never run (the Phase 2G ruling holds); listing them all is not a pick.
+
+        **Any other merge with no root is `non_enumerable`**: a literal beside a call, two
+        unrelated calls. A literal here means a candidate whose grammar kind is a literal or
+        a declaration reference AND which answers a `literal` on the spot; a candidate that
+        answers anything else — an `instance` whose identified construction is not a
+        literal, a `class` with no symbol, a value reached by crossing out of this method —
+        leaves the merge `non_enumerable` as it was.
         """
         candidates = argument.get("candidates")
         if not isinstance(candidates, list) or not candidates:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         root = self._root_of(candidates, method)
         if root is None:
-            return _only(trail, _unresolved(NON_ENUMERABLE))
+            return self._branched(candidates, method, origin, trail, frames)
         return tuple(
             (
                 crossed,
                 replace(answer, inexact=True) if answer.kind in (LITERAL, EXPRESSION) else answer,
             )
             for crossed, answer in self._entry(root, method, origin, trail, frames)
+        )
+
+    def _branched(
+        self,
+        candidates: "list[Mapping[str, Any]]",
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """A merge with no root: every candidate `narrowed` where all are literals, else ONE
+        `non_enumerable` (ruling 7; `_merged` states the rule)."""
+        if not all(
+            str(candidate.get("kind")) in _LITERAL_KINDS
+            or str(candidate.get("kind")) in _DECLARATION_KINDS
+            for candidate in candidates
+        ):
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        reached = [
+            found
+            for candidate in candidates
+            for found in self._entry(candidate, method, origin, trail, frames)
+        ]
+        if any(answer.kind != LITERAL or crossed != trail for crossed, answer in reached):
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        return tuple(
+            dict.fromkeys((trail, replace(answer, narrowed=True)) for _, answer in reached)
         )
 
     def _root_of(
@@ -1362,7 +1406,7 @@ class _Walk:
         # the hole itself where it reached none** (spec 2026-10-18 §3, §4). The second half
         # is what makes a partly-known address possible — an unresolvable hole no longer
         # discards the holes beside it that ARE known.
-        per_hole: list[tuple[tuple[_Trail, str | None, str, bool], ...]] = []
+        per_hole: list[tuple[tuple[_Trail, str | None, str, bool, bool], ...]] = []
         # **A hole nobody filled is NAMED after the value that fills it at runtime**, where
         # the facts name that value (ruled by the user 2026-10-18, one position over from
         # `<host>`). `"/owners/" + ownerId + "/pets"` is the most ordinary outbound address
@@ -1390,13 +1434,15 @@ class _Walk:
             # An INEXACT literal fills its hole like an exact one — the text is the value the
             # code states, read through a merge whose root it is — and taints the result
             # below: a template filled from one is never `literal`, because part of what
-            # was sent (what the call on the root did to it) was not read.
+            # was sent (what the call on the root did to it) was not read. A NARROWED literal
+            # fills its hole the same way and marks the result `narrowed` (ruling 7): one
+            # template per candidate, of which one is sent.
             settled = tuple(
-                (crossed, str(answer.value), answer.yields, answer.inexact)
+                (crossed, str(answer.value), answer.yields, answer.inexact, answer.narrowed)
                 for crossed, answer in reached
                 if answer.kind == LITERAL and answer.literal_kind == STRING
             )
-            per_hole.append(settled or ((trail, None, _ADDRESS, False),))
+            per_hole.append(settled or ((trail, None, _ADDRESS, False, False),))
         self._holes = tuple(unfilled)
 
         # Nothing anywhere: the caller carries the template unchanged, which is what it
@@ -1408,7 +1454,7 @@ class _Walk:
         # hole takes a name, the answer is strictly better than the fact —
         # `/owners/{ownerId}/pets` against `/owners/{}/pets` — and the caller must be given
         # it even though no hole was FILLED. That is why this is two tests rather than one.
-        filled = any(value is not None for hole in per_hole for _, value, _, _ in hole)
+        filled = any(value is not None for hole in per_hole for _, value, _, _, _ in hole)
         if not filled and all(hole == _HOLE for hole in unfilled):
             return None
 
@@ -1420,7 +1466,7 @@ class _Walk:
             # was never assembled by any single run.
             merged: _Trail = trail
             coherent = True
-            for crossed, _, _, _ in combination:
+            for crossed, _, _, _, _ in combination:
                 joined = _combine(merged, crossed)
                 if joined is None:
                     coherent = False
@@ -1430,12 +1476,13 @@ class _Walk:
                 continue
             text = pieces[0] + "".join(
                 (value if value is not None else hole) + piece
-                for (_, value, _, _), hole, piece in zip(
+                for (_, value, _, _, _), hole, piece in zip(
                     combination, self._holes, pieces[1:], strict=True
                 )
             )
-            whole = all(value is not None for _, value, _, _ in combination)
-            inexact = any(inexact for _, _, _, inexact in combination)
+            whole = all(value is not None for _, value, _, _, _ in combination)
+            inexact = any(inexact for _, _, _, inexact, _ in combination)
+            narrowed = any(narrowed for _, _, _, _, narrowed in combination)
             # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
             # ruling 2). `//customers-service/owners` is RFC 3986 §4.2's scheme-relative
             # reference — a real URI form, not an invention — and the `//` says exactly
@@ -1443,7 +1490,7 @@ class _Walk:
             # second shape for any consumer to learn. Only where the result carries no
             # scheme of its own: `"http://" + host + "/x"` already says where the
             # authority starts and prefixing that would be wrong.
-            if any(kind == _AUTHORITY for _, _, kind, _ in combination) and "://" not in text:
+            if any(kind == _AUTHORITY for _, _, kind, _, _ in combination) and "://" not in text:
                 text = f"//{text}"
             # **`literal` only when EVERY hole was read; otherwise `expression`**, and that
             # is the whole safety of a partial fill (§3). A half-filled template is not a
@@ -1454,9 +1501,15 @@ class _Walk:
             reached_out.append(
                 (
                     merged,
-                    Answer(kind=LITERAL, value=text, literal_kind=STRING, inexact=inexact)
+                    Answer(
+                        kind=LITERAL,
+                        value=text,
+                        literal_kind=STRING,
+                        inexact=inexact,
+                        narrowed=narrowed,
+                    )
                     if whole
-                    else Answer(kind=EXPRESSION, value=text, inexact=inexact),
+                    else Answer(kind=EXPRESSION, value=text, inexact=inexact, narrowed=narrowed),
                 )
             )
         # Deduplicated on (path, answer): several combinations routinely agree, and two

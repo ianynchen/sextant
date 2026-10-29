@@ -756,6 +756,10 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
     if answer is None:
         return None, None, str(Resolution.UNRESOLVED)
     if answer.kind == LITERAL and answer.literal_kind == STRING:
+        # A NARROWED literal is one branch of several (ruling 7) and is never the one
+        # `resolved` address this arm hands on as a `string`.
+        if answer.narrowed:
+            return None, str(answer.value), str(Resolution.NARROWED)
         return None, str(answer.value), str(Resolution.RESOLVED)
     if answer.kind == EXPRESSION:
         return None, str(answer.value), str(Resolution.PARTIAL)

@@ -500,8 +500,11 @@ def _paired(
 
 def _text(answer: Answer | None) -> str | None:
     """The string an answer states, or None for everything else — an unresolved reason, an
-    expression carrying a hole, a number."""
+    expression carrying a hole, a number, or one branch of several literals (`narrowed`,
+    ruling 7: a prefix table holds the prefix, and "one of these" is not one)."""
     if answer is None or answer.kind != LITERAL or answer.literal_kind != STRING:
+        return None
+    if answer.narrowed:
         return None
     value = str(answer.value).strip()
     return value or None

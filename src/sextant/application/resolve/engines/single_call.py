@@ -816,13 +816,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # a destination is an opaque identity kept whole, never a URL to split.
                 read_answer = channel_of_answer if _channel_declared(method) else url_of_answer
                 method_slot = method.get("method_arg")
+                # **Whether either slot the row reads is one of several branches** (ruling 7):
+                # a `narrowed` verb or path makes the row `narrowed`, decided per binding
+                # because `with_authority` below re-derives the resolution from the text.
+                verb_slot: int | None = (
+                    method_slot if verb is None and isinstance(method_slot, int) else None
+                )
                 walked = list(
                     dict.fromkeys(
                         (
                             verb
-                            if verb is not None or not isinstance(method_slot, int)
-                            else _verb_from_answer(binding.slots.get(method_slot)),
+                            if verb_slot is None
+                            else _verb_from_answer(binding.slots.get(verb_slot)),
                             read_answer(binding.slots.get(url_slot)),
+                            _is_narrowed(binding.slots.get(url_slot))
+                            or (
+                                verb_slot is not None and _is_narrowed(binding.slots.get(verb_slot))
+                            ),
                         )
                         for binding in resolve_site(workspace, site, values, ())
                     )
@@ -830,7 +840,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # The walk may never take an answer away. Where it reached nothing the
                 # literal read above stands, which for a `concat` is the addressless row
                 # this engine has always derived.
-                answered = [(row_verb, found) for row_verb, found in walked if found[1] is not None]
+                answered = [
+                    (row_verb, found, narrowed)
+                    for row_verb, found, narrowed in walked
+                    if found[1] is not None
+                ]
                 if answered:
                     # **The PEER is its own question** (`OI-138` cause 3). The walk above is
                     # handed NO identities on purpose, so an address assembled from an object
@@ -841,16 +855,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     walked_pairs = [
                         (
                             row_verb,
-                            with_authority(
-                                found,
-                                url_argument,
-                                str(site["caller"]),
-                                workspace,
-                                values,
-                                catalog.value_model or (),
+                            _narrowed_if(
+                                with_authority(
+                                    found,
+                                    url_argument,
+                                    str(site["caller"]),
+                                    workspace,
+                                    values,
+                                    catalog.value_model or (),
+                                ),
+                                narrowed,
                             ),
                         )
-                        for row_verb, found in answered
+                        for row_verb, found, narrowed in answered
                     ]
                     destinations = [destination for _, destination in walked_pairs]
         response_argument = _arg_at(arguments, method.get("response_arg"))
@@ -2094,6 +2111,23 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
+
+
+def _is_narrowed(answer: Any) -> bool:
+    """Whether a walked slot is one of several literals on a branch (ruling 7)."""
+    return answer is not None and bool(answer.narrowed)
+
+
+def _narrowed_if(
+    address: tuple[str | None, str | None, str], narrowed: bool
+) -> tuple[str | None, str | None, str]:
+    """`address` at `narrowed` where its binding read a branch and it would otherwise say
+    `resolved` (ruling 7): two verbs or two paths of which one runs are not THE row. A
+    weaker word (`partial`, `unresolved`) already says less and stands."""
+    peer, path, resolution = address
+    if narrowed and resolution == str(Resolution.RESOLVED):
+        return peer, path, str(Resolution.NARROWED)
+    return address
 
 
 def _verb_from_answer(answer: Any) -> str | None:
