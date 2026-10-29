@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-231 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-233 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -234,6 +234,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-228 | [SEXTANT-221](https://app.plane.so/portolan/browse/SEXTANT-221/) | the value walk's memo is keyed without calling frames |
 | OI-229 | [SEXTANT-222](https://app.plane.so/portolan/browse/SEXTANT-222/) | Quartz: a trigger chain must reach build() in its own method; a configured cron is read only as the root's direct argument |
 | OI-230 | [SEXTANT-223](https://app.plane.so/portolan/browse/SEXTANT-223/) | the execute-join reads content past a getter view; safe only while built values are immutable |
+| OI-231 | [SEXTANT-224](https://app.plane.so/portolan/browse/SEXTANT-224/) | constant field writes are not tied to the constructor that made them |
+| OI-232 | [SEXTANT-225](https://app.plane.so/portolan/browse/SEXTANT-225/) | Quartz: one job key on two job chains publishes both jobs for one trigger |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
