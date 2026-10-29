@@ -216,6 +216,8 @@ _BINDING = "binding"
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
 _ELEMENT_OF = "element-of"
+# Which candidate of a merge with no root a path took (ruling 7, `_Walk._branched`).
+_BRANCH_OF = "branch-of"
 
 # §2's `identified_by` table, as the walk is handed it: `{owner?, method, arg, arity?,
 # descriptor?, role?}` per producing call, built once by the loader (`yaml_source
@@ -682,6 +684,7 @@ def resolve_site(
     site: Mapping[str, Any],
     index: ValueIndex | None = None,
     identities: "Identities" = (),
+    branches: bool = True,
 ) -> list[Binding]:
     """Every slot of one call site, resolved per path (§1b).
 
@@ -701,6 +704,9 @@ def resolve_site(
     (`Identities` below says what it is and what the walk does with it). Empty is the
     walk as it was before Task 7: a producer nothing names answers with a reason.
 
+    `branches` False answers a branch between literals `non_enumerable` rather than
+    `narrowed` (`_Walk.__init__` says which reader needs that).
+
     Returns one `Binding` per coherent path, in a deterministic order (NFR-1): the first
     slot's paths drive the outer order, and each slot's answers arrive in the edge query's
     own ordering. An empty list means no path answers every slot at once, which is the
@@ -708,7 +714,7 @@ def resolve_site(
     is not a row here.
     """
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold, identities)
+    walk = _Walk(fold, identities, branches=branches)
     site = fold.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     combined: list[tuple[_Trail, dict[int | str, Answer]]] = [((), {})]
     for slot in _slots_of(site):
@@ -897,8 +903,13 @@ class _Walk:
         index: ValueIndex,
         identities: Identities = (),
         declared: AbstractSet[tuple[str, str]] = frozenset(),
+        branches: bool = True,
     ) -> None:
         self._index = index
+        # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
+        # the one reader that can carry a single address and must not lose the one it had
+        # (`fluent`'s assembled url, OI-134). Every other reader takes the default.
+        self._branches = branches
         self._identities = tuple(identities)
         # The producer reader's stop set (`producers_of`). Empty for the value walk, which is
         # what keeps its answers exactly what they were: `_declared_producer` matches nothing.
@@ -1147,8 +1158,8 @@ class _Walk:
         **A merge with no root whose candidates are ALL literals is `narrowed`** (ruling 7,
         2026-10-29, amending the 2026-10-21 design): `c ? A.class : B.class`, `c ? "x" :
         "y"`. One answer per candidate, each the literal the code states, marked `narrowed`,
-        on this same path — the candidates are the complete set and no one of them is THE
-        value, which is D00's `narrowed`. Picking one would still be a fact about code that
+        on this path plus the choice it made — the candidates are the complete set and no
+        one of them is THE value, which is D00's `narrowed`. Picking one would still be a fact about code that
         may never run (the Phase 2G ruling holds); listing them all is not a pick.
 
         **Any other merge with no root is `non_enumerable`**: a literal beside a call, two
@@ -1181,7 +1192,23 @@ class _Walk:
         frames: "_Frames",
     ) -> tuple[_Reached, ...]:
         """A merge with no root: every candidate `narrowed` where all are literals, else ONE
-        `non_enumerable` (ruling 7; `_merged` states the rule)."""
+        `non_enumerable` (ruling 7; `_merged` states the rule).
+
+        **Each candidate is a CHOICE on the path, recorded as a crossing** (fix round 1, M-1).
+        Without it two reads of one branch combine in every pairing: `p = c ? "/a" : "/b";
+        … p + "/x/" + p` minted `/a/x/b`, which no execution builds. The step's context is
+        the branch — the method and its candidate list, since a `merge` carries no value id —
+        so `_combine` keeps one choice per branch on a path: the same branch read twice gives
+        `(/a, /a)` and `(/b, /b)`. Two branches with the SAME candidates in one method share a
+        context and are held to one choice too; that can drop a real pairing and never
+        invents one, which is the direction the walk is allowed to err in. Branches with
+        different candidates are independent, as nothing in the facts says otherwise.
+
+        **Candidates answering ONE value are that value, exactly** — `c ? 1 : 1L` is `1` on
+        every branch, so there is no choice to record and nothing to narrow.
+        """
+        if not self._branches:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
         if not all(
             str(candidate.get("kind")) in _LITERAL_KINDS
             or str(candidate.get("kind")) in _DECLARATION_KINDS
@@ -1189,15 +1216,22 @@ class _Walk:
         ):
             return _only(trail, _unresolved(NON_ENUMERABLE))
         reached = [
-            found
-            for candidate in candidates
-            for found in self._entry(candidate, method, origin, trail, frames)
+            (index, crossed, answer)
+            for index, candidate in enumerate(candidates)
+            for crossed, answer in self._entry(candidate, method, origin, trail, frames)
         ]
-        if any(answer.kind != LITERAL or crossed != trail for crossed, answer in reached):
+        if any(answer.kind != LITERAL or crossed != trail for _, crossed, answer in reached):
             return _only(trail, _unresolved(NON_ENUMERABLE))
-        return tuple(
-            dict.fromkeys((trail, replace(answer, narrowed=True)) for _, answer in reached)
-        )
+        distinct = list(dict.fromkeys(answer for _, _, answer in reached))
+        if len(distinct) == 1:
+            return _only(trail, distinct[0])
+        branch = (_BRANCH_OF, method, json.dumps(list(candidates), sort_keys=True, default=str))
+        chosen: list[_Reached] = []
+        for index, _, answer in reached:
+            merged = _combine(trail, (_Step(branch, f"branch {index}"),))
+            if merged is not None:
+                chosen.append((merged, replace(answer, narrowed=True)))
+        return tuple(dict.fromkeys(chosen))
 
     def _root_of(
         self, candidates: "list[Mapping[str, Any]]", method: str

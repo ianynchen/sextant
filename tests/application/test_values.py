@@ -1472,6 +1472,97 @@ def _facts() -> list[Fact]:
                 )
             ],
         ),
+        # Fix round 1 (M-1): `String p = c ? "/a" : "/b"; one(p + "/x" + p)` — ONE branch
+        # read twice — and `pair(c ? "/a" : "/b", d ? Order.class : Billing.class)`, two
+        # branches with nothing tying them together.
+        _declared(_FORKED, "twice", "()V"),
+        _site(
+            _symbol(_FORKED, "twice", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=60,
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+            ],
+        ),
+        _site(
+            _symbol(_FORKED, "twice", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/x{}", source=60)],
+        ),
+        _declared(_FORKED, "two", "()V"),
+        _site(
+            _symbol(_FORKED, "two", "()V"),
+            0,
+            _PAIR_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="/a"),
+                        CallArgument(kind="string", value="/b"),
+                    ],
+                ),
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="class", symbol=_ORDER_WORKER),
+                        CallArgument(kind="class", symbol=_BILLING_WORKER),
+                    ],
+                ),
+            ],
+        ),
+        # A branch one of whose candidates is a literal KIND the walk cannot read (a class
+        # reference with no symbol), and one whose two candidates are the same value.
+        _declared(_FORKED, "unreadable", "()V"),
+        _site(
+            _symbol(_FORKED, "unreadable", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="string", value="x"),
+                        CallArgument(kind="class"),
+                    ],
+                )
+            ],
+        ),
+        _declared(_FORKED, "same", "()V"),
+        _site(
+            _symbol(_FORKED, "same", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="int", value=1),
+                        CallArgument(kind="long", value=1),
+                    ],
+                )
+            ],
+        ),
     ]
     return facts
 
@@ -2908,7 +2999,61 @@ def test_a_branch_between_two_class_literals_is_narrowed(walked):
         ("literal", "symbol", _BILLING_WORKER, True),
         ("literal", "symbol", _ORDER_WORKER, True),
     ]
-    assert len({b.path for b in bindings}) == 1
+    # One path through `kind`'s return, told apart only by WHICH candidate it took (fix
+    # round 1): the branch is a choice the path records, like a caller or a return.
+    assert sorted(b.path[0] for b in bindings) == ["branch 0", "branch 1"]
+    assert len({b.path[1:] for b in bindings}) == 1
+
+
+@pytest.mark.pins("values.a-BRANCH-is-one-choice-per-path")
+@pytest.mark.pins("values.a-template-filled-from-a-branch-is-NARROWED")
+def test_one_branch_read_twice_is_never_paired_with_itself_crosswise(walked):
+    """M-1 for branches: `p + "/x" + p` with `p = c ? "/a" : "/b"` is `/a/x/a` or
+    `/b/x/b`. `/a/x/b` would pair two choices of ONE branch that no run makes together;
+    the branch is a crossing on the path, so `_combine` refuses it. Each template is
+    `narrowed`: it was filled from a branch, and which one runs is not known."""
+    bindings = _bindings(walked, _symbol(_FORKED, "twice", "()V"), 1)
+    assert sorted((b.slots[0].kind, b.slots[0].value, b.slots[0].narrowed) for b in bindings) == [
+        ("literal", "/a/x/a", True),
+        ("literal", "/b/x/b", True),
+    ]
+
+
+def test_two_independent_branches_on_one_site_pair_every_way(walked):
+    """`pair(c ? "/a" : "/b", d ? Order.class : Billing.class)`: two branches with different
+    candidates, and nothing in the facts says they test the same condition, so all four
+    pairings survive — each slot `narrowed`, never `resolved`. Were they the same branch
+    (the test above), only the two coherent pairings would."""
+    bindings = _bindings(walked, _symbol(_FORKED, "two", "()V"), 0)
+    assert sorted(
+        (b.slots[0].value, b.slots[1].value, b.slots[0].narrowed, b.slots[1].narrowed)
+        for b in bindings
+    ) == [
+        ("/a", _BILLING_WORKER, True, True),
+        ("/a", _ORDER_WORKER, True, True),
+        ("/b", _BILLING_WORKER, True, True),
+        ("/b", _ORDER_WORKER, True, True),
+    ]
+
+
+@pytest.mark.pins("values.a-BRANCH-with-an-unreadable-candidate-stays-non-enumerable")
+def test_a_branch_whose_candidate_reads_no_literal_stays_non_enumerable(walked):
+    """A candidate of a literal KIND that answers no literal — `class` with no symbol, here
+    `not_readable` — leaves the set incomplete, so the merge is ONE `non_enumerable` and
+    never a `narrowed` list carrying an unresolved member."""
+    bindings = _bindings(walked, _symbol(_FORKED, "unreadable", "()V"), 0)
+    assert [(b.slots[0].kind, b.slots[0].reason, b.slots[0].narrowed) for b in bindings] == [
+        ("unresolved", "non_enumerable", False)
+    ]
+
+
+@pytest.mark.pins("values.a-BRANCH-of-one-value-is-that-value-exactly")
+def test_a_branch_whose_candidates_are_one_value_is_that_value_exactly(walked):
+    """`c ? 1 : 1L` is `1` on every branch: one answer, exact, with no choice on its path."""
+    bindings = _bindings(walked, _symbol(_FORKED, "same", "()V"), 0)
+    assert [(b.slots[0].kind, b.slots[0].value, b.slots[0].narrowed, b.path) for b in bindings] == [
+        ("literal", 1, False, ())
+    ]
 
 
 def test_a_branch_with_a_non_literal_stays_non_enumerable(walked):

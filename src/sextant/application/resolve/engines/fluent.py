@@ -739,6 +739,29 @@ def _declares_a_hop(matches: dict[str, Any]) -> bool:
     return walk(matches)
 
 
+def _one_assembled(
+    assembled: "Sequence[tuple[str | None, str | None, str]]",
+) -> dict[str, Any] | None:
+    """The one address the assembled answers agree on, as an argument `url_of` reads — or
+    None where there is none or several."""
+    whole = {
+        literal for _, literal, resolution in assembled if resolution == "resolved" and literal
+    }
+    if len(whole) == 1:
+        return {"kind": "string", "value": whole.pop()}
+    # A partly-known address, published as the EXPRESSION kind `url_of` reads: the
+    # text is the template with its holes, and `url_of` decides peer and path from
+    # it exactly as it does for `single_call`. Only where there is one — several
+    # answers are several rows, which this engine's one-argument return cannot carry
+    # (`OI-134`'s shape), so it leaves the capture as it was rather than choosing.
+    partly = {
+        literal for _, literal, resolution in assembled if resolution == "partial" and literal
+    }
+    if not whole and len(partly) == 1:
+        return {"kind": EXPRESSION, "value": partly.pop()}
+    return None
+
+
 def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, str]:
     """One walk answer for an assembled ADDRESS, as `(None, text, resolution)` where the text
     is the template VERBATIM.
@@ -755,11 +778,13 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
     """
     if answer is None:
         return None, None, str(Resolution.UNRESOLVED)
+    # A NARROWED answer is one branch of several (ruling 7) and is never the one address
+    # this arm hands on — whole or partly read, so it is told apart from both here.
+    if answer.narrowed and (
+        answer.kind == EXPRESSION or (answer.kind == LITERAL and answer.literal_kind == STRING)
+    ):
+        return None, str(answer.value), str(Resolution.NARROWED)
     if answer.kind == LITERAL and answer.literal_kind == STRING:
-        # A NARROWED literal is one branch of several (ruling 7) and is never the one
-        # `resolved` address this arm hands on as a `string`.
-        if answer.narrowed:
-            return None, str(answer.value), str(Resolution.NARROWED)
         return None, str(answer.value), str(Resolution.RESOLVED)
     if answer.kind == EXPRESSION:
         return None, str(answer.value), str(Resolution.PARTIAL)
@@ -940,25 +965,20 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
         # shared walk was built to end (spec 2026-09-22 §0a).
         assembled = _walked_with(argument, context, (), reader=_assembled_text)
         if assembled is not None:
-            whole = {
-                literal
-                for _, literal, resolution in assembled
-                if resolution == "resolved" and literal
-            }
-            if len(whole) == 1:
-                return {"kind": "string", "value": whole.pop()}
-            # A partly-known address, published as the EXPRESSION kind `url_of` reads: the
-            # text is the template with its holes, and `url_of` decides peer and path from
-            # it exactly as it does for `single_call`. Only where there is one — several
-            # answers are several rows, which this engine's one-argument return cannot carry
-            # (`OI-134`'s shape), so it leaves the capture as it was rather than choosing.
-            partly = {
-                literal
-                for _, literal, resolution in assembled
-                if resolution == "partial" and literal
-            }
-            if not whole and len(partly) == 1:
-                return {"kind": EXPRESSION, "value": partly.pop()}
+            address = _one_assembled(assembled)
+            # **Several branch literals are several rows, and this engine carries ONE**
+            # (`OI-134`). The walk may never take an answer away: before ruling 7 a branch
+            # between literals was an unfilled hole, and the template it left — `/x{}` at
+            # `partial` — is what this arm published. Read that again rather than nothing.
+            if address is None and any(
+                resolution == str(Resolution.NARROWED) for _, _, resolution in assembled
+            ):
+                unbranched = _walked_with(
+                    argument, context, (), reader=_assembled_text, branches=False
+                )
+                address = None if unbranched is None else _one_assembled(unbranched)
+            if address is not None:
+                return address
         return argument
     if not forms:
         return argument

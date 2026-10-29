@@ -22,10 +22,15 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_call_engines import CATALOGS_DIR, _resolve_fluent
+from test_call_engines import CATALOGS_DIR, FLUENT_CAPABILITIES, _document, _resolve_fluent
 
+from sextant.application.resolve.call_edges import record_call_edges
+from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.return_flow import record_return_flows
+from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 BUILDER = "io/ktor/client/request/HttpRequestBuilder#"
 REQUEST_KT = "io/ktor/client/request/HttpRequestKt#"
@@ -333,3 +338,62 @@ def test_the_routing_and_client_catalogs_spell_one_verb_field_table():
     assert routing and client, tables
     assert all(table == client[0] for table in [*routing, *client]), tables
     assert len(client[0]) == 9, client[0]
+
+
+def _branched_address(caller: str) -> list[CallSiteFact]:
+    """`client.get("https://orders.example.com/v1" + (if (c) "/a" else "/b"))`: the url is a
+    concat (value 90) whose one operand is a branch between two literals."""
+    sites = _inlined_call(caller, "unused", verbs=(None, "Get"))
+    url = next(site for site in sites if site.target.name == "url")
+    url.arguments[1] = CallArgument(
+        kind="concat", source=90, value="https://orders.example.com/v1{}"
+    )
+    branch = CallArgument(
+        kind="merge",
+        candidates=[
+            CallArgument(kind="string", value="/a"),
+            CallArgument(kind="string", value="/b"),
+        ],
+    )
+    return [
+        *sites,
+        _site(
+            caller,
+            "java/lang/invoke/StringConcatFactory#",
+            "makeConcatWithConstants",
+            "(Ljava/lang/String;)Ljava/lang/String;",
+            len(sites),
+            None,
+            [branch],
+            invoke_kind="static",
+            result=90,
+        ),
+    ]
+
+
+@pytest.mark.pins("fluent.a-BRANCHED-assembled-address-keeps-its-unfilled-template")
+def test_a_branched_assembled_address_keeps_the_template_it_published_before(tmp_path: Path):
+    """Ruling 7 lists `/v1/a` and `/v1/b`, each `narrowed`, and this engine carries ONE
+    address per chain (`OI-134`). The walk may never take an answer away, so the chain keeps
+    what it published before the branch was listed: the template with that hole unfilled,
+    at `partial`."""
+    caller = _caller("branched")
+    workspace = _resolve_walked_fluent(tmp_path, _branched_address(caller))
+    rows = sorted(
+        (r["method"], r["peer"], r["path"], r["resolution"])
+        for r in workspace.query("endpoints")
+        if r["caller"] == caller
+    )
+    workspace.close()
+    assert rows == [("GET", "orders.example.com", "/v1{}", "partial")]
+
+
+def _resolve_walked_fluent(tmp_path: Path, facts: list[CallSiteFact]):
+    """`_resolve_fluent` with the derived tables the walk's edges read built first."""
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    assert derive_endpoints(workspace, [_ktor_client()], capabilities=FLUENT_CAPABILITIES) == []
+    return workspace

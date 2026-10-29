@@ -1804,6 +1804,7 @@ def _walked_with(
     context: _Reads,
     identities: Sequence[dict[str, Any]],
     reader: "Callable[[Answer | None], tuple[str | None, str | None, str]]" = channel_of_answer,
+    branches: bool = True,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """`_walked_channels`' walk, with the identity list decided by the caller.
 
@@ -1820,6 +1821,9 @@ def _walked_with(
     reaches over plain value edges and can never conclude "this producer MEANS the
     destination". That is why the assembled-address caller may ask without declaring a
     hop.
+
+    `branches` is `resolve_site`'s: False reads a branch between literals as the walk did
+    before ruling 7.
     """
     if context.values is None or context.workspace is None:
         return None
@@ -1833,7 +1837,9 @@ def _walked_with(
     walked = list(
         dict.fromkeys(
             reader(binding.slots.get(slot))
-            for binding in resolve_site(context.workspace, site, context.values, identities)
+            for binding in resolve_site(
+                context.workspace, site, context.values, identities, branches
+            )
         )
     )
     return walked or [(None, None, "unresolved")]

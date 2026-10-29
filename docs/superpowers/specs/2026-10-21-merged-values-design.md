@@ -109,7 +109,9 @@ value was sent; its exact rendering was not read." A merge with no root is
 
 > **Amended 2026-10-29 by ruling 7** (`2026-10-28-quartz-design.md` §1, §3c): a merge with no
 > root whose candidates are ALL literals (string, int, bool, or a declaration symbol) answers
-> each candidate, marked `narrowed`, on the one path — D00's word for "one of these runs".
+> each candidate, marked `narrowed`, on the path plus a crossing naming which candidate it took
+> (so one branch read twice pairs only with itself) — D00's word for "one of these runs".
+> Candidates that answer one value answer it exactly.
 > Carried through later hops and joins like `inexact`; `url_of_answer` publishes it at
 > `narrowed`, `channel_of_answer` refuses it. A merge with any other candidate stays
 > `non_enumerable`, and a rooted merge is unchanged.

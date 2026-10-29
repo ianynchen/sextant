@@ -743,7 +743,7 @@ GUARDS: dict[str, Guard] = {
     ),
     "values.a-BRANCH-between-literals-is-narrowed": Guard(
         what="a merge with no root whose candidates are all literals answers every candidate, "
-        "each `narrowed`, on the one path",
+        "each `narrowed`, one path per branch choice",
         why="ruling 7 (2026-10-29): `c ? A.class : B.class` is one of two values, the set "
         "complete — D00's `narrowed`. Answering `non_enumerable` hides a closed set the code "
         "states, and RuoYi's job-class ternary is exactly that set",
@@ -752,6 +752,70 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/values.py",
                 find="            return self._branched(candidates, method, origin, trail, frames)\n",
                 replace="            return _only(trail, _unresolved(NON_ENUMERABLE))  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-is-one-choice-per-path": Guard(
+        what="each candidate of a branch is a crossing on the path, so one branch read twice "
+        "pairs only with itself",
+        why='fix round 1 of ruling 7 (M-1): `p + "/x" + p` with `p = c ? "/a" : "/b"` '
+        "minted `/a/x/b`, which no execution builds; the path is the unit of resolution",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find='            merged = _combine(trail, (_Step(branch, f"branch {index}"),))\n',
+                replace="            merged = trail  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-template-filled-from-a-branch-is-NARROWED": Guard(
+        what="`_joined` marks a template filled from a narrowed literal `narrowed`",
+        why="ruling 7: a template built from one branch of several is one of several "
+        "templates; unmarked it is a whole literal the url reader publishes at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="            narrowed = any(narrowed for _, _, _, _, narrowed in combination)\n",
+                replace="            narrowed = False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-with-an-unreadable-candidate-stays-non-enumerable": Guard(
+        what="a branch is `narrowed` only where every candidate answers a literal on this "
+        "path; otherwise it is ONE `non_enumerable`",
+        why="ruling 7 lists a COMPLETE set; a candidate that reads no literal, or a value "
+        "reached by crossing out of the method, leaves it incomplete, and a `narrowed` list "
+        "carrying an unresolved member claims a set nobody read",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if any(answer.kind != LITERAL or crossed != trail for _, crossed, answer in reached):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-BRANCH-of-one-value-is-that-value-exactly": Guard(
+        what="a branch whose candidates answer one value answers it exactly, unmarked",
+        why="`c ? 1 : 1L` is `1` on every branch; `narrowed` would call a known value one of "
+        "several",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if len(distinct) == 1:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-BRANCHED-assembled-address-keeps-its-unfilled-template": Guard(
+        what="a fluent chain whose assembled url answers only branch literals keeps the "
+        "template it published before ruling 7, its hole unfilled, at `partial`",
+        why="the engine carries ONE address per chain (OI-134) and the walk may never take an "
+        "answer away: without this the chain fell from `partial` to `unresolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if address is None and any(\n",
+                replace="            if False and any(  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -810,8 +874,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        if answer.narrowed:\n            return None, str(answer.value), str(Resolution.NARROWED)\n",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return None, str(answer.value), str(Resolution.NARROWED)\n",
+                find="    if answer.narrowed and (\n",
+                replace="    if False and (  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
