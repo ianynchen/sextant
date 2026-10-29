@@ -796,7 +796,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**92 of 107 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**93 of 108 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -859,6 +859,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
 | `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
+| `quartz` | `org.quartz-scheduler:quartz` | 2.5.1 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `smallrye-reactive-messaging` | `io.quarkus:quarkus-messaging` | 3.17.5, 3.40.1.1 |
 |  | `io.quarkus:quarkus-messaging-deployment` | 3.17.5, 3.40.1.1 |

@@ -243,7 +243,8 @@ def test_catalogs_run_counts_per_kind(analyzed_workspace_copy: Path):
     catalog-fed, so they never appear; a kind nothing ran for does not appear either."""
     metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
     run = metadata["catalogs_run"]
-    assert run["schedule"] == 1
+    # `spring-scheduling` and `quartz` (2026-10-29): neither is dependency-gated, so both run.
+    assert run["schedule"] == 2
     assert run["endpoint"] > 5
     assert "module" not in run and "boundary-property" not in run
     assert all(count > 0 for count in run.values())

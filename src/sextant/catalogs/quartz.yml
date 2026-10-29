@@ -1,0 +1,73 @@
+id: quartz
+displayName: Quartz scheduler (triggers built in code)
+style: scheduled_chain
+
+# NO `protocol` AND NO `direction`, on the same terms as `spring-scheduling.yml`: this
+# catalog derives into `scheduled_work`, and work started on a clock speaks no wire.
+# `resolve/endpoints.py` refuses either key on a catalog that mints no endpoint rows.
+
+detect:
+  coordinates: ["org.quartz-scheduler:quartz"]
+
+# The trigger chain is read off call sites, linked `result -> receiver` (D00 §5), with
+# its constant arguments: the `fluent` style's own three.
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # ONE ENTRY PER `newTrigger()` ROOT (spec 2026-10-28-quartz-design §3a, ruling 3), walked
+  # by the chain walk every builder catalog uses (`shapes/chains.py`): `roots`, `steps` and
+  # `terminal` are that walk's own words. `TriggerBuilder` has exactly one static factory
+  # (CP-55 row 2). A trigger rebuilt from an existing one — `trigger.getTriggerBuilder()`,
+  # an instance call for `rescheduleJob` — is the same trigger with a new schedule, and is
+  # not a root here on purpose.
+  roots:
+    - { owner: org.quartz.TriggerBuilder, method: newTrigger }
+  steps:
+    # The trigger's key (ruling 5). `withIdentity(name)`, `withIdentity(name, group)` and
+    # `withIdentity(TriggerKey)` all match; the third captures an object, which is no
+    # constant, so its name stays NULL. Owner-gated: `JobBuilder` has a `withIdentity` too.
+    - owner: org.quartz.TriggerBuilder
+      method: withIdentity
+      captures: { name: arg0, group: arg1 }
+    # The schedule builder is the ARGUMENT of `withSchedule`, a nested chain of its own
+    # (spec §2b), followed from here by the value walk.
+    - owner: org.quartz.TriggerBuilder
+      method: withSchedule
+      captures: { schedule: arg0 }
+  terminal: [build]
+
+  # The group a key written without one lands in: `Key.DEFAULT_GROUP`, declared once on
+  # `org.quartz.utils.Key` and substituted by `Key`'s constructor for a null group
+  # (CP-55 rows 10-18).
+  default_group: DEFAULT
+
+  # The schedule KIND, by the schedule builder's own type (spec §3b): the owner of the
+  # builder chain's root, or — where the walk ends before a root — the type the call that
+  # produced the builder is declared to return. The four builders and their factories are
+  # CP-55 rows 3-6.
+  kinds:
+    org.quartz.CronScheduleBuilder: cron
+    org.quartz.SimpleScheduleBuilder: simple
+    org.quartz.CalendarIntervalScheduleBuilder: calendarInterval
+    org.quartz.DailyTimeIntervalScheduleBuilder: dailyTimeInterval
+
+  # The one root whose expression is its string argument, verbatim, as `@Scheduled(cron =
+  # …)` is recorded. By descriptor (CP-55 row 3): `cronSchedule(CronExpression)` takes an
+  # object, and is written as its chain like every other root.
+  literal_expression:
+    owner: org.quartz.CronScheduleBuilder
+    method: cronSchedule
+    descriptor: "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;"
+    arg: 0
+
+  # A cron handed in as a Spring `@Value` field or parameter reads as its `${…}` (the field
+  # ladder, `shapes/arguments.py`), the way every outbound catalog reads a configured address.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+
+measured:
+  - { artifact: org.quartz-scheduler:quartz, versions: ["2.5.1"],
+      identity: reported, by: scripts/probes/cp55_quartz_shapes.md }

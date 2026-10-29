@@ -4714,9 +4714,10 @@ def test_the_report_counts_the_catalogs_that_ran_per_kind_and_names_what_each_sk
 ):
     """The observability map (spec 2026-10-22 §4b) is a function of two recorded facts: how
     many catalogs that RAN feed each kind, and what each SKIPPED catalog would have fed. The
-    scheduling catalog is the one that feeds `schedule`, and it runs on the fixture."""
+    scheduling catalog and the Quartz catalog feed `schedule`, and both run on the fixture:
+    neither is dependency-gated, so Quartz runs and finds no trigger there (2026-10-29)."""
     _, report = resolved_fixture
-    assert report.catalogs_run["schedule"] == 1
+    assert report.catalogs_run["schedule"] == 2
     assert report.catalogs_run["endpoint"] > 5
     # Not catalog-fed kinds are never counted, and a count is never zero.
     assert set(report.catalogs_run) <= {

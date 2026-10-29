@@ -90,6 +90,7 @@ The keys, by the engine that reads them:
 | `interface_implementation` | `matches.interface`, `registration.owner` |
 | `injected_client` | `field_annotation` |
 | `scheduled_work` | `annotation`, `container` |
+| `scheduled_chain` | `matches.roots[].owner`, `matches.steps[].owner` (the chain walk's), `kinds`' keys, `literal_expression.owner` |
 | `error_advice` | `handler_annotation`, `status_annotation` |
 | `supertype_dispatch` | `matches.supertype` |
 | `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
@@ -692,10 +693,11 @@ A style is a shape of evidence, not a framework. New frameworks reuse a style; o
 genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
-`error_advice`, Task 8, are the fourteenth and fifteenth.)
+`error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
+design of 2026-10-28, is the sixteenth.)
 
-**Fifteen sections follow, and they are NOT fifteen engines** — §5.3 requires this document
-to say which is which rather than let a reader count headings. **Thirteen have an engine**,
+**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this document
+to say which is which rather than let a reader count headings. **Fourteen have an engine**,
 each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
 catalog's `style:` is resolved against and the only place the answer lives. The other two
 are:
@@ -711,7 +713,7 @@ are:
   reasoning; nothing in it describes behaviour that runs today. Its section says so again
   at the top, in the `default_produces` model §5.3 names.
 
-The count above therefore reads: thirteen shipped engine styles, one resolve pass, one
+The count above therefore reads: fourteen shipped engine styles, one resolve pass, one
 design. *This heading read "The thirteen styles" and the two non-wire engines had no section
 at all until the 2O documentation sweep; the number counted headings, which is exactly the
 substitution §5.3 forbids.*
@@ -4105,6 +4107,74 @@ and [D01](D01-graph-schema.md) §5 documents a `trace_of` walk. Neither exists a
 half of a live mechanism. **The omission becomes wrong the moment a `root_kind` producer
 ships**: a scheduled method IS a root at that point, and these rows have to be re-examined
 as roots rather than left as a table nobody traverses.
+
+### `scheduled_chain`
+
+The sixteenth style, and the **second shape of evidence for `scheduled_work`** (Quartz design
+2026-10-28 §3d): a schedule BUILT by a chain of calls rather than declared by an annotation.
+Non-wire on the same terms as `scheduled_work` — no `protocol`, no `direction`, its own
+table — and, like it, handed every catalog of the resolve so the config model decides what a
+placeholder is (`endpoints._bound`).
+
+```yaml
+# quartz.yml
+style: scheduled_chain
+detect:
+  coordinates: ["org.quartz-scheduler:quartz"]
+requires: [call_site, string_constants, chain_reconstruction]
+matches:
+  roots:                          # the chain walk's own words (`fluent`, below)
+    - { owner: org.quartz.TriggerBuilder, method: newTrigger }
+  steps:
+    - owner: org.quartz.TriggerBuilder
+      method: withIdentity
+      captures: { name: arg0, group: arg1 }
+    - owner: org.quartz.TriggerBuilder
+      method: withSchedule
+      captures: { schedule: arg0 }
+  terminal: [build]
+  default_group: DEFAULT          # the group of a key written without one
+  kinds:                          # schedule builder type -> the framework's kind word
+    org.quartz.CronScheduleBuilder: cron
+    org.quartz.SimpleScheduleBuilder: simple
+  literal_expression:             # the one root whose expression is its string argument
+    { owner: org.quartz.CronScheduleBuilder, method: cronSchedule,
+      descriptor: "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;", arg: 0 }
+  field_sources: { … }            # the field ladder, as every outbound catalog spells it
+```
+
+**The chain is the `fluent` style's walk, unchanged** (`shapes/chains.py`): `roots`, `steps`
+(owner-gated, with `argN` captures), `terminal`, folded last-wins. This style reads three
+capture fields off each chain end — `name`, `group` and `schedule` — and every chain end is
+one row: two triggers built alike are two rows, and nothing collapses them. A chain that
+reaches no terminal derives nothing.
+
+**The schedule is followed with the value walk** (`values.producers_of`) from the `schedule`
+argument to the call that built it — any call on a `kinds` type — across returns and
+parameters, then back along that call's own `receiver` links, within its method, to the
+builder chain's root. Then:
+
+- **`trigger`** is `kinds[root owner]`. Where the walk ends before a root — a helper whose
+  body branches between calls on its parameter, a factory in a jar — it is `kinds[the type
+  the producing call is declared to return]`, read off that call's descriptor: a fact the
+  compiler wrote, not a model of the call's body. Otherwise NULL, and a chain with no kind
+  is not derived.
+- **`expression`**, for a `literal_expression` root (matched by owner, method and, where
+  declared, parameter types), is its argument as the field ladder or the value walk reads
+  it: a string literal verbatim (`resolved`, or `narrowed` for one of a branch's
+  candidates), a `${…}` placeholder verbatim (`unresolved`). Steps after that root are not
+  part of it. For every other root it is the chain written as text
+  (`shapes/chain_text.py`), constants only. Anything else is NULL and the row `partial`;
+  where the argument's walk ended at a call whose value is read at runtime, that call's bare
+  symbol is `expression_source`.
+- **`name`** is `group.name` where the walk reads both as one constant each, a missing
+  group being `default_group`; NULL otherwise.
+
+**`handler` is NULL in every row this style writes today** — pairing a trigger with its job
+is the design's next step (§3c), not yet built — and so `resolution` speaks for the
+expression alone. Such rows are not trace roots (`roots.py`).
+
+**Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
 
 ### `error_advice`
 

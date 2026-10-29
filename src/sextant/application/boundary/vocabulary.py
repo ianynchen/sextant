@@ -148,14 +148,14 @@ def kinds_fed_by(style: str, direction: str | None, has_shape_model: bool) -> tu
     """Which kinds a catalog's rows can feed (spec §4b), from fields every catalog already
     carries — a function, not a new catalog key.
 
-    `scheduled_work` writes `scheduled_work` and `error_advice` writes `error_handlers`, so
-    each feeds exactly its own kind. Every other style writes `endpoints`: `inbound` feeds
-    `endpoint`, `outbound` feeds `dependency`, `both` feeds both — and so does a catalog
-    that declares no direction, because a `config_join` catalog (`spring-integration`,
-    `spring-kafka-media`) writes rows of either direction and which one is known only per
-    row. A declared `shape_model` additionally feeds `data-contract`. The result follows
-    registry order."""
-    if style == "scheduled_work":
+    `scheduled_work` and `scheduled_chain` write `scheduled_work` and `error_advice` writes
+    `error_handlers`, so each feeds exactly its own kind. Every other style writes
+    `endpoints`: `inbound` feeds `endpoint`, `outbound` feeds `dependency`, `both` feeds
+    both — and so does a catalog that declares no direction, because a `config_join` catalog
+    (`spring-integration`, `spring-kafka-media`) writes rows of either direction and which
+    one is known only per row. A declared `shape_model` additionally feeds `data-contract`.
+    The result follows registry order."""
+    if style in ("scheduled_work", "scheduled_chain"):
         return ("schedule",)
     if style == "error_advice":
         return ("error-handler",)

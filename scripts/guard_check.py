@@ -159,6 +159,8 @@ _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
 _CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
+_SCHEDULED_CHAIN = "sextant/application/resolve/engines/scheduled_chain.py"
+_QUARTZ_CATALOG = "sextant/catalogs/quartz.yml"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -185,6 +187,49 @@ _QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
+    "quartz.a-REBUILT-trigger-is-not-an-entry": Guard(
+        what="only a `newTrigger()` root is a trigger entry; `trigger.getTriggerBuilder()` "
+        "rebuilds an existing trigger and starts none",
+        why="NBlog's and RuoYi's update method rebuilds the trigger it already scheduled for "
+        "`rescheduleJob`; reading that chain as a root would publish one schedule twice, as "
+        "two triggers, contradicting ruling 3's one entry per new trigger",
+        edits=(
+            Edit(
+                path=_QUARTZ_CATALOG,
+                find="    - { owner: org.quartz.TriggerBuilder, method: newTrigger }\n",
+                replace="    - { owner: org.quartz.TriggerBuilder, method: newTrigger }\n"
+                "    - { owner: [org.quartz.Trigger, org.quartz.CronTrigger], "
+                "method: getTriggerBuilder }\n",
+            ),
+        ),
+    ),
+    "quartz.KIND-from-the-declared-return-type": Guard(
+        what="where the walk to the schedule builder ends before a root, the kind is the type "
+        "the producing call is declared to return",
+        why="RuoYi, aurora and NBlog pass the cron builder through a misfire helper that "
+        "branches; without the declared type their one trigger has no kind and no job here, "
+        "and is not derived at all",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find='    return context.kinds.get(returned_type(str(producer["descriptor"])) or "")',
+                replace="    return None  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-runtime-cron-is-PARTIAL-not-dropped": Guard(
+        what="a cron argument the walk reads no value for keeps its entry, `partial`, naming "
+        "the call it stopped at",
+        why="every real Quartz application reads its cron off a database row (ruling 2); "
+        "dropping those entries would report no schedule for any of them",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            found.append((None, _PARTIAL, _source(root, slot, context)))",
+                replace="            pass  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "schedules.an-enum-constant-is-written-as-its-type-and-name": Guard(
         what="an `enum` argument (a named constant of its own type) is written as "
         "`Type.CONSTANT` rather than leaving the chain without text",
@@ -5891,6 +5936,10 @@ def copy_tree(destination: Path) -> Path:
         # protoc's own generated gRPC classes, which the inherited-member read is pinned on:
         # only real generated code puts the handlers on `<Service>Grpc$AsyncService`.
         "grpc-probe",
+        # Quartz's triggers (spec 2026-10-28): the shapes its guards are pinned on cross
+        # methods — a cron read off a getter in the caller, a builder through a helper — and
+        # only the value walk over real facts crosses them.
+        "orders-quartz",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

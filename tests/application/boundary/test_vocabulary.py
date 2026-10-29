@@ -85,6 +85,7 @@ def test_no_column_is_both_an_identity_and_an_attribute_or_evidence():
 
 def test_which_kinds_a_catalog_feeds():
     assert kinds_fed_by("scheduled_work", None, False) == ("schedule",)
+    assert kinds_fed_by("scheduled_chain", None, False) == ("schedule",)
     assert kinds_fed_by("error_advice", None, False) == ("error-handler",)
     assert kinds_fed_by("annotation_driven", "inbound", True) == ("endpoint", "data-contract")
     assert kinds_fed_by("single_call", "outbound", False) == ("dependency",)
