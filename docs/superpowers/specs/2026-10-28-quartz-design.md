@@ -1,6 +1,6 @@
 # Quartz — design
 
-**Status: DRAFT 2026-10-28, all questions ruled; awaiting approval** (branch `cov/quartz`). Plane SEXTANT-177,
+**Status: DRAFT 2026-10-29, self-reviewed; one question open (§7)** (branch `cov/quartz`). Plane SEXTANT-177,
 Java/Kotlin framework order 2 (`docs/COVERAGE.md` "Priority order"). Moves COVERAGE §5.12's
 Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```delivery Async row
 (`docs/java-kotlin-delivery-list.md:63`). The Async cell does not reach ✅ from this item:
@@ -144,8 +144,16 @@ the compiler wrote, not a model of the helper. Only a value typed as the interfa
 
 ### 3c. The job
 
-The trigger's job is found by following, with the value walk, whatever pairs them, as Quartz
-pairs them:
+The trigger's job is found from whatever pairs them, as Quartz pairs them. The value walk
+runs backward, so each pairing call is the starting point: from its arguments the walk reaches
+the `build()` of a trigger chain and of a job chain. A `newTrigger()` chain no pairing call
+reaches is still an entry (§3a), with its job unknown.
+
+The pairing calls are the `fluent` engine's existing **execute-join** (`terminal_via_argument`,
+`_JoinFilter`): a built value handed to the call that consumes it, the shape that already
+pairs an SQS request with `SqsClient.sendMessage(request)`. The join is within one method
+today. Here it finds its arguments through the value walk, which lets it cross methods; that
+is a change to the join, so it applies to every catalog that uses it.
 1. **`Scheduler.scheduleJob(JobDetail, Trigger)`:** the walk from the trigger argument reaches
    this trigger's `build()`, and the walk from the job argument gives the `JobDetail`.
 2. **`Scheduler.scheduleJob(JobDetail, Set<Trigger>, boolean)`** and
@@ -160,46 +168,70 @@ pairs them:
 
 From the `JobDetail` chain, the walk from `newJob(...)`'s argument gives the job class.
 
-**The handler** is the method Quartz calls, mirroring the framework (DR-6): `execute(
-JobExecutionContext)` as declared on the job class or the nearest superclass that declares it;
-where that declaration is Spring's `QuartzJobBean.execute`, it is the class's own
-`executeInternal(JobExecutionContext)` instead, which is what `QuartzJobBean.execute` calls.
+**The handler** is the method Quartz calls, mirroring the framework (DR-6). Quartz calls
+`Job.execute(JobExecutionContext)` on an instance of the job class, so the handler is the body
+the JVM's dispatch rule picks for that receiver class. `resolve/dispatch.py` already computes
+that, over `ancestry_of`, and is used; nothing here walks superclasses on its own.
+
+When that body is in a jar, the chain stops there, as it does for any call into a jar. Spring's
+`QuartzJobBean.execute` is the case that matters: it calls the subclass's
+`executeInternal(JobExecutionContext)`. Which method a framework's template calls on a subclass
+is catalog data, in the vocabulary `jakarta-servlet.yml` already uses for `HttpServlet.service`
+calling `doGet`: a `supertype` and its `dispatch` list. The Quartz catalog states
+`QuartzJobBean` → `executeInternal`.
 
 **Several job classes.**
 - **Several paths** (callers passing different classes): one entry per path, each `resolved`.
   This is the walk's existing multiplicity, and a closed set is exact.
 - **One path with a branch** (RuoYi's ternary, a `merge` with no common root): the walk answers
-  `non_enumerable` today and keeps the candidates in the fact. Here the candidates are class
-  literals, and the question is only which METHOD Quartz will run. Where every candidate
-  reaches the same handler (RuoYi: both inherit `AbstractQuartzJob.execute`), that handler is
-  the answer whichever branch runs, and the entry is one row. Where they reach different
-  handlers, one row per candidate at `narrowed` (one of them runs; we cannot say which).
-  `narrowed` is D00's existing word for that.
+  `non_enumerable` (spec 2026-10-21, merged values) and the handler is NULL. See §7: whether the
+  walk should answer a branch of literals as `narrowed` with its candidates is a change to the
+  shared walk, for the user to rule. Nothing in the Quartz catalog or engine reads the merge's
+  candidates around the walk.
 
-The dispatcher is then the handler, and the trace continues into it as it does from any root.
-What it calls by a name read from the row stays unknown.
+**After the handler, the call graph does the rest.** The dispatcher is a root, and the trace
+continues through `call_edges` as it does from any root:
+- **ruoyi-vue-pro:** `JobHandlerInvoker.executeInternal` calls `jobHandler.execute(param)`
+  through the `JobHandler` interface. The dispatch rule resolves that call to every in-module
+  `JobHandler` implementation, `narrowed`, so all ~25 job beans are reached from the dispatcher
+  with no Quartz-specific rule.
+- **RuoYi-Vue, aurora, NBlog:** the dispatcher calls its target by reflection
+  (`Method.invoke(bean, …)`), which names no callee. The trace stops there, correctly.
 
 ### 3d. Engine and catalog (ruling 6)
 
-Quartz is a catalog on the machinery that already exists, not a new reader:
-- **Chains** are read by the `fluent` engine's chain walk (roots, steps, captures, `argN`), the
-  one Vert.x, Ktor, the HTTP clients and Spring Integration use. Quartz is a `fluent` catalog,
-  `src/sextant/catalogs/quartz.yml`.
-- **Values that cross methods** (a trigger returned by a helper, a class from a helper, a cron
-  from a getter, an `@Value` field) go through `resolve/values.py`, which `fluent` already calls
-  for its arguments. The value walk finds the call that produced the value; the chain walk reads
-  the chain in the method where that call is.
-- **What a job does** is traced from its handler through the same call graph as every other
-  root. A job that sends to Kafka, calls a REST client, publishes on the Vert.x event bus or
-  returns a reactive chain gets those rows from those catalogs, unchanged.
+Quartz is a catalog on machinery that already exists. Each existing piece keeps its one job:
 
-The one generalisation this needs: `fluent` writes only endpoint rows today, and refuses a
-catalog without a `protocol`. It gains a second output, `scheduled_work`, chosen by what the
-catalog derives, as `endpoints.py` already does for non-wire styles. The `scheduled_work`
-annotation engine stays as it is; both write the same table. The owners, method names,
-consumer signatures and kind map in §3a–§3c are catalog data; the engine names no Quartz type.
-Anything here that `fluent` or the value walk cannot express yet is added there, for every
-catalog, not as a Quartz path.
+| Concern | Existing component | What Quartz uses it for |
+|---|---|---|
+| Reading a builder chain: roots, steps, captures, `argN` | the `fluent` chain walk | `newTrigger()`, `newJob(…)` and schedule builder chains |
+| Pairing a built value with the call that consumes it | `fluent`'s execute-join (`terminal_via_argument`) | `scheduleJob(job, trigger)` and its overloads |
+| A value that crosses methods | `resolve/values.py` | a trigger returned by a helper, a class from a helper, a cron from a getter |
+| An `@Value` field or parameter to its `${…}` | the field ladder, `shapes/arguments.py` | a configured cron |
+| Which body runs for a receiver class | `resolve/dispatch.py` | the job's handler |
+| A framework template calling a subclass method | the `supertype` + `dispatch` catalog vocabulary | `QuartzJobBean` → `executeInternal` |
+| Compiler-emitted artefacts read as the source wrote them | `resolve/effective_calls.py` | autoboxing (§3g) |
+| Per-environment values for a `${…}` | `resolve/resolved_schedules.py` + `placeholder_rule` | configured crons, unchanged |
+| What the job does | `call_edges` + every other catalog | Kafka, REST, event bus or reactive calls inside the job |
+
+**The one structural change: the chain walk leaves `fluent.py`.** Today the walk lives inside
+the `fluent` engine, and its context also carries what only endpoints need (client bases,
+metadata, channel bindings, verbs). Adding a `scheduled_work` output to that engine would put
+scheduling and endpoint derivation in one module. So:
+1. **Move, with no change in behaviour,** the chain walk (roots, steps, captures, folding,
+   joins, bean hops) into its own module under `resolve/shapes/`. It produces the folded
+   captures for each chain and knows nothing about what row they become. `fluent` keeps the
+   endpoint derivation and calls the walk. This step is pinned by the existing suite and by
+   `scripts/field_check.py` on every pin, before any Quartz work starts.
+2. **Add the scheduled-work derivation** as its own engine, which turns a chain's captures into
+   `scheduled_work` rows. The annotation engine (`engines/scheduled_work.py`) stays as it is. The
+   two are different shapes of evidence for one table, D02's rule that a style is a shape of
+   evidence, not a framework.
+
+The catalog `src/sextant/catalogs/quartz.yml` holds every owner, method, consumer signature
+and the kind map; neither engine names a Quartz type. Writing a chain as text (§3b) is a pure
+function in `resolve/shapes/`, beside the walk, not inside an engine. Placeholder detection uses
+the config model's `placeholder_rule`, not a hard-coded `${`.
 
 ### 3e. Schema
 
@@ -247,23 +279,29 @@ already owns it) and asserts on `render` output, which is an intention marker.
 
 - **Values the compiler boxed are read as their constants.** `onDaysOfTheWeek(3, 5)` compiles
   to `Integer.valueOf(3)` per element, and the extractor records each as `unresolved` today.
-  The fix is in the extractor, as a rule about what javac emits for autoboxing: a
-  `Integer/Long/Short/Byte/Character/Boolean/Float/Double.valueOf` whose only argument is a
-  constant of its primitive type is that constant. It is the same kind of rule as reading a
-  constant-folded `static final`, not a model of a library method. It is a fact-level change,
-  so it gets a probe, every fixture is rebuilt with JDK 21, and `scripts/field_check.py` is
-  run on the pins.
+  javac inserts these calls for autoboxing (JLS 5.1.7); the source wrote `3`. Reading them back
+  is a third projection in `resolve/effective_calls.py`, the one place compiler-emitted
+  artefacts are already undone (the Kotlin `$default` bridge, class-compiled lambdas). The
+  rule covers the eight boxing conversions only: a `<Wrapper>.valueOf(<its primitive>)` whose
+  argument is a constant is that constant. The extractor is unchanged, and raw `call_sites` keep
+  the bytecode's own statement. Engines read the projection, so `scripts/field_check.py` runs
+  on the pins.
 - **The kind from the declared return type** (§3b): a compiler fact, not a model of the helper.
 - **Entries come from `newTrigger()` roots** (§3a); `getTriggerBuilder()` rebuilds are not new
   triggers.
-- **The same handler from every branch is one exact answer** (§3c); different handlers are
-  `narrowed`.
+- **The chain walk moves out of `fluent.py` before Quartz is added** (§3d), so endpoint and
+  scheduling derivation stay in separate modules.
+- **The handler comes from `dispatch.py`; `QuartzJobBean` → `executeInternal` is catalog
+  data** in the servlet `dispatch` vocabulary (§3c).
+- **Pairing reuses the execute-join,** made to find its arguments through the value walk
+  (§3c).
 
 ## 4. What it does NOT do
 
 - **Read seed SQL or any database** (ruling 2).
-- **Name the dispatcher's targets.** The `JobHandler` beans in ruoyi-vue-pro stay methods no
-  code is shown to call.
+- **Add any rule for the dispatcher's targets.** Where the dispatcher calls them through an
+  interface (ruoyi-vue-pro), the call graph already reaches them. Where it uses reflection
+  (RuoYi-Vue, aurora, NBlog), the trace stops, as for any reflective call.
 - **`quartz_data.xml` and `quartz.properties` jobs.** Stated as a COVERAGE boundary; none of
   the real corpora uses them.
 - **`@DisallowConcurrentExecution`, `@PersistJobDataAfterExecution`, job data maps.**
@@ -288,10 +326,18 @@ These are predictions until the "As built" section measures them.
 | Corpus | Predicted entries |
 |---|---|
 | spring-boot smoke test | 5: `helloJob` ×3 and `anotherJob` ×2, all `SampleJob.executeInternal`, all `resolved` |
-| RuoYi-Vue, aurora, NBlog | 1 each: `AbstractQuartzJob.execute` (or the project's equivalent), `cron`, expression NULL, `partial` |
-| ruoyi-vue-pro | 2: `JobHandlerInvoker.executeInternal` and the IoT manager's job (handler from its callers' class arguments), `cron`, expression NULL, `partial` |
+| RuoYi-Vue, aurora, NBlog | 1 each: `cron`, expression NULL, `partial`. Handler NULL unless §7 is ruled yes, then the inherited `execute` (one row: both branches reach the same body). |
+| ruoyi-vue-pro | 2: `JobHandlerInvoker.executeInternal` and the IoT manager's job (handler from its callers' class arguments), `cron`, expression NULL, `partial`. The trace from the first reaches all ~25 `JobHandler` implementations. |
 | dolphinscheduler | 1: handler NULL (the trigger set is made in Guava), `cron` from the factory's declared type, expression NULL, `partial`. Not a trace root. |
 
 ## 7. Open — for the user
 
-Nothing. Rulings 5 and 6 closed the last question.
+**Should the value walk answer a branch between literals as `narrowed`, with its candidates?**
+RuoYi-Vue, aurora and NBlog pick the job class with `cond ? A.class : B.class` inside a
+helper. The 2026-10-21 merged-values design answers a merge with no common root as
+`non_enumerable`, so these three get no handler and no trace root.
+- **Yes:** the walk answers `narrowed` and lists the candidates, which is D00's word for "one of
+  these runs, we cannot say which" and what `dispatch.py` already does for several bodies.
+  Every consumer of the walk sees the change. Consumers that refuse an inexact answer
+  (`channel_of_answer`) keep refusing it, and `field_check.py` measures the rest.
+- **No:** the three keep a NULL handler, and their dispatchers are not roots.
