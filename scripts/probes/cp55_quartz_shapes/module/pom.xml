@@ -1,0 +1,18 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.sextant.probes</groupId>
+  <artifactId>cp55-quartz-shapes</artifactId>
+  <version>0</version>
+  <!-- CP-55's subject: one Java file of Quartz call forms, compiled by javac 21 against Quartz 2.5.1
+       and spring-context-support 7.0.1 (the versions Spring Boot 4.0.0's `spring-boot-starter-quartz`
+       manages) and read with `javap`. Compiled by the probe's harness, never run: no scheduler is
+       started. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.quartz-scheduler</groupId><artifactId>quartz</artifactId><version>2.5.1</version></dependency>
+    <dependency><groupId>org.springframework</groupId><artifactId>spring-context-support</artifactId><version>7.0.1</version></dependency>
+  </dependencies>
+</project>
