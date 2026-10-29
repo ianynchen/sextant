@@ -21,10 +21,19 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import scheduled_chain
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+    MethodReturnFact,
+    SymbolFact,
+)
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -144,12 +153,14 @@ def test_a_simple_chain_is_its_text(analyzed: Path):
     )
 
 
-@pytest.mark.pins("quartz.KIND-from-the-declared-return-type")
-def test_the_kind_comes_from_a_helpers_declared_return_type(analyzed: Path):
-    """`createJob` hands `withSchedule` the result of `misfire(row, builder)`, whose body
-    branches between two calls on its parameter: the walk ends there, before any root. The
-    helper is DECLARED to return `CronScheduleBuilder`, which the compiler wrote, so the kind
-    is `cron` whatever the body does; the expression is not in the code."""
+@pytest.mark.pins("values.a-branch-of-calls-on-one-receiver-passes-through")
+def test_a_builder_through_a_branching_helper_is_followed_to_its_root(analyzed: Path):
+    """The RuoYi shape. `createJob` hands `withSchedule` the result of `misfire(row,
+    builder)`, whose body branches between two calls on its parameter. Both branches are
+    builder calls on ONE receiver, so the chain reader passes through to it, in the calling
+    context it came through, and reaches `cronSchedule(row.getCron())`: `cron`, read at
+    runtime from the getter (re-pinned 2026-10-29, fix round 1: it stopped at the branch and
+    named no source)."""
     [row] = _entries_in(analyzed, "RowScheduler#createJob")
     assert (row["trigger"], row["name"], row["expression"], row["resolution"]) == (
         "cron",
@@ -157,6 +168,36 @@ def test_the_kind_comes_from_a_helpers_declared_return_type(analyzed: Path):
         None,
         "partial",
     )
+    assert "OrderJobRow#getCron(" in str(row["expression_source"]), row
+
+
+@pytest.mark.pins("values.a-passed-through-branch-keeps-its-calling-context")
+def test_a_passed_through_branch_stays_in_its_calling_context(analyzed: Path):
+    """`misfire` is called from `createJob` AND from `updateJob`, each with its own
+    `cronSchedule(row.getCron())`. Walked from `createJob`'s trigger, its parameter is the
+    argument at `createJob`'s call alone: the chain is `createJob`'s `cronSchedule`, never
+    `updateJob`'s rebuilt trigger's."""
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        index = value_index(workspace)
+        [with_schedule] = [
+            site
+            for (caller, _), site in index.sites.items()
+            if "/RowScheduler#createJob(" in caller and site["name"] == "withSchedule"
+        ]
+        builders = {
+            (str(site["owner"]), str(site["name"]))
+            for site in index.sites.values()
+            if site["owner"] == CRON_BUILDER
+        }
+        producers = producers_of(index, with_schedule, 0, builders, along_receivers=True)
+    finally:
+        workspace.close()
+    assert [
+        [(caller.split("/")[-1].split("(")[0], ordinal) for caller, ordinal in p.chain]
+        for p in producers
+    ] == [[("RowScheduler#createJob", 7)]]
+    assert producers[0].rooted and producers[0].inexact
 
 
 @pytest.mark.pins("quartz.a-runtime-cron-is-PARTIAL-not-dropped")
@@ -290,3 +331,128 @@ def test_two_unnamed_triggers_are_two_rows(tmp_path: Path):
         (None, "cron", "0 0 * * * ?"),
         (None, "cron", "0 0 * * * ?"),
     ]
+
+
+_MODULE = "sextant-jvm maven com.acme/jobs 1.0.0 "
+_TRIGGERS = "com/acme/jobs/Triggers#"
+_SIMPLE = "org/quartz/SimpleScheduleBuilder#"
+_SIMPLE_TYPE = "Lorg/quartz/SimpleScheduleBuilder;"
+_TRIGGER_TYPE = "Lorg/quartz/TriggerBuilder;"
+
+
+def _method_symbol(name: str, jvm: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + method_descriptor(_TRIGGERS, name, jvm),
+        construct_kind="method",
+        enclosing=_MODULE + _TRIGGERS,
+    )
+
+
+def _scheduled_with(caller: str, builder: list, schedule_source: int) -> list:
+    """`newTrigger().withSchedule(<value schedule_source>).build()` in `caller`, after the
+    `builder` sites that make the schedule (ordinals 1.., values 2..)."""
+    return [
+        _site(caller, 0, TRIGGER_BUILDER, "newTrigger", f"(){_TRIGGER_TYPE}", result=1),
+        *builder,
+        _site(
+            caller,
+            20,
+            TRIGGER_BUILDER,
+            "withSchedule",
+            f"(Lorg/quartz/ScheduleBuilder;){_TRIGGER_TYPE}",
+            receiver=1,
+            result=21,
+            arguments=(CallArgument(kind="unresolved", source=schedule_source),),
+        ),
+        _site(
+            caller, 21, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=21, result=22
+        ),
+    ]
+
+
+def test_a_builder_chain_continued_on_a_helpers_parameter_is_written_whole(tmp_path: Path):
+    """`withSchedule(forever(simpleSchedule().withIntervalInSeconds(30)))` with `forever(b)`
+    returning `b.repeatForever()`: the chain's last call is on the helper's PARAMETER, so its
+    root is in the caller. The reader continues through that receiver in the calling context
+    and the chain is written whole, across the two methods."""
+    forever_jvm = f"({_SIMPLE_TYPE}){_SIMPLE_TYPE}"
+    helper = _MODULE + method_descriptor(_TRIGGERS, "forever", forever_jvm)
+    caller = _MODULE + method_descriptor(_TRIGGERS, "every30s", "()Lorg/quartz/Trigger;")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        _method_symbol("forever", forever_jvm),
+        _method_symbol("every30s", "()Lorg/quartz/Trigger;"),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=helper,
+            target=CallTarget(owner=_SIMPLE, name="repeatForever", descriptor=f"(){_SIMPLE_TYPE}"),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver_parameter=0,
+            result=2,
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        *_scheduled_with(
+            caller,
+            [
+                _site(caller, 1, _SIMPLE, "simpleSchedule", f"(){_SIMPLE_TYPE}", result=3),
+                _site(
+                    caller,
+                    2,
+                    _SIMPLE,
+                    "withIntervalInSeconds",
+                    f"(I){_SIMPLE_TYPE}",
+                    receiver=3,
+                    result=4,
+                    arguments=(CallArgument(kind="int", value=30),),
+                ),
+                _site(
+                    caller,
+                    3,
+                    _TRIGGERS,
+                    "forever",
+                    forever_jvm,
+                    result=5,
+                    arguments=(CallArgument(kind="unresolved", source=4),),
+                ),
+            ],
+            schedule_source=5,
+        ),
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (row["trigger"], row["expression"], row["resolution"]) == (
+        "simple",
+        "simpleSchedule().withIntervalInSeconds(30).repeatForever()",
+        "resolved",
+    )
+
+
+@pytest.mark.pins("quartz.KIND-from-the-declared-return-type")
+def test_the_kind_comes_from_a_helpers_declared_return_type(tmp_path: Path):
+    """The dolphinscheduler shape: the schedule builder comes from a factory in a jar
+    (`Schedules.nightly()`), whose body is not read, so the walk reaches no builder call. The
+    factory is DECLARED to return `CronScheduleBuilder`, which the compiler wrote, so the kind
+    is `cron` whatever it does inside; the expression is not in the code."""
+    caller = "com/acme/jobs/Triggers#nightly()."
+    facts = _scheduled_with(
+        caller,
+        [
+            _site(
+                caller,
+                1,
+                "com/vendor/Schedules#",
+                "nightly",
+                "()Lorg/quartz/CronScheduleBuilder;",
+                result=3,
+            )
+        ],
+        schedule_source=3,
+    )
+    [row] = _scheduled(tmp_path, facts)
+    assert (row["trigger"], row["expression"], row["resolution"]) == ("cron", None, "partial")

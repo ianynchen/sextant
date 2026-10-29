@@ -358,6 +358,17 @@ class Producer:
     identity: tuple[str, str] | None = None
     reason: str | None = None
     ended_at: Answer | None = None
+    # Set only by a reader walking ALONG RECEIVERS (`producers_of(..., along_receivers=True)`):
+    # every declared call of the chain that built the value, `(caller, ordinal)`, ROOT FIRST
+    # and ending at `caller`/`ordinal` — across methods, in the path's own calling contexts.
+    # `rooted` says the first one is a call on no receiver at all (a static factory), so the
+    # chain is whole; False where its first call's receiver is something the walk could not
+    # follow to another declared call.
+    chain: tuple[tuple[str, int], ...] = ()
+    rooted: bool = False
+    # A branch was passed through on the way (`_Walk._passed_through`): the chain is the
+    # shared receiver's, and which of the branch's own calls ran is not known.
+    inexact: bool = False
 
 
 @dataclass(frozen=True)
@@ -786,6 +797,7 @@ def producers_of(
     site: Mapping[str, Any],
     slot: int | str,
     declared: AbstractSet[tuple[str, str]],
+    along_receivers: bool = False,
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -805,16 +817,27 @@ def producers_of(
     No identity table is applied: an `identified_by` entry says what a value MEANS, and a
     rendering of a client is not the client.
 
+    **`along_receivers` reads the whole CHAIN of declared calls instead** (Quartz spec
+    2026-10-28 §3b). A builder is a chain — `cronSchedule(x).withMisfireHandling…()` — and
+    its first call can be in another method than its last: a helper takes the builder as a
+    parameter and calls one more step on it. So at a declared call the walk does not stop;
+    it goes on through that call's RECEIVER, on the SAME path, and prepends the call to
+    whatever the receiver reaches (`Producer.chain`). The path is what keeps the calling
+    context: inside a helper the walk descended into, the helper's parameter is the argument
+    at the call it came through, never every caller the helper has. And a branch whose every
+    candidate is a declared call on one shared receiver passes through to that receiver
+    (`_Walk._passed_through`), marked `inexact`.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
     """
-    walk = _Walk(index, declared=declared)
+    walk = _Walk(index, declared=declared, along_receivers=along_receivers)
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
     for _, answer in walk.at(site, slot):
         if answer.kind == _PRODUCED:
-            found.append(answer.value)
+            found.append(replace(answer.value, inexact=True) if answer.inexact else answer.value)
         elif answer.kind == UNRESOLVED:
             found.append(Producer(reason=answer.reason))
         else:
@@ -904,6 +927,7 @@ class _Walk:
         identities: Identities = (),
         declared: AbstractSet[tuple[str, str]] = frozenset(),
         branches: bool = True,
+        along_receivers: bool = False,
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -914,6 +938,9 @@ class _Walk:
         # The producer reader's stop set (`producers_of`). Empty for the value walk, which is
         # what keeps its answers exactly what they were: `_declared_producer` matches nothing.
         self._declared = frozenset(declared)
+        # The chain reader (`producers_of(..., along_receivers=True)`): a declared call is
+        # followed on through its receiver rather than ending the path.
+        self._along_receivers = along_receivers
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -1174,6 +1201,9 @@ class _Walk:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         root = self._root_of(candidates, method)
         if root is None:
+            passed = self._passed_through(candidates, method, trail, frames)
+            if passed is not None:
+                return passed
             return self._branched(candidates, method, origin, trail, frames)
         return tuple(
             (
@@ -1707,7 +1737,7 @@ class _Walk:
         if producers:
             stopped = self._declared_producer((method, min(producers)))
             if stopped is not None:
-                return _only(trail, stopped)
+                return self._along(stopped, trail, frames)
         reached: list[_Reached] = []
         for ordinal, callee in self._index.returns.get((method, value), ()):
             for return_ordinal, entry in self._index.returned_values.get(callee, ()):
@@ -1911,6 +1941,90 @@ class _Walk:
             (_SLOT, site[0], site[1]),
             trail,
             "argument",
+        )
+
+    def _along(self, stopped: Answer, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
+        """A declared producer, as the reader asked for it: the end of the path, or — for the
+        chain reader — the last call of a chain followed on through its receiver.
+
+        The receiver is resolved on THIS path, in THIS frame stack, so a receiver that is a
+        parameter of a helper the walk descended into is the argument at the call it came
+        through. Each receiver answer that is itself a declared chain gets this call
+        appended; anything else (an unread value, a parameter nothing binds) leaves this
+        call as the first one found, not rooted.
+        """
+        producer = stopped.value
+        if not self._along_receivers or producer.caller is None or producer.ordinal is None:
+            return _only(trail, stopped)
+        here = (producer.caller, producer.ordinal)
+        row = self._index.sites.get(here)
+        if row is None or (
+            row.get("receiver") is None
+            and row.get("receiver_parameter") is None
+            and row.get("receiver_field") is None
+        ):
+            return _only(
+                trail, replace(stopped, value=replace(producer, chain=(here,), rooted=True))
+            )
+        reached: list[_Reached] = []
+        for crossed, answer in self._resolve((_SLOT, here[0], here[1], RECEIVER), trail, frames):
+            if answer.kind == _PRODUCED and answer.value.chain:
+                chained = replace(
+                    producer, chain=(*answer.value.chain, here), rooted=answer.value.rooted
+                )
+                reached.append((crossed, replace(stopped, value=chained, inexact=answer.inexact)))
+            else:
+                reached.append((crossed, replace(stopped, value=replace(producer, chain=(here,)))))
+        return tuple(reached) or _only(
+            trail, replace(stopped, value=replace(producer, chain=(here,)))
+        )
+
+    def _passed_through(
+        self,
+        candidates: "list[Mapping[str, Any]]",
+        method: str,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """For the chain reader only: a merge whose every candidate is the result of a
+        DECLARED call on one shared receiver — `c ? b.stepA() : b.stepB()` — is that
+        receiver's chain, followed on the same path, `inexact` because which step ran is not
+        known. None for any other merge, and always for every other reader, whose answers are
+        unchanged.
+
+        This is `_merged`'s shared-root rule one step further out: there the root is one of
+        the candidates (`x` beside `f(x)`); here it is what every candidate is a call ON. A
+        reader asking for the call that BUILT a value cannot be given the receiver's producer
+        in its place, so the rule stays with the reader that asked for the chain.
+        """
+        if not self._along_receivers:
+            return None
+        sites: list[tuple[str, int]] = []
+        for candidate in candidates:
+            source = candidate.get("source")
+            ordinals = (
+                self._index.producers.get((method, int(str(source))), ())
+                if source is not None
+                else ()
+            )
+            if not ordinals or self._declared_producer((method, min(ordinals))) is None:
+                return None
+            sites.append((method, min(ordinals)))
+        receivers = {
+            (
+                self._index.sites[site].get("receiver"),
+                self._index.sites[site].get("receiver_parameter"),
+                self._index.sites[site].get("receiver_field"),
+            )
+            for site in sites
+        }
+        if len(receivers) != 1 or receivers == {(None, None, None)}:
+            return None
+        return tuple(
+            (crossed, replace(answer, inexact=True))
+            for crossed, answer in self._resolve(
+                (_SLOT, sites[0][0], sites[0][1], RECEIVER), trail, frames
+            )
         )
 
     def _declared_producer(self, site: tuple[str, int]) -> Answer | None:

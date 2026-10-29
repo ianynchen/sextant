@@ -213,8 +213,9 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     -- `resolution` says `unresolved` beside it. NULL where the walk could not
     -- reach a literal; `expression_source` then says where it stopped.
     expression TEXT,
-    -- The SCIP symbol of the method or field the walk to the expression
-    -- stopped at. Set only when `expression` is NULL.
+    -- The bare descriptor (D00 §5a) of the method or field the walk to the
+    -- expression stopped at: a method in a jar has no module coordinates. Set
+    -- only when `expression` is NULL.
     expression_source TEXT,
     -- D00's resolution set. `resolved` where the expression is the literal the
     -- framework will schedule on; `unresolved` where it is a property

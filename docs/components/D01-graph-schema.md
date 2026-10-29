@@ -994,8 +994,9 @@ rather than one of [D00](D00-fact-schema.md) §4's closed sets), `name` (the tri
 name where the framework gives one, part of the identity beside `handler` and `trigger`;
 NULL for `@Scheduled`), `expression` (the declared
 schedule **verbatim** — a cron string normalised or a delay re-spelled names a different
-schedule from the one that runs), `expression_source` (the SCIP symbol of the method or
-field the walk to the expression stopped at; set only when `expression` is NULL),
+schedule from the one that runs), `expression_source` (the bare descriptor ([D00](D00-fact-schema.md) §5a) of the method or
+field the walk to the expression stopped at — bare because a method in a jar has no module
+coordinates; set only when `expression` is NULL),
 `resolution`, `evidence` and `catalog_id`. `handler`, `trigger`, `name`, `expression` and
 `expression_source` are nullable: a NULL is a fact the code does not state, and the
 document prints it as `not in the code`. A row with no `handler` is not a root.

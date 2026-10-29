@@ -187,6 +187,35 @@ _QUESTIONS = "sextant/application/query/questions.py"
 
 
 GUARDS: dict[str, Guard] = {
+    "values.a-branch-of-calls-on-one-receiver-passes-through": Guard(
+        what="for the chain reader, a merge whose every candidate is a declared call on one "
+        "shared receiver passes through to that receiver's chain",
+        why="RuoYi, aurora and NBlog pass the cron builder through a misfire helper that "
+        "branches between two builder calls on its parameter; without the pass-through the "
+        "walk stops at the branch and the trigger names no source for its runtime cron",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if not self._along_receivers:\n            return None\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            return None\n",
+            ),
+        ),
+    ),
+    "values.a-passed-through-branch-keeps-its-calling-context": Guard(
+        what="the pass-through resolves the shared receiver on the same path and frames, so "
+        "a helper's parameter is the argument at the call the walk came through",
+        why="`misfire` is called from `createJob` and from `updateJob`; resolved with no "
+        "calling context its parameter reaches both callers' builders, and the rebuilt "
+        "trigger's schedule would be attached to the new trigger's entry",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                (_SLOT, sites[0][0], sites[0][1], RECEIVER), trail, frames\n",
+                replace="                (_SLOT, sites[0][0], sites[0][1], RECEIVER), (), ()\n",
+            ),
+        ),
+    ),
     "quartz.a-REBUILT-trigger-is-not-an-entry": Guard(
         what="only a `newTrigger()` root is a trigger entry; `trigger.getTriggerBuilder()` "
         "rebuilds an existing trigger and starts none",
@@ -2189,7 +2218,7 @@ GUARDS: dict[str, Guard] = {
                 find="""        if producers:
             stopped = self._declared_producer((method, min(producers)))
             if stopped is not None:
-                return _only(trail, stopped)
+                return self._along(stopped, trail, frames)
         reached: list[_Reached] = []
 """,
                 replace="        reached: list[_Reached] = []\n",

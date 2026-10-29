@@ -12,16 +12,18 @@ the chain walk every builder catalog uses (`shapes/chains.py`): the catalog's `r
 (the trigger's key) and `schedule` (the builder handed to it). Each chain end is one entry
 (ruling 3): two triggers built alike are two rows, and nothing here collapses them. The
 schedule builder is a nested chain, the ARGUMENT of a step (§2b), so it is followed with
-the value walk (`values.producers_of`) to the call that built it, across returns and
-helpers, and from there back along its own `receiver` links to its root. A cron handed in
+the value walk's chain reader (`values.producers_of(..., along_receivers=True)`): every
+builder call that built it, back along `receiver` links to its root, across returns, helpers
+and parameters, in the path's own calling contexts. A cron handed in
 as a configured field or parameter reads through the field ladder (`shapes/arguments.py`),
 a non-cron chain is written by `shapes/chain_text.py`, and a placeholder is told by the
 resolve's config model (`config.placeholder_rule`), never by a hard-coded opener.
 
 **What a row says** (§3b):
-- `trigger` — the kind, `kinds[...]` of the schedule chain's root owner; where the walk ends
-  before a root (a helper whose body branches, a factory in a jar), of the type the call
-  that produced the builder is DECLARED to return, which the compiler wrote; else NULL.
+- `trigger` — the kind, `kinds[...]` of the schedule chain's root owner, or of the first
+  builder call found where no root is; where the walk reaches no builder call (a factory in
+  a jar), of the type the call that produced the builder is DECLARED to return, which the
+  compiler wrote; else NULL.
 - `expression` — for the `literal_expression` root, its argument as the walk finds it:
   a string literal verbatim (`resolved`), or a `${…}` placeholder (`unresolved`). For any
   other root, the chain as written (ruling 4). NULL where the code does not hold it, with
@@ -227,37 +229,64 @@ def _schedules(
     captures: Mapping[str, Any], context: _Context
 ) -> list[tuple[str | None, str | None, str, str | None]]:
     """`(trigger, expression, resolution, expression_source)` for each distinct schedule the
-    walk finds handed to the trigger, in its order."""
+    walk finds handed to the trigger, in its order.
+
+    The builder chain is read by the value walk ALONG RECEIVERS (`producers_of`): every call
+    on a `kinds` type that built the value, root first, across returns and helpers and in
+    the path's own calling contexts — a helper's parameter is the argument at the call the
+    walk came through, never another caller's."""
     position = _position(captures.get(_SCHEDULE), context)
     if position is None:
         return []
     site, slot = position
     declared_kind = _declared_kind(site, slot, context)
     found: list[tuple[str | None, str | None, str, str | None]] = []
-    builders = [
-        (producer.caller, producer.ordinal)
-        for producer in producers_of(context.index, site, slot, context.builder_calls)
-        if producer.caller is not None and producer.ordinal is not None
+    chains = [
+        producer
+        for producer in producers_of(
+            context.index, site, slot, context.builder_calls, along_receivers=True
+        )
+        if producer.chain
     ]
-    for caller, ordinal in builders:
-        chain = _chain_to_root(caller, ordinal, context)
-        if chain is None or chain[0]["owner"] not in context.kinds:
-            found.append((declared_kind, None, _PARTIAL, None))
+    for producer in chains:
+        sites = [context.index.sites[key] for key in producer.chain]
+        if not producer.rooted:
+            # A builder call was found and its root was not: the kind is the builder call's
+            # own type, which is a `kinds` key by construction of the stop set.
+            found.append((context.kinds.get(str(sites[0]["owner"])), None, _PARTIAL, None))
             continue
-        kind = context.kinds[str(chain[0]["owner"])]
-        if _is_literal_root(chain[0], context):
-            found.extend((kind, *schedule) for schedule in _literal(chain[0], context))
+        kind = context.kinds[str(sites[0]["owner"])]
+        if _is_literal_root(sites[0], context):
+            found.extend((kind, *schedule) for schedule in _literal(sites[0], context))
             continue
-        text = chain_text(chain, _effective(caller, context))
+        # A chain passed through a branch is not the chain as written: which step ran is not
+        # known, so it has no text.
+        text = None if producer.inexact else _text(sites, context)
         found.append(
             (kind, text, _RESOLVED, None) if text is not None else (kind, None, _PARTIAL, None)
         )
-    if not builders:
-        # The walk ends before any builder call (§3b): a helper whose body branches between
-        # calls on its parameter, a factory in a jar. The kind is still the type the
-        # producing call is declared to return.
+    if not chains:
+        # The walk ends before any builder call (§3b): a factory in a jar, a helper whose body
+        # it cannot read. The kind is still the type the producing call is declared to return.
         found.append((declared_kind, None, _PARTIAL, None))
     return list(dict.fromkeys(found))
+
+
+def _text(sites: list[Mapping[str, Any]], context: _Context) -> str | None:
+    """The chain as written: each method's run of calls by `chain_text`, whose nested
+    arguments are value ids of that method alone, joined in chain order."""
+    parts: list[str] = []
+    run: list[Mapping[str, Any]] = []
+    for site in sites:
+        if run and run[-1]["caller"] != site["caller"]:
+            part = chain_text(run, _effective(str(run[-1]["caller"]), context))
+            if part is None:
+                return None
+            parts.append(part)
+            run = []
+        run.append(site)
+    part = chain_text(run, _effective(str(run[-1]["caller"]), context))
+    return None if part is None else ".".join([*parts, part])
 
 
 def _declared_kind(site: Mapping[str, Any], slot: int, context: _Context) -> str | None:
@@ -276,28 +305,6 @@ def _declared_kind(site: Mapping[str, Any], slot: int, context: _Context) -> str
     if producer is None or not producer.get("descriptor"):
         return None
     return context.kinds.get(returned_type(str(producer["descriptor"])) or "")
-
-
-def _chain_to_root(caller: str, ordinal: int, context: _Context) -> list[Mapping[str, Any]] | None:
-    """The builder chain ending at `(caller, ordinal)`, root first, followed back along each
-    call's own `receiver` within the method (D00 §5) — or None where it reaches a receiver
-    that is no call of this method (a parameter, a field), so its root is elsewhere."""
-    chain: list[Mapping[str, Any]] = []
-    seen: set[int] = set()
-    site = context.index.sites.get((caller, ordinal))
-    while site is not None:
-        chain.append(site)
-        receiver = site.get("receiver")
-        if receiver is None:
-            if site.get("receiver_parameter") is not None or site.get("receiver_field"):
-                return None
-            return chain[::-1]
-        if int(str(receiver)) in seen:
-            return None
-        seen.add(int(str(receiver)))
-        ordinals = context.index.producers.get((caller, int(str(receiver))), ())
-        site = context.index.sites.get((caller, min(ordinals))) if ordinals else None
-    return None
 
 
 def _is_literal_root(root: Mapping[str, Any], context: _Context) -> bool:

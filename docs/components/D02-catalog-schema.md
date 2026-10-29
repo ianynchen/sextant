@@ -4149,22 +4149,24 @@ capture fields off each chain end — `name`, `group` and `schedule` — and eve
 one row: two triggers built alike are two rows, and nothing collapses them. A chain that
 reaches no terminal derives nothing.
 
-**The schedule is followed with the value walk** (`values.producers_of`) from the `schedule`
-argument to the call that built it — any call on a `kinds` type — across returns and
-parameters, then back along that call's own `receiver` links, within its method, to the
-builder chain's root. Then:
+**The schedule is followed with the value walk's chain reader**
+(`values.producers_of(..., along_receivers=True)`) from the `schedule` argument: every call
+on a `kinds` type that built it, back along each call's `receiver`, root first — across
+returns, helpers and parameters, on the path's own calling contexts (a helper's parameter is
+the argument at the call the walk came through). A branch whose every candidate is such a
+call on one shared receiver passes through to that receiver, `inexact`. Then:
 
-- **`trigger`** is `kinds[root owner]`. Where the walk ends before a root — a helper whose
-  body branches between calls on its parameter, a factory in a jar — it is `kinds[the type
-  the producing call is declared to return]`, read off that call's descriptor: a fact the
-  compiler wrote, not a model of the call's body. Otherwise NULL, and a chain with no kind
-  is not derived.
+- **`trigger`** is `kinds[root owner]`; where a builder call was found but no root, the
+  builder call's own owner's kind. Where the walk reaches no builder call at all — a factory
+  in a jar — it is `kinds[the type the producing call is declared to return]`, read off that
+  call's descriptor: a fact the compiler wrote, not a model of the call's body. Otherwise
+  NULL, and a chain with no kind is not derived.
 - **`expression`**, for a `literal_expression` root (matched by owner, method and, where
   declared, parameter types), is its argument as the field ladder or the value walk reads
   it: a string literal verbatim (`resolved`, or `narrowed` for one of a branch's
   candidates), a `${…}` placeholder verbatim (`unresolved`). Steps after that root are not
   part of it. For every other root it is the chain written as text
-  (`shapes/chain_text.py`), constants only. Anything else is NULL and the row `partial`;
+  (`shapes/chain_text.py`), constants only — none where a branch was passed through. Anything else is NULL and the row `partial`;
   where the argument's walk ended at a call whose value is read at runtime, that call's bare
   symbol is `expression_source`.
 - **`name`** is `group.name` where the walk reads both as one constant each, a missing
