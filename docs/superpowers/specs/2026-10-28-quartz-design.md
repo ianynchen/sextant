@@ -1,6 +1,6 @@
 # Quartz — design
 
-**Status: DRAFT 2026-10-29, self-reviewed; one question open (§7)** (branch `cov/quartz`). Plane SEXTANT-177,
+**Status: DRAFT 2026-10-29, self-reviewed, all questions ruled; awaiting approval** (branch `cov/quartz`). Plane SEXTANT-177,
 Java/Kotlin framework order 2 (`docs/COVERAGE.md` "Priority order"). Moves COVERAGE §5.12's
 Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```delivery Async row
 (`docs/java-kotlin-delivery-list.md:63`). The Async cell does not reach ✅ from this item:
@@ -14,6 +14,7 @@ Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```deliver
 | 2 | Schedules kept in a database table | **Stop at the dispatcher.** *"We don't assume we can read the database. Leave the schedule as a value unknown. The scheduling part should be a partial."* Seed SQL in the repo is not read. |
 | 3 | Several triggers on one job | **Each trigger is its own entry,** *"so that user is aware there are multiple triggers for the same job."* |
 | 5 | Telling two entries on one job apart | **A: by the trigger's own name,** the way Quartz identifies triggers (`TriggerKey`). OI-183 (`@Schedules`) stays open. |
+| 7 | A branch between literals in the value walk (2026-10-29) | **`narrowed`, with its candidates.** Changes the 2026-10-21 merged-values answer for a merge with no common root whose candidates are all literals; every consumer of the walk sees it. |
 | 6 | How it is built | **Holistically.** *"We shouldn't be building these as separate pieces. Call chains are the same, assignments are the same."* Quartz reuses the chain, value and trace machinery every other catalog uses (§3d). |
 | 4 | Non-cron schedules | **The builder chain, as written.** No English summary: that needs an LLM (optional in Sextant) or a template per builder method ([one rule, not one parser per method], 2026-10-21). *"We want deterministic logic where applicable."* |
 
@@ -183,11 +184,14 @@ calling `doGet`: a `supertype` and its `dispatch` list. The Quartz catalog state
 **Several job classes.**
 - **Several paths** (callers passing different classes): one entry per path, each `resolved`.
   This is the walk's existing multiplicity, and a closed set is exact.
-- **One path with a branch** (RuoYi's ternary, a `merge` with no common root): the walk answers
-  `non_enumerable` (spec 2026-10-21, merged values) and the handler is NULL. See §7: whether the
-  walk should answer a branch of literals as `narrowed` with its candidates is a change to the
-  shared walk, for the user to rule. Nothing in the Quartz catalog or engine reads the merge's
-  candidates around the walk.
+- **One path with a branch** (RuoYi's ternary, a `merge` with no common root whose candidates
+  are all literals): the value walk answers `narrowed` and lists the candidates (ruling 7).
+  This is a change to `values.py` for every consumer, not a Quartz rule: a merge whose
+  candidates are not all literals stays `non_enumerable`, and consumers that refuse an inexact
+  answer (`channel_of_answer`) keep refusing it. `dispatch.py` then gives each candidate's
+  body. Where every candidate reaches the same body (RuoYi: both inherit
+  `AbstractQuartzJob.execute`), the entry is one row; otherwise one row per body, `narrowed`.
+  Nothing in the Quartz catalog or engine reads the merge's candidates around the walk.
 
 **After the handler, the call graph does the rest.** The dispatcher is a root, and the trace
 continues through `call_edges` as it does from any root:
@@ -326,18 +330,10 @@ These are predictions until the "As built" section measures them.
 | Corpus | Predicted entries |
 |---|---|
 | spring-boot smoke test | 5: `helloJob` ×3 and `anotherJob` ×2, all `SampleJob.executeInternal`, all `resolved` |
-| RuoYi-Vue, aurora, NBlog | 1 each: `cron`, expression NULL, `partial`. Handler NULL unless §7 is ruled yes, then the inherited `execute` (one row: both branches reach the same body). |
+| RuoYi-Vue, aurora, NBlog | 1 each: `cron`, expression NULL, `partial`. Handler: the inherited `execute` (one row; both branches reach the same body). |
 | ruoyi-vue-pro | 2: `JobHandlerInvoker.executeInternal` and the IoT manager's job (handler from its callers' class arguments), `cron`, expression NULL, `partial`. The trace from the first reaches all ~25 `JobHandler` implementations. |
 | dolphinscheduler | 1: handler NULL (the trigger set is made in Guava), `cron` from the factory's declared type, expression NULL, `partial`. Not a trace root. |
 
 ## 7. Open — for the user
 
-**Should the value walk answer a branch between literals as `narrowed`, with its candidates?**
-RuoYi-Vue, aurora and NBlog pick the job class with `cond ? A.class : B.class` inside a
-helper. The 2026-10-21 merged-values design answers a merge with no common root as
-`non_enumerable`, so these three get no handler and no trace root.
-- **Yes:** the walk answers `narrowed` and lists the candidates, which is D00's word for "one of
-  these runs, we cannot say which" and what `dispatch.py` already does for several bodies.
-  Every consumer of the walk sees the change. Consumers that refuse an inexact answer
-  (`channel_of_answer`) keep refusing it, and `field_check.py` measures the rest.
-- **No:** the three keep a NULL handler, and their dispatchers are not roots.
+Nothing. Ruling 7 closed the last question.
