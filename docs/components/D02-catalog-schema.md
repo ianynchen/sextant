@@ -4202,9 +4202,11 @@ path the trigger and the job took to the pairing call (`values.producer_paths`, 
 descent into a helper as the call that entered it, so a read crossing out of that helper
 agrees only with that call). A helper `addJob(jobClass, cron)` called from two places is two
 rows, never four; a trigger built in `trigger(cron)` and scheduled by each caller keeps each
-caller's cron with that caller's job. A pairing no one path holds (its trigger and job
-passing through one helper on two calls) is read part by part, and every such row is
-`partial`: **a part no binding ties to the row — the name, the cron, the job's class — is
+caller's cron with that caller's job. A trigger and a job whose paths to a pairing call
+disagree on a caller they crossed out to came from two executions, and are no pairing at all
+(`Path.two_calls_of_one_helper` tells this from the next case). A pairing no one path holds
+because its trigger and job each passed through one helper on a call of its own (the M-1
+bound) is read part by part, and every such row is `partial`: **a part no binding ties to the row — the name, the cron, the job's class — is
 kept only where every path agrees on it; otherwise it is NULL**, a NULL cron naming in
 `expression_source` the method whose parameter it is (each caller hands its own), or the
 call the walk stopped at. A job named by a key a `job_key` call builds is paired on the path

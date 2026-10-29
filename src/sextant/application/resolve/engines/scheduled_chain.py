@@ -67,7 +67,9 @@ schedule took to `withSchedule` and the path the trigger and the job took to the
 paired them (`values.producer_paths`): each row holds the values one path gives.
 `addJob(jobClass, cron)` called twice is two rows, never four, and a trigger built in a
 helper and scheduled by each caller keeps each caller's cron with that caller's job. A
-pairing no one path holds is read part by part, `partial`, and a part no binding ties to
+trigger and a job that reached the pairing call through different callers are no pairing;
+a pairing no one path holds only because each passed through one helper on its own call is
+read part by part, `partial`, and a part no binding ties to
 the row — the name, the cron, the job's class — is kept only where every path agrees on it,
 else NULL; rows equal but for their resolution are one, at the weaker word. A job named by a
 key a `job_key` call builds is paired on the path to that call.
@@ -601,9 +603,13 @@ def _pairings(end: ChainEnd, context: _Context) -> list[tuple[ChainEnd | None, P
     built value reaches, then its `forJob`. `(None, _ANY_PATH)` where no job is found.
 
     A pairing call's path is the trigger's path to it JOINED with the job's: both values
-    are what one call was handed. Where every join disagrees, no one path holds the call's
-    pairing and the path is None (`_apart` reads the row). A job named by its key, or
-    injected as a bean, is paired by that name itself, on any path."""
+    are what one call was handed. Where every join disagrees on a caller crossed out to,
+    the two came from different executions and there is no pairing; where they disagree
+    only on which call of one helper handed each back, the pairing is real but no one path
+    holds it, and the path is None (`_apart` reads the row). A job named by a constant
+    `forJob(name)` key, or injected as a bean, is paired on any path, being the same on
+    every one; a job named by a key a `job_key` call builds is paired on the path to that
+    call (`_built_keys`)."""
     found: list[tuple[ChainEnd | None, Path | None]] = []
     for consumer in end.consumers:
         for pairing in context.rules.pairing:
@@ -619,7 +625,13 @@ def _pairings(end: ChainEnd, context: _Context) -> list[tuple[ChainEnd | None, P
                     both for trigger in triggers if (both := trigger.joined(path)) is not None
                 ]
                 found.extend((job, both) for both in joined)
-                if not joined:
+                # A trigger and a job that reached this call through DIFFERENT callers of
+                # the method holding it are two executions: no pairing. Only where the
+                # paths disagree solely on which call of one helper handed each back (the
+                # M-1 bound) is the pairing real and read apart (`_apart`).
+                if not joined and any(
+                    trigger.two_calls_of_one_helper(path) for trigger in triggers
+                ):
                     found.append((job, None))
     position = _position(end.captures.get(_JOB_DETAIL), context)
     if position is not None:

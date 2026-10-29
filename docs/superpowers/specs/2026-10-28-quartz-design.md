@@ -487,7 +487,9 @@ they were not built here, so no analysis reached them.
   every path agrees. The first wave's row-shape check (every schedule with every handler)
   is gone. **Third wave (R20):** a job named by a built `JobKey` is paired on the path to
   that `jobKey` call, and in a row no binding holds every part — name, cron, class — is
-  kept only where every path agrees, else NULL.
+  kept only where every path agrees, else NULL. **Fourth wave (R21):** a trigger and a job
+  whose paths to the pairing call disagree on a caller they crossed out to are no pairing
+  (they are two executions); only the "two calls of one helper" bound is read apart.
 - **A trigger with no `withSchedule`** is an entry on the catalog's `default_schedule`:
   Quartz 2.5.1's `TriggerBuilder.build()` sets `SimpleScheduleBuilder.simpleSchedule()` when
   no schedule was handed to it (`javap -c`), so the row is `simple`, `simpleSchedule()`.

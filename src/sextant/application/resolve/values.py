@@ -880,11 +880,30 @@ class Path:
     (`resolve_positions(..., within=...)`)."""
 
     trail: "_Trail" = ()
+    # The steps written for a call the path ENTERED a helper through (`_entered`), as
+    # against a caller it crossed out to. Empty for every path but `producer_paths`'.
+    entered: "frozenset[_Step]" = frozenset()
 
     def joined(self, other: "Path") -> "Path | None":
         """Both paths as one, or None where they made different choices somewhere."""
         merged = _combine(self.trail, other.trail)
-        return None if merged is None else Path(merged)
+        return None if merged is None else Path(merged, self.entered | other.entered)
+
+    def two_calls_of_one_helper(self, other: "Path") -> bool:
+        """Whether the two paths disagree ONLY on which call entered a helper — each value
+        handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
+        binding cannot hold (the M-1 bound) — rather than on a caller either crossed out
+        to, which says they come from two different executions. False where they agree
+        everywhere (`joined` answers then)."""
+        chosen = {step.context: step for step in self.trail}
+        clashes = [
+            (chosen[step.context], step)
+            for step in other.trail
+            if step.context in chosen and chosen[step.context].label != step.label
+        ]
+        return bool(clashes) and all(
+            mine in self.entered and theirs in other.entered for mine, theirs in clashes
+        )
 
 
 def producer_paths(
@@ -905,7 +924,9 @@ def producer_paths(
     ran the helper — so the path carries both spellings, and a later read within it
     (`resolve_positions(..., within=)`) reaching the helper's parameter agrees only with the
     call the descent came through. A path that descends into ONE helper on two different
-    calls cannot be held by one binding, which is the M-1 ruling's own bound."""
+    calls cannot be held by one binding, which is the M-1 ruling's own bound; the path
+    records which steps were written for an entry (`Path.entered`), so a reader can tell
+    that bound from two paths through different callers (`Path.two_calls_of_one_helper`)."""
     walk = _Walk(
         index,
         declared=declared,
@@ -923,7 +944,7 @@ def producer_paths(
             producer = Producer(ended_at=answer)
         entered = _entered(trail, index)
         if entered is not None:
-            found.append((producer, Path(entered)))
+            found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
     return tuple(dict.fromkeys(found))
 
 

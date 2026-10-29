@@ -439,6 +439,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "quartz.paths-through-DIFFERENT-callers-pair-nothing": Guard(
+        what="a job and a trigger whose paths to a pairing call disagree on a caller they "
+        "crossed out to are no pairing; only two calls of one helper are read apart",
+        why="`sched(JobDetail j, Trigger t)` called by x with (A, c1) and y with (B, c2): "
+        "treating every failed join as untied publishes A@c2 and B@c1, pairings no "
+        "execution builds, callers-squared of them (R21: four callers, twelve false rows)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="trigger.two_calls_of_one_helper(path) for trigger in triggers",
+                replace="True for trigger in triggers  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "quartz.no-withSchedule-is-the-DEFAULT-schedule": Guard(
         what="a trigger built with no `withSchedule` is an entry on the catalog's "
         "`default_schedule`",
