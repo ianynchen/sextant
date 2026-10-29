@@ -134,6 +134,15 @@ matches:
     org.quartz.CalendarIntervalScheduleBuilder: calendarInterval
     org.quartz.DailyTimeIntervalScheduleBuilder: dailyTimeInterval
 
+  # The schedule a trigger built with NO `withSchedule` runs on: `TriggerBuilder.build()`
+  # sets `SimpleScheduleBuilder.simpleSchedule()` where no schedule builder was handed to it
+  # (Quartz 2.5.1, `javap -c org.quartz.TriggerBuilder`: `getfield scheduleBuilder;
+  # ifnonnull; invokestatic SimpleScheduleBuilder.simpleSchedule`) — fire once, at the start
+  # time. `newTrigger().withIdentity(…).startNow().build()` is Quartz's own first example, so
+  # such a trigger is an entry like any other (spec §3a): kind `simple`, written
+  # `simpleSchedule()`.
+  default_schedule: { owner: org.quartz.SimpleScheduleBuilder, method: simpleSchedule }
+
   # The one root whose expression is its string argument, verbatim, as `@Scheduled(cron =
   # …)` is recorded. By descriptor (CP-55 row 3): `cronSchedule(CronExpression)` takes an
   # object, and is written as its chain like every other root.

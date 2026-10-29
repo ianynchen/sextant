@@ -78,7 +78,7 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 # The capture fields that reach an identity column of `endpoints`
 # (`derive_call_endpoints.sql`'s own `method`/`path`/`peer`). `url`, `base` and
 # `channel` are already refused as literals by the engine itself
-# (`fluent._validate_captures` demands `argN` for every `_ARGUMENT_FIELDS`
+# (`chains._validate_captures` demands `argN` for every `_ARGUMENT_FIELDS`
 # member), so `http_method` is the one field a catalog can spell as a literal
 # at all — and it is the one that shipped wrong.
 _IDENTITY_CAPTURES = ("http_method",)

@@ -37,7 +37,7 @@ direction: inbound
 # `inboundChannelAdapter` forms carry a `ConsumerProperties` at slot 1, read
 # through its `(String...)` constructor the same way. A root or step matched by
 # owner and name alone would read ONE slot for every overload; the descriptor
-# (its parameter portion — `fluent._same_overload`) is what tells them apart.
+# (its parameter portion — `chains._same_overload`) is what tells them apart.
 #
 # THE SINK'S TOPIC: `topic(String)` on the producer spec (row 7); `topic(Function)`,
 # `topicExpression(String)` and `topicExpression(Expression)` are not literals

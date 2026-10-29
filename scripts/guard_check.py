@@ -254,8 +254,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            found.append((None, _PARTIAL, _source(root, slot, context)))",
-                replace="            pass  # guard disabled by scripts/guard_check.py",
+                find="            expression, resolution, source = _expression(answers.get(_VALUE), "
+                "root, slot, context)\n",
+                replace="            expression, resolution, source = _expression(answers.get(_VALUE), "
+                "root, slot, context)\n            if expression is None:\n                continue"
+                "  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -310,10 +313,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        dict.fromkeys((handler, narrowed and len(branched) > 1) for "
-                "handler, narrowed in found)",
-                replace="        [(handler, narrowed and len(branched) > 1) for handler, narrowed "
-                "in found]  # guard disabled by scripts/guard_check.py",
+                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler)",
+                replace="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
+                "id(row))  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -325,11 +327,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            found.append((None if job_class is None else "
-                "_handler(job_class, context), narrowed))",
-                replace="            found.append((None if job_class is None else "
-                "_handler(job_class, context), True))  # guard disabled by "
-                "scripts/guard_check.py",
+                find="            narrowed=narrowed,",
+                replace="            narrowed=True,  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -340,8 +339,82 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="narrowed and len(branched) > 1",
+                find="row.narrowed and len(branched) > 1",
                 replace="False",
+            ),
+        ),
+    ),
+    "quartz.one-PATH-ties-the-cron-to-its-job": Guard(
+        what="the trigger's key, the literal cron and the job's class are read together on "
+        "each path, so a value stays with the values its own path gives",
+        why="the `QuartzManager.addJob(jobClass, cron)` helper is called with a job and a cron "
+        "per caller; read apart, every cron pairs with every job, and two callers publish "
+        "four `resolved` rows, two of them a job at a time nobody scheduled it",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        resolve_positions(context.workspace, positions, context.index) if "
+                "positions else []\n",
+                replace="        [dict(zip(positions, combo)) for combo in __import__('itertools')"
+                ".product(*([answers[label] for answers in resolve_positions(context.workspace, "
+                "{label: at}, context.index)] for label, at in positions.items()))] if positions "
+                "else []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-pairing-is-partial": Guard(
+        what="where no path ties schedules to jobs (every schedule reaches every job), the "
+        "rows are `partial`",
+        why="a trigger built in a helper and paired with a different job in each caller "
+        "reaches every caller's job with every caller's cron; publishing each pairing "
+        "`resolved` states schedules that are false for half of them",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="    crossed = _crossed(found)",
+                replace="    crossed = False  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.no-withSchedule-is-the-DEFAULT-schedule": Guard(
+        what="a trigger built with no `withSchedule` is an entry on the catalog's "
+        "`default_schedule`",
+        why="Quartz's `TriggerBuilder.build()` uses `simpleSchedule()` where no schedule was "
+        "handed to it, and `newTrigger().withIdentity(..).startNow().build()` is its own "
+        "first example; without the default that trigger, and the job it runs, is missing",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        return [context.default_schedule]",
+                replace="        return []  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.a-call-ON-the-value-names-where-it-came-from": Guard(
+        what="a no-argument call handing back its own receiver's type is read past, and the "
+        "call that produced its receiver is the named source",
+        why="`cronSchedule(row.getCron().trim())` would name `String#trim()` as where the cron "
+        "is read at runtime, which says nothing about where it comes from",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find='        if not (call["arguments"] or []) and returned_type(',
+                replace='        if False and not (call["arguments"] or []) and returned_type(  '
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.one-HANDLER-is-one-row-at-the-weaker-word": Guard(
+        what="one body reached exactly on one path and through a branch on another is one "
+        "row, at the weaker resolution",
+        why="two rows for one handler, `resolved` and `narrowed`, state the one trigger twice "
+        "and claim the body both certainly and possibly runs",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        rows[key] = resolution if key not in rows else "
+                "_weaker(rows[key], resolution)",
+                replace="        rows[key] = resolution  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -371,6 +444,49 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAIN_TEXT,
                 find="\n    return None\n",
                 replace="\n    return ''  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.a-nested-call-is-written-WITH-its-receiver": Guard(
+        what="a nested call is written with what it was called on (its type for a static "
+        "call, a constant of its own type, a nested call written too), else the chain has "
+        "no text",
+        why="`withIntervalInMilliseconds(TimeUnit.MINUTES.toMillis(5))` written without its "
+        "receiver reads `TimeUnit.toMillis(5)`, a call nobody wrote, published `resolved`",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    return None if receiver is None else f"{receiver}.{name}({written})"',
+                replace="    return f\"{short_class_name(str(site['owner']))}.{name}({written})\""
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-construction-is-written-as-NEW": Guard(
+        what="a nested constructor call is written `new Type(args)`",
+        why="`startingDailyAt(new TimeOfDay(9, 0))` written as `TimeOfDay.<init>(9, 0)` is "
+        "no code anyone wrote",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="        return f\"new {short_class_name(str(site['owner']))}({written})\"",
+                replace="        return f\"{short_class_name(str(site['owner']))}.{name}({written})\""
+                "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "schedules.a-NESTED-type-is-written-with-a-dot": Guard(
+        what="a nested type in a written chain reads `Outer.Inner`, as the source writes it",
+        why="the Spring Boot smoke test's row read `DateBuilder$IntervalUnit.HOUR`, the "
+        "binary name, which no source spells (OI-223)",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find="from sextant.domain.symbols import bare_descriptor, member_name, owner_of, "
+                "short_class_name\n",
+                replace="from sextant.domain.symbols import bare_descriptor, member_name, owner_of, "
+                "simple_name\n\n\ndef short_class_name(symbol):  # guard disabled by "
+                "scripts/guard_check.py\n    return simple_name(bare_descriptor(symbol))\n",
             ),
         ),
     ),

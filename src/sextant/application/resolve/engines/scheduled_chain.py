@@ -28,7 +28,9 @@ resolve's config model (`config.placeholder_rule`), never by a hard-coded opener
   a string literal verbatim (`resolved`), or a `${…}` placeholder (`unresolved`). For any
   other root, the chain as written (ruling 4). NULL where the code does not hold it, with
   `expression_source` naming the call the walk stopped at (ruling 2): the row stays,
-  `partial`, rather than being dropped.
+  `partial`, rather than being dropped. A trigger handed no schedule at all runs on the
+  catalog's `default_schedule` (Quartz's `build()` uses `simpleSchedule()`), written as
+  that call.
 - `name` — `group.name`, where both are constants; a key written with no group is in the
   catalog's `default_group`.
 
@@ -58,6 +60,12 @@ up in `supertype_dispatch`: a framework template the catalog says calls a subcla
 hands the handler to that method, resolved the same way; any other unread body gives none.
 Several job classes reaching ONE body are one row, at the row's own resolution; several
 bodies from one branch are a row each, `narrowed` (§3c).
+
+**One path at a time.** The key, the literal root's argument and the job root's class are
+read together (`values.resolve_positions`), so each row holds the values ONE path gives:
+`addJob(jobClass, cron)` called twice is two rows, never four. Where no path ties schedules
+to jobs (each reaches each), every row is `partial`; rows equal but for their resolution
+are one, at the weaker word.
 
 **`resolution`** (§3a): `resolved` with handler and expression both known and no
 placeholder; `unresolved` where the only gap is a placeholder; `narrowed` where the only gap
@@ -96,6 +104,7 @@ from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
     LITERAL,
+    RECEIVER,
     STRING,
     SYMBOL,
     Answer,
@@ -115,6 +124,7 @@ from sextant.domain.symbols import (
 _KINDS = "kinds"
 _LITERAL_EXPRESSION = "literal_expression"
 _DEFAULT_GROUP = "default_group"
+_DEFAULT_SCHEDULE = "default_schedule"
 # The capture fields this engine reads off a chain end — the catalog's steps name the
 # argument each one reads (`argN`), and the chain walk folds them, last wins.
 _NAME = "name"
@@ -135,6 +145,10 @@ _JOB_NAME = "job_name"
 _JOB_GROUP = "job_group"
 _JOB_KEY_FIELD = "job_key"
 _ARG = re.compile(r"^arg(\d+)$")
+# The two positions read with the trigger's key on each path (`_on_paths`): the literal
+# root's argument and the job root's class.
+_VALUE = "value"
+_CLASS = "class"
 
 _RESOLVED = "resolved"
 _UNRESOLVED = "unresolved"
@@ -170,7 +184,7 @@ def entries(
     `catalogs` is every catalog of the resolve, for the config model's placeholder opener
     (`config_model_of`, the choice the annotation engine and `resolved_schedules` make);
     a caller handing one catalog gets that catalog's model."""
-    kinds, literal, default_group = _validated(catalog)
+    kinds, literal, default_group, default_schedule = _validated(catalog)
     rules = _job_rules(catalog)
     trigger_walk, job_walk = _walks(catalog, rules)
     ends = list(chain_ends(workspace, trigger_walk))
@@ -189,6 +203,7 @@ def entries(
         kinds=kinds,
         literal=literal,
         default_group=default_group,
+        default_schedule=default_schedule,
         opener=opener,
         field_sources=field_facts(workspace, catalog),
         # Every call identity the module makes, for naming the call a walk to the
@@ -278,6 +293,8 @@ class _Context:
     # `{owners, method, descriptor, arg}`, the owners converted.
     literal: Mapping[str, Any]
     default_group: str
+    # The schedule a trigger built with no `withSchedule` runs on, as a row writes it.
+    default_schedule: "_Schedule"
     opener: str
     field_sources: FieldFacts | None
     every_call: frozenset[tuple[str, str]]
@@ -330,28 +347,143 @@ def _walks(catalog: Catalog, rules: _JobRules) -> tuple[Catalog, Catalog]:
     return trigger_walk, job_walk
 
 
+@dataclass(frozen=True)
+class _Schedule:
+    """One schedule handed to a trigger: its kind, and its expression where that is known
+    whatever path reached it."""
+
+    kind: str | None
+    expression: str | None = None
+    resolution: str = _PARTIAL
+    source: str | None = None
+    # The `literal_expression` root whose argument IS the expression, read on each path
+    # together with the trigger's key and the job's class (`_on_paths`); None where the
+    # expression above is already the answer.
+    literal: tuple[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class _Found:
+    """One path's row, before rows equal but for their resolution are one (`_entries_of`)."""
+
+    name: str | None
+    trigger: str | None
+    expression: str | None
+    resolution: str  # the expression's own
+    source: str | None
+    handler: str | None
+    narrowed: bool
+
+
 def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
-    name = _key(end.captures.get(_NAME), end.captures.get(_GROUP), context)
-    handlers = _handlers(_jobs_of(end, context), context)
-    for trigger, expression, resolution, source in _schedules(end.captures, context):
-        for handler, narrowed in handlers:
-            if trigger is None and handler is None:
-                # Neither a kind nor a job: the chain says nothing a reader could use (§3a),
-                # and a row of NULLs would claim work nobody can name.
-                continue
-            yield TriggerEntry(
-                caller=end.caller,
-                row={
-                    "handler": handler,
-                    "trigger": trigger,
-                    "name": name,
-                    "expression": expression,
-                    "expression_source": source,
-                    "resolution": _row_resolution(handler, narrowed, resolution),
-                    "evidence": "compiler",
-                    "catalog_id": context.catalog.id,
-                },
-            )
+    """The rows of one chain end, one per distinct row the paths give.
+
+    **The trigger's key, its expression and its job's class are read TOGETHER, one path at
+    a time** (`_on_paths`), so a value stays with the values its own path gives: the
+    `addJob(jobClass, cron)` helper two callers call is two rows, each caller's cron with
+    its own job, never the four a separate read of each would cross. Where the pairing is
+    made somewhere no path shares — the trigger built in one method and paired with jobs in
+    its callers — every schedule reaches every job and nothing says which go together:
+    those rows are all `partial` (`_crossed`)."""
+    jobs: list[ChainEnd | None] = [*_jobs_of(end, context)] or [None]
+    found = [
+        row
+        for schedule in _schedules(end.captures, context)
+        for job in jobs
+        for row in _on_paths(end, schedule, job, context)
+        # Neither a kind nor a job: the chain says nothing a reader could use (§3a), and a
+        # row of NULLs would claim work nobody can name.
+        if row.trigger is not None or row.handler is not None
+    ]
+    # Classes on one branch (`narrowed` answers) reaching ONE body are one row at its own
+    # resolution; reaching several, each row is `narrowed` (§3c).
+    branched = {row.handler for row in found if row.narrowed}
+    crossed = _crossed(found)
+    rows: dict[tuple[str | None, ...], str] = {}
+    for row in found:
+        resolution = (
+            _PARTIAL
+            if crossed
+            else _row_resolution(row.handler, row.narrowed and len(branched) > 1, row.resolution)
+        )
+        key = (row.name, row.trigger, row.expression, row.source, row.handler)
+        # One body found exactly on one path and through a branch on another is one row,
+        # at the weaker word: that it may not run is the true half.
+        rows[key] = resolution if key not in rows else _weaker(rows[key], resolution)
+    for (name, trigger, expression, source, handler), resolution in rows.items():
+        yield TriggerEntry(
+            caller=end.caller,
+            row={
+                "handler": handler,
+                "trigger": trigger,
+                "name": name,
+                "expression": expression,
+                "expression_source": source,
+                "resolution": resolution,
+                "evidence": "compiler",
+                "catalog_id": context.catalog.id,
+            },
+        )
+
+
+def _on_paths(
+    end: ChainEnd, schedule: _Schedule, job: ChainEnd | None, context: _Context
+) -> Iterator[_Found]:
+    """A row per path through the trigger's key, the schedule's literal argument and the
+    job root's class, read together (`values.resolve_positions`): on each path, the values
+    that path gives and no other's."""
+    positions: dict[str, tuple[Mapping[str, Any], int | str]] = {}
+    name = _position(end.captures.get(_NAME), context)
+    group = _position(end.captures.get(_GROUP), context)
+    if name is not None:
+        positions[_NAME] = name
+        if group is not None:
+            positions[_GROUP] = group
+    slot = int(context.literal["arg"])
+    root = None if schedule.literal is None else context.index.sites[schedule.literal]
+    if root is not None and slot < len(root["arguments"] or []):
+        positions[_VALUE] = (root, slot)
+    if job is not None and context.rules.class_arg < len(job.root["arguments"] or []):
+        positions[_CLASS] = (job.root, context.rules.class_arg)
+    # No single path reaching every position at once leaves one row with nothing paired,
+    # rather than a pairing no path makes.
+    paths = (
+        resolve_positions(context.workspace, positions, context.index) if positions else []
+    ) or [{}]
+    for answers in paths:
+        expression, resolution, source = schedule.expression, schedule.resolution, schedule.source
+        if root is not None:
+            expression, resolution, source = _expression(answers.get(_VALUE), root, slot, context)
+        job_class, narrowed = _job_class(answers.get(_CLASS))
+        yield _Found(
+            name=_key_of(answers, context),
+            trigger=schedule.kind,
+            expression=expression,
+            resolution=resolution,
+            source=source,
+            handler=None if job_class is None else _handler(job_class, context),
+            narrowed=narrowed,
+        )
+
+
+def _crossed(found: list[_Found]) -> bool:
+    """Whether the paths left schedules and jobs unpaired: several schedules, several
+    handlers, and every schedule with every handler — what a read of each alone gives, so
+    the paths decided nothing about which go together. (A helper called with every
+    combination on purpose gives the same rows and is `partial` too: from the rows alone
+    the two are one shape.)"""
+    schedules = {(row.name, row.trigger, row.expression, row.source) for row in found}
+    handlers = {row.handler for row in found}
+    pairs = {(row.name, row.trigger, row.expression, row.source, row.handler) for row in found}
+    return len(schedules) > 1 and len(handlers) > 1 and len(pairs) == len(schedules) * len(handlers)
+
+
+# The resolution words from the strongest claim to the weakest.
+_STRENGTH = (_RESOLVED, _UNRESOLVED, _NARROWED, _PARTIAL)
+
+
+def _weaker(one: str, other: str) -> str:
+    return max(one, other, key=_STRENGTH.index)
 
 
 def _row_resolution(handler: str | None, narrowed: bool, expression: str) -> str:
@@ -494,38 +626,17 @@ def _built_keys(site: Mapping[str, Any], slot: int, context: _Context) -> list[s
     return keys
 
 
-def _handlers(jobs: list[ChainEnd], context: _Context) -> list[tuple[str | None, bool]]:
-    """`(handler, narrowed)` for each distinct body the jobs' classes run, in order: one
-    NULL where no job is found or a class's body is not known. Classes on one branch
-    (`narrowed` answers) reaching ONE body are one row at its own resolution; reaching
-    several, each row is `narrowed` (§3c)."""
-    found: list[tuple[str | None, bool]] = []
-    for job in jobs:
-        for job_class, narrowed in _job_classes(job, context):
-            found.append((None if job_class is None else _handler(job_class, context), narrowed))
-    if not found:
-        return [(None, False)]
-    branched = {handler for handler, narrowed in found if narrowed}
-    return list(
-        dict.fromkeys((handler, narrowed and len(branched) > 1) for handler, narrowed in found)
-    )
-
-
-def _job_classes(job: ChainEnd, context: _Context) -> list[tuple[str | None, bool]]:
-    """`(class, narrowed)` for each answer the value walk gives the job root's class
-    argument — a class literal by its bare type; None for anything else."""
-    root = job.root
-    slot = context.rules.class_arg
-    if slot >= len(root["arguments"] or []):
-        return [(None, False)]
-    found = [
-        (str(answer.value), answer.narrowed)
-        if answer.kind == LITERAL and answer.literal_kind == SYMBOL and not answer.inexact
-        else (None, False)
-        for answers in resolve_positions(context.workspace, {"class": (root, slot)}, context.index)
-        for answer in (answers["class"],)
-    ]
-    return list(dict.fromkeys(found)) or [(None, False)]
+def _job_class(answer: Answer | None) -> tuple[str | None, bool]:
+    """`(class, narrowed)` for one answer for the job root's class argument — a class
+    literal by its bare type; None for anything else."""
+    if (
+        answer is not None
+        and answer.kind == LITERAL
+        and answer.literal_kind == SYMBOL
+        and not answer.inexact
+    ):
+        return str(answer.value), answer.narrowed
+    return None, False
 
 
 def _handler(job_class: str, context: _Context) -> str | None:
@@ -575,13 +686,21 @@ def _key_at(
     if group is not None:
         positions[_GROUP] = group
     names = {
-        f"{_constant(answers.get(_GROUP)) if _GROUP in answers else context.default_group}"
-        f".{_constant(answers[_NAME])}"
+        key
         for answers in resolve_positions(context.workspace, positions, context.index)
-        if _constant(answers[_NAME]) is not None
-        and (_GROUP not in answers or _constant(answers[_GROUP]) is not None)
+        if (key := _key_of(answers, context)) is not None
     }
     return names.pop() if len(names) == 1 else None
+
+
+def _key_of(answers: Mapping[str, Answer], context: _Context) -> str | None:
+    """`group.name` on one path, where it reads both as one string each; a name with no
+    group is in the default group. NULL for no name, or a key read at runtime."""
+    if _NAME not in answers:
+        return None
+    name = _constant(answers[_NAME])
+    group = _constant(answers[_GROUP]) if _GROUP in answers else context.default_group
+    return None if name is None or group is None else f"{group}.{name}"
 
 
 def _position(
@@ -610,22 +729,22 @@ def _constant(answer: Answer | None) -> str | None:
     return str(answer.value)
 
 
-def _schedules(
-    captures: Mapping[str, Any], context: _Context
-) -> list[tuple[str | None, str | None, str, str | None]]:
-    """`(trigger, expression, resolution, expression_source)` for each distinct schedule the
-    walk finds handed to the trigger, in its order.
+def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule]:
+    """Each distinct schedule the walk finds handed to the trigger, in its order; the
+    catalog's `default_schedule` where none is (Quartz's own `build()`, CP-55).
 
     The builder chain is read by the value walk ALONG RECEIVERS (`producers_of`): every call
     on a `kinds` type that built the value, root first, across returns and helpers and in
     the path's own calling contexts — a helper's parameter is the argument at the call the
     walk came through, never another caller's."""
+    if _SCHEDULE not in captures:
+        return [context.default_schedule]
     position = _position(captures.get(_SCHEDULE), context)
     if position is None:
         return []
     site, slot = position
     declared_kind = _declared_kind(site, slot, context)
-    found: list[tuple[str | None, str | None, str, str | None]] = []
+    found: list[_Schedule] = []
     chains = [
         producer
         for producer in producers_of(
@@ -638,22 +757,20 @@ def _schedules(
         if not producer.rooted:
             # A builder call was found and its root was not: the kind is the builder call's
             # own type, which is a `kinds` key by construction of the stop set.
-            found.append((context.kinds.get(str(sites[0]["owner"])), None, _PARTIAL, None))
+            found.append(_Schedule(context.kinds.get(str(sites[0]["owner"]))))
             continue
         kind = context.kinds[str(sites[0]["owner"])]
         if _is_literal_root(sites[0], context):
-            found.extend((kind, *schedule) for schedule in _literal(sites[0], context))
+            found.append(_literal(sites[0], kind, context))
             continue
         # A chain passed through a branch is not the chain as written: which step ran is not
         # known, so it has no text.
         text = None if producer.inexact else _text(sites, context)
-        found.append(
-            (kind, text, _RESOLVED, None) if text is not None else (kind, None, _PARTIAL, None)
-        )
+        found.append(_Schedule(kind, text, _RESOLVED) if text is not None else _Schedule(kind))
     if not chains:
         # The walk ends before any builder call (§3b): a factory in a jar, a helper whose body
         # it cannot read. The kind is still the type the producing call is declared to return.
-        found.append((declared_kind, None, _PARTIAL, None))
+        found.append(_Schedule(declared_kind))
     return list(dict.fromkeys(found))
 
 
@@ -705,13 +822,11 @@ def _is_literal_root(root: Mapping[str, Any], context: _Context) -> bool:
     )
 
 
-def _literal(
-    root: Mapping[str, Any], context: _Context
-) -> list[tuple[str | None, str, str | None]]:
-    """`(expression, resolution, expression_source)` for the `literal_expression` root's
-    argument, one per distinct answer: the field ladder's `${…}` for a configured field or
-    parameter, else the value walk's string, verbatim. Steps after the root are not part of
-    the expression, as they are not for `@Scheduled` (§3b)."""
+def _literal(root: Mapping[str, Any], kind: str, context: _Context) -> _Schedule:
+    """The `literal_expression` root's schedule: the field ladder's `${…}` for a configured
+    field or parameter, which no path changes; else its argument, read on each path with
+    the trigger's key and job (`_on_paths`, `_expression`). Steps after the root are not
+    part of the expression, as they are not for `@Scheduled` (§3b)."""
     slot = int(context.literal["arg"])
     arguments = root["arguments"] or []
     argument = arguments[slot] if slot < len(arguments) else None
@@ -720,26 +835,31 @@ def _literal(
         argument, context.field_sources, _call_facts(caller, context), caller
     )
     if configured is not None:
-        return [(configured, _resolution_of(configured, False, context), None)]
-    found: list[tuple[str | None, str, str | None]] = []
-    for answers in resolve_positions(context.workspace, {"value": (root, slot)}, context.index):
-        answer = answers["value"]
-        if answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
-            found.append(
-                (
-                    str(answer.value),
-                    _resolution_of(str(answer.value), answer.narrowed, context),
-                    None,
-                )
-            )
-        elif (
-            answer.kind == EXPRESSION and context.opener in str(answer.value) and not answer.inexact
-        ):
-            found.append((str(answer.value), _UNRESOLVED, None))
-        else:
-            # Read at runtime (ruling 2): the entry stays, naming where the walk stopped.
-            found.append((None, _PARTIAL, _source(root, slot, context)))
-    return list(dict.fromkeys(found))
+        return _Schedule(kind, configured, _resolution_of(configured, False, context))
+    return _Schedule(kind, literal=_site_key(root))
+
+
+def _expression(
+    answer: Answer | None, root: Mapping[str, Any], slot: int, context: _Context
+) -> tuple[str | None, str, str | None]:
+    """`(expression, resolution, expression_source)` for one path's answer for the literal
+    root's argument: a string verbatim, a `${…}` verbatim, else read at runtime (ruling 2) —
+    the entry stays, naming where the walk stopped."""
+    if (
+        answer is not None
+        and answer.kind == LITERAL
+        and answer.literal_kind == STRING
+        and not answer.inexact
+    ):
+        return str(answer.value), _resolution_of(str(answer.value), answer.narrowed, context), None
+    if (
+        answer is not None
+        and answer.kind == EXPRESSION
+        and context.opener in str(answer.value)
+        and not answer.inexact
+    ):
+        return str(answer.value), _UNRESOLVED, None
+    return None, _PARTIAL, _source(root, slot, context)
 
 
 def _resolution_of(expression: str, narrowed: bool, context: _Context) -> str:
@@ -756,12 +876,36 @@ def _source(root: Mapping[str, Any], slot: int, context: _Context) -> str | None
         method_descriptor(
             str(site["owner"]), str(site["name"]), str(site.get("descriptor") or "()")
         )
-        for producer in producers_of(context.index, root, slot, context.every_call)
-        if producer.caller is not None
-        and producer.ordinal is not None
-        and (site := context.index.sites.get((producer.caller, producer.ordinal))) is not None
+        for site in _reading_calls(root, slot, context, frozenset())
     }
     return called.pop() if len(called) == 1 else None
+
+
+def _reading_calls(
+    site: Mapping[str, Any],
+    slot: int | str,
+    context: _Context,
+    seen: frozenset[tuple[str, int]],
+) -> list[Mapping[str, Any]]:
+    """The calls the walk from `site`'s `slot` stops at, each read back past a call made ON
+    the value: one that takes nothing and hands back its own receiver's type
+    (`getCron().trim()`) does not say where the value came from, so the call that produced
+    its receiver is named instead."""
+    found: list[Mapping[str, Any]] = []
+    for producer in producers_of(context.index, site, slot, context.every_call):
+        if producer.caller is None or producer.ordinal is None:
+            continue
+        key = (producer.caller, producer.ordinal)
+        call = context.index.sites.get(key)
+        if call is None or key in seen:
+            continue
+        if not (call["arguments"] or []) and returned_type(
+            str(call.get("descriptor") or "()")
+        ) == str(call["owner"]):
+            found.extend(_reading_calls(call, RECEIVER, context, seen | {key}))
+            continue
+        found.append(call)
+    return found
 
 
 def _effective(caller: str, context: _Context) -> dict[Any, Mapping[str, Any]]:
@@ -787,8 +931,9 @@ def _call_facts(caller: str, context: _Context) -> CallFacts:
     )
 
 
-def _validated(catalog: Catalog) -> tuple[dict[str, str], dict[str, Any], str]:
-    """`kinds`, `literal_expression` and `default_group`, refused when malformed — each
+def _validated(catalog: Catalog) -> tuple[dict[str, str], dict[str, Any], str, _Schedule]:
+    """`kinds`, `literal_expression`, `default_group` and `default_schedule`, refused when
+    malformed — each
     reaches a published column, where a typo is indistinguishable from an observation (the
     `scheduled_work._validate_matches` precedent). The chain's own keys are the walk's to
     check (`chain_ends`)."""
@@ -829,6 +974,24 @@ def _validated(catalog: Catalog) -> tuple[dict[str, str], dict[str, Any], str]:
             f"written without one is in, got {default_group!r} (D02 §2's `scheduled_chain` "
             f"style)"
         )
+    default = matches.get(_DEFAULT_SCHEDULE)
+    default_owners = (
+        catalog_symbols(default.get("owner"), f"{catalog.source}: {_DEFAULT_SCHEDULE}.owner")
+        if isinstance(default, dict)
+        else ()
+    )
+    if not (
+        isinstance(default, dict)
+        and isinstance(default.get("method"), str)
+        and len(default_owners) == 1
+        and default_owners[0] in owned
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_DEFAULT_SCHEDULE}` must be `{{owner, "
+            f"method}}`, the static factory the framework builds a trigger's schedule with "
+            f"where none is handed to it, its owner one of `{_KINDS}`, got {default!r} (D02 "
+            f"§2's `scheduled_chain` style)"
+        )
     return (
         owned,
         {
@@ -840,6 +1003,8 @@ def _validated(catalog: Catalog) -> tuple[dict[str, str], dict[str, Any], str]:
             "arg": literal["arg"],
         },
         default_group,
+        # Written as the chain it stands for, a root with no argument (ruling 4).
+        _Schedule(owned[default_owners[0]], f"{default['method']}()", _RESOLVED),
     )
 
 

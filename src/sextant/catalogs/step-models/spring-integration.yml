@@ -67,7 +67,7 @@ displayName: The Spring Integration Java DSL flow definition (every member, clas
 # the handler sits at slot 0 in `handle(GenericHandler)` and at slot 1 in
 # `handle(Class, GenericHandler)`, and one name matching both would read one
 # slot for each. The engine compares the parameter portion alone
-# (`fluent._same_overload`, F2 §4.1's rule): the return type differs between the
+# (`chains._same_overload`, F2 §4.1's rule): the return type differs between the
 # base's and the subclass's `handle` and moves between releases.
 #
 # THE MEMBERS THE OWNERS DECLARE BEYOND THE THIRTY-FOUR — `IntegrationFlowBuilder`'s

@@ -1,6 +1,6 @@
 # Quartz — design
 
-**Status: DRAFT 2026-10-29, self-reviewed, all questions ruled; awaiting approval** (branch `cov/quartz`). Plane SEXTANT-177,
+**Status: BUILT 2026-10-29** (branch `cov/quartz`, "As built" below). Plane SEXTANT-177,
 Java/Kotlin framework order 2 (`docs/COVERAGE.md` "Priority order"). Moves COVERAGE §5.12's
 Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```delivery Async row
 (`docs/java-kotlin-delivery-list.md:63`). The Async cell does not reach ✅ from this item:
@@ -400,7 +400,7 @@ module analyze` on the module that holds its Quartz code. Nothing was written in
 
 | Corpus | Commit | Module | Entries |
 |---|---|---|---|
-| spring-boot smoke test | `6922eaa` | `smoke-test/spring-boot-smoke-test-quartz` | **5, all `SampleJob#executeInternal`, all `resolved`:** simple `DEFAULT.sampleTrigger` `simpleSchedule().withIntervalInSeconds(2).repeatForever()`; simple `samples.every-day` `repeatHourlyForever(24)`; cron `samples.3am-weekdays` `atHourAndMinuteOnGivenDaysOfWeek(3, 0, 1, 2, 3, 4, 5)`; calendarInterval `samples.once-a-week` `calendarIntervalSchedule().withIntervalInWeeks(1)`; dailyTimeInterval `samples.every-hour-tue-thu` `dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5).startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0)).endingDailyAt(TimeOfDay.hourAndMinuteOfDay(18, 0)).withInterval(1, DateBuilder$IntervalUnit.HOUR)` |
+| spring-boot smoke test | `6922eaa` | `smoke-test/spring-boot-smoke-test-quartz` | **5, all `SampleJob#executeInternal`, all `resolved`:** simple `DEFAULT.sampleTrigger` `simpleSchedule().withIntervalInSeconds(2).repeatForever()`; simple `samples.every-day` `repeatHourlyForever(24)`; cron `samples.3am-weekdays` `atHourAndMinuteOnGivenDaysOfWeek(3, 0, 1, 2, 3, 4, 5)`; calendarInterval `samples.once-a-week` `calendarIntervalSchedule().withIntervalInWeeks(1)`; dailyTimeInterval `samples.every-hour-tue-thu` `dailyTimeIntervalSchedule().onDaysOfTheWeek(3, 5).startingDailyAt(TimeOfDay.hourAndMinuteOfDay(9, 0)).endingDailyAt(TimeOfDay.hourAndMinuteOfDay(18, 0)).withInterval(1, DateBuilder.IntervalUnit.HOUR)` (re-measured after the final review's fix wave; it read `DateBuilder$IntervalUnit.HOUR` before, OI-223) |
 | RuoYi-Vue | `13db1fc` | `ruoyi-quartz` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `SysJob#getCronExpression`, `partial` |
 | NBlog | `b8e537c` | `blog-api` | 1: `ScheduleJob#executeInternal`, cron, expression NULL from `ScheduleJob#getCron`, `partial` |
 | aurora | `07e9524` | `aurora-springboot` | 1: `AbstractQuartzJob#execute`, cron, expression NULL from `Job#getCronExpression`, `partial` |
@@ -465,14 +465,34 @@ they were not built here, so no analysis reached them.
 
 - **OI-222** (SEXTANT-215): dolphinscheduler's trigger gains a false cron from an unrelated
   field writer, above.
-- **OI-223** (SEXTANT-216): a nested type in a written chain reads `Outer$Inner`, not
-  `Outer.Inner` (`DateBuilder$IntervalUnit.HOUR` in the smoke test). Cosmetic; the row stays
-  `resolved`.
+- **OI-223** (SEXTANT-216): a nested type in a written chain read `Outer$Inner`, not
+  `Outer.Inner` (`DateBuilder$IntervalUnit.HOUR` in the smoke test). Fixed in the final
+  review's fix wave, below; the smoke test now reads `DateBuilder.IntervalUnit.HOUR`.
 - **OI-229** (SEXTANT-222): a trigger chain must reach `build()` in its own method, and a
   configured cron is read only as the builder's direct argument.
 - OI-224 to OI-228 and OI-230 are follow-ups from the branch's reviews of the shared code.
 - **An environment note, not an issue:** NBlog, aurora and dolphinscheduler need Lombok
   1.18.30 or later to build on JDK 21.
+
+### The final review's fix wave (2026-10-29)
+
+- **One path at a time.** A trigger's key, its literal cron and its job's class were read
+  separately and crossed, so the common `addJob(jobClass, cron)` helper called from two
+  places gave four `resolved` rows, two of them false. They are now read together on each
+  path (`values.resolve_positions`): two rows. Where no path ties schedules to jobs (each
+  reaches each), every row is `partial`.
+- **A trigger with no `withSchedule`** is an entry on the catalog's `default_schedule`:
+  Quartz 2.5.1's `TriggerBuilder.build()` sets `SimpleScheduleBuilder.simpleSchedule()` when
+  no schedule was handed to it (`javap -c`), so the row is `simple`, `simpleSchedule()`.
+- **A written chain** names a nested call's receiver (`TimeUnit.MINUTES.toMillis(5)`), or
+  has no text where the receiver cannot be written; a constructor reads `new TimeOfDay(9, 0)`;
+  a nested type reads `Outer.Inner` (OI-223).
+- **A cron read off `getCron().trim()`** names `getCron`, not `String#trim()`.
+- **One handler** found exactly on one path and through a branch on another is one row, at
+  the weaker word.
+- **What it moved:** the six pinned field corpora are unchanged. The smoke test was
+  re-analysed, and the other six modules in the table above re-derived on their Task 11
+  workspaces: every row is unchanged except the smoke test's `DateBuilder.IntervalUnit.HOUR`.
 
 ### Not done, stated
 

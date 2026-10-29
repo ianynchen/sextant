@@ -224,7 +224,9 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     -- not; `narrowed` where it is one of several candidates.
     resolution TEXT,
     -- D00's evidence set. Always `compiler`: every column above is read off
-    -- the annotation the compiler wrote into the class file.
+    -- the class file — the annotation the compiler wrote there, or the calls
+    -- of a schedule built in code (the `scheduled_chain` style's builder
+    -- chains).
     evidence   TEXT,
     -- The id of the catalog that derived this row — provenance, exactly as
     -- `endpoints.catalog_id` is, and for the same reason: rule scoping, never

@@ -68,7 +68,7 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
-**Twenty-one type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+**Twenty-seven type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
 means ONE library or annotation reachable under more than one name — held by its interface
 (`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
 older package. A call site's owner is the DECLARED type, so a codebase writing the interface
@@ -4134,6 +4134,8 @@ matches:
       captures: { schedule: arg0 }
   terminal: [build]
   default_group: DEFAULT          # the group of a key written without one
+  default_schedule:               # the schedule `build()` uses where none was handed over
+    { owner: org.quartz.SimpleScheduleBuilder, method: simpleSchedule }
   kinds:                          # schedule builder type -> the framework's kind word
     org.quartz.CronScheduleBuilder: cron
     org.quartz.SimpleScheduleBuilder: simple
@@ -4178,7 +4180,10 @@ call on one shared receiver passes through to that receiver, `inexact`. Then:
   builder call's own owner's kind. Where the walk reaches no builder call at all — a factory
   in a jar — it is `kinds[the type the producing call is declared to return]`, read off that
   call's descriptor: a fact the compiler wrote, not a model of the call's body. Otherwise
-  NULL, and a chain with no kind and no job is not derived.
+  NULL, and a chain with no kind and no job is not derived. A chain with **no** `schedule`
+  capture runs on the framework's own default, `default_schedule` — `{owner, method}`, a
+  static factory whose owner is one of `kinds` (Quartz's `build()` uses
+  `simpleSchedule()`): kind `kinds[owner]`, expression `method()`, `resolved`.
 - **`expression`**, for a `literal_expression` root (matched by owner, method and, where
   declared, parameter types), is its argument as the field ladder or the value walk reads
   it: a string literal verbatim (`resolved`, or `narrowed` for one of a branch's
@@ -4189,6 +4194,13 @@ call on one shared receiver passes through to that receiver, `inexact`. Then:
   symbol is `expression_source`.
 - **`name`** is `group.name` where the walk reads both as one constant each, a missing
   group being `default_group`; NULL otherwise.
+
+**The key, the literal root's argument and the job root's class are read TOGETHER, one path
+at a time** (`values.resolve_positions`): a helper `addJob(jobClass, cron)` called from two
+places is two rows, each caller's cron with its own job, never the four a separate read of
+each would cross. Where no path ties them — several schedules, several handlers, and every
+schedule with every handler, as when the trigger is built in a helper and paired with a
+different job in each caller — every row is `partial`.
 
 **The job** (§3c) is found from whatever pairs it with the trigger, through machinery that
 already exists, and every pairing it finds counts:
@@ -4221,7 +4233,8 @@ same way. Any other jar body gives no handler. A method is `{name, parameters, r
 the servlet selector plus the return type, because the JVM resolves a method by its whole
 descriptor. Several classes reaching one body are one row, at that row's own resolution;
 several bodies from one branch are one row each, `narrowed`; several pairings (paths) are
-one row per distinct body.
+one row per distinct body. Rows equal but for their resolution are one row, at the weaker
+word (one body reached exactly on one path and through a branch on another is `narrowed`).
 
 **`resolution`**: `resolved` where the handler and the expression are both known and the
 expression holds no placeholder; `unresolved` where the only gap is a placeholder;

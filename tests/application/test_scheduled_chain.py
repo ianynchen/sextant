@@ -941,3 +941,270 @@ def test_a_trigger_reaching_two_consumers_is_one_entry(tmp_path: Path):
     assert [(_handler_of(row), row["expression"], row["resolution"]) for row in rows] == [
         ("AJob#execute", "0 0 * * * ?", "resolved")
     ]
+
+
+# --- the final review's fix wave (2026-10-29) ------------------------------------------------
+
+
+def _add_job_facts(add_jvm: str, cron: CallArgument, calls: dict[str, tuple]) -> list:
+    """`addJob(...)` holding `newTrigger().withSchedule(cronSchedule(<cron>)).build()`,
+    `newJob(<parameter 0>).build()` and `scheduleJob(job, trigger)`, called from each
+    method in `calls` with that call's arguments."""
+    job = ("org/quartz/Job#",)
+    add_job = _MODULE + method_descriptor(_TRIGGERS, "addJob", add_jvm)
+    schedule_jvm = "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+    trigger = _cron_trigger(add_job)
+    trigger[1] = trigger[1].model_copy(update={"arguments": [cron]})
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=job, declares=("execute",)),
+        *_job_class("BJob", interfaces=job, declares=("execute",)),
+        _method_symbol("addJob", add_jvm),
+        *trigger,
+        _site(
+            add_job,
+            10,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=10,
+            arguments=(CallArgument(kind="parameter", value=0),),
+        ),
+        _site(
+            add_job, 11, JOB_BUILDER, "build", "()Lorg/quartz/JobDetail;", receiver=10, result=11
+        ),
+        _site(
+            add_job,
+            12,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            schedule_jvm,
+            receiver=20,
+            result=12,
+            arguments=(
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="unresolved", source=5),
+            ),
+        ),
+        MethodReturnFact(document_id="doc_1", method=add_job, ordinal=0, value=None),
+    ]
+    for name, arguments in calls.items():
+        symbol = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        facts += [
+            _method_symbol(name, "()V"),
+            _site(symbol, 0, _TRIGGERS, "addJob", add_jvm, arguments=arguments),
+        ]
+    return facts
+
+
+@pytest.mark.pins("quartz.one-PATH-ties-the-cron-to-its-job")
+def test_a_shared_helpers_cron_and_class_stay_on_their_own_path(tmp_path: Path):
+    """The `QuartzManager.addJob(jobClass, cron)` helper: `first()` passes `(AJob.class,
+    "0 0 1 * * ?")` and `second()` passes `(BJob.class, "0 0 2 * * ?")`. The cron and the
+    class are read TOGETHER on each path, so each caller's cron stays with its own job:
+    two rows, each `resolved` — never AJob at 2am or BJob at 1am (final review, Critical
+    1: four `resolved` rows, two of them false)."""
+
+    def call(job_class: str, cron: str) -> tuple:
+        return (
+            CallArgument(kind="class", symbol=f"{_JOBS}{job_class}#"),
+            CallArgument(kind="string", value=cron),
+        )
+
+    facts = _add_job_facts(
+        "(Ljava/lang/Class;Ljava/lang/String;)V",
+        CallArgument(kind="parameter", value=1),
+        {"first": call("AJob", "0 0 1 * * ?"), "second": call("BJob", "0 0 2 * * ?")},
+    )
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["expression"], row["resolution"]) for row in rows] == [
+        ("AJob#execute", "0 0 1 * * ?", "resolved"),
+        ("BJob#execute", "0 0 2 * * ?", "resolved"),
+    ]
+
+
+@pytest.mark.pins("quartz.an-UNTIED-pairing-is-partial")
+def test_a_pairing_no_path_ties_is_partial(tmp_path: Path):
+    """`trigger(cron)` builds and returns a trigger; `first()` hands
+    `scheduleJob(newJob(AJob.class).build(), trigger("0 0 1 * * ?"))` and `second()` the
+    same with `BJob` and `"0 0 2 * * ?"`. The cron is read through `trigger`'s callers and
+    the job in each caller, so no path ties a cron to a job: every cron reaches every job.
+    Two of those four rows are false and which two is not known, so none is `resolved`."""
+    trigger_jvm = "(Ljava/lang/String;)Lorg/quartz/Trigger;"
+    helper = _MODULE + method_descriptor(_TRIGGERS, "trigger", trigger_jvm)
+    schedule_jvm = "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+    trigger = _cron_trigger(helper)
+    trigger[1] = trigger[1].model_copy(
+        update={"arguments": [CallArgument(kind="parameter", value=0)]}
+    )
+
+    def consumer(name: str, job_class: str, cron: str) -> list:
+        caller = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        return [
+            _method_symbol(name, "()V"),
+            *_job_chain(caller, job_class),
+            _site(
+                caller,
+                3,
+                _TRIGGERS,
+                "trigger",
+                trigger_jvm,
+                result=4,
+                arguments=(CallArgument(kind="string", value=cron),),
+            ),
+            _site(
+                caller,
+                4,
+                "org/quartz/Scheduler#",
+                "scheduleJob",
+                schedule_jvm,
+                receiver=9,
+                result=5,
+                arguments=(
+                    CallArgument(kind="unresolved", source=3),
+                    CallArgument(kind="unresolved", source=4),
+                ),
+            ),
+        ]
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        *_job_class("BJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        _method_symbol("trigger", trigger_jvm),
+        *trigger,
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=5),
+        ),
+        *consumer("first", "AJob", "0 0 1 * * ?"),
+        *consumer("second", "BJob", "0 0 2 * * ?"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert sorted((_handler_of(row), row["expression"]) for row in rows) == [
+        ("AJob#execute", "0 0 1 * * ?"),
+        ("AJob#execute", "0 0 2 * * ?"),
+        ("BJob#execute", "0 0 1 * * ?"),
+        ("BJob#execute", "0 0 2 * * ?"),
+    ]
+    assert {row["resolution"] for row in rows} == {"partial"}
+
+
+@pytest.mark.pins("quartz.no-withSchedule-is-the-DEFAULT-schedule")
+def test_a_trigger_with_no_schedule_fires_once(tmp_path: Path):
+    """`newTrigger().withIdentity("x", "g").forJob("x", "g").startNow().build()`, Quartz's
+    own first example: no `withSchedule`, so `TriggerBuilder.build()` uses
+    `SimpleScheduleBuilder.simpleSchedule()` (fire once; CP-55's Quartz 2.5.1 bytecode).
+    The trigger is an entry like any other (§3a): `simple`, `simpleSchedule()`."""
+    caller = f"{_JOBS}Triggers#once()."
+    builder = "Lorg/quartz/TriggerBuilder;"
+    trigger = [
+        _site(caller, 0, TRIGGER_BUILDER, "newTrigger", f"(){builder}", result=1),
+        _site(
+            caller,
+            1,
+            TRIGGER_BUILDER,
+            "withIdentity",
+            f"(Ljava/lang/String;Ljava/lang/String;){builder}",
+            receiver=1,
+            result=2,
+            arguments=(
+                CallArgument(kind="string", value="x"),
+                CallArgument(kind="string", value="g"),
+            ),
+        ),
+        _site(
+            caller,
+            2,
+            TRIGGER_BUILDER,
+            "forJob",
+            f"(Ljava/lang/String;Ljava/lang/String;){builder}",
+            receiver=2,
+            result=3,
+            arguments=(
+                CallArgument(kind="string", value="x"),
+                CallArgument(kind="string", value="g"),
+            ),
+        ),
+        _site(caller, 3, TRIGGER_BUILDER, "startNow", f"(){builder}", receiver=3, result=4),
+        _site(caller, 4, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=4, result=5),
+    ]
+    facts = [
+        *_job_class("OnceJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        *_job_chain(f"{_JOBS}Jobs#once().", "OnceJob", "x", "g"),
+        *trigger,
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (
+        _handler_of(row),
+        row["name"],
+        row["trigger"],
+        row["expression"],
+        row["resolution"],
+    ) == ("OnceJob#execute", "g.x", "simple", "simpleSchedule()", "resolved")
+
+
+@pytest.mark.pins("quartz.a-call-ON-the-value-names-where-it-came-from")
+def test_a_call_on_the_runtime_value_names_the_call_that_read_it(tmp_path: Path):
+    """`cronSchedule(row.getCron().trim())`: `trim()` takes nothing and hands back its own
+    receiver's type, so it is a call on the value, not where the value came from. The
+    source named is `Row#getCron()`, the call that read it — never `String#trim()`."""
+    caller = "com/acme/jobs/Triggers#hourly(Lcom/acme/jobs/Row;)."
+    string = "()Ljava/lang/String;"
+    sites = _cron_trigger(caller)
+    sites[1] = sites[1].model_copy(
+        update={"arguments": [CallArgument(kind="unresolved", source=8)]}
+    )
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner="com/acme/jobs/Row#", name="getCron", descriptor=string),
+            invoke_kind="virtual",
+            ordinal=10,
+            receiver_parameter=0,
+            result=7,
+        ),
+        _site(caller, 11, "java/lang/String#", "trim", string, receiver=7, result=8),
+        *sites,
+    ]
+    [row] = _scheduled(tmp_path, facts)
+    assert (row["expression"], row["resolution"]) == (None, "partial")
+    assert "Row#getCron(" in str(row["expression_source"]), row
+
+
+@pytest.mark.pins("quartz.one-HANDLER-is-one-row-at-the-weaker-word")
+def test_one_handler_found_exactly_and_through_a_branch_is_one_row(tmp_path: Path):
+    """Two job chains share the key `g.x`: one is `newJob(AJob.class)`, the other
+    `newJob(c ? AJob.class : BJob.class)`. `AJob#execute` is reached exactly on one path
+    and as one of two on the other: one row for it, at the weaker word (`narrowed`), never
+    a `resolved` row and a `narrowed` row for one body."""
+    job = ("org/quartz/Job#",)
+    branched = _job_chain(f"{_JOBS}Jobs#either().", "AJob", "x", "g")
+    branched[0] = branched[0].model_copy(
+        update={
+            "arguments": [
+                CallArgument(
+                    kind="merge",
+                    candidates=[
+                        CallArgument(kind="class", symbol=f"{_JOBS}AJob#"),
+                        CallArgument(kind="class", symbol=f"{_JOBS}BJob#"),
+                    ],
+                )
+            ]
+        }
+    )
+    facts = [
+        *_job_class("AJob", interfaces=job, declares=("execute",)),
+        *_job_class("BJob", interfaces=job, declares=("execute",)),
+        *_job_chain(f"{_JOBS}Jobs#plain().", "AJob", "x", "g"),
+        *branched,
+        *_trigger_for_job(f"{_JOBS}Triggers#hourly().", "x", "g"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert [(_handler_of(row), row["resolution"]) for row in rows] == [
+        ("AJob#execute", "narrowed"),
+        ("BJob#execute", "narrowed"),
+    ]

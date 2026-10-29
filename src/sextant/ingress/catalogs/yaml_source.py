@@ -827,7 +827,7 @@ def _step_identity(step: Any) -> tuple[frozenset[str], str, str | None]:
     """What makes one step entry the same overload as another, as the engine
     matches it: its owners as a SET (`[A, B]` and `[B, A]` are one owner set),
     its method, and its descriptor's PARAMETER portion (a return type is not
-    method identity — `fluent._same_overload`'s rule). A descriptor not spelled
+    method identity — `chains._same_overload`'s rule). A descriptor not spelled
     as one is compared as written; the engine refuses it by file."""
     if not isinstance(step, dict):
         return (frozenset({repr(step)}), "", None)

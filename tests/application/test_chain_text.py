@@ -37,7 +37,10 @@ def test_a_simple_schedule_chain_reads_as_written() -> None:
 
 
 def test_a_nested_builder_argument_is_written_as_its_call() -> None:
-    nested = _site(TIME_OF_DAY, "hourAndMinuteOfDay", _int(9), _int(0), result=7)
+    nested = {
+        **_site(TIME_OF_DAY, "hourAndMinuteOfDay", _int(9), _int(0), result=7),
+        "invoke_kind": "static",
+    }
     sites = [
         _site(SCHEDULE, "dailyTimeIntervalSchedule", result=1),
         _site(BUILDER, "startingDailyAt", {"kind": "unresolved", "source": 7}, result=2),
@@ -116,7 +119,114 @@ def test_a_non_constant_argument_gives_none(argument: dict[str, Any]) -> None:
 
 @pytest.mark.pins("schedules.a-chain-with-a-non-constant-argument-has-no-text")
 def test_a_nested_call_with_a_non_constant_argument_gives_none() -> None:
-    nested = _site(TIME_OF_DAY, "hourAndMinuteOfDay", {"kind": "unresolved"}, result=7)
+    nested = {
+        **_site(TIME_OF_DAY, "hourAndMinuteOfDay", {"kind": "unresolved"}, result=7),
+        "invoke_kind": "static",
+    }
     sites = [_site(BUILDER, "startingDailyAt", {"kind": "unresolved", "source": 7})]
 
     assert chain_text(sites, {7: nested}) is None
+
+
+TIME_UNIT = "java/util/concurrent/TimeUnit#"
+
+
+def _in_milliseconds(nested: dict[str, Any], effective: dict[int, Any]) -> str | None:
+    """`simpleSchedule().withIntervalInMilliseconds(<nested, value 7>)`."""
+    sites = [
+        _site(SCHEDULE, "simpleSchedule", result=1),
+        _site(BUILDER, "withIntervalInMilliseconds", {"kind": "unresolved", "source": 7}),
+    ]
+    return chain_text(sites, {7: nested, **effective})
+
+
+@pytest.mark.pins("schedules.a-nested-call-is-written-WITH-its-receiver")
+def test_a_nested_call_on_an_enum_constant_is_written_with_it() -> None:
+    """`withIntervalInMilliseconds(TimeUnit.MINUTES.toMillis(5))`: the nested call is made
+    on a constant of its own type, read by `getstatic`, so the receiver is written too.
+    Written without it, `TimeUnit.toMillis(5)` would be a call nobody wrote."""
+    nested = {
+        **_site(TIME_UNIT, "toMillis", {"kind": "long", "value": 5}, result=7),
+        "invoke_kind": "virtual",
+        "receiver": 6,
+        "receiver_field": f"{TIME_UNIT}MINUTES.",
+    }
+
+    assert _in_milliseconds(nested, {}) == (
+        "simpleSchedule().withIntervalInMilliseconds(TimeUnit.MINUTES.toMillis(5))"
+    )
+
+
+@pytest.mark.pins("schedules.a-nested-call-is-written-WITH-its-receiver")
+def test_a_nested_call_on_a_nested_call_is_written_with_it() -> None:
+    nested = {
+        **_site(TIME_UNIT, "scaled", _int(2), result=7),
+        "invoke_kind": "virtual",
+        "receiver": 5,
+    }
+    receiver = {**_site(TIME_UNIT, "of", result=5), "invoke_kind": "static"}
+
+    assert _in_milliseconds(nested, {5: receiver}) == (
+        "simpleSchedule().withIntervalInMilliseconds(TimeUnit.of().scaled(2))"
+    )
+
+
+@pytest.mark.pins("schedules.a-nested-call-is-written-WITH-its-receiver")
+@pytest.mark.parametrize(
+    "receiver",
+    [
+        # a value no call in hand produced: a local, a parameter, an unreadable receiver
+        {"receiver": 6},
+        {"receiver_parameter": 0},
+        {},
+        # a static field of ANOTHER type: a read of something that can vary
+        {"receiver": 6, "receiver_field": "org/acme/Config#unit."},
+    ],
+)
+def test_a_nested_call_on_a_receiver_not_written_gives_none(receiver: dict[str, Any]) -> None:
+    nested = {
+        **_site(TIME_UNIT, "toMillis", {"kind": "long", "value": 5}, result=7),
+        "invoke_kind": "virtual",
+        **receiver,
+    }
+
+    assert _in_milliseconds(nested, {}) is None
+
+
+@pytest.mark.pins("schedules.a-construction-is-written-as-NEW")
+def test_a_construction_is_written_with_new() -> None:
+    """`startingDailyAt(new TimeOfDay(9, 0))`: a constructor is `new Type(args)`, never
+    `TimeOfDay.<init>(9, 0)`."""
+    constructed = {
+        **_site(TIME_OF_DAY, "<init>", _int(9), _int(0)),
+        "invoke_kind": "special",
+        "receiver": 7,
+    }
+    sites = [
+        _site(SCHEDULE, "dailyTimeIntervalSchedule", result=1),
+        _site(BUILDER, "startingDailyAt", {"kind": "unresolved", "source": 7}, result=2),
+    ]
+
+    assert chain_text(sites, {7: constructed}) == (
+        "dailyTimeIntervalSchedule().startingDailyAt(new TimeOfDay(9, 0))"
+    )
+
+
+@pytest.mark.pins("schedules.a-NESTED-type-is-written-with-a-dot")
+def test_a_nested_type_is_written_with_a_dot() -> None:
+    """`DateBuilder.IntervalUnit.HOUR` as the source writes it, never the binary
+    `DateBuilder$IntervalUnit.HOUR` (OI-223, the Spring Boot smoke test's row) — for an
+    enum constant, a class literal and a nested call's owner alike."""
+    hour = {"kind": "enum", "symbol": "org/quartz/DateBuilder$IntervalUnit#HOUR."}
+    job = {"kind": "class", "symbol": "org/acme/Jobs$Nightly#"}
+    nested = {**_site("org/acme/Outer$Inner#", "of", result=7), "invoke_kind": "static"}
+    sites = [
+        _site(SCHEDULE, "dailyTimeIntervalSchedule", result=1),
+        _site(BUILDER, "withInterval", _int(1), hour, result=2),
+        _site(BUILDER, "of", job, {"kind": "unresolved", "source": 7}, result=3),
+    ]
+
+    assert chain_text(sites, {7: nested}) == (
+        "dailyTimeIntervalSchedule().withInterval(1, DateBuilder.IntervalUnit.HOUR)"
+        ".of(Jobs.Nightly, Outer.Inner.of())"
+    )

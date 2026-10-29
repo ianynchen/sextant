@@ -187,7 +187,7 @@ def _lambda_arguments(
     catalog, a body containing `metricsRecorder.queue("internal-metrics")` beside
     `to.payload(event)` published `internal-metrics` as an SQS queue at
     `resolved`, and so did a `queue(...)` on a receiver handed in from outside.
-    `fluent._captures_of_body` — the precedent these docstrings cite — gates on
+    `chains._captures_of_body` — the precedent these docstrings cite — gates on
     all three, and this now matches it.
 
     **One hop, and no chain walking.** Unlike `fluent`, this does not link sites
@@ -218,7 +218,7 @@ def _lambda_arguments(
         return None, None, None
     # A call argument's `symbol` carries no module coordinates and `call_sites.caller`
     # does (D00 §5a), so the join is on the bare descriptor — the detail
-    # `fluent._captures_of_body` records as the one that costs a cycle if missed. Where
+    # `chains._captures_of_body` records as the one that costs a cycle if missed. Where
     # two full callers share a bare name the body is NOT read: a merged frame would let
     # another module's literal answer for this one.
     callers = bare_callers.get(bare_descriptor(str(symbol)), set())
@@ -407,7 +407,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `call_sites.caller` carries the module coordinates a fact writes (D00 §5a)
     # and a `lambda` argument's `symbol` does not — a call argument never repeats
     # them — so a lookup on the raw strings misses every time, silently. That is
-    # the detail `fluent._captures_of_body` records as the one that costs a cycle
+    # the detail `chains._captures_of_body` records as the one that costs a cycle
     # if missed, and it costs the same cycle here.
     # Bare descriptor -> the FULL caller symbols that reduce to it. A set of
     # names, not a merged site list: two callers differing only in module
@@ -1252,7 +1252,7 @@ def _matching_method(
 
 def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
     """Refuses a broken `methods` row before any call site is matched — the
-    `fluent._validate_steps` precedent: an unchecked value does not stay in
+    `chains._validate_steps` precedent: an unchecked value does not stay in
     the file (`ports/catalogs.py`'s own discipline), so this runs once, at
     `run` start, over every declared row, rather than lazily on whichever
     row a call site happens to reach first.
