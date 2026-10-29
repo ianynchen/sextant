@@ -157,6 +157,7 @@ _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
+_EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -2813,6 +2814,24 @@ GUARDS: dict[str, Guard] = {
                 "                        for sib_annotation, sib_args in siblings\n"
                 "                    ),\n",
                 replace="                    frozenset(),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "effective-calls.AUTOBOXING-reads-as-its-constant": Guard(
+        what="an argument produced by one of the eight javac boxing calls (`<Wrapper>.valueOf"
+        "(<prim>)`) handed a constant is read by every engine as that constant, in an array's "
+        "elements as much as in a single slot",
+        why="Quartz spec 2026-10-28, CP-55 rows 20-22. javac wraps `onDaysOfTheWeek(3, 5)` as an "
+        "`Integer[]` of `valueOf` results, each an `unresolved` the value walk cannot read. "
+        "With the projection skipped, a weekday set and every boxed constant handed to a "
+        "builder is a hole in the schedule the source states plainly: the entry publishes no "
+        "days, or marks a fully constant schedule unresolved",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_CALLS,
+                find="        if boxed:\n            row = _with_unboxed(row, boxed)",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            row = _with_unboxed(row, boxed)",
             ),
         ),
     ),
