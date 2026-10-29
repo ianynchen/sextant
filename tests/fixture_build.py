@@ -63,6 +63,7 @@ PRIMED_FIXTURES = (
     "spring-integration-probe",
     "orders-micronaut",
     "orders-quarkus",
+    "orders-quartz",
     # protoc-generated gRPC classes (`tests/e2e/test_grpc_java_inherited_handlers.py`).
     "grpc-probe",
     "orders-receivers",
