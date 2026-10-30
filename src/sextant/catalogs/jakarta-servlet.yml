@@ -3,6 +3,9 @@ displayName: Jakarta Servlet (@WebServlet on an HttpServlet subclass)
 style: supertype_dispatch
 protocol: http
 direction: inbound
+# Registered with the container itself, beside the DispatcherServlet (ruling 3): CP-57's
+# `@WebServlet` answered under the context path and NOT under `spring.mvc.servlet.path`.
+dispatcher: servlet
 
 # The Servlet API rather than any framework: `@WebServlet` is processed by the
 # CONTAINER's own deployment scan, so a class extending `HttpServlet` is served

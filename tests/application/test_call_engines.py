@@ -19,7 +19,7 @@ from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
-from sextant.application.resolve.shapes.chains import chain_ends
+from sextant.application.resolve.shapes.chains import _resolve_captures, chain_ends
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -4443,6 +4443,249 @@ def test_a_url_built_inside_a_uri_lambda_is_read(tmp_path: Path):
     assert [(e["kind"], e["name"], e["value"]) for e in entries] == [("query", "status", "OPEN")]
 
 
+_LIFTED_MATCHES = {
+    **_LAMBDA_MATCHES,
+    "steps": [
+        *_LAMBDA_MATCHES["steps"],
+        {"method": "body", "owner": "com.acme.http.UriBuilder", "captures": {"body": "arg0"}},
+    ],
+    "field_sources": {
+        "value_annotation": "com.acme.config.Value",
+        "properties_annotation": "com.acme.config.ConfigurationProperties",
+        "prefix_from": "prefix",
+        "getter_prefixes": ["get", "is"],
+    },
+}
+
+
+def _lambda_chain(caller: str, body: str, inside: list) -> list:
+    """`get().uri(b -> ...).retrieve()` over an enclosing method `caller`, whose lambda
+    `body` holds the `inside` calls. The enclosing method also holds a zero-argument
+    `BillingProperties#getUrl()` whose result is value 20 - the id the lambda reuses for
+    a different call, which is the whole point."""
+    return [
+        _call(caller, PROPERTIES, "getUrl", 0, receiver=5, result=20),
+        _call(caller, WEBCLIENT, "get", 1, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            2,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=10, result=13),
+        *inside,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "url.", construct_kind="field"
+        ),
+    ]
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_a_value_read_in_a_lambda_is_never_looked_up_in_the_enclosing_method(tmp_path: Path):
+    """Ruling 2 of the object-identity design. A value id is the id the METHOD numbered, and
+    the lambda body is its own method. `b.path(other.compute("k"))` inside the lambda reads
+    value 20 - the lambda's own `compute` call. The enclosing method also has a value 20: a
+    `BillingProperties#getUrl()` whose type is bound to the prefix `billing`. Looked up in
+    the enclosing method's sites, the path became `${billing.url}`, a configuration key this
+    destination never reads, at `resolved`."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = _lambda_chain(
+        caller,
+        body,
+        [
+            _call(
+                _MODULE + body,
+                "com/acme/http/Other#",
+                "compute",
+                0,
+                receiver=None,
+                result=20,
+                arguments=[CallArgument(kind="string", value="k")],
+            ),
+            _call(
+                _MODULE + body,
+                URI_BUILDER,
+                "path",
+                1,
+                receiver=None,
+                result=40,
+                arguments=[CallArgument(kind="unresolved", source=20)],
+            ),
+            _call(_MODULE + body, URI_BUILDER, "build", 2, receiver=40, result=42),
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert "${billing.url}" not in str(endpoint["path"])
+    assert endpoint["resolution"] != "resolved"
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_a_value_read_in_a_lambda_is_found_in_the_lambdas_own_method(tmp_path: Path):
+    """The positive half: the same id read where it was numbered. The lambda's own value 20
+    IS `BillingProperties#getUrl()`, so the path is the configuration key - the id has to be
+    followed in the lambda's sites, not merely refused in the enclosing method's."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = _lambda_chain(
+        caller,
+        body,
+        [
+            _call(_MODULE + body, PROPERTIES, "getUrl", 0, receiver=7, result=20),
+            _call(
+                _MODULE + body,
+                URI_BUILDER,
+                "path",
+                1,
+                receiver=None,
+                result=40,
+                arguments=[CallArgument(kind="unresolved", source=20)],
+            ),
+            _call(_MODULE + body, URI_BUILDER, "build", 2, receiver=40, result=42),
+        ],
+    )
+    # The enclosing method's value 20 is a different call, so a lookup there cannot be
+    # what makes this pass.
+    facts[0] = _call(
+        caller,
+        "com/acme/http/Other#",
+        "compute",
+        0,
+        receiver=5,
+        result=20,
+        arguments=[CallArgument(kind="string", value="k")],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("${billing.url}", "resolved")
+
+
+@pytest.mark.pins("arguments.a-lifted-parameter-is-typed-by-its-own-signature")
+def test_a_lambda_parameter_used_as_a_body_is_typed_by_the_lambdas_signature(tmp_path: Path):
+    """The second reader of the same defect: `body(arg0)` inside the lambda is the LAMBDA's
+    parameter 0 (an `OrderEvent`), and the enclosing method's parameter 0 is an
+    `AuditRecord`. Typed against the enclosing signature the row published `AuditRecord`."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    # `bodyValue(<lambda>)`: the lambda is the BODY capture, so its own `body` step is what
+    # folds up into the row.
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "bodyValue",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+        _call(
+            _MODULE + body,
+            URI_BUILDER,
+            "body",
+            0,
+            receiver=None,
+            result=40,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+    ]
+    facts += [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=caller,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/http/AuditRecord#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + body,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/http/OrderEvent#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert "AuditRecord" not in str(endpoint["request_shape"])
+    assert "OrderEvent" in str(endpoint["request_shape"])
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_every_captured_argument_carries_its_own_method():
+    """Every argument `_resolve_captures` builds, nested elements and candidates included,
+    names the method of the site it was read at - the stamp the readers look sources and
+    parameters up by."""
+    site = {
+        "caller": _MODULE + "com/acme/http/Client#lambda$x$0().",
+        "ordinal": 3,
+        "arguments": [
+            {"kind": "string", "value": "/a"},
+            {"kind": "unresolved", "source": 20},
+            {"kind": "array", "elements": [{"kind": "parameter", "value": 0}]},
+            {
+                "kind": "merge",
+                "candidates": [
+                    {"kind": "string", "value": "x"},
+                    {"kind": "unresolved", "source": 7},
+                ],
+            },
+            {"kind": "instance", "symbol": "com/acme/Order#"},
+        ],
+    }
+    declared = {
+        "url": "arg0",
+        "base": "arg1",
+        "body": "arg2",
+        "response": "arg3",
+        "channel": "arg4",
+    }
+    captured = _resolve_captures(declared, site)
+
+    def stamped(argument: dict) -> list:
+        nested = [*argument.get("elements", []), *argument.get("candidates", [])]
+        return [argument.get("caller"), *[c for n in nested for c in stamped(n)]]
+
+    assert all(
+        caller == site["caller"] for value in captured.values() for caller in stamped(value)
+    ), captured
+
+
 def test_a_lambda_body_the_catalog_declares_no_step_for_folds_nothing(tmp_path: Path):
     """The near-miss (§10). The same chain under a catalog declaring no `UriBuilder`
     steps derives the pathless row it always did — so what comes back from a lambda is
@@ -6764,6 +7007,202 @@ def test_the_same_method_join_is_unchanged(tmp_path: Path):
     assert [(r["caller"], r["protocol"], r["path"]) for r in rows] == [
         (sender, "sqs", "/acme/orders")
     ]
+
+
+# --- A builder STARTED in a helper and finished by its caller (ruling 5, spec 2026-10-30).
+# The root is in one method and the terminal in another, so no root walk ever reaches the
+# terminal: the walk goes back from the terminal's receiver, across the helper's return, to
+# the root.
+
+_SQS_BUILDER_JVM = "()Lsoftware/amazon/awssdk/services/sqs/model/SendMessageRequest$Builder;"
+
+
+def _sqs_started_by_a_helper() -> tuple[str, list]:
+    """`base(){ return SendMessageRequest.builder().queueUrl(Q); }` and
+    `send(){ sqs.sendMessage(base().messageBody("{}").build()); }`. The body is a literal so
+    the row's shape needs no declared signature."""
+    base = _sqs_method("base", _SQS_BUILDER_JVM)
+    send = _sqs_method("send")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "base", _SQS_BUILDER_JVM),
+        _declared_method(_SQS_PRODUCER, "send", "()V"),
+        _call(base, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            base,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=base,
+            ordinal=2,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(owner=_SQS_PRODUCER, name="base", descriptor=_SQS_BUILDER_JVM),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner=_SQS_REQUEST,
+                name="messageBody",
+                descriptor="(Ljava/lang/String;)" + _SQS_BUILDER_JVM[2:],
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=5,
+            result=6,
+            arguments=[CallArgument(kind="string", value="{}")],
+        ),
+        _call(send, _SQS_REQUEST, "build", 2, receiver=6, result=7),
+        _sqs_send(send, 3, source=7),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=4, value=None),
+    ]
+    return send, facts
+
+
+@pytest.mark.pins("chains.a-ROOTLESS-terminal-walks-back-across-methods")
+def test_a_request_started_in_a_helper_and_sent_by_its_caller_is_one_row(tmp_path: Path):
+    """`send` holds the body, the build and the send; `base()` holds the root and the queue.
+    The walk from `build()`'s receiver crosses `base()`'s return to `builder()`, folding the
+    queue from the helper and the body from the caller: one row, the caller's, with the
+    helper's queue."""
+    send, facts = _sqs_started_by_a_helper()
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+
+    rows = [(r["path"], r["resolution"]) for r in found]
+    assert rows == [("/acme/orders", "resolved")]
+    assert [r["caller"] for r in found] == [send]
+
+
+_OKHTTP_BUILDER = "okhttp3/Request$Builder#"
+_OKHTTP_HELPER = "com/acme/http/Helper#"
+_REQ_JVM = "(Ljava/lang/String;)Lokhttp3/Request$Builder;"
+
+
+def _okhttp_request_helper(callers: dict[str, str]) -> tuple[dict[str, str], list]:
+    """`req(String svc){ return new Request.Builder().url("http://" + svc + "/x"); }` and,
+    per entry of `callers` (method name to service), `name(){ client.newCall(req(svc).build());
+    }`. Returns each caller's symbol by its service."""
+    req = _MODULE + method_descriptor(_OKHTTP_HELPER, "req", _REQ_JVM)
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _OKHTTP_HELPER, construct_kind="class"),
+        _declared_method(_OKHTTP_HELPER, "req", _REQ_JVM),
+        _call(req, _OKHTTP_BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=req,
+            target=CallTarget(
+                owner="java/lang/invoke/StringConcatFactory#",
+                name="makeConcatWithConstants",
+                descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+            ),
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=19,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(
+            req,
+            _OKHTTP_BUILDER,
+            "url",
+            2,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="concat", source=19, value="http://{}/x")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=req,
+            ordinal=3,
+            value=CallArgument(kind="unresolved", source=8),
+        ),
+    ]
+    symbols: dict[str, str] = {}
+    for name, service in callers.items():
+        caller = _MODULE + method_descriptor(_OKHTTP_HELPER, name, "()V")
+        symbols[service] = caller
+        facts += [
+            _declared_method(_OKHTTP_HELPER, name, "()V"),
+            CallSiteFact(
+                document_id="doc_1",
+                caller=caller,
+                target=CallTarget(owner=_OKHTTP_HELPER, name="req", descriptor=_REQ_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                receiver=None,
+                result=5,
+                arguments=[CallArgument(kind="string", value=service)],
+            ),
+            _call(caller, _OKHTTP_BUILDER, "build", 1, receiver=5, result=6),
+            _call(
+                caller,
+                "okhttp3/OkHttpClient#",
+                "newCall",
+                2,
+                receiver=99,
+                result=20,
+                arguments=[CallArgument(kind="instance", source=6, symbol="okhttp3/Request#")],
+            ),
+            MethodReturnFact(document_id="doc_1", method=caller, ordinal=3, value=None),
+        ]
+    return symbols, facts
+
+
+@pytest.mark.pins("chains.a-ROOTLESS-terminal-walks-back-across-methods")
+@pytest.mark.pins("values.a-CONSTRUCTION-is-a-whole-chain")
+@pytest.mark.pins("fluent.a-chain-walked-back-reads-on-its-own-path")
+def test_each_caller_of_a_request_helper_gets_its_own_value(tmp_path: Path):
+    """Review Focus 2: one helper, two callers, `"svc-a"` and `"svc-b"`. Each caller's chain
+    is read on the path it took into the helper, so each row holds its own caller's service,
+    never one row holding both and never a row with the service unread."""
+    symbols, facts = _okhttp_request_helper({"a": "svc-a", "b": "svc-b"})
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("okhttp"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert sorted((r["caller"], r["peer"]) for r in rows) == [
+        (symbols["svc-a"], "svc-a"),
+        (symbols["svc-b"], "svc-b"),
+    ]
+    assert {(r["path"], r["resolution"]) for r in rows} == {("/x", "resolved")}
+
+
+@pytest.mark.pins("chains.a-REACHED-terminal-is-not-walked-back")
+def test_a_terminal_a_root_walk_reached_is_never_walked_twice(tmp_path: Path):
+    """The whole chain in one method: the root walk reaches `build()`, so the walk back from
+    a terminal no root reached never starts there. One end and one row, not two."""
+    sender = _sqs_method("inline")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "inline", "()V"),
+        *_sqs_request_chain(sender),
+        _sqs_send(sender, 3, source=3),
+        MethodReturnFact(document_id="doc_1", method=sender, ordinal=4, value=None),
+    ]
+    catalog = _shipped("aws-sqs-sdk")
+    workspace = _resolve_fluent_walked(tmp_path, facts, catalog)
+    rows = workspace.query("endpoints")
+    ends = list(chain_ends(workspace, catalog))
+    workspace.close()
+
+    assert [(r["caller"], r["path"]) for r in rows] == [(sender, "/acme/orders")]
+    assert [(end.caller, end.path) for end in ends] == [(sender, None)]
 
 
 # verbless fluent chains — a root declaring NO `http_method` capture derives
@@ -11838,3 +12277,210 @@ def test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cor
         )
         == []
     )
+
+
+# --- Ruling 4 (spec 2026-10-30): a call that returns its own receiver configures it ---
+
+# The OkHttp shape with `url` and `post` flagged `returns_receiver: true`: each returns the
+# builder it was called on, so a statement that drops its result still configures the
+# builder the later `build()` reads.
+_RETURNS_RECEIVER_MATCHES = {
+    **_OKHTTP_MATCHES,
+    "steps": [
+        {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+        {
+            "method": "post",
+            "returns_receiver": True,
+            "captures": {"http_method": "POST", "body": "arg0"},
+        },
+    ],
+}
+
+
+def _url(caller: str, ordinal: int, url: str, result: int) -> CallSiteFact:
+    return _call(
+        caller,
+        BUILDER,
+        "url",
+        ordinal,
+        receiver=2,
+        result=result,
+        arguments=[CallArgument(kind="string", value=url)],
+    )
+
+
+def _new_call(caller: str, ordinal: int, request: int) -> CallSiteFact:
+    return _call(
+        caller,
+        OKHTTP_CLIENT,
+        "newCall",
+        ordinal,
+        receiver=99,
+        result=ordinal + 100,
+        arguments=[CallArgument(kind="instance", source=request, symbol=REQUEST)],
+    )
+
+
+def _builder_over_statements(caller: str) -> list:
+    """`b = new Builder(); b.url("https://h/orders"); b.post(body); newCall(b.build())` —
+    four statements on one builder, the results of `url` and `post` dropped."""
+    return [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _url(caller, 1, "https://h/orders", result=8),
+        _call(
+            caller,
+            BUILDER,
+            "post",
+            2,
+            receiver=2,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=5, symbol=ORDER_REQUEST)],
+        ),
+        _call(caller, BUILDER, "build", 3, receiver=2, result=14),
+        _new_call(caller, 4, request=14),
+    ]
+
+
+def _rows_of(tmp_path: Path, facts: list, matches: dict) -> list:
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(matches, "invented-receiver"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["path"], r["peer"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("chains.a-call-returning-its-RECEIVER-configures-it")
+def test_a_builder_configured_over_several_statements_is_one_chain(tmp_path: Path):
+    """`url` and `post` return the builder they were called on, so a statement dropping
+    that result still configures the builder: the walk folds both into the chain in place,
+    as it folds a void setter, and `build()` reads them. Walked as forks, each saw only
+    itself, and `build()` read a builder with no address and the root's verb."""
+    facts = _builder_over_statements("com/acme/http/Client#export().")
+
+    assert _rows_of(tmp_path, facts, _RETURNS_RECEIVER_MATCHES) == [
+        ("POST", "/orders", "h", "resolved")
+    ]
+
+
+def test_configuration_after_a_build_never_reaches_the_built_request(tmp_path: Path):
+    """Review Focus 1: `b.url(a); r1 = b.build(); newCall(r1); b.url(c); r2 = b.build();
+    newCall(r2)`. `build()` returns a new value, so it still forks, copying the captures
+    as they stand when it is reached: r1 carries `a` alone, and the later `url(c)` reaches
+    r2 only."""
+    caller = "com/acme/http/Client#twice()."
+    facts = [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _url(caller, 1, "https://h/a-path", result=8),
+        _call(caller, BUILDER, "build", 2, receiver=2, result=14),
+        _new_call(caller, 3, request=14),
+        _url(caller, 4, "https://h/c-path", result=9),
+        _call(caller, BUILDER, "build", 5, receiver=2, result=15),
+        _new_call(caller, 6, request=15),
+    ]
+
+    paths = [path for _, path, _, _ in _rows_of(tmp_path, facts, _RETURNS_RECEIVER_MATCHES)]
+
+    assert sorted(paths) == ["/a-path", "/c-path"]
+
+
+def test_an_unflagged_call_returning_a_value_still_forks(tmp_path: Path):
+    """The flag is per step. `post` left unflagged is walked as it always was, a fork of
+    its own: its verb never reaches the `build()` called on the builder beside it, while
+    the flagged `url` does."""
+    matches = {
+        **_RETURNS_RECEIVER_MATCHES,
+        "steps": [
+            {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+            {"method": "post", "captures": {"http_method": "POST", "body": "arg0"}},
+        ],
+    }
+    facts = _builder_over_statements("com/acme/http/Client#export().")
+
+    assert _rows_of(tmp_path, facts, matches) == [("GET", "/orders", "h", "resolved")]
+
+
+def test_a_flagged_terminal_folds_in_place_and_what_follows_it_configures_the_chain(
+    tmp_path: Path,
+):
+    """A terminal written `{method: send, returns_receiver: true}` makes the chain
+    executable and folds in place: the `url` set on the same object afterwards reaches the
+    row. Unflagged, `send` forks with what it has, and that row has no address."""
+    caller = "com/acme/http/Client#send()."
+    facts = [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(caller, BUILDER, "send", 1, receiver=2, result=7),
+        _url(caller, 2, "https://h/orders", result=8),
+    ]
+    flagged = {
+        **_RETURNS_RECEIVER_MATCHES,
+        "terminal": [{"method": "send", "returns_receiver": True}],
+    }
+
+    assert _rows_of(tmp_path, facts, flagged) == [("GET", "/orders", "h", "resolved")]
+
+
+def test_a_base_set_as_a_statement_on_a_held_builder_reaches_the_row(tmp_path: Path):
+    """`b = WebClient.builder(); b.baseUrl("http://a"); c = b.build(); c.get().uri("/x")
+    .retrieve()`. The base is set by a statement on `b`, not on the chain that leads to the
+    root, so the pre-root fold reaches it only because `baseUrl` is flagged: it returns
+    `b`, and a flagged call on a value the chain passes through, before that chain reads
+    it, configures it."""
+    caller = "com/acme/http/Client#heldBuilder()."
+    matches = {
+        **_BASE_MATCHES,
+        "steps": [
+            {
+                "method": "baseUrl",
+                "owner": "com.acme.http.WebClient$Builder",
+                "returns_receiver": True,
+                "captures": {"base": "arg0"},
+            },
+            *_BASE_MATCHES["steps"][1:],
+        ],
+    }
+    facts = [
+        _call(caller, WEBCLIENT, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            BUILDER_SPEC,
+            "baseUrl",
+            1,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="string", value="http://a")],
+        ),
+        _call(caller, BUILDER_SPEC, "build", 2, receiver=2, result=10),
+        _call(caller, WEBCLIENT, "get", 3, receiver=10, result=11),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            4,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 5, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(matches))
+    row = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert row["peer"] == "a" and row["path"] == "/x"
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        {
+            **_OKHTTP_MATCHES,
+            "steps": [{"method": "url", "returns_receiver": "yes", "captures": {"url": "arg0"}}],
+        },
+        {**_OKHTTP_MATCHES, "terminal": [{"method": "build", "returns_receiver": 1}]},
+    ],
+    ids=["a step", "a terminal"],
+)
+def test_a_non_bool_returns_receiver_is_refused(tmp_path: Path, matches: dict):
+    """`returns_receiver` is true or false. Anything else is a broken catalog, refused at
+    load and naming the key, never read as truthy."""
+    with pytest.raises(CatalogError, match="returns_receiver"):
+        _resolve_fluent(tmp_path, [], _fluent_catalog(matches, "invented-receiver"))

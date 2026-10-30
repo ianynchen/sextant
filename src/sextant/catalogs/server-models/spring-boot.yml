@@ -17,22 +17,86 @@
 # 2026-10-18.
 id: spring-boot
 
+# **What serves a row, and which stack the module runs on** (ruling 3 of the 2026-10-30
+# object-identity design). Both are framework words, so both are declared here rather than
+# in code.
+#
+# `dispatchers` is the closed set a catalog's `dispatcher:` names and a key's `applies_to`
+# lists: `spring` is Spring's own dispatcher (the DispatcherServlet, or the DispatcherHandler
+# on the reactive stack), `servlet` a `@WebServlet` the container registers itself, and
+# `jaxrs` Jersey. A catalog naming none takes no configured prefix.
+dispatchers: [spring, servlet, jaxrs]
+
+# The stack a module runs on, read IN ORDER off its dependency coordinates: the first entry
+# whose coordinates it carries. It is Spring Boot's own `WebApplicationType
+# .deduceFromClasspath`, which answers SERVLET where `DispatcherServlet` or Jersey's
+# `ServletContainer` is on the classpath and REACTIVE where only `DispatcherHandler` is —
+# so a servlet app that also carries WebFlux for its `WebClient` is a servlet app.
+#
+# **The STARTERS are listed beside the artifacts that carry those classes**, because a
+# dependency set read off the build file (`dependency_source: declared`) names what the module
+# asked for and none of its transitives: `spring-boot-starter-web` without `spring-webmvc`.
+# Boot 4 renamed that starter `spring-boot-starter-webmvc` (the note at the top of this file),
+# so both spellings are here. The order still decides: a module carrying a servlet starter and
+# the WebFlux starter is a servlet app.
+#
+# A module carrying none of these runs no web stack that this file can name, and no
+# `prefixes` entry applies to it. Where it configures a prefix and has rows a dispatcher
+# serves, the keys that were not applied are named in a `web_stack` open question.
+stacks:
+  - stack: servlet
+    coordinates:
+      - org.springframework:spring-webmvc
+      - org.glassfish.jersey.containers:jersey-container-servlet-core
+      - org.springframework.boot:spring-boot-starter-web
+      - org.springframework.boot:spring-boot-starter-webmvc
+      - org.springframework.boot:spring-boot-starter-jersey
+  - stack: reactive
+    coordinates:
+      - org.springframework:spring-webflux
+      - org.springframework.boot:spring-boot-starter-webflux
+
 prefixes:
   # **MEASURED, from the framework's own bytes** — `scripts/probes/cp38_boot_prefix_keys.md`
   # reads `META-INF/spring-configuration-metadata.json` out of the Boot jars, which names
-  # every property Boot binds and records deprecations with their replacements. Both keys
-  # below are declared and undeprecated at 2.7.18, 3.5.14 and 4.1.1; what moved between those
-  # versions is the ARTIFACT that declares them (`spring-boot-autoconfigure` to
-  # `spring-boot-web-server`/`spring-boot-webmvc`), never the names.
+  # every property Boot binds and records deprecations with their replacements. The context
+  # path and the servlet path are declared and undeprecated at 2.7.18, 3.5.14 and 4.1.1; what
+  # moved between those versions is the ARTIFACT that declares them
+  # (`spring-boot-autoconfigure` to `spring-boot-web-server`/`spring-boot-webmvc`), never the
+  # names.
   #
-  # `keys` is ORDERED and composes left to right: `server.servlet.context-path=/petclinic` with
-  # `spring.mvc.servlet.path=/api` serves `@GetMapping("/owners")` at `/petclinic/api/owners`.
+  # **Each key names the dispatchers it reaches** (ruling 3 of the 2026-10-30 object-identity
+  # design). One servlet container can hold three dispatchers, and probe CP-57
+  # (`scripts/probes/cp57-dispatcher-prefixes/RESULT.md`, Boot 3.5.14) requested every
+  # handler under every combination of the three keys below:
+  #
+  #   * `spring` — the DispatcherServlet: MVC controllers, functional routes, Actuator on the
+  #     main port, and Spring Data REST. Context path, then `spring.mvc.servlet.path`.
+  #   * `servlet` — a `@WebServlet` the container registers itself, beside the
+  #     DispatcherServlet. Context path only.
+  #   * `jaxrs` — Jersey. Context path, then `spring.jersey.application-path`.
+  #
+  # `keys` is ORDERED and composes left to right over the keys that apply to a row's
+  # dispatcher: `server.servlet.context-path=/petclinic` with `spring.mvc.servlet.path=/api`
+  # serves `@GetMapping("/owners")` at `/petclinic/api/owners`, and a `@WebServlet("/legacy")`
+  # beside it at `/petclinic/legacy`.
+  #
+  # **Two servlet entries, and the split is the Jersey key's.** CP-38's own method (the
+  # metadata JSON) finds `spring.jersey.application-path` declared and undeprecated in
+  # `spring-boot-autoconfigure` 2.7.18 and 3.5.14; at Boot 4 Jersey moved to its own module,
+  # which no local repository holds, so the key is declared only below 4.0 — the reason the
+  # reactive entry further down stops there too. The first entry a module's version admits
+  # wins per dispatcher, so a module whose Boot version is unrecorded reads the first.
   - framework: org.springframework.boot
-    versions: ">=2.0"
-    measured: ["2.7.18", "3.5.14", "4.1.1"]
-    keys: [server.servlet.context-path, spring.mvc.servlet.path]
+    versions: ">=2.0 <4.0"
+    measured: ["2.7.18", "3.5.14"]
+    stack: servlet
+    keys:
+      - { key: server.servlet.context-path, applies_to: [spring, servlet, jaxrs] }
+      - { key: spring.mvc.servlet.path, applies_to: [spring] }
+      - { key: spring.jersey.application-path, applies_to: [jaxrs] }
     # The protocols this container serves, and the two it is measured for. SSE is an HTTP
-    # response from the same DispatcherServlet, so it carries the same prefix.
+    # response from the same dispatcher, so it carries the same prefix.
     #
     # **`websocket` is deliberately ABSENT.** A handshake URL is very probably under the
     # context path too, and "very probably" is not a measurement — no probe has opened a
@@ -41,15 +105,35 @@ prefixes:
     # existed.
     protocols: [http, sse]
 
+  # Boot 4 on the servlet stack: the same two keys, measured at 4.1.1 by CP-38, and the
+  # dispatchers CP-57 measured them reaching at 3.5.14. No Jersey key, for the reason above;
+  # a Jersey row on Boot 4 takes the context path alone.
+  - framework: org.springframework.boot
+    versions: ">=4.0"
+    measured: ["4.1.1"]
+    stack: servlet
+    keys:
+      - { key: server.servlet.context-path, applies_to: [spring, servlet, jaxrs] }
+      - { key: spring.mvc.servlet.path, applies_to: [spring] }
+    protocols: [http, sse]
+
   # The reactive stack, bounded to where it was measured. `spring.webflux.base-path` is
   # declared at 2.7.18 and 3.5.14; at 4.1.1 it is absent from the 37 metadata-carrying
   # artifacts this repository holds, and `spring-boot-webflux` is not among them — so Boot 4
   # reactive is OUTSIDE this row rather than covered by it (CP-38's own "what it does not
   # settle"). A `>=2.0` range here would claim a version nobody opened.
+  #
+  # CP-57's reactive variant (3.5.14) served the WebFlux controller, the functional route,
+  # Actuator and a Spring Cloud Gateway route all under the base path, and none of them under
+  # a leftover `server.servlet.context-path` — which is why the entries are split by `stack`
+  # rather than composed: a reactive app has no servlet container for the context path to
+  # belong to.
   - framework: org.springframework.boot
     versions: ">=2.0 <4.0"
     measured: ["2.7.18", "3.5.14"]
-    keys: [spring.webflux.base-path]
+    stack: reactive
+    keys:
+      - { key: spring.webflux.base-path, applies_to: [spring] }
     protocols: [http, sse]
 
 # NOT DECLARED, and the absences are the point:
@@ -60,7 +144,8 @@ prefixes:
 # * `management.endpoints.web.base-path`, which prefixes the ACTUATOR surface alone rather
 #   than the module's. It composes after the keys above when management shares the main port
 #   and does not when `management.server.port` moves it — an interaction CP-5 measured on one
-#   port only. Declaring it here would apply it to every row.
+#   port only, and CP-57 did not measure at all. Declaring it here would apply it to every
+#   row the `spring` dispatcher serves.
 
 # **A prefix installed PER CONTROLLER PACKAGE** (spec 2026-10-18 §4, `OI-148`), which is how
 # `YunaiV/ruoyi-vue-pro` serves every one of its 480 endpoints under `/admin-api` or

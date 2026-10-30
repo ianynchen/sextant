@@ -3,6 +3,11 @@ displayName: Spring HTTP Interface
 style: annotation_driven
 protocol: http
 direction: outbound
+# The rows `resolves.direction` below turns INBOUND are `@Controller`/`@RestController`
+# methods, served by the DispatcherServlet's (or DispatcherHandler's) request mapping like
+# any controller, so they take that dispatcher's prefix (ruling 3, CP-57's MVC controller).
+# Outbound rows take no configured prefix whatever this says.
+dispatcher: spring
 
 # spring-web ships the annotation package, so this coordinate matches every
 # Spring module — a weak discriminator, moot while catalog-module matching is

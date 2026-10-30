@@ -383,9 +383,9 @@ def test_a_reclassified_rows_open_questions_move_with_it(tmp_path: Path):
 
 def test_two_rows_sharing_a_wire_identity_move_independently(tmp_path: Path):
     """`(protocol, direction, method, path)` is not unique in this table, so
-    the write matches on `handler`/`caller` too — the same six columns
-    `stamp_format.sql` uses. Two rows differing only in their handler must not
-    both move because one of them declared the envelope."""
+    the write matches on the row's `row_id` (ruling 7), as every rewrite does.
+    Two rows differing only in their handler must not both move because one of
+    them declared the envelope."""
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     _seed(
         workspace,
@@ -397,6 +397,46 @@ def test_two_rows_sharing_a_wire_identity_move_independently(tmp_path: Path):
     workspace.close()
 
     assert rows == {"a#f().": TARGET, "b#g().": SOURCE}
+
+
+def test_an_entry_written_with_its_row_takes_the_rows_new_protocol(tmp_path: Path):
+    """Ruling 7 (follow the object). An `endpoint_metadata` entry written in the pass
+    that mints its row names the row's protocol as it was then; this pass moves the
+    row to another protocol, and the entry, bound to the row's `row_id`, moves with
+    it. Left behind, it would name a channel on a protocol the row no longer has.
+    The other row's entry, at the same address, stays: the match is the row, not
+    the address."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    _seed(
+        workspace,
+        {"path": "/shared", "handler": "a#f().", "produces": json.dumps([STREAM_MIME])},
+        {"path": "/shared", "handler": "b#g()."},
+    )
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[
+            {
+                "protocol": SOURCE,
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/shared",
+                "caller": handler,
+                "kind": "header",
+                "name": "X-Ver",
+                "value": "2",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "requirement": None,
+            }
+            for handler in ("a#f().", "b#g().")
+        ],
+    )
+    apply_protocol_hints(workspace, [_catalog()])
+    entries = {row["caller"]: row["protocol"] for row in workspace.query("endpoint_metadata")}
+    workspace.close()
+
+    assert entries == {"a#f().": TARGET, "b#g().": SOURCE}
 
 
 # --- the format ladder, downstream of the move ----------------------------

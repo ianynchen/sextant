@@ -9,31 +9,26 @@
 -- address, it never creates or removes an endpoint, so the row count is identical before and
 -- after. `method`, `handler` and `caller` are untouched.
 --
--- Rows are matched on the same six identity columns `reclassify_protocol.sql` and
--- `stamp_format.sql` use, with IS NOT DISTINCT FROM on every one: `(protocol, direction,
--- method, path)` is not unique in this table and a messaging row carries NULLs in most of
--- these, where SQL equality would silently match none.
+-- **Rows are matched on `row_id`, and on nothing else** (follow-the-object, Ruling 7). The
+-- id names exactly the row the pass read, where `(protocol, direction, method, path)` is not
+-- unique in this table and the address is the very column this statement changes. Matched by
+-- address, a row the pass did not choose but which shares the chosen row's address — an
+-- outbound call to the same path, a functional route an installed prefix does not cover —
+-- moved with it.
 --
--- **Running it twice changes nothing the second time**, by the same construction as
--- `reclassify_protocol.sql`: `h.path` is the row's ORIGINAL path and `h.prefixed` is the
--- replacement, so once a row has been rewritten it no longer matches its own old key. That is
--- what makes the statement safe to re-run and is why the match carries `path` at all.
+-- **The entries attached to a moved row follow it in `follow_endpoint_rows.sql`**, run from
+-- the same call site straight after this one: DuckDB binds parameters only on the last
+-- statement of an execute, so the two cannot share this file, and that one needs none.
+--
+-- Running it twice would prefix twice; the pass runs it once per resolve, on rows the engines
+-- have just minted.
 --
 -- Parameters:
---   $rows -- {protocol, direction, method, path, handler, caller, prefixed}, one per row that
---            moves. `path` is the value the row must still hold; `prefixed` is what replaces
---            it, already composed and canonicalised by the pass.
+--   $rows -- {row_id, prefixed}, one per row that moves. `prefixed` is what replaces the
+--            row's path, already composed and canonicalised by the pass.
 UPDATE endpoints e
 SET path = h.prefixed
 FROM (SELECT UNNEST(
-    $rows::STRUCT(
-        protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
-        handler VARCHAR, caller VARCHAR, prefixed VARCHAR
-    )[]
+    $rows::STRUCT(row_id BIGINT, prefixed VARCHAR)[]
 ) AS h)
-WHERE e.protocol  IS NOT DISTINCT FROM h.protocol
-  AND e.direction IS NOT DISTINCT FROM h.direction
-  AND e.method    IS NOT DISTINCT FROM h.method
-  AND e.path      IS NOT DISTINCT FROM h.path
-  AND e.handler   IS NOT DISTINCT FROM h.handler
-  AND e.caller    IS NOT DISTINCT FROM h.caller;
+WHERE e.row_id = h.row_id;

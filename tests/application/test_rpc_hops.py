@@ -116,8 +116,8 @@ def _workspace(
         )
     for path, handler in handled:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
-            "VALUES ('grpc', 'inbound', NULL, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+            "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'grpc', 'inbound', NULL, ?, ?)",
             [path, None if handler is None else _MODULE + handler],
         )
     return workspace

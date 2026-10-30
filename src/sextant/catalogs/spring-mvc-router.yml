@@ -3,6 +3,9 @@ displayName: Spring MVC (functional routing)
 style: combinator
 protocol: http
 direction: inbound
+# Served by the DispatcherServlet (ruling 3): CP-57's functional route answered under the
+# context path and `spring.mvc.servlet.path`.
+dispatcher: spring
 
 # THE ASYMMETRY THIS CLOSES (F10 §11, `G-29`, W44). `spring-webflux-router.yml` has read
 # functional routing since 2E and only the REACTIVE package: `org.springframework.web.

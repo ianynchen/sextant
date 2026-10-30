@@ -106,7 +106,7 @@ from sextant.application.resolve.shapes.arguments import (
     supertypes_of,
 )
 from sextant.application.resolve.shapes.chain_text import chain_text
-from sextant.application.resolve.shapes.chains import ChainEnd, chain_ends
+from sextant.application.resolve.shapes.chains import ChainEnd, chain_ends, configuring_calls
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
@@ -226,6 +226,11 @@ def entries(
         builder_calls=frozenset(
             (str(s["owner"]), str(s["name"])) for s in index.sites.values() if s["owner"] in kinds
         ),
+        # The calls the catalog declares `returns_receiver: true` on either walk, which
+        # configure the builder they are called on (ruling 4, spec 2026-10-30): the chain
+        # reader gathers one made on the builder in a statement of its own (`_schedules`).
+        configuring=configuring_calls(trigger_walk, index.sites.values())
+        | configuring_calls(job_walk, index.sites.values()),
         rules=rules,
         job_ends=job_ends,
         # The `build()` calls the two walks ended at, by identity: where a walk from a
@@ -312,6 +317,7 @@ class _Context:
     field_sources: FieldFacts | None
     every_call: frozenset[tuple[str, str]]
     builder_calls: frozenset[tuple[str, str]]
+    configuring: frozenset[tuple[str, str, str]]
     rules: _JobRules
     job_ends: list[ChainEnd]
     built: frozenset[tuple[str, str]]
@@ -406,10 +412,21 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
     took to the call that paired them (`_pairings`). So the `addJob(jobClass, cron)` helper
     two callers call is two rows, and a trigger built in `trigger(cron)` and scheduled by
     each of its callers keeps each caller's cron with that caller's job. A pairing no path
-    can hold is read part by part (`_apart`), and such a row is never `resolved`."""
+    can hold is read part by part (`_apart`), and such a row is never `resolved`.
+
+    **A chain walked back across methods is read on the path that walk took** (`ChainEnd.
+    path`, ruling 5, spec 2026-10-30): a trigger started in `base(n)` and built by each of
+    its callers is one end per caller, and its key, read in the helper, is that caller's
+    argument. So each schedule's path is joined with the end's, and a schedule on a path
+    the end's disagrees with is not this end's."""
     pairings = _pairings(end, context)
     found: list[_Found] = []
     for schedule in _schedules(end.captures, context):
+        if end.path is not None:
+            on_end = schedule.path.joined(end.path)
+            if on_end is None:
+                continue
+            schedule = replace(schedule, path=on_end)
         rows: list[_Found] = []
         for job, path in pairings:
             if path is None:
@@ -564,7 +581,7 @@ def _apart(
     )
     classes = {_job_class(answers.get(_CLASS)) for answers in read or [{}]}
     job_class, narrowed = classes.pop() if len(classes) == 1 else (None, False)
-    names = _keys(end.captures.get(_NAME), end.captures.get(_GROUP), context)
+    names = _keys(end.captures.get(_NAME), end.captures.get(_GROUP), context, end.path)
     untied = {
         "handler": len(classes) > 1,
         "name": len(names) > 1,
@@ -836,10 +853,13 @@ def _key(
 
 
 def _keys(
-    name: Mapping[str, Any] | None, group: Mapping[str, Any] | None, context: _Context
+    name: Mapping[str, Any] | None,
+    group: Mapping[str, Any] | None,
+    context: _Context,
+    within: Path | None = None,
 ) -> set[str]:
-    """Every key two captures name on some path (`_keys_at`)."""
-    return _keys_at(_position(name, context), _position(group, context), context)
+    """Every key two captures name on some path (`_keys_at`), within `within` where given."""
+    return _keys_at(_position(name, context), _position(group, context), context, within)
 
 
 def _key_at(
@@ -920,7 +940,9 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     with the path it took: every call
     on a `kinds` type that built the value, root first, across returns and helpers and in
     the path's own calling contexts — a helper's parameter is the argument at the call the
-    walk came through, never another caller's."""
+    walk came through, never another caller's. A call the catalog declares
+    `returns_receiver: true`, made on the builder in a statement of its own, is in the
+    chain too (`configuring`, ruling 4)."""
     if _SCHEDULE not in captures:
         return [context.default_schedule]
     position = _position(captures.get(_SCHEDULE), context)
@@ -932,7 +954,12 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     chains = [
         (producer, path)
         for producer, path in producer_paths(
-            context.index, site, slot, context.builder_calls, along_receivers=True
+            context.index,
+            site,
+            slot,
+            context.builder_calls,
+            along_receivers=True,
+            configuring=context.configuring,
         )
         if producer.chain
     ]

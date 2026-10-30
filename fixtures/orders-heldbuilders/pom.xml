@@ -1,0 +1,51 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-heldbuilders</artifactId>
+  <version>1.0.0</version>
+  <!-- Every shipped builder catalog written in the VARIABLE style (ruling 4, spec
+       2026-10-30): the builder held in a local and configured over statements of its own,
+       each call's result dropped. The other fixtures chain their builders, so they read
+       the same calls one way only. One class per catalog, plus the two helper classes the
+       cross-method walk (ruling 5) reads. Versions are the Spring Boot 3.2.5 line
+       `fixtures/orders-service` and `fixtures/spring-integration-probe` build against. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>3.2.5</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-webflux</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>6.1.6</version>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId><artifactId>reactor-core</artifactId><version>3.6.5</version>
+    </dependency>
+    <dependency>
+      <groupId>com.squareup.okhttp3</groupId><artifactId>okhttp</artifactId><version>4.12.0</version>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId><artifactId>sqs</artifactId><version>2.25.31</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId><artifactId>spring-kafka</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.integration</groupId><artifactId>spring-integration-kafka</artifactId>
+    </dependency>
+  </dependencies>
+</project>

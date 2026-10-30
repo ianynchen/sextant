@@ -18,30 +18,21 @@
 -- anyone else between the read and the write keeps that answer, and running
 -- the statement twice changes nothing the second time.
 --
--- Rows are matched on the same six identity columns `stamp_format.sql` uses:
--- `(protocol, direction, method, path)` is not unique in this table — two
--- listeners on one destination, several NULL-path call sites — and
--- `handler`/`caller` are what separate them. Every column uses IS NOT
--- DISTINCT FROM: a messaging row carries NULLs in most of them, and SQL
--- equality would silently match none.
+-- Rows are matched on `row_id` (follow-the-object, Ruling 7), which names
+-- exactly the row the pass read: `(protocol, direction, method, path)` is not
+-- unique in this table — two listeners on one destination, several NULL-path
+-- call sites. The compare-and-set above stays: it is a guard on the VALUE, not
+-- a way of finding the row, and uses IS NOT DISTINCT FROM because the value
+-- read may be NULL.
 --
 -- Parameters:
---   $rows -- {protocol, direction, method, path, handler, caller,
---             bytes_shape, request_shape}, one per BOUND row. `bytes_shape`
---             is the value the column must still hold; `request_shape` is
---             what replaces it.
+--   $rows -- {row_id, bytes_shape, request_shape}, one per BOUND row.
+--             `bytes_shape` is the value the column must still hold;
+--             `request_shape` is what replaces it.
 UPDATE endpoints e
 SET request_shape = b.request_shape
 FROM (SELECT UNNEST(
-    $rows::STRUCT(
-        protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
-        handler VARCHAR, caller VARCHAR, bytes_shape VARCHAR, request_shape VARCHAR
-    )[]
+    $rows::STRUCT(row_id BIGINT, bytes_shape VARCHAR, request_shape VARCHAR)[]
 ) AS b)
-WHERE e.protocol      IS NOT DISTINCT FROM b.protocol
-  AND e.direction     IS NOT DISTINCT FROM b.direction
-  AND e.method        IS NOT DISTINCT FROM b.method
-  AND e.path          IS NOT DISTINCT FROM b.path
-  AND e.handler       IS NOT DISTINCT FROM b.handler
-  AND e.caller        IS NOT DISTINCT FROM b.caller
+WHERE e.row_id = b.row_id
   AND e.request_shape IS NOT DISTINCT FROM b.bytes_shape;

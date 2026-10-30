@@ -383,6 +383,9 @@ def test_a_peer_resolved_through_service_discovery_names_the_service(discovery_r
         ("customers-service", "/owners/{ownerId}/pets", "resolved"),
         ("None", "<host>/orders", "partial"),
         ("None", "None", "unresolved"),
+        # `StringHostClient`'s two calling contexts (ruling 6), one row each.
+        ("billing-service", "/stock", "resolved"),
+        ("None", "/stock", "partial"),
     }
 
 
@@ -573,3 +576,20 @@ def test_both_engines_give_one_answer_for_one_assembled_address(fluent_address_r
         ("vets-service", "/vets", "resolved"),
         ("visits-service", "/pets/visits", "resolved"),
     }
+
+
+@pytest.mark.pins("values.a-concat-hole-REPLACES-what-it-cannot-fill-never-drops-it")
+def test_a_helper_concat_called_with_an_unknown_host_publishes_no_peer(discovery_rows):
+    """`fetch(String host)` builds `"http://" + host + "/stock"` and is called with the
+    literal `billing-service` and with a `String` its own caller supplied.
+
+    Before, the second calling context was dropped and the only row stated
+    `billing-service` at `resolved` for a helper that reaches two hosts. Now each context
+    is its own row: the literal one still names its peer, and the one reading nothing
+    states the path it knows at `partial` with NO peer — the caller's own host is not
+    something this module states."""
+    stock = sorted(row for row in discovery_rows if row[1].endswith("/stock"))
+    assert stock == [
+        ("None", "/stock", "partial"),
+        ("billing-service", "/stock", "resolved"),
+    ]

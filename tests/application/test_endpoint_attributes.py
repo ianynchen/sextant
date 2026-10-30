@@ -147,8 +147,8 @@ def _workspace(
     workspace.derive("endpoint_metadata_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES ('temporal', ?, ?, ?, ?, NULL, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'temporal', ?, ?, ?, ?, NULL, ?)",
             [direction, method, path, None if handler is None else _MODULE + handler, catalog_id],
         )
     return workspace
@@ -588,8 +588,8 @@ def _shipped_run(
     workspace.derive("endpoint_metadata_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES (?, 'inbound', ?, ?, ?, NULL, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), ?, 'inbound', ?, ?, ?, NULL, ?)",
             [_SHIPPED_PROTOCOLS[catalog_id], method, path, _MODULE + handler, catalog_id],
         )
     record_endpoint_attributes(workspace, list(YamlCatalogSource(catalogs_dir()).load()))

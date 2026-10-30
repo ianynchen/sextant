@@ -165,11 +165,10 @@ _KEYS = (_TARGET, _MEDIA, _RETURNS, _ANNOTATIONS, _WHEN)
 # false is worse than none (§9).*
 _MEDIA_COLUMNS = ("produces",)
 
-# The row identity a reclassification is matched back onto — the same six
-# columns `stamp_format.sql` and `bind_request_shape.sql` use, for the same
-# reason: `(protocol, direction, method, path)` is not unique in this table,
-# and `handler`/`caller` are what separate two rows that share it.
-_MATCH_COLUMNS = ("protocol", "direction", "method", "path", "handler", "caller")
+# What a reclassification is matched back onto: the row's `row_id`, which names
+# exactly the row read (follow-the-object, Ruling 7) — `(protocol, direction,
+# method, path)` is not unique in this table.
+_MATCH_COLUMNS = ("row_id",)
 
 
 def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -179,7 +178,7 @@ def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
     (`resolve/pipeline.py`). Reads catalog vocabulary, the row's own columns
     and — for `hint_annotations`/`hint_when` — the owner's and its type's
     annotation facts; writes exactly one column, on rows that already
-    existed.
+    existed, and the entries and questions about those rows follow them.
     """
     hints = _vocabulary(catalogs)
     if not hints:
@@ -208,14 +207,17 @@ def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 {column: endpoint.get(column) for column in _MATCH_COLUMNS}
                 | {"reclassified": hint.target}
             )
-    workspace.derive("reclassify_protocol", rows=rows)
     # The ledger follows the rows. `open_questions.protocol` is a SNAPSHOT of
     # a wire identity, not a join, and `parse_binding` took its copy before
     # this pass ran — so a reclassified row's question would otherwise publish
     # one protocol while the endpoint published another. Two statements
     # because DuckDB binds parameters only on the last one of an execute, not
-    # because they are two decisions: same `$rows`, one call site.
+    # because they are two decisions: same `$rows`, one call site. The ledger
+    # FIRST: it finds its questions by the protocol the row still holds.
     workspace.derive("reclassify_open_questions", rows=rows)
+    workspace.derive("reclassify_protocol", rows=rows)
+    # And the entries bound to a reclassified row take its new protocol (Ruling 7).
+    workspace.derive("endpoint_rows_follow")
 
 
 # --- the four evidence kinds ------------------------------------------------

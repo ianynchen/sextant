@@ -436,3 +436,62 @@ def test_a_dependency_serving_an_address_this_module_calls_keeps_the_outbound_ro
         "address; the drop runs before the merge precisely so the merged row cannot "
         "take it away"
     )
+
+
+def test_an_entry_on_a_borrowed_row_is_dropped_with_it(tmp_path: Path):
+    """Ruling 7 (follow the object). A reactor sibling's own client call derives an outbound
+    row, and `single_call` writes the query parameter its URL carries as an
+    `endpoint_metadata` entry bound to that row, in the same pass. The borrowed-row drop
+    then removes the row: it is the sibling's call, not this module's. The entry goes with
+    it, whichever catalogs the module loads — this one loads no protocol hint, no path
+    prefix and no gRPC, so no later pass would happen to clean it up. Left behind, the
+    bundle states a parameter of a call the module does not make."""
+    facts = tmp_path / "facts"
+    own = _MODULE + "com/acme/orders/OwnClient#fetch()."
+    borrowed = _MODULE + "com/acme/common/NeighbourClient#fetch()."
+
+    def _calling(document_id: str, caller: str, url: str) -> list:
+        return [
+            SymbolFact(
+                document_id=document_id,
+                symbol=caller,
+                construct_kind=ConstructKind.METHOD,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="V")),
+            ),
+            CallSiteFact(
+                document_id=document_id,
+                caller=caller,
+                target=CallTarget(
+                    owner="com/acme/orders/Rest#",
+                    name="get",
+                    descriptor="(Ljava/lang/String;)Ljava/lang/Object;",
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                arguments=[CallArgument(kind="string", value=url)],
+            ),
+        ]
+
+    write_fact_file(
+        facts / "own.jsonl",
+        _document("own", OriginTier.MODULE_OUTPUT, None),
+        _calling("own", own, "/orders?view=summary"),
+    )
+    write_fact_file(
+        facts / "sibling.jsonl",
+        _document("sibling", OriginTier.DEPENDENCY, "com.acme:orders-common"),
+        _calling("sibling", borrowed, "/neighbour?v=2"),
+    )
+    _module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    derive_endpoints(workspace, [_outbound_catalog()], capabilities=CAPABILITIES)
+    rows = [(str(r["path"]), str(r["caller"])) for r in workspace.query("endpoints")]
+    entries = [
+        (str(r["path"]), str(r["caller"]), str(r["name"]))
+        for r in workspace.query("endpoint_metadata")
+    ]
+    workspace.close()
+
+    assert rows == [("/orders", own)]
+    assert entries == [("/orders", own, "view")]

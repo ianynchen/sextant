@@ -615,8 +615,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                if self._accessor((method, ordinal)):\n"
-                "                    continue\n",
+                find="            if self._accessor((method, ordinal)):\n"
+                "                continue\n",
                 replace="",
             ),
         ),
@@ -775,8 +775,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        assembled = _walked_with(argument, context, (), reader=_assembled_text)",
-                replace="        assembled = _walked_with(argument, context, ())  # guard disabled",
+                find="        assembled = _walked_with(argument, context, (), "
+                "reader=_assembled_text, within=context.path)",
+                replace="        assembled = _walked_with(argument, context, (), "
+                "within=context.path)  # guard disabled",
             ),
         ),
     ),
@@ -1218,7 +1220,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/values.py",
-                find="            narrowed = any(narrowed for _, _, _, _, narrowed in combination)\n",
+                find="            narrowed = any(narrowed for _, _, _, _, narrowed, _ in combination)\n",
                 replace="            narrowed = False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -2090,6 +2092,40 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-concat-hole-REPLACES-what-it-cannot-fill-never-drops-it": Guard(
+        what="a concatenation hole gives one candidate per calling context its operand "
+        "reached, and the context that read no text keeps the hole's spelling instead of "
+        "vanishing",
+        why="the filter kept only string literals whenever any path read one, so a helper "
+        'called with `"svc-a"` and with a parameter nothing supplies published ONE address '
+        "and a peer for it — a fact the code does not state, found by the same multiplicity "
+        "checks that the `preserves` arm above feeds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                for crossed, answer in reached\n            )\n"
+                "            per_hole.append(settled or",
+                replace="                for crossed, answer in reached\n"
+                "                if answer.kind == LITERAL and answer.literal_kind == STRING\n"
+                "            )\n            per_hole.append(settled or",
+            ),
+        ),
+    ),
+    "values.a-hole-filled-by-a-PLACEHOLDER-expression-is-never-a-literal": Guard(
+        what="a concatenation hole filled with the text of an expression that carries a "
+        "`${key}` makes an `expression`, never a `literal`",
+        why="`${key}` is the deployment's to set, and `channel_of_answer` refuses an "
+        "expression on purpose: a `literal` holding an unresolved placeholder would be read "
+        "as a destination by a messaging catalog",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            whole = all(value is not None for _, value, _, _, _, _ in combination) and not any(\n"
+                "                keyed for _, _, _, _, _, keyed in combination\n            )\n",
+                replace="            whole = all(value is not None for _, value, _, _, _, _ in combination)\n",
+            ),
+        ),
+    ),
     "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped": Guard(
         what="an identity a `preserves` entry cannot carry becomes an UNRESOLVED answer on "
         "its own path, so a reader of the result still sees that the code had two paths",
@@ -2204,6 +2240,24 @@ GUARDS: dict[str, Guard] = {
                 path=_PATH_PREFIX,
                 find="    if not found:\n        return True\n    return any(",
                 replace="    if not found:\n        return True\n    return True or any(",
+            ),
+        ),
+    ),
+    "path_prefix.a-prefix-applies-to-ITS-OWN-dispatchers-rows": Guard(
+        what="a configured prefix reaches only the rows its catalog's dispatcher serves: the "
+        "context path and `spring.mvc.servlet.path` for the DispatcherServlet, the context path "
+        "alone for a container-registered `@WebServlet`, the context path and the Jersey "
+        "application path for Jersey (ruling 3, CP-57)",
+        why="keyed by protocol alone, every inbound row took the DispatcherServlet's prefix, so "
+        'a `@WebServlet("/legacy")` in a module setting `spring.mvc.servlet.path=/api` '
+        "published at `/shop/api/legacy` — an address the container never serves, at "
+        "`resolved`. The edit reads every row's prefix as the `spring` dispatcher's, which is "
+        "that old lookup exactly",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find='        served_under = prefixes.get((dispatcher, protocol), "")\n',
+                replace='        served_under = prefixes.get(("spring", protocol), "")\n',
             ),
         ),
     ),
@@ -2428,6 +2482,85 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-field-read-answers-ITS-OWN-OBJECTS-writes": Guard(
+        what="a field read through a getter whose receiver is a construction of the field's "
+        "own type answers only the writes made on that object: its constructor's, and the "
+        "setter calls made on it",
+        why='ruling 1 of the 2026-10-30 review: `a.setCron("A"); b.setCron("B"); '
+        "one(a.getCron())` answered `A` and `B`, both exact, and ruoyi-vue-pro's "
+        "`getAdminApi().getPrefix()` answered `/app-api` beside `/admin-api`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if read_on is not None:\n"
+                "            scoped = self._object_writes(symbol, read_on, trail, frames)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            scoped = self._object_writes(symbol, read_on, trail, frames)\n",
+            ),
+        ),
+    ),
+    "values.a-path-from-OUTSIDE-does-not-unplace-the-built-object": Guard(
+        what="a getter read whose receiver is a construction on some paths and an object from "
+        "outside on others answers each path by itself: the construction's own writes, and "
+        "for the outside path what an object from outside answers",
+        why="OI-250: ruoyi-vue-pro's `WebProperties` is `@Data`, so `adminApi` also has a "
+        "setter nothing here calls; that one path from outside left the read unplaced, and "
+        "`getAdminApi().getPrefix()` answered `/app-api` beside `/admin-api`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if all(built is None for built, _, _ in read):\n",
+                replace="        if any(built is None for built, _, _ in read):"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-object-walk-is-reused-only-for-frames-that-READ-ALIKE": Guard(
+        what="an object walk kept on the index serves another asker only where that asker's "
+        "frames give the same answer at every read the walk made of them",
+        why="fix round 1 of the 2026-10-30 Task 7 review: the memo of `_objects` is keyed on "
+        "the frames a walk read, and a getter inside a helper called on two objects would "
+        "hand the second caller the first caller's object if frames were ignored",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n',
+                replace='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n    return True  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "values.two-reads-of-one-field-pair-ONE-write": Guard(
+        what="two reads of one field on one receiver are on one write step, so a pair of them "
+        "never takes two different writes",
+        why="ruling 1 of the 2026-10-30 review: a field written by `m1` and by `m2` and read "
+        "twice paired `(h1, h2)`, a value the object never held at once",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        merged = _combine(trail, (step,))\n        if merged is None:\n"
+                "            return ()\n",
+                replace="        merged = trail  # guard disabled by scripts/guard_check.py\n"
+                "        if merged is None:\n            return ()\n",
+            ),
+        ),
+    ),
+    "values.an-object-read-in-progress-is-never-asked-again": Guard(
+        what="a field read placed on an object is in progress in every walk it starts, the "
+        "receiver's and each setter call's, so a walk that reaches it again answers it as "
+        "before ruling 1",
+        why="review of ruling 1, Critical: `a.getNext().setNext(new Row())` made the setter "
+        "call's object walk read `next` again through another getter, forever, and a cycle "
+        "through two fields did the same: a RecursionError, not an answer",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        asking = self._asking | {(symbol, site)}\n",
+                replace="        asking = self._asking  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.an-object-a-LIBRARY-call-hands-back-is-not-from-outside": Guard(
         what="the unseen-object rule declares every unscanned call to the producer reader, "
         "so an object a library call hands back ends at that call, not at `external`",
@@ -2579,10 +2712,12 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="""            if constructed is not None:
                 stopped = self._declared_producer((method, constructed))
-                if stopped is not None:
-                    return _only(trail, stopped)
+                if stopped is not None and self._along_receivers:
 """,
-                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+                replace="""            if False:  # guard disabled by scripts/guard_check.py
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None and self._along_receivers:
+""",
             ),
         ),
     ),
@@ -2808,6 +2943,83 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="    for consumer in context.joined.get(_site_key(site), ()):\n",
                 replace="    for consumer in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-ROOTLESS-terminal-walks-back-across-methods": Guard(
+        what="a terminal no root walk reached is walked back from its receiver across "
+        "returns and parameters to a declared root, and becomes a chain end carrying the "
+        "path it took (ruling 5, spec 2026-10-30)",
+        why="a builder started in a helper and finished and sent by its caller — "
+        "`sqs.sendMessage(base().messageBody(m).build())` with the queue set in `base()` — "
+        "has a root without a terminal in one method and a terminal without a root in the "
+        "other, so the forward walk derives no row for a message the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            _walk_back(site, context, context_of, rootless)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONSTRUCTION-is-a-whole-chain": Guard(
+        what="on the chain reader (`along_receivers`), a declared construction is the first "
+        "call of a whole chain (`rooted`), never a call on a receiver it was handed",
+        why="a constructor's `receiver` is the object it builds, so read as any other call "
+        "the chain stopped at the step after it, unrooted: `new Request.Builder().url(u)` "
+        "returned from a helper reached no root, and its caller's send derived no row "
+        "(ruling 5, spec 2026-10-30)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if stopped is not None and self._along_receivers:\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-chain-walked-back-reads-on-its-own-path": Guard(
+        what="a chain end walked back across methods is derived with its captures read on "
+        "the path the walk took (`ChainEnd.path`, `_walked_with(..., within=)`)",
+        why="a shared helper's parameter is one value per caller: read on every path, "
+        '`req("svc-a")` and `req("svc-b")` gave each row both services, which is no '
+        "address, and both rows lost their peer (Review Focus 2, ruling 5)",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        _derive(end, context if end.path is None else "
+                "replace(context, path=end.path))\n",
+                replace="        _derive(end, context)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-REACHED-terminal-is-not-walked-back": Guard(
+        what="the walk back from a rootless terminal skips every terminal a root walk "
+        "already reached (ruling 5, spec 2026-10-30)",
+        why="a chain whose root and terminal are in one method is reached forward AND, "
+        "walked back from its terminal, reaches the same root: two ends for one request, "
+        "and two rows wherever the two reads differ",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            if _site_key(site) in reached or not _reaches_terminal(site, "
+                "context):\n",
+                replace="            if not _reaches_terminal(site, context):  "
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.a-walked-back-trigger-reads-on-its-own-path": Guard(
+        what="a trigger chain walked back across methods is read on the path that walk took: "
+        "each schedule's path is joined with the end's (`ChainEnd.path`)",
+        why="a trigger started in `base(n)` and built and scheduled by each caller holds its "
+        "key in the helper; read on every path, each caller's row took every caller's name, "
+        "two false rows at `resolved` (Review Focus 2 in Quartz rows, ruling 5)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        if end.path is not None:\n            on_end = ",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            on_end = ",
             ),
         ),
     ),
@@ -3275,6 +3487,63 @@ GUARDS: dict[str, Guard] = {
                 path=_DERIVE_ENDPOINTS,
                 find="        (fl.owner IS NOT NULL) AS flipped,",
                 replace="        (cp.flip_direction IS NOT NULL) AS flipped,  -- guard disabled",
+            ),
+        ),
+    ),
+    "endpoints.a-rewrite-matches-a-row-by-its-ROW-ID": Guard(
+        what="a pass that rewrites an `endpoints` row after it was minted finds that row by its "
+        "`row_id`, never by its address (follow-the-object, ruling 7)",
+        why="`(protocol, direction, method, path)` is not unique and the address is what the "
+        "rewrites change. Matched by path, the configured prefix moves every row at the chosen "
+        "row's address — a call the module makes to `/x` on another service is published at "
+        "`/shop/x`, an address that service does not serve",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/prefix_endpoint_paths.sql",
+                find="WHERE e.row_id = h.row_id;",
+                replace="WHERE e.path IS NOT DISTINCT FROM "
+                "(SELECT x.path FROM endpoints x WHERE x.row_id = h.row_id);  -- guard disabled",
+            ),
+        ),
+    ),
+    "endpoints.a-stashed-requirement-is-joined-by-ROW-ID": Guard(
+        what="the requirements pass joins the combinator's stash to its rows by the `row_id` the "
+        "stash bound when it was written, never by the columns the route was minted with",
+        why="the requirements pass runs after the configured path prefix, which rewrites `path`. "
+        "Joined on the minted path, every requirement of a prefixed route finds no row and is "
+        "dropped: in any module with a context path, every functional route published with no "
+        "requirements at all (measured on `orders-contextpath` before ruling 7)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/request_requirements.py",
+                find='    by_row = {e["row_id"]: e for e in endpoints}',
+                replace="    by_row = {  # guard disabled by scripts/guard_check.py\n"
+                '        (e["caller"], e["handler"], e["method"], e["path"], e["catalog_id"]): e\n'
+                "        for e in endpoints\n"
+                "    }",
+            ),
+            Edit(
+                path="sextant/application/resolve/request_requirements.py",
+                find='        e = by_row.get(r["row_id"])',
+                replace='        e = by_row.get((r["caller"], r["handler"], r["method"], r["path"], '
+                'r["catalog_id"]))',
+            ),
+        ),
+    ),
+    "endpoints.an-attached-entry-follows-its-row-by-ROW-ID": Guard(
+        what="an `endpoint_metadata` entry follows the row it was bound to, by `row_id`, when a "
+        "pass moves that row",
+        why="`fluent` and `single_call` write an entry in the pass that mints its row, before the "
+        "path prefix runs. Matched to its row by address, the entry stays at `/x` while the row "
+        "moves to `/shop/x`: the bundle publishes a header for an address nothing serves, and a "
+        "reader joining the two tables on the address loses it (review focus 4 of the "
+        "2026-10-30 plan)",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/follow_endpoint_rows.sql",
+                find="WHERE m.row_id = e.row_id\n  AND (",
+                replace="WHERE m.row_id = e.row_id AND m.path IS NOT DISTINCT FROM e.path  "
+                "-- guard disabled\n  AND (",
             ),
         ),
     ),
@@ -6211,6 +6480,99 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-LIFTED-argument-carries-its-own-method": Guard(
+        what="every argument lifted out of a lambda body is stamped with that body's own "
+        "method, whatever its kind, so its value id and parameter index are read there",
+        why="a lambda body's value id 20 is the lambda's call 20, and the enclosing method has "
+        "a call 20 of its own; read there, a destination that came from `other.compute(k)` "
+        "is published as the enclosing method's `properties.getUrl()` key at `resolved`, and "
+        "a lambda's parameter is typed as the enclosing method's",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='    stamped = {**argument, "caller": site["caller"]}\n',
+                replace='    stamped = {**argument, **({"caller": site["caller"]} if argument.get("kind") == "parameter" else {})}  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "chains.a-call-returning-its-RECEIVER-configures-it": Guard(
+        what="a call declared `returns_receiver: true` folds into the chain in place, as a "
+        "void setter does, with what is called on its result, instead of forking a walk of "
+        "its own (ruling 4, spec 2026-10-30)",
+        why="a builder configured over several statements, `b.url(u); b.post(x); "
+        "newCall(b.build())`, drops the results of `url` and `post`. Walked as forks each "
+        "saw only itself, and the `build()` beside them read a builder with no address and "
+        "the root's default verb: a row with no destination, for a request the module does "
+        "send to a known address",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if _chain_key(next_site) is None or _configures(next_site, context):\n",
+                replace="        if _chain_key(next_site) is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-CONFIGURING-call-hands-the-chain-on": Guard(
+        what="a call folded in place because it returns the object it was called on still "
+        "hands the chain on to a consumer that takes its result (ruling 4, spec 2026-10-30; "
+        "spec 2026-09-21 §5)",
+        why="`handle(Amqp.outboundAdapter(t).exchangeName(x).routingKey(k))`: once the spec "
+        "steps are declared `returns_receiver: true` they are folded, never walked, so the "
+        "continuation `_walk` asks for at each site was never asked for them and the sink's "
+        "chain ended with no terminal. The outbound row of every chained sink spec was lost",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                handed_on = _continuations(next_site, captures, context)\n",
+                replace="                handed_on = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-HELD-value-hands-on-what-configured-it": Guard(
+        what="a value handed to a consumer carries the configuring calls made on it before "
+        "the consumer took it (ruling 4, spec 2026-10-30)",
+        why='`spec = Kafka.outboundChannelAdapter(t); spec.topic("orders"); '
+        "flow.handle(spec)`: the continuation was taken from the root with the root's "
+        "captures alone, before `topic` was folded, so the outbound row had no topic",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        _continue(consumer, _configured_for(site, consumer, captures, context), context)\n",
+                replace="        _continue(consumer, captures, context)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONFIGURING-call-is-not-an-escape": Guard(
+        what="a call the reader declares returns the object it was called on (`configuring`), "
+        "made on a value between its producer and its use, is not `escapes`: the chain reader "
+        "gathers it into the chain, with what is called on its result (ruling 4, spec "
+        "2026-10-30, the backward half)",
+        why="a builder configured in statements of its own, `cb = cronSchedule(c); "
+        "cb.withMisfireHandlingInstructionDoNothing(); tb.withSchedule(cb)`, reads as a value "
+        "something unknown wrote into, so the chain is never found: the schedule loses its "
+        "cron and the row drops to `partial`, for a trigger whose cron the code states",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if row is None or _call_of(row) not in self._configuring:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "arguments.a-lifted-parameter-is-typed-by-its-own-signature": Guard(
+        what="a payload read from a parameter is typed by the signature of the method the "
+        "argument was lifted from, not the chain's enclosing method",
+        why="a lambda's parameter 0 is a captured variable of ITS signature; typed against "
+        "the enclosing method's parameter 0 the row publishes a contract type this send "
+        "never carries, at `resolved`",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    return reads.parameters_by_caller.get(str(caller), ())\n",
+                replace="    return reads.caller_parameters  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
 }
 
 
@@ -6367,6 +6729,10 @@ def copy_tree(destination: Path) -> Path:
         # methods — a cron read off a getter in the caller, a builder through a helper — and
         # only the value walk over real facts crosses them.
         "orders-quartz",
+        # A context path, a DispatcherServlet path and a `@WebServlet` in one module (ruling
+        # 3): which dispatcher serves a row is read off the catalog that derived it, so the
+        # guard that keeps the servlet path off a plain servlet is pinned on real facts.
+        "orders-contextpath",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

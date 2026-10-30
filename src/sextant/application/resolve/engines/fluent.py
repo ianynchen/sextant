@@ -16,7 +16,7 @@ positional slot.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -72,6 +72,7 @@ from sextant.application.resolve.values import (
     LITERAL,
     STRING,
     Answer,
+    Path,
     ValueIndex,
     cached_value_index,
 )
@@ -136,7 +137,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     — derives its `${…}` expression where it derived `unresolved`, and so does
     each element of a varargs slot. Every shipped fluent catalog sees it; it is
     more resolution in the direction the ladder already took, never a new claim
-    (`_own_parameter`, `_address_read`).
+    (`_own_method`, `_address_read`).
 
     The walk is `shapes.chains.chain_ends`, which validates and reads the chain's own
     keys; this engine checks its own words first — a root's `direction:`, the
@@ -211,6 +212,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     # through from the caller's own signature names its type there and
                     # nowhere else.
                     caller_parameters=caller_parameters.get(end.caller, ()),
+                    sites_by_caller=by_caller,
+                    parameters_by_caller=caller_parameters,
                 ),
                 carrier_rules=carrier_rules,
                 field_sources=field_sources,
@@ -222,7 +225,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 verb_fields=verb_fields,
                 client_base=client_base,
             )
-        _derive(end, context)
+        # A chain walked back across methods is read on the path it took (ruling 5).
+        _derive(end, context if end.path is None else replace(context, path=end.path))
 
     workspace.derive("call_endpoints", rows=rows)
     if bindings:
@@ -274,6 +278,10 @@ class _DeriveContext:
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
     values: "ValueIndex | None" = None
+    # The path the end being derived was walked back across methods by (`ChainEnd.path`,
+    # ruling 5, spec 2026-10-30): its captures are read on that path alone, so each caller
+    # of a shared helper reads its own arguments. None for a chain walked from its root.
+    path: Path | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -412,7 +420,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             # window (`values._used_at`). Resolving in the wrong method would read a
             # same-numbered value of another method and fabricate; `test_fluent_
             # registrations.py`'s negative half pins exactly that.
-            destinations = _walked_channels(channel_argument, context, channel_via_forms) or literal
+            destinations = (
+                _walked_channels(channel_argument, context, channel_via_forms, context.path)
+                or literal
+            )
         else:
             destinations = literal
     else:
@@ -963,7 +974,7 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
         # `<host>/owners` at `partial` while this arm published `path` NULL at `unresolved`.
         # Two engines, two answers about one piece of evidence, which is the disease the
         # shared walk was built to end (spec 2026-09-22 §0a).
-        assembled = _walked_with(argument, context, (), reader=_assembled_text)
+        assembled = _walked_with(argument, context, (), reader=_assembled_text, within=context.path)
         if assembled is not None:
             address = _one_assembled(assembled)
             # **Several branch literals are several rows, and this engine carries ONE**
@@ -974,7 +985,12 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
                 resolution == str(Resolution.NARROWED) for _, _, resolution in assembled
             ):
                 unbranched = _walked_with(
-                    argument, context, (), reader=_assembled_text, branches=False
+                    argument,
+                    context,
+                    (),
+                    reader=_assembled_text,
+                    branches=False,
+                    within=context.path,
                 )
                 address = None if unbranched is None else _one_assembled(unbranched)
             if address is not None:
@@ -986,7 +1002,7 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
     # through the same `_captured_at` provenance the channel half uses. The order above is
     # untouched: a literal at the capture answers first, and a field-fed address is already
     # a string by the time it arrives (`_address_read`), so neither ever reaches here.
-    walked = _walked_channels(argument, context, forms)
+    walked = _walked_channels(argument, context, forms, context.path)
     if walked is None:
         return argument
     # **A URL is ONE string**, which is why `_validate_channel_via_entries` refuses

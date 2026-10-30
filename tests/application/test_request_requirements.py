@@ -30,11 +30,13 @@ answer pinned once in `test_pipeline.py` against real bytecode.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.request_requirements import (
     _expression,
     _fallback,
@@ -52,6 +54,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.redaction import REDACTED
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
@@ -98,8 +101,8 @@ def _workspace(
     workspace.derive("route_requirements_reset")
     for protocol, method, path, handler, caller in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id, handler_signature) VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id, handler_signature) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), ?, 'inbound', ?, ?, ?, ?, ?, ?)",
             [
                 protocol,
                 method,
@@ -227,6 +230,70 @@ def test_a_stashed_value_whose_name_could_not_be_read_is_masked_whole(tmp_path: 
 
     assert [(e["name"], e["value"], e["resolution"]) for e in entries] == [
         (None, REDACTED, "unresolved")
+    ]
+
+
+# The coordinate that puts a module on the servlet stack in the shipped server model.
+WEBMVC = "org.springframework:spring-webmvc"
+
+
+@pytest.mark.pins("endpoints.a-rewrite-matches-a-row-by-its-ROW-ID")
+@pytest.mark.pins("endpoints.a-stashed-requirement-is-joined-by-ROW-ID")
+def test_a_prefixed_route_keeps_its_header_requirement(tmp_path: Path):
+    """Ruling 7 of the 2026-10-30 review (follow the object). The combinator stashes a
+    requirement against the route as it minted it, `GET /x`; the configured prefix then moves
+    that row to `/shop/x`; this pass runs after both. The requirement belongs to the row, so it
+    is written against the row where the row now is.
+
+    Joined by the path it was stashed under, it found no row after the move and was dropped:
+    every combinator route in a module with a context path published with no requirements.
+
+    The module also CALLS `/x` on another service, an outbound row at the same address. The
+    prefix moves the row it chose, by that row's id, and nothing else: matched by address, the
+    call moved too and published an address on a peer that the peer does not serve."""
+    workspace = _workspace(tmp_path, ("http", "GET", "/x", HANDLER, ROUTES))
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, caller, peer, "
+        "catalog_id) VALUES (2, 'http', 'outbound', 'GET', '/x', ?, 'billing', 'invented-client')",
+        [ROUTES],
+    )
+    _stash(workspace, HANDLER, "X-Ver", "required", value="2", path="/x")
+    workspace._connection.execute(
+        "INSERT INTO resolved_config (key, value, source, environment) "
+        "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
+    )
+    # A servlet-stack module, which is what the context path belongs to (ruling 3).
+    workspace._connection.execute(
+        "INSERT INTO raw_facts (kind, document_id, payload) VALUES ('module', 'doc_module', ?)",
+        [json.dumps({"module_id": "com.acme:shop", "dependency_coordinates": [WEBMVC]})],
+    )
+    prefixed = replace(
+        _catalog(),
+        dispatcher="spring",
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
+    )
+    apply_path_prefixes(workspace, [prefixed])
+    record_request_requirements(workspace, [prefixed])
+    entries = _entries(workspace)
+    paths = {(str(row["direction"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {("inbound", "/shop/x"), ("outbound", "/x")}
+
+    assert entries == [
+        {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/shop/x",
+            "caller": HANDLER,
+            "kind": "header",
+            "name": "X-Ver",
+            "value": "2",
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "requirement": "required",
+        }
     ]
 
 
@@ -807,8 +874,8 @@ def _mapping_workspace(
     workspace.derive("route_requirements_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', ?, ?, ?, ?, ?)",
             [method, path, None if handler is None else _MODULE + handler, None, CATALOG],
         )
     return workspace
@@ -1134,8 +1201,8 @@ def _reads_workspace(
     workspace.derive("route_requirements_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', ?, ?, ?, ?, ?)",
             [method, path, handler, ROUTES, CATALOG],
         )
     return workspace

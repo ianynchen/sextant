@@ -396,12 +396,49 @@ class FieldWriteScanTest {
     }
 
     /** {@code this.url = new String(built)} — the call right below the write is the
-     *  CONSTRUCTOR, which returns nothing, so it is not what the field holds; the value is
-     *  the {@code NEW}'s, and a {@code source} naming the {@code <init>} would join no call
-     *  site's {@code result} at all. No fact: a constructed value is not this write's shape. */
+     *  CONSTRUCTOR, which returns nothing; the value is the {@code NEW}'s, so the fact
+     *  carries the {@code instance} entry whose {@code source} is the {@code NEW}'s index
+     *  in the full instruction list. */
     @Test
-    void emits_nothing_for_a_value_built_with_new() throws Exception {
-        assertEquals(List.of(), fieldWrites("(Ljava/lang/StringBuilder;)V"));
+    void emits_the_constructed_instance_for_a_value_built_with_new() throws Exception {
+        MethodNode method = method("<init>", "(Ljava/lang/StringBuilder;)V");
+        List<String> lines = MethodFlow.fieldWrites("doc", SYMBOL, method);
+        assertEquals(1, lines.size());
+        assertTrue(lines.get(0).contains("\"kind\":\"instance\""), lines.get(0));
+        int created = -1;
+        for (int i = 0; i < method.instructions.size(); i++) {
+            if (method.instructions.get(i).getOpcode() == org.objectweb.asm.Opcodes.NEW) created = i;
+        }
+        assertEquals(created, sourceOf(lines.get(0)));
+    }
+
+    /** {@code static final Api A = new Api("/a")} in a static method: {@code new; dup; ldc;
+     *  invokespecial; putstatic}. */
+    @Test
+    void emits_the_constructed_instance_for_a_static_field_built_with_new() {
+        MethodNode clinit = new MethodNode(
+            org.objectweb.asm.Opcodes.ASM9, org.objectweb.asm.Opcodes.ACC_STATIC,
+            "<clinit>", "()V", null, null);
+        clinit.visitCode();
+        clinit.visitTypeInsn(org.objectweb.asm.Opcodes.NEW, "com/acme/Api");
+        clinit.visitInsn(org.objectweb.asm.Opcodes.DUP);
+        clinit.visitLdcInsn("/a");
+        clinit.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESPECIAL,
+            "com/acme/Api", "<init>", "(Ljava/lang/String;)V", false);
+        clinit.visitFieldInsn(org.objectweb.asm.Opcodes.PUTSTATIC, OWNER, "A", "Lcom/acme/Api;");
+        clinit.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        clinit.visitMaxs(3, 0);
+        clinit.visitEnd();
+
+        List<String> lines = MethodFlow.fieldWrites("doc", SYMBOL, clinit);
+        assertEquals(1, lines.size());
+        assertTrue(lines.get(0).contains("\"kind\":\"instance\""), lines.get(0));
+        assertTrue(lines.get(0).contains("com/acme/Api"), lines.get(0));
+        int created = 0;
+        for (int i = 0; i < clinit.instructions.size(); i++) {
+            if (clinit.instructions.get(i).getOpcode() == org.objectweb.asm.Opcodes.NEW) created = i;
+        }
+        assertEquals(created, sourceOf(lines.get(0)));
     }
 
     /** **A lambda is not a value** (ruled 2026-09-22). {@code static Runnable r = () -> …}

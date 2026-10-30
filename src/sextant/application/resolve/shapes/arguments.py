@@ -14,6 +14,7 @@ Catalog orchestration, born in its own module rather than riding along
 inside `contracts.py` (2E-prep design §1e).
 """
 
+import dataclasses
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -31,13 +32,19 @@ from sextant.application.resolve.values import (
     LITERAL,
     STRING,
     Answer,
+    Path,
     ValueIndex,
+    resolve_positions,
     resolve_site,
 )
 from sextant.domain.closed_sets import Resolution
-from sextant.domain.config_keys import normalize_key
+from sextant.domain.config_keys import _PLACEHOLDER, carries_expression, normalize_key
 from sextant.domain.redaction import authority_without_userinfo
 from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
+
+# `carries_expression` is defined in `domain/config_keys.py` (values.py reads it too, and this
+# module imports values); it is re-exported here so its callers keep this import.
+__all__ = ["carries_expression"]
 
 # The scheme is OPTIONAL, which admits RFC 3986 §4.2's scheme-relative reference
 # (`//authority/path`) beside an absolute URL. The walk writes that form when it joined
@@ -774,6 +781,15 @@ class CallFacts:
     # signature, and this is that signature. Empty where the caller is not a declaration
     # this module scanned, which is the same silence every other unread argument gives.
     caller_parameters: tuple[dict[str, Any], ...] = ()
+    # Every method's own sites and parameters, keyed by FULL caller symbol — what an
+    # argument LIFTED out of another method (a lambda body's capture) is read against,
+    # through its own stamped `caller` (`sites_of`/`parameters_of`). Empty where the
+    # builder lifts nothing, which is every engine but the chain walk and the fluent
+    # consumer.
+    sites_by_caller: Mapping[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    parameters_by_caller: Mapping[str, tuple[dict[str, Any], ...]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -839,38 +855,6 @@ class FieldFacts:
 # written without naming it", which is how every `@Value("${…}")`-shaped
 # expression reaches the facts.
 _ANNOTATION_VALUE_ARG = "value"
-
-# D01's own placeholder form — the expression an endpoint row carries until
-# the per-environment join resolves it (`resolved_peers`, whose SQL matches on
-# exactly this delimiter pair). Rungs 1 and 2 return an expression the facts
-# already spell; rung 3 SYNTHESISES one from a prefix and a property name, so
-# it is the one rung that has to write the delimiters itself.
-#
-# Written here rather than read from a `config_model` for the same reason the
-# relaxed-binding rule below is applied unconditionally: `placeholders` and
-# `key_matching` are declared on the framework FAMILY's base catalog, and a
-# client catalog — the only thing this ladder is handed — cannot see them.
-# `resolved_peers`' own SQL already hard-codes this same pair, so one form is
-# assumed in exactly two places rather than one; a non-`${}` ecosystem has to
-# thread the pair onto `field_sources` and into that query together.
-_PLACEHOLDER = ("${", "}")
-
-
-def carries_expression(text: str) -> bool:
-    """Whether an address carries a D01 placeholder — an OPEN delimiter with
-    a matching CLOSE after it, `resolve/config.py`'s own reading (an
-    unterminated `${` is literal text there too).
-
-    What it decides: an address containing one is unsplittable, whatever else
-    it looks like (2F design §4). `https://${billing.host}/orders` matches
-    CP-2's absolute-URL shape perfectly and splitting it would write
-    `${billing.host}` into the `peer` column as if it were an authority —
-    a peer no environment ever named, and one the per-environment join reads
-    only from `path`/`peer` as WHOLE expressions. So the check runs BEFORE the
-    split, never after."""
-    open_, close = _PLACEHOLDER
-    start = text.find(open_)
-    return start != -1 and close in text[start + len(open_) :]
 
 
 @dataclass(frozen=True)
@@ -983,6 +967,31 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
         declared_fields=declarations.declared_fields,
         declared_parameters=declarations.declared_parameters,
     )
+
+
+def sites_of(argument: Mapping[str, Any], reads: CallFacts) -> list[dict[str, Any]]:
+    """The call sites of the method an argument's `source` value id belongs to.
+
+    A value id means something only inside the method that numbered it (D00 §5), and a
+    capture lifted out of a lambda body arrives in a chain whose own sites are the
+    ENCLOSING method's: searched there, the id names a different call and fabricates its
+    owner. `_own_method` stamps `caller` on every lifted argument, and it keys
+    `sites_by_caller` the same way (the full symbol). An argument carrying no `caller`
+    was never lifted — `single_call` reads the site's own arguments in the site's own
+    facts — so those facts' own sites are its method's."""
+    caller = argument.get("caller")
+    if caller is None:
+        return reads.caller_call_sites
+    return reads.sites_by_caller.get(str(caller), [])
+
+
+def parameters_of(argument: Mapping[str, Any], reads: CallFacts) -> tuple[dict[str, Any], ...]:
+    """The declared parameters of the method an argument's `parameter` index belongs
+    to — `sites_of`'s companion, for the same reason and with the same fallback."""
+    caller = argument.get("caller")
+    if caller is None:
+        return reads.caller_parameters
+    return reads.parameters_by_caller.get(str(caller), ())
 
 
 def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, Any], ...]]:
@@ -1103,7 +1112,7 @@ def field_expression(
             or _properties_field_expression(field, facts)
         )
     if kind == "unresolved":
-        return _properties_getter_expression(argument.get("source"), facts, workspace_types)
+        return _properties_getter_expression(argument, facts, workspace_types)
     if kind == _PARAMETER_KIND:
         return _parameter_expression(argument, facts, caller)
     return None
@@ -1184,7 +1193,7 @@ def _properties_field_expression(field: str, facts: FieldFacts) -> str | None:
 
 
 def _properties_getter_expression(
-    source: Any, facts: FieldFacts, workspace_types: CallFacts
+    argument: dict[str, Any], facts: FieldFacts, workspace_types: CallFacts
 ) -> str | None:
     """Rung 3, the getter form (Task 6 checkpoint F-1): the address argument
     is the RESULT of a zero-argument call — `baseUrl(properties.getUrl())` —
@@ -1196,12 +1205,13 @@ def _properties_getter_expression(
 
     Zero-argument only: an accessor takes none, and a call that does is not
     reading a property, whatever it is named."""
+    source = argument.get("source")
     if source is None:
         return None
     site = next(
         (
             candidate
-            for candidate in workspace_types.caller_call_sites
+            for candidate in sites_of(argument, workspace_types)
             if candidate.get("result") == source and not (candidate.get("arguments") or [])
         ),
         None,
@@ -1527,13 +1537,14 @@ def _reference_of(
         # a comment goes stale with nothing to notice. The declared type is the same claim
         # every shape derived from a signature already makes.
         index = parameter_index(argument)
-        if index is None or index >= len(workspace_types.caller_parameters):
+        declared_parameters = parameters_of(argument, workspace_types)
+        if index is None or index >= len(declared_parameters):
             return None
         # The `type` member, not the entry. A declared parameter is `{name, annotations,
         # erased_symbol, type, type_annotations}`; the D00 §5a reference every other rung
         # here roots is the `type`, and handing the whole entry to `root_type` raises on
         # the `symbol` it does not carry.
-        declared = workspace_types.caller_parameters[index].get("type")
+        declared = declared_parameters[index].get("type")
         return declared if isinstance(declared, dict) else None
     if kind != "instance":
         # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
@@ -1554,7 +1565,9 @@ def _reference_of(
         return carried[0] if carried else None
     payload_ctor_arg = catalog_rules.call_wrappers.get(symbol)
     if payload_ctor_arg is not None:
-        constructor = _linked_constructor(symbol, argument.get("source"), workspace_types)
+        constructor = _linked_constructor(
+            symbol, argument.get("source"), workspace_types, argument=argument
+        )
         if constructor is None:
             return None
         ctor_arguments = constructor.get("arguments") or []
@@ -1658,6 +1671,7 @@ def _linked_constructor(
     name: str = "<init>",
     arity: int | None = None,
     descriptor: str | None = None,
+    argument: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """D02 §2h's join: the call site — an `<init>` by default, or (Task 7's
     `channel_via`) any other named method — within this same caller, whose
@@ -1675,10 +1689,16 @@ def _linked_constructor(
     if source is None:
         return None
     key = "receiver" if name == "<init>" else "result"
+    # `argument`, where the caller has one, names the method the `source` id belongs to.
+    pool = (
+        workspace_types.caller_call_sites
+        if argument is None
+        else sites_of(argument, workspace_types)
+    )
     return next(
         (
             site
-            for site in workspace_types.caller_call_sites
+            for site in pool
             if site.get("name") == name
             and site.get("owner") == owner_symbol
             and site.get(key) == source
@@ -1721,7 +1741,7 @@ def _address_read(argument: dict[str, Any] | None, context: _Reads) -> dict[str,
     a string literal BEFORE any existing resolution path sees it, so an
     imperatively-fed address behaves downstream exactly as a written one. The
     caller handed to the ladder's parameter rung is the one the argument
-    carries (`_own_parameter`) — the method whose signature the index is an
+    carries (`_own_method`) — the method whose signature the index is an
     index into — never the chain's, which a lambda body's capture is not."""
     if isinstance(argument, dict) and argument.get("kind") == "array":
         # A varargs slot is one `array` argument (9.15), one destination per
@@ -1745,6 +1765,7 @@ def _walked_channels(
     argument: dict[str, Any] | None,
     context: _Reads,
     forms: Sequence[dict[str, Any]] = (),
+    within: Path | None = None,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """One channel capture's destinations, resolved by the backward walk (Task 9).
 
@@ -1759,6 +1780,8 @@ def _walked_channels(
     **One tuple per distinct destination, not one per path** (§1c), the same reasoning
     `single_call` and `interface_implementation` state: several paths routinely agree about
     this one slot, and keeping them apart would mint a second row for one registration.
+
+    `within` is `_walked_with`'s.
     """
     # The provenance, the index and the site are all checked by `_walked_with`, which
     # does the walk; what is decided HERE is only which identities it may consult.
@@ -1796,7 +1819,7 @@ def _walked_channels(
     ]
     if not identities:
         return None
-    return _walked_with(argument, context, identities)
+    return _walked_with(argument, context, identities, within=within)
 
 
 def _walked_with(
@@ -1805,6 +1828,7 @@ def _walked_with(
     identities: Sequence[dict[str, Any]],
     reader: "Callable[[Answer | None], tuple[str | None, str | None, str]]" = channel_of_answer,
     branches: bool = True,
+    within: Path | None = None,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """`_walked_channels`' walk, with the identity list decided by the caller.
 
@@ -1824,6 +1848,11 @@ def _walked_with(
 
     `branches` is `resolve_site`'s: False reads a branch between literals as the walk did
     before ruling 7.
+
+    `within` is the path a chain walked back across methods took (`chains.ChainEnd.path`,
+    ruling 5, spec 2026-10-30): the argument is read as a further step of that path
+    (`resolve_positions`), so a helper's parameter is the argument at the call the chain
+    came through, never every caller the helper has. None reads every path, as before.
     """
     if context.values is None or context.workspace is None:
         return None
@@ -1834,14 +1863,26 @@ def _walked_with(
     site = context.values.sites.get((str(caller), int(str(ordinal))))
     if site is None:
         return None
-    walked = list(
-        dict.fromkeys(
-            reader(binding.slots.get(slot))
+    if within is not None:
+        answers = [
+            answered.get("value")
+            for answered in resolve_positions(
+                context.workspace,
+                {"value": (site, slot)},
+                context.values,
+                identities,
+                within,
+                branches,
+            )
+        ]
+    else:
+        answers = [
+            binding.slots.get(slot)
             for binding in resolve_site(
                 context.workspace, site, context.values, identities, branches
             )
-        )
-    )
+        ]
+    walked = list(dict.fromkeys(reader(answer) for answer in answers))
     return walked or [(None, None, "unresolved")]
 
 

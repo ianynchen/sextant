@@ -286,6 +286,17 @@ entry needs its own trust pair: a header whose value could not be read is visibl
 unresolved, and *sends a header we could not read* is a different claim from *sends no
 header*.
 
+**An entry names its endpoint twice: by the row's identity columns, and by `row_id`**
+(spec 2026-10-30-object-identity, ruling 7). The identity columns are what a reader outside
+the run joins on, which is why they are carried rather than replaced by a key: `row_id`
+numbers a row for one resolve, names nothing outside it, and the export leaves it out. Inside
+the run the id is what holds an entry to its row. It is bound when the entry is written, by
+the row's identity as minted, before any pass has moved the row; the path prefix and a
+protocol reclassification then move the row by its id, and the entry's identity columns are
+copied from the row again (`follow_endpoint_rows.sql`). An entry whose row the self-call pass
+removes is removed with it. Matched by address instead, an entry written as its row was
+minted stayed at the address the prefix had just moved the row away from.
+
 **The same table holds what an inbound endpoint's framework DEMANDS of a request** (spec
 2026-09-19 §5a). An inbound row's entries are the headers, query parameters and cookies the
 framework's binder or routing tree enforces — `direction = inbound`, `caller` the handler
@@ -913,10 +924,10 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed TWELVE-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed FOURTEEN-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
 `unselected_binding`, `handler_protocol`, `registration_activation`, `self_exchange`,
-`routing_conflict` and `routing_depth`** — checked by the single owning module before any row is inserted,
+`routing_conflict`, `routing_depth`, `web_stack` and `prefix_not_measured`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -930,7 +941,9 @@ same change that added it to the module — the drift above is why that is now t
 rather than an afterthought.* *And then it said NINE while the module enforced twelve:
 `self_exchange` (F5 §6.1, W27) and `routing_conflict` (W28) were added to the module without
 this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
-in the change that closed that spec's register items, the fourth drift of this one count.* *This paragraph said "two-value set" and named the first two
+in the change that closed that spec's register items, the fourth drift of this one count.*
+*`web_stack` and `prefix_not_measured` (ruling 3 of the 2026-10-30 object-identity design)
+are the thirteenth and fourteenth, added here in the same change as the module.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -948,7 +961,15 @@ because the question is which of them serves it; a `routing_depth` candidate hol
 `caller` and `depth` — the first helper the combinator's walk did not follow, the routing
 entry's own caller (where a reader opens the file) and the bound that stopped it — and ONE
 row per run carries every such chain, its `method` and `path` NULL because both genuinely are
-unread (spec 2026-09-19 §4a). Each array is sorted by the pass that writes it, so two runs produce the
+unread (spec 2026-09-19 §4a); a `web_stack` candidate holds `stack` and `keys` — one stack the
+module might run on and the configured prefix keys that stack's server-model entries would
+have applied — on ONE row per protocol, `method` and `path` NULL because the question is the
+module's, filed where a module configures a prefix, has rows a dispatcher serves, and carries
+none of the server model's `stacks` coordinates (D02 §1h); a `prefix_not_measured` candidate
+holds `key`, `framework`, `module_versions` and `declared_for` — a configured prefix key the
+server model declares for the module's stack only under version ranges that do not admit the
+module, so no entry applied it — on ONE row per protocol, `method` and `path` NULL, filed only
+where the module has inbound rows a dispatcher the key applies to serves. Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.
 
 `evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence
@@ -1385,6 +1406,7 @@ own cadence.
 | 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
 | 9 | `scheduled_work` gains `name` and `expression_source`; `handler`, `trigger` and `expression` may be NULL; `resolution` may be `partial` or `narrowed`; `resolved_schedules` gains `name` (spec `2026-10-28-quartz-design.md` §3e) | refused by its stamp exactly as at 5 to 8, so a workspace without the columns is re-analysed rather than read as one whose schedules have no names |
 | 10 | `scheduled_work` gains `untied`; an `@Scheduled` row's `name` is EMPTY rather than NULL (spec `2026-10-28-quartz-design.md`, "Empty cells", ruled 2026-10-29) | refused by its stamp exactly as at 5 to 9, so every NULL of the older vintage — which could mean any of the three — is re-derived rather than printed as `not in the code` |
+| 11 | `endpoints` and `endpoint_metadata` gain `row_id`: an endpoint row is numbered when it is written, and an entry attached to it is bound to that number when it is written and follows the row through the path prefix and a protocol reclassification (spec `2026-10-30-object-identity-design.md`, ruling 7). The export leaves the id out, so no bundle column changes | refused by its stamp exactly as at 5 to 10, so rows with no id — which no pass could find again — are re-derived rather than read beside numbered ones |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

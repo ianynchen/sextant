@@ -516,16 +516,14 @@ def test_a_binding_never_overwrites_an_answer_that_is_not_its_own(tmp_path: Path
         _call(_handler(), SCROLL, "decode", _parameter(0)),
     )
     _seed(workspace)
+    (row_id,) = workspace._connection.execute(
+        "SELECT row_id FROM endpoints WHERE protocol = 'sqs' AND path = 'queue'"
+    ).fetchone()
     workspace.derive(
         "bind_request_shape",
         rows=[
             {
-                "protocol": "sqs",
-                "direction": "inbound",
-                "method": None,
-                "path": "queue",
-                "handler": _handler(),
-                "caller": None,
+                "row_id": row_id,
                 # Not what the row holds: a value written by someone else
                 # after this decision was taken.
                 "bytes_shape": _payload(NOTE),

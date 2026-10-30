@@ -31,14 +31,29 @@
 --             of wire identity. `consumes`/`produces` (2E design §4) are
 --             carried data, never identity — every engine but Task 5's
 --             Spring pass passes NULL for both.
+-- EVERY INSERTED ROW IS MINTED A `row_id` (follow-the-object, Ruling 7), the
+-- same way `insert_endpoints.sql` does: one above the highest id in the table,
+-- numbered over the rows that survive the gate and the guard below (the inner
+-- SELECT), in an order naming every column, so a refused row leaves no gap and
+-- a second resolve mints the same ids. The id is computed here, never bound in
+-- `$rows`: a STRUCT key the builders do not emit would send `derive` down its
+-- per-value slow route.
 INSERT INTO endpoints (
-    protocol, direction, method, path, handler, caller, peer,
+    row_id, protocol, direction, method, path, handler, caller, peer,
     handler_signature, resolution, evidence, catalog_id, request_shape, response_shape,
     consumes, produces
 )
-SELECT r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
+SELECT (SELECT coalesce(max(row_id), 0) FROM endpoints)
+           + row_number() OVER (
+               ORDER BY r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
+                        r.resolution, r.evidence, r.catalog_id, r.request_shape,
+                        r.response_shape, r.consumes, r.produces, r.handler_signature
+           ),
+       r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
        r.handler_signature, r.resolution, r.evidence, r.catalog_id, r.request_shape,
        r.response_shape, r.consumes, r.produces
+FROM (
+SELECT r.*
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
@@ -115,4 +130,5 @@ WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
       AND existing.path      = r.path
       AND existing.caller IS NOT DISTINCT FROM r.caller
       AND existing.peer   IS NOT DISTINCT FROM r.peer
-);
+)
+) r;

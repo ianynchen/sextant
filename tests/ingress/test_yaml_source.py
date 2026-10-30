@@ -517,3 +517,43 @@ def test_the_shipped_spring_model_reads_bean_presence_only_through_presence():
     assert presence["missing"].endswith(".ConditionalOnMissingBean")
     assert presence["present"].endswith(".ConditionalOnBean")
     assert {presence["missing"], presence["present"]}.isdisjoint(other)
+
+
+def test_an_unknown_dispatcher_word_is_refused(tmp_path: Path):
+    """Ruling 3 of the 2026-10-30 object-identity design. `dispatcher` is a closed set — the
+    dispatchers the server model's keys apply to — and a word outside it is a typo, not an
+    absence. Read as
+    absent, `dispatcher: sping` would quietly take every configured prefix off the catalog's
+    rows, which is exactly what a catalog with no dispatcher means."""
+    (tmp_path / "invented-typo.yml").write_text(
+        _HEADER + "dispatcher: dispatcherservlet\nmatches: {}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "dispatcherservlet" in str(raised.value)
+    assert "invented-typo.yml" in str(raised.value)
+
+
+def test_a_server_model_key_naming_an_unknown_dispatcher_is_refused(tmp_path: Path):
+    """The same closed set, on the server model's side: a key that `applies_to` a dispatcher
+    its file does not declare would apply to nothing, silently."""
+    (tmp_path / "server-models").mkdir()
+    (tmp_path / "server-models" / "invented.yml").write_text(
+        "id: invented\ndispatchers: [spring]\n"
+        "stacks: [{stack: servlet, coordinates: ['org.springframework:spring-webmvc']}]\n"
+        "prefixes:\n"
+        "  - framework: org.springframework.boot\n"
+        "    versions: '>=2.0'\n"
+        "    measured: ['3.5.14']\n"
+        "    stack: servlet\n"
+        "    keys: [{key: server.servlet.context-path, applies_to: [sping]}]\n"
+        "    protocols: [http]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).server_model()
+
+    assert "sping" in str(raised.value)

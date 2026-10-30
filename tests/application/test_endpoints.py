@@ -8433,7 +8433,7 @@ def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_
     try:
         workspace.derive("endpoints_reset")
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, path) VALUES ('jms', 'outbound', '/prior')"
+            "INSERT INTO endpoints (row_id, protocol, direction, path) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'jms', 'outbound', '/prior')"
         )
         broken = next(
             catalog
@@ -8801,7 +8801,7 @@ def test_a_catalog_declaring_an_unknown_class_level_value_is_refused(tmp_path: P
     try:
         workspace.derive("endpoints_reset")
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, path) VALUES ('kafka','inbound','/prior')"
+            "INSERT INTO endpoints (row_id, protocol, direction, path) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'kafka','inbound','/prior')"
         )
         with pytest.raises(CatalogError) as refusal:
             derive_endpoints(workspace, [broken], capabilities=set())

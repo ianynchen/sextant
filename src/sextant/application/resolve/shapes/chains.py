@@ -37,7 +37,7 @@ change in behaviour, so a second consumer can read the same walk.
 """
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -71,8 +71,11 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
+    RECEIVER,
+    Path,
     ValueIndex,
     cached_value_index,
+    producer_paths,
     producers_of,
 )
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
@@ -200,6 +203,10 @@ class ChainEnd:
     # or across returns and parameters — empty for a terminal no execute-join declares. Several
     # consumers are still ONE end: the walk lists them, it does not fork on them.
     consumers: tuple[Mapping[str, Any], ...]
+    # The path the walk back from a rootless terminal took to its root (`_walk_back`,
+    # ruling 5, spec 2026-10-30), for reading the captures on that path alone: each caller
+    # of a shared helper reads its own arguments. None for a chain walked from its root.
+    path: Path | None = None
 
 
 def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
@@ -219,7 +226,9 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     _validate_captures(steps, catalog, allow_when=True)
     undeclared_owners, undeclared_poisons = _undeclared_steps(matches, catalog)
     _validate_poisons([*roots, *bean_roots], steps, undeclared_poisons, catalog)
-    terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []), catalog)
+    terminal_names, via_argument_names, receiver_terminals = _terminal_index(
+        matches.get("terminal", []), catalog
+    )
     # `arguments` arrives decoded from the workspace (`_DECODED_COLUMNS`), as
     # single_call reads it: both the root scan below and the shared
     # `argument_descriptor`'s `call_wrappers` one-hop read the list, never text.
@@ -295,7 +304,17 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
         if step["receiver_arg"] is not None:
             extension_steps.setdefault(step["method"], []).append(step)
     caller_parameters = workspace.once(declared_parameters_of)
-    for caller, sites in by_caller.items():
+    # Where every walk records each chain end, for this loop to yield caller by caller.
+    ends: list[ChainEnd] = []
+    reached: set[tuple[str, int]] = set()
+    contexts: dict[str, _ChainContext] = {}
+
+    def context_of(caller: str) -> _ChainContext:
+        """One caller's context, built once: its own walk's, and a chain walked back across
+        methods folds each of its calls in the context of the method it is in."""
+        if caller in contexts:
+            return contexts[caller]
+        sites = by_caller[caller]
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`
         # is built fresh per caller, over that caller's own sites alone, so a
         # value id from one method can never be mistaken for a link in
@@ -310,9 +329,10 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             # `OI-77`, the same fix `single_call` takes: a body handed straight through
             # from the caller's own signature names its type there and nowhere else.
             caller_parameters=caller_parameters.get(caller, ()),
+            sites_by_caller=by_caller,
+            parameters_by_caller=caller_parameters,
         )
-        ends: list[ChainEnd] = []
-        context = _ChainContext(
+        contexts[caller] = _ChainContext(
             workspace=workspace,
             values=walk_index,
             caller=caller,
@@ -321,6 +341,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             steps=steps,
             terminal_names=terminal_names,
             via_argument_names=via_argument_names,
+            receiver_terminals=receiver_terminals,
             joined=joined,
             catalog=catalog,
             facts=facts,
@@ -335,7 +356,15 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             all_parameters=caller_parameters,
             annotations=annotations,
             ends=ends,
+            reached=reached,
         )
+        return contexts[caller]
+
+    # What the walk back from a rootless terminal stops at and folds, built the first time a
+    # caller has one (`_rootless_walk`): most modules have none, and pay nothing for it.
+    rootless: _RootlessWalk | None = None
+    for caller, sites in by_caller.items():
+        context = context_of(caller)
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
         # order too (NFR-1), via `by_receiver`'s own insertion order below.
@@ -352,6 +381,17 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
                 captures[_CONTINUE] = root["continue_via"]
             _fold_bean_captures(captures, rooted)
             _walk(site, captures, terminal=None, context=rooted)
+            yield from ends
+            ends.clear()
+        # Ruling 5 (spec 2026-10-30): a terminal no root walk reached has its root in another
+        # method — a builder started in a helper and finished here. After the root walks, so
+        # a terminal they reached is never walked twice.
+        for site in sites:
+            if _site_key(site) in reached or not _reaches_terminal(site, context):
+                continue
+            if rootless is None:
+                rootless = _rootless_walk(catalog, walk_index, roots, steps)
+            _walk_back(site, context, context_of, rootless)
             yield from ends
             ends.clear()
 
@@ -423,6 +463,10 @@ def _declared_entries(
             # §5: a step whose result is handed to a consumer that continues
             # the walk — the same word a root may carry; None otherwise.
             "continue_via": _validated_continuation(step, catalog),
+            # Ruling 4 (spec 2026-10-30): the step returns the object it was called on, so
+            # it configures that object as a void setter does (`_configures`) — False for
+            # the ordinary step, whose result is a value of its own and forks.
+            "returns_receiver": _validated_returns_receiver(step, catalog, "step"),
         }
         for step in matches.get("steps", [])
     ]
@@ -569,6 +613,9 @@ class _ChainContext:
     steps: list[dict[str, Any]]
     terminal_names: set[str]
     via_argument_names: dict[str, _JoinFilter | None]
+    # Ruling 4 (spec 2026-10-30): the terminals written `{method, returns_receiver: true}`,
+    # which return the object they were called on and so configure it (`_configures`).
+    receiver_terminals: set[str]
     # The executing calls the value walk pairs with a terminal site, by that site's
     # `(caller, ordinal)` (`_joined_through_values`) — the module's, not this caller's.
     joined: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
@@ -626,6 +673,13 @@ class _ChainContext:
     # is the same not-charging-the-innocent rule Task 7 measured at 0.16s on `mall-admin`.
     workspace: "Workspace | None" = None
     values: "ValueIndex | None" = None
+    # The terminal sites a walk has reached, by `(caller, ordinal)`: what the walk back from
+    # a rootless terminal skips (`_walk_back`). One set per `chain_ends` run, shared by
+    # every caller's context.
+    reached: set[tuple[str, int]] | None = None
+    # The path a chain walked back across methods took (`ChainEnd.path`); None on a chain
+    # walked from its root.
+    path: Path | None = None
 
 
 def _prefix_captures(
@@ -664,8 +718,19 @@ def _prefix_captures(
     before `handle(sinkSpec)`, where the flow's source is a root and the walk
     arrives at `handle` from the sink chain, never from that root. A root is
     owner-gated by construction, so the rule above holds for it. Empty on the
-    root walk itself, whose prefix is what it always was."""
-    producers: list[dict[str, Any]] = []
+    root walk itself, whose prefix is what it always was.
+
+    **A flagged call on a value the chain passes through configures it** (ruling 4, spec
+    2026-10-30). `b = WebClient.builder(); b.baseUrl(x); b.build().get()` reads `b` at
+    `build()`, and `baseUrl` is a statement of its own on `b`, never a producer. A step
+    declared `returns_receiver: true` returns `b` itself, so each such call on a value
+    before the call that reads it folds after that value's producer, in ordinal order,
+    with what is called on its own result (`_configured_before`). Owner-gated like every
+    other backward fold, and bounded by the reading call's ordinal, so a call made after
+    the chain read the value never reaches it."""
+    # Each link is a value the chain reads, the call that reads it, and the call that
+    # produced it — None where nothing in this method did (a parameter, a field).
+    links: list[tuple[Any, dict[str, Any], dict[str, Any] | None]] = []
     visited: set[Any] = set()
     current = root_site
     while True:
@@ -681,24 +746,53 @@ def _prefix_captures(
             ),
             None,
         )
+        links.append((receiver, current, producer))
         if producer is None:
             break
-        producers.append(producer)
         current = producer
     owned = [step for step in context.steps if step["owners"] is not None]
+    configuring = [step for step in owned if step["returns_receiver"]]
     captures: dict[str, Any] = {}
-    # `reversed`: `producers` was collected from the root outward, so this
+    # `reversed`: `links` was collected from the root outward, so this
     # folds the outermost producer first — real chain order, which is what
     # makes last-wins mean the same thing on both sides of the root.
-    for producer in reversed(producers):
-        root = _matching_root(producer, roots)
-        if root is not None:
-            captures.update(_root_captures(root, producer, context))
-            continue
-        step = _matching_step(producer, owned)
-        if step is not None:
-            captures.update(_step_captures(step, producer))
+    for receiver, reader, producer in reversed(links):
+        if producer is not None:
+            root = _matching_root(producer, roots)
+            if root is not None:
+                captures.update(_root_captures(root, producer, context))
+            else:
+                step = _matching_step(producer, owned)
+                if step is not None:
+                    captures.update(_step_captures(step, producer))
+        if configuring:
+            for step, site in _configured_before(receiver, reader, configuring, context):
+                captures.update(_step_captures(step, site))
     return captures
+
+
+def _configured_before(
+    value: Any,
+    reader: dict[str, Any],
+    configuring: list[dict[str, Any]],
+    context: _ChainContext,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """The calls on `value` before `reader` reads it that match a `returns_receiver` step
+    in `configuring`, in ordinal order, each followed by the flagged calls made on its own
+    result (which is `value` again) before `reader` — the backward half of `_fold_or_fork`'s
+    in-place fold, for `_prefix_captures`."""
+    found: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for site in context.by_receiver.get(value, []):
+        if site is reader or int(site["ordinal"]) >= int(reader["ordinal"]):
+            continue
+        step = _matching_step(site, configuring)
+        if step is None:
+            continue
+        found.append((step, site))
+        same_object = _chain_key(site)
+        if same_object is not None:
+            found.extend(_configured_before(same_object, reader, configuring, context))
+    return found
 
 
 def _root_captures(
@@ -720,6 +814,127 @@ def _root_captures(
     if root["compose"] is not None:
         captures[_COMPOSE] = root["compose"]
     return captures
+
+
+@dataclass(frozen=True)
+class _RootlessWalk:
+    """What the walk back from a rootless terminal reads (`_walk_back`, ruling 5): the calls
+    it chains through, and the calls that configure the object they are called on."""
+
+    declared: frozenset[tuple[str, str]]
+    configuring: frozenset[tuple[str, str, str]]
+
+
+def _rootless_walk(
+    catalog: Catalog,
+    index: ValueIndex,
+    roots: Sequence[dict[str, Any]],
+    steps: Sequence[dict[str, Any]],
+) -> _RootlessWalk:
+    """The calls `_walk_back` chains through: every `(owner, name)` the module calls whose
+    name is a root's or a step's, on an owner the entry names where it names one. Read off
+    the module's own calls because the value walk matches a call on its exact owner and name,
+    and most steps name no owner. A call whose body is in the module is never one: the walk
+    crosses its return to the library call inside, as the execute-join's walk does
+    (`_joined_through_values`). `configuring` is `configuring_calls`' set, so the two walks
+    agree on which calls configure a chain (ruling 4).
+
+    Empty where the module calls no root of the catalog: a chain the walk back finds must
+    start at one, so no terminal is walked there (GUIDELINES §8.7)."""
+    owners_by_name: dict[str, list[tuple[str, ...] | None]] = {}
+    for root in roots:
+        owners_by_name.setdefault(str(root["method"]), []).append(tuple(root["owners"]))
+    for step in steps:
+        owners_by_name.setdefault(str(step["method"]), []).append(step["owners"])
+    declared: set[tuple[str, str]] = set()
+    in_module: set[tuple[str, str]] = set()
+    root_names = {str(root["method"]) for root in roots}
+    rooted = False
+    for site in index.sites.values():
+        name = str(site["name"])
+        if not rooted and name in root_names:
+            rooted = _matching_root(dict(site), roots) is not None
+        owner = str(site["owner"])
+        named = owners_by_name.get(name)
+        if named is None or not any(owners is None or owner in owners for owners in named):
+            continue
+        declared.add((owner, name))
+        if _site_key(site) in index.reached:
+            in_module.add((owner, name))
+    if not rooted:
+        return _RootlessWalk(frozenset(), frozenset())
+    return _RootlessWalk(
+        frozenset(declared - in_module), configuring_calls(catalog, index.sites.values())
+    )
+
+
+def _walk_back(
+    terminal: dict[str, Any],
+    context: _ChainContext,
+    context_of: Callable[[str], _ChainContext],
+    rootless: _RootlessWalk,
+) -> None:
+    """A terminal no root walk reached, followed BACK to its root across methods (ruling 5,
+    spec 2026-10-30): `base(){ return SendMessageRequest.builder().queueUrl(q); }` and
+    `sqs.sendMessage(base().messageBody(m).build())` put the root in one method and the
+    terminal in another, which no forward walk joins.
+
+    The value walk reads the terminal's receiver ALONG RECEIVERS (`producer_paths`), across
+    returns and parameters, each path in its own calling contexts. A path whose chain starts
+    at a declared root is this catalog's chain. Its captures fold in chain order: the root's
+    own, as the root walk folds them, then each call of the chain in the context of the
+    method it is in (its captures stamped with that method, ruling 2), then the terminal's;
+    and the walk goes on forward from the terminal in this method, as from any terminal it
+    reaches. The end carries the path, so each caller of a shared helper reads its own
+    arguments (`ChainEnd.path`).
+
+    A path passed through a branch (`inexact`) is not a chain as written: which branch's
+    calls ran is not known, and folding the shared receiver's chain alone could state a
+    verb the branch changed. It derives nothing, rather than a row the code may not make."""
+    if not rootless.declared:
+        return
+    assert context.values is not None
+    for producer, path in producer_paths(
+        context.values,
+        terminal,
+        RECEIVER,
+        rootless.declared,
+        along_receivers=True,
+        configuring=rootless.configuring,
+    ):
+        if not producer.chain or producer.inexact:
+            continue
+        chain = [_site_at(caller, ordinal, context_of) for caller, ordinal in producer.chain]
+        root = _matching_root(chain[0], context.roots)
+        if root is None:
+            continue
+        rooted = replace(context_of(str(chain[0]["caller"])), root=chain[0])
+        captures = {
+            **_prefix_captures(chain[0], rooted),
+            **_root_captures(root, chain[0], rooted),
+        }
+        if root["continue_via"] is not None:
+            captures[_CONTINUE] = root["continue_via"]
+        _fold_bean_captures(captures, rooted)
+        for site in chain[1:]:
+            _fold_site(site, captures, context_of(str(site["caller"])))
+        _fold_site(terminal, captures, context)
+        _walk(terminal, captures, terminal=None, context=replace(context, root=chain[0], path=path))
+
+
+def _site_at(
+    caller: str, ordinal: int, context_of: Callable[[str], _ChainContext]
+) -> dict[str, Any]:
+    """The call site `(caller, ordinal)`, as its caller's own walk reads it."""
+    return next(site for site in context_of(caller).sites if int(site["ordinal"]) == ordinal)
+
+
+def _mark_reached(site: dict[str, Any], context: _ChainContext) -> None:
+    """Records a terminal a deriving walk reached, so the walk back from a rootless terminal
+    never starts there (`_walk_back`). A collecting walk derives nothing, so it records
+    nothing."""
+    if context.reached is not None and context.collect is None:
+        context.reached.add(_site_key(site))
 
 
 def _walk(
@@ -756,6 +971,7 @@ def _walk(
     one has; "derives" here means the end is recorded for `chain_ends` to yield."""
     if _reaches_terminal(site, context):
         terminal = site
+        _mark_reached(site, context)
         _hold_executing_call(site, captures, context)
     # Spec 2026-09-21 §5: a value this row produced that a declared consumer
     # takes as an argument hands the chain on — the walk continues from the
@@ -766,7 +982,7 @@ def _walk(
     # configuring call's result on it, or a `build()`.
     consumers = _continuations(site, captures, context)
     for consumer in consumers:
-        _continue(consumer, captures, context)
+        _continue(consumer, _configured_for(site, consumer, captures, context), context)
     chain_key = _chain_key(site)
     # A void ordinary call (`result` null, D00 §5) has nothing a following
     # row's `receiver` could ever really match — `None` is not a value id,
@@ -782,18 +998,7 @@ def _walk(
         # constructor row itself wherever its key is looked up; excluded
         # here so a `<init>` root never chains into itself.
         nexts = [s for s in context.by_receiver.get(chain_key, []) if s is not site]
-    forked = False
-    for next_site in nexts:
-        if _chain_key(next_site) is None:
-            _fold_site(next_site, captures, context)
-            if _reaches_terminal(next_site, context):
-                terminal = next_site
-                _hold_executing_call(next_site, captures, context)
-            continue
-        forked = True
-        next_captures = dict(captures)
-        _fold_site(next_site, next_captures, context)
-        _walk(next_site, next_captures, terminal, context)
+    forked, terminal = _fold_or_fork(nexts, captures, terminal, context)
     if forked or consumers:
         return
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
@@ -804,9 +1009,94 @@ def _walk(
     elif terminal is not None:
         context.ends.append(
             ChainEnd(
-                context.caller, context.root, terminal, captures, _end_consumers(terminal, context)
+                context.caller,
+                context.root,
+                terminal,
+                captures,
+                _end_consumers(terminal, context),
+                context.path,
             )
         )
+
+
+def _fold_or_fork(
+    nexts: list[dict[str, Any]],
+    captures: dict[str, Any],
+    terminal: dict[str, Any] | None,
+    context: _ChainContext,
+) -> tuple[bool, dict[str, Any] | None]:
+    """`_walk`'s step over the rows called on one value, in ordinal order: each row that
+    configures the value folds into `captures` in place, and each other row forks a walk of
+    its own with a copy of `captures` as they stand when it is reached. Returns whether any
+    row forked, and the chain's terminal after the in-place folds.
+
+    A row configures the value when it is void (it has no result to continue from) or when
+    it returns the object it was called on (`_configures`, ruling 4, spec 2026-10-30). The
+    second kind has a result, and that result IS the value, so what is called on it folds
+    here too, in place, before the next row on the value: `b.url(u).post(x);` configures
+    `b` with both. A fork copies the captures where it is reached, so `b.url(a); r1 =
+    b.build(); b.url(c); r2 = b.build()` gives r1 the address `a` and r2 the address `c`:
+    configuration after a build never reaches the request already built."""
+    forked = False
+    for next_site in nexts:
+        if _chain_key(next_site) is None or _configures(next_site, context):
+            _fold_site(next_site, captures, context)
+            if _reaches_terminal(next_site, context):
+                terminal = next_site
+                _mark_reached(next_site, context)
+                _hold_executing_call(next_site, captures, context)
+            same_object = _chain_key(next_site)
+            if same_object is not None:
+                # The value a configuring call returns may be handed on as it is (spec
+                # 2026-09-21 §5): `handle(spec.topic("t"))`. Folded in place, the call is no
+                # site `_walk` visits, so it is asked here, and a chain handed on ends here
+                # as `_walk`'s does.
+                handed_on = _continuations(next_site, captures, context)
+                for consumer in handed_on:
+                    _continue(
+                        consumer, _configured_for(next_site, consumer, captures, context), context
+                    )
+                on_it = [s for s in context.by_receiver.get(same_object, []) if s is not next_site]
+                forked_on_it, terminal = _fold_or_fork(on_it, captures, terminal, context)
+                forked = forked or forked_on_it or bool(handed_on)
+            continue
+        forked = True
+        next_captures = dict(captures)
+        _fold_site(next_site, next_captures, context)
+        _walk(next_site, next_captures, terminal, context)
+    return forked, terminal
+
+
+def _configured_for(
+    site: dict[str, Any],
+    consumer: dict[str, Any],
+    captures: dict[str, Any],
+    context: _ChainContext,
+) -> dict[str, Any]:
+    """What `site`'s value carries when `consumer` takes it (ruling 4, spec 2026-10-30): a
+    copy of `captures` with each call on that value made before `consumer` that configures
+    it folded in, in ordinal order, with what is called on a configuring call's own result,
+    which is the value again. A call configures the value as `_fold_or_fork` says: it is void,
+    or it returns the object it was called on. So `spec = sink(t); spec.topic("x");
+    handle(spec)` hands `handle` the topic; a call made after `consumer` never reaches it."""
+    handed = dict(captures)
+    visited: set[Any] = set()
+
+    def fold(value: Any) -> None:
+        if value is None or value in visited:
+            return
+        visited.add(value)
+        for call in context.by_receiver.get(value, []):
+            if call is site or call is consumer:
+                continue
+            if int(call["ordinal"]) >= int(consumer["ordinal"]):
+                continue
+            if _chain_key(call) is None or _configures(call, context):
+                _fold_site(call, handed, context)
+                fold(_chain_key(call))
+
+    fold(_chain_key(site))
+    return handed
 
 
 def _hold_executing_call(
@@ -1019,6 +1309,55 @@ def _validated_receiver_arg(step: dict[str, Any], catalog: Catalog) -> int | Non
             f"2026-10-26 §3c)"
         )
     return declared
+
+
+def _validated_returns_receiver(entry: dict[str, Any], catalog: Catalog, kind: str) -> bool:
+    """A step's or terminal's optional `returns_receiver`, refused unless it is a boolean.
+    A string or a number would read as truthy and flag a call no evidence showed returns
+    its own receiver, which joins calls that are not one chain (ruling 4, spec
+    2026-10-30)."""
+    declared = entry.get("returns_receiver", False)
+    if not isinstance(declared, bool):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: {kind} `{entry.get('method')}` declares "
+            f"`returns_receiver: {declared!r}`, which is not true or false — it says the "
+            f"call returns the object it was called on (ruling 4, spec 2026-10-30)"
+        )
+    return declared
+
+
+def _configures(site: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether `site` returns the object it was called on (ruling 4, spec 2026-10-30): the
+    step it matches, or the terminal it names, is declared `returns_receiver: true`. Such a
+    call configures that object, so the walk folds it, and what is called on its result,
+    into the chain in place, as it folds a void setter, instead of forking."""
+    if str(site["name"]) in context.receiver_terminals:
+        return True
+    step = _matching_step(site, context.steps)
+    return step is not None and step["returns_receiver"]
+
+
+def configuring_calls(
+    catalog: Catalog, sites: Iterable[Mapping[str, Any]]
+) -> frozenset[tuple[str, str, str]]:
+    """The `(owner, name, descriptor)` of each of `sites` that a step or terminal of
+    `catalog` declares `returns_receiver: true`, in the site's own spelling — the exact
+    overload the step matched, never every overload of its name: the set the value walk's chain
+    reader takes as `configuring` (ruling 4, spec 2026-10-30, the backward half). Matched
+    as the forward walk matches a step (`_matching_step`), so the two walks agree on which
+    calls configure a chain."""
+    _, _, steps = _declared_entries(catalog)
+    flagged = [step for step in steps if step["returns_receiver"]]
+    terminals = _terminal_index(catalog.matches.get("terminal", []), catalog)[2]
+    if not flagged and not terminals:
+        return frozenset()
+    methods = {str(step["method"]) for step in flagged}
+    return frozenset(
+        (str(site["owner"]), str(site["name"]), str(site.get("descriptor")))
+        for site in sites
+        if str(site["name"]) in terminals
+        or (str(site["name"]) in methods and _matching_step(dict(site), flagged) is not None)
+    )
 
 
 def _receiver_of(site: dict[str, Any], extension_steps: dict[str, list[dict[str, Any]]]) -> Any:
@@ -1630,7 +1969,7 @@ def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[
 
 def _terminal_index(
     entries: list[Any], catalog: Catalog
-) -> tuple[set[str], dict[str, _JoinFilter | None]]:
+) -> tuple[set[str], dict[str, _JoinFilter | None], set[str]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
     ruling: the catalog marks it `terminal_via_argument: true` on the
@@ -1640,13 +1979,19 @@ def _terminal_index(
     `{owner, method}` mapping instead narrows the join to that one declared
     call, closing the fabrication a bare join leaves open — `Request r =
     builder.build(); log.debug("…", r)` consumes `build`'s own result too,
-    and without a filter that non-executing use would complete the chain."""
+    and without a filter that non-executing use would complete the chain.
+
+    The third set is the terminals declared `returns_receiver: true` (ruling 4, spec
+    2026-10-30), in either form: they return the object they were called on."""
     plain: set[str] = set()
     via_argument: dict[str, _JoinFilter | None] = {}
+    returns_receiver: set[str] = set()
     for entry in entries:
         if isinstance(entry, str):
             plain.add(entry)
             continue
+        if _validated_returns_receiver(entry, catalog, "terminal"):
+            returns_receiver.add(entry["method"])
         marker = entry.get("terminal_via_argument")
         if not marker:
             plain.add(entry["method"])
@@ -1678,7 +2023,7 @@ def _terminal_index(
             if isinstance(marker, dict)
             else None
         )
-    return plain, via_argument
+    return plain, via_argument, returns_receiver
 
 
 def _validated_continuation(entry: dict[str, Any], catalog: Catalog) -> _JoinFilter | None:
@@ -2101,7 +2446,7 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
             }
         elif _reads_an_argument(field, value):
             slot = _arg_index(value)
-            read = _own_parameter(_arg_at(site["arguments"], slot), site)
+            read = _own_method(_arg_at(site["arguments"], slot), site)
             # No slot, nothing to name: `_arg_index` answers None for a capture that is
             # not a positional read, and a position the walk cannot be told is one it must
             # not be asked about.
@@ -2130,7 +2475,7 @@ def _captured_at(
     one missed would be silent.
 
     Every reader of these arguments selects the keys it wants (`kind`, `value`, `source`,
-    `elements`), so an extra key travels harmlessly — the same way `_own_parameter`'s
+    `elements`), so an extra key travels harmlessly — the same way `_own_method`'s
     `caller` already does.
     """
     if argument is None:
@@ -2138,29 +2483,28 @@ def _captured_at(
     return {**argument, _CAPTURED_AT: (site["caller"], site["ordinal"], slot)}
 
 
-def _own_parameter(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
-    """A `parameter`-kind argument with the site's own caller beside it (spec
-    2026-09-21 §3c: a destination handed in as the constructing method's
-    `@Value` parameter reads its expression through the field ladder's rung
-    2a, which needs the declaration the index is an index INTO). The same
-    discipline as the `bean_via` marker above, for the same reason: captures
-    fold up out of lambda bodies, and a lambda's `parameter 1` is a captured
-    variable of ITS signature — read against the enclosing method's it would
-    fabricate that method's expression. Every other kind travels untouched."""
+def _own_method(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
+    """The argument with the site's own caller stamped on it, of every kind and through
+    every `elements` and `candidates` it holds (ruling 2 of the object-identity design).
+
+    A value id (`source`) and a parameter index are both meaningful only inside the
+    method that wrote them (D00 §5), and captures fold up out of lambda bodies into a
+    chain whose own method is the enclosing one: read there, a lambda's `source: 20` is
+    the enclosing method's call 20, and its `parameter 1` is the enclosing signature's.
+    So each argument carries its method, and its readers (`sites_of`, `parameters_of`)
+    look it up there rather than in the chain's. The same discipline as the `bean_via`
+    marker above, for the same reason. The `parameter` rung of the field ladder (spec
+    2026-09-21 §3c) reads the same key."""
     if argument is None:
         return None
-    if argument.get("kind") == "array":
-        # Each element of a varargs slot is read on its own (`_address_read`),
-        # so each parameter among them carries the caller too.
-        return {
-            **argument,
-            "elements": [
-                _own_parameter(element, site) for element in argument.get("elements") or []
-            ],
-        }
-    if argument.get("kind") != "parameter":
-        return argument
-    return {**argument, "caller": site["caller"]}
+    stamped = {**argument, "caller": site["caller"]}
+    for key in ("elements", "candidates"):
+        held = argument.get(key)
+        if isinstance(held, list):
+            stamped[key] = [
+                _own_method(member, site) if isinstance(member, dict) else member for member in held
+            ]
+    return stamped
 
 
 def _reads_an_argument(field: str, value: Any) -> bool:

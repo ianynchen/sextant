@@ -12,7 +12,13 @@
        Spring 7.0.9 and nothing else, matching `orders-spring7` so the jar this build needs
        is already in the local repository. The context path is a property of the SERVLET
        CONTAINER rather than of any dependency, so no Boot starter is declared and the
-       fixture stays light. -->
+       fixture stays light.
+
+       Two more, for ruling 3 of the 2026-10-30 object-identity design: a `@WebServlet` is
+       registered with the CONTAINER, not behind the DispatcherServlet, so it takes the context
+       path and never `spring.mvc.servlet.path` (CP-57). `jakarta.servlet-api` carries the
+       annotation and `HttpServlet`; `spring-boot-web-server` carries `@ServletComponentScan`
+       at Boot 4, which is the scan that registers it in a Boot app. -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -22,6 +28,17 @@
       <groupId>org.springframework</groupId>
       <artifactId>spring-webmvc</artifactId>
       <version>7.0.9</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>6.1.0</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-web-server</artifactId>
+      <version>4.1.1</version>
     </dependency>
   </dependencies>
 </project>

@@ -42,6 +42,7 @@ matches:
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
 | `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1e. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
+| `dispatcher` | What serves an inbound catalog's rows inside the module's server, and so which configured path prefixes reach them — §1h. Optional; a catalog naming none takes no configured prefix |
 | `matches` | Style-specific |
 
 **`protocol` and `direction` are omitted by a NON-WIRE style, and their absence is a claim**
@@ -684,6 +685,83 @@ mapping (nothing says which argument is the client); a key declared on BOTH side
 catalog cannot carry a copy of the ladder that drifts from the model's. Whether the merged key
 is complete is refused where it is read, by `shapes/client_base.client_base_of`, which both
 engines call. An edit to the directory moves `_catalog_hash`.
+
+## 1h. `dispatcher` and the server model — which configured prefix reaches a row
+
+Ruling 3 of the 2026-10-30 object-identity design. A configured path prefix
+(`server.servlet.context-path`, `spring.mvc.servlet.path`, …) belongs to the SERVER, not to
+any catalog, so it is declared once in `catalogs/server-models/*.yml` and applied by
+`resolve/path_prefix.py` to the rows every catalog derived. But one server holds several
+DISPATCHERS, and probe CP-57 (`scripts/probes/cp57-dispatcher-prefixes/RESULT.md`, Boot
+3.5.14) measured them taking different keys: the DispatcherServlet's rows answer under the
+context path and the servlet path, a container-registered `@WebServlet`'s under the context
+path alone, Jersey's under the context path and `spring.jersey.application-path`. So a key
+names the dispatchers it reaches, and a catalog names the dispatcher that serves its rows:
+
+```yaml
+# spring-mvc-router.yml
+direction: inbound
+dispatcher: spring          # one of the server model's `dispatchers`; optional
+```
+
+**A catalog without `dispatcher` takes no configured prefix.** That is the right answer for
+every framework the server model does not describe (Quarkus, Micronaut, Javalin, Ktor), whose
+servers Spring Boot's keys do not configure. A word outside the vocabulary is refused by file
+(`yaml_source._dispatcher`): read as absent, a typo would silently take the prefix off every
+row the catalog derives. On a catalog whose `resolves.direction` turns some rows inbound
+(`spring-http-interface`), the key applies to those rows only; an outbound row never takes a
+configured prefix.
+
+The vocabulary is DATA, declared in the server model beside the keys, because every word in
+it names a framework (`tests/architecture/test_source_rules.py` keeps framework names out of
+code). A server model file carries three blocks:
+
+```yaml
+id: spring-boot
+dispatchers: [spring, servlet, jaxrs]    # the closed set `dispatcher:` and `applies_to` name
+
+stacks:                                  # IN ORDER; the first whose coordinates the module
+  - stack: servlet                       # carries is its stack, none of them means no web
+    coordinates:                         # stack and no configured prefix at all
+      - org.springframework:spring-webmvc
+      - org.glassfish.jersey.containers:jersey-container-servlet-core
+      - org.springframework.boot:spring-boot-starter-web
+      - org.springframework.boot:spring-boot-starter-webmvc
+      - org.springframework.boot:spring-boot-starter-jersey
+  - stack: reactive
+    coordinates:
+      - org.springframework:spring-webflux
+      - org.springframework.boot:spring-boot-starter-webflux
+
+prefixes:
+  - framework: org.springframework.boot
+    versions: ">=2.0 <4.0"
+    measured: ["2.7.18", "3.5.14"]
+    stack: servlet                       # one of `stacks`
+    keys:                                # ORDERED, composing left to right per dispatcher
+      - { key: server.servlet.context-path, applies_to: [spring, servlet, jaxrs] }
+      - { key: spring.mvc.servlet.path, applies_to: [spring] }
+      - { key: spring.jersey.application-path, applies_to: [jaxrs] }
+    protocols: [http, sse]
+```
+
+| Field | Meaning |
+|---|---|
+| `dispatchers` | The closed set of dispatcher words. A key's `applies_to` and a catalog's `dispatcher` must be among them; the catalog loader accepts the words some key applies to |
+| `stacks[].stack`, `stacks[].coordinates` | Which web stack the module runs on, read off its `module_dependencies` coordinates in the listed order — Spring Boot's own `WebApplicationType.deduceFromClasspath` order, so a servlet app carrying WebFlux for its `WebClient` stays a servlet app. The STARTERS are listed beside the artifacts (`spring-boot-starter-web`/`-webmvc`/`-jersey` for servlet, `spring-boot-starter-webflux` for reactive), because a dependency set read off the build file names the starter and none of its transitives. A module matching no stack takes no configured prefix; where it configures one and has rows a dispatcher serves, the unapplied keys are named in one `web_stack` open question per protocol ([D01](D01-graph-schema.md)) |
+| `prefixes[].stack` | The stack this entry applies to. Only the module's own stack's entries apply: CP-57 measured a leftover `server.servlet.context-path` doing nothing on a reactive app |
+| `prefixes[].keys[].key` | A configuration key whose agreed value is a prefix segment |
+| `prefixes[].keys[].applies_to` | The dispatchers that key reaches. A pairing is declared only once a probe has measured it |
+| `prefixes[].framework`, `versions`, `measured`, `protocols` | As before: the entry applies where the module's framework version is in `versions` (an unrecorded version admits it), `measured` names the versions whose metadata was read, and `protocols` the wires it prefixes. A configured key the model declares for the module's stack only under ranges that do not admit the module is not applied, and is named in a `prefix_not_measured` open question ([D01](D01-graph-schema.md)) where the module has rows a dispatcher the key applies to serves — on Boot 4, `spring.jersey.application-path` and `spring.webflux.base-path` |
+
+**How a row's prefix is found.** For each entry on the module's stack whose version range
+admits it, each dispatcher's prefix is the agreed values of the keys that apply to it,
+composed left to right; the first entry to give a dispatcher a prefix for a protocol wins.
+A row then takes the prefix of `(its catalog's dispatcher, its protocol)` — the catalog is
+found through `endpoints.catalog_id` — followed by any installed per-package prefix
+(`class_path_prefixes`), followed by its own path. All three are read and validated by
+`YamlCatalogSource.server_model`, which refuses a missing block, an unknown `stack` and an
+`applies_to` word outside `dispatchers`.
 
 ---
 
@@ -1975,6 +2053,27 @@ carrying no `source` joins nothing, as a null `receiver` does. It is the FORWARD
 the backward prefix walk still follows each producer's own `receiver`, so it stops at an
 extension call as at any static call. `receiver_arg` is a non-negative integer and a step's
 word; anything else, and the word on a root, is refused at load.
+
+**A step or a terminal may declare `returns_receiver: true`** (ruling 4, spec 2026-10-30):
+the call returns the object it was called on, so it configures that object the way a void
+setter does. The walk folds it into the chain in place instead of forking a walk of its own,
+and folds what is called on its result there too, in ordinal order, before the next call on
+the object. So `b.url(u); b.post(x); client.newCall(b.build())`, four statements with the
+results of `url` and `post` dropped, is one chain. A call returning a new value, such as
+`build()`, still forks, with the captures as they stand when it is reached: in
+`b.url(a); r1 = b.build(); b.url(c); r2 = b.build()`, r1 has the address `a` and r2 the
+address `c`. The pre-root backward fold reads the flag too, for owner-declared steps only, as
+it does every step: a flagged call on a value the chain passes through, made before the call
+that reads that value, folds after the value's producer, so
+`b = WebClient.builder(); b.baseUrl(x); b.build().get()` carries the base. A value handed on
+to a consumer (`continue: true`) carries what configured it too: a flagged call whose result
+a consumer takes still hands the chain on (`handle(spec.topic("t"))`), and a consumer taking
+the value itself is handed the configuring calls made on it before that consumer
+(`spec.topic("t"); handle(spec)`). A terminal takes
+the word in its mapping form, `{ method: m, returns_receiver: true }`. The default is
+`false`. Anything but a boolean is refused at load. A flag goes on a method only after
+`javap`, or the method's Javadoc, shows it returns `this`, and the catalog quotes that
+evidence in a comment beside it.
 
 **`client_base`** (spec 2026-10-26 §3c, §3g items 1-3) says the library joins a relative
 address onto a base the executing CLIENT holds, and declares where that base is set. Every

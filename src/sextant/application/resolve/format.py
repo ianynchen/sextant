@@ -117,20 +117,9 @@ _PAYLOAD_COLUMNS = ("request_shape", "response_shape")
 _MEDIA_COLUMNS = ("consumes", "produces")
 
 # What `stamp_format.sql` matches a stamped answer back onto: the row's
-# identity, plus every column a rung above read. The four carried columns are
-# there because they are INPUTS — two rows agreeing on all eight were handed
-# the same answer, which is what lets an UPDATE with no unique key stay
-# idempotent rather than ambiguous.
-_MATCH_COLUMNS = (
-    "protocol",
-    "direction",
-    "method",
-    "path",
-    "handler",
-    "caller",
-    *_MEDIA_COLUMNS,
-    *_PAYLOAD_COLUMNS,
-)
+# `row_id`, which names exactly the row the answer was read off
+# (follow-the-object, Ruling 7).
+_MATCH_COLUMNS = ("row_id",)
 
 
 def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -159,9 +148,7 @@ def resolve_format(workspace: Workspace, catalogs: list[Catalog]) -> None:
         answer = _answer(
             endpoint, unconstrained, fixed, media, serializers, described, default_marker
         )
-        # The row is matched back by its identity AND by every column the
-        # answer above was read from (`stamp_format.sql`) — which is what
-        # makes a duplicate match idempotent in a table with no unique key.
+        # The row is matched back by its `row_id` (`stamp_format.sql`).
         rows.append(
             {column: endpoint.get(column) for column in _MATCH_COLUMNS}
             | {"format": answer.format, "format_resolution": answer.resolution}

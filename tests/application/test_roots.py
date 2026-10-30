@@ -246,8 +246,8 @@ def test_a_both_row_is_still_a_root_because_the_module_serves_it(tmp_path: Path)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     handler = _MODULE + "com/acme/orders/OrderController#create(sig_00000000)."
     workspace._connection.execute(
-        "INSERT INTO endpoints (protocol, direction, method, path, handler, caller) "
-        "VALUES ('http', 'both', 'POST', '/v1/orders', ?, 'com/acme/Client#call().')",
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller) "
+        "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'both', 'POST', '/v1/orders', ?, 'com/acme/Client#call().')",
         [handler],
     )
     record_roots(workspace)

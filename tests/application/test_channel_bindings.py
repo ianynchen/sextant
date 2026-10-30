@@ -102,6 +102,7 @@ def test_a_fed_channel_with_one_reader_mints_one_inbound_row_naming_both_ends(
     workspace.close()
 
     assert row == {
+        "row_id": 1,
         "protocol": "amqp",
         "direction": "inbound",
         "method": None,

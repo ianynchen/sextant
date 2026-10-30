@@ -418,7 +418,7 @@ def _descriptor_of(
 
 def _binding(endpoint: dict[str, Any], descriptor: str) -> dict[str, Any]:
     """One compare-and-set row for `bind_request_shape.sql`: the row's
-    identity, the bytes-shaped value this pass read, and the payload type it
+    `row_id`, the bytes-shaped value this pass read, and the payload type it
     replaces it with. Carrying the value read is what makes the write
     first-writer-safe — see that file."""
     return {column: endpoint.get(column) for column in _MATCH_COLUMNS} | {
@@ -427,11 +427,10 @@ def _binding(endpoint: dict[str, Any], descriptor: str) -> dict[str, Any]:
     }
 
 
-# The row identity a binding is matched back onto. The same six columns
-# `stamp_format.sql` uses for identity: `(protocol, direction, method, path)`
-# is not unique in this table — two listeners on one destination, several
-# NULL-path call sites — and `handler`/`caller` are what separate them.
-_MATCH_COLUMNS = ("protocol", "direction", "method", "path", "handler", "caller")
+# What a binding is matched back onto: the row's `row_id`, which names exactly
+# the row read (follow-the-object, Ruling 7) — `(protocol, direction, method,
+# path)` is not unique in this table.
+_MATCH_COLUMNS = ("row_id",)
 
 # The two refusals, and the sentence each puts in front of its candidates.
 # Prose, not a closed vocabulary: `open_questions.evidence` is a trail for a

@@ -115,6 +115,21 @@ QUESTIONS = (
     # may be on any route or none — so one run files ONE row and every chain is a
     # candidate of it (the `service_identity._merged` shape).
     "routing_depth",
+    # Ruling 3 of the 2026-10-30 object-identity design. A module that configures a path
+    # prefix and has rows a dispatcher serves, where none of the server model's `stacks`
+    # coordinates is among its dependencies — a build-file parse that lists neither a web
+    # artifact nor a known starter. Which configured keys reach a row depends on the stack,
+    # so none is applied. Candidates: one per stack, with the configured keys its entries
+    # would have applied. Identity NULL on method and path: the question is the module's.
+    "web_stack",
+    # Ruling 3, the version bound's half. A configured key the server model declares for the
+    # module's stack only under version ranges that do not admit the module — Boot 4's
+    # `spring.jersey.application-path`, Boot 4's `spring.webflux.base-path` — so no entry
+    # applied it. A sibling of `web_stack` rather than a widening of it: that one asks WHICH
+    # STACK, this one knows the stack and asks whether a key still means what was measured.
+    # Candidates: one per key, with the framework, the module's version(s) and the ranges the
+    # key is declared for.
+    "prefix_not_measured",
 )
 
 

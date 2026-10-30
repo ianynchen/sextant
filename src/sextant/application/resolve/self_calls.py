@@ -36,8 +36,8 @@ _PROTOCOLS = ("grpc",)
 # The hosts that name this module itself. IPv6 loopback appears both bare and bracketed.
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
 
-# The columns that tell two endpoint rows apart, `peer` included (the SQL says why).
-_ROW_COLUMNS = ("protocol", "direction", "method", "path", "handler", "caller", "peer")
+# What names the row to drop: its `row_id` (follow-the-object, Ruling 7; the SQL says why).
+_ROW_COLUMNS = ("row_id",)
 
 
 def served_services(workspace: Workspace) -> dict[str, set[str]]:
@@ -103,3 +103,5 @@ def record_self_calls(workspace: Workspace) -> None:
         and _is_this_module(None if row["peer"] is None else str(row["peer"]))
     ]
     workspace.derive("self_call_endpoints_drop", rows=rows)
+    # The entries bound to a dropped row go with it (Ruling 7).
+    workspace.derive("endpoint_rows_follow")

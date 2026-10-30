@@ -281,6 +281,11 @@ def derive_endpoints_with_runs(
     # a path this module serves collided with the same path anywhere else in the world.
     # The two rows now stand, and `record_self_exchange` asks the question instead.
     workspace.derive("borrowed_endpoints_drop")
+    # The entries `fluent` and `single_call` bound to a dropped row go with it (ruling 7).
+    # Last in this call and unconditional, so every row this call removes takes its entries
+    # whichever catalogs the module loads — not only when a later pass that moves rows
+    # happens to run.
+    workspace.derive("endpoint_rows_follow")
     ran = Counter(kind for catalog, _ in running for kind in _feeds(catalog))
     return skipped, dict(ran)
 

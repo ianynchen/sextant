@@ -32,8 +32,8 @@ def _workspace(
     for protocol, direction, path, symbol, peer in rows:
         stored = None if symbol is None else _MODULE + symbol
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, peer) "
-            "VALUES (?, ?, NULL, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, peer) "
+            "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), ?, ?, NULL, ?, ?, ?, ?)",
             [
                 protocol,
                 direction,
@@ -62,6 +62,46 @@ def test_a_client_of_a_service_this_module_handles_is_dropped(tmp_path: Path) ->
     )
     record_self_calls(workspace)
     assert _remaining(workspace) == [("grpc", "inbound", "helloworld.Greeter/SayHello")]
+
+
+def test_an_entry_bound_to_a_dropped_row_goes_with_it(tmp_path: Path) -> None:
+    """Ruling 7 (follow the object). The client's call carried a header, written as the
+    row was minted and bound to its `row_id`. The row is a self-call and is dropped; a
+    header stated about an outbound call that is not there describes nothing, so the entry
+    goes too. The served row's own entry stays."""
+    workspace = _workspace(
+        tmp_path,
+        ("grpc", "inbound", "helloworld.Greeter/SayHello", HANDLER, None),
+        ("grpc", "outbound", "helloworld.Greeter", CALLER, None),
+    )
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[
+            {
+                "protocol": "grpc",
+                "direction": direction,
+                "method": None,
+                "path": path,
+                "caller": _MODULE + symbol,
+                "kind": "header",
+                "name": "x-tenant",
+                "value": "acme",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "requirement": None,
+            }
+            for direction, path, symbol in (
+                ("inbound", "helloworld.Greeter/SayHello", HANDLER),
+                ("outbound", "helloworld.Greeter", CALLER),
+            )
+        ],
+    )
+    record_self_calls(workspace)
+    entries = [str(r["direction"]) for r in workspace.query("endpoint_metadata")]
+    workspace.close()
+
+    assert entries == ["inbound"]
 
 
 @pytest.mark.pins("grpc.a-DESCRIPTOR-only-inbound-row-serves-nothing")
