@@ -14,6 +14,7 @@ Catalog orchestration, born in its own module rather than riding along
 inside `contracts.py` (2E-prep design §1e).
 """
 
+import dataclasses
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -774,6 +775,15 @@ class CallFacts:
     # signature, and this is that signature. Empty where the caller is not a declaration
     # this module scanned, which is the same silence every other unread argument gives.
     caller_parameters: tuple[dict[str, Any], ...] = ()
+    # Every method's own sites and parameters, keyed by FULL caller symbol — what an
+    # argument LIFTED out of another method (a lambda body's capture) is read against,
+    # through its own stamped `caller` (`sites_of`/`parameters_of`). Empty where the
+    # builder lifts nothing, which is every engine but the chain walk and the fluent
+    # consumer.
+    sites_by_caller: Mapping[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    parameters_by_caller: Mapping[str, tuple[dict[str, Any], ...]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -985,6 +995,31 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
     )
 
 
+def sites_of(argument: Mapping[str, Any], reads: CallFacts) -> list[dict[str, Any]]:
+    """The call sites of the method an argument's `source` value id belongs to.
+
+    A value id means something only inside the method that numbered it (D00 §5), and a
+    capture lifted out of a lambda body arrives in a chain whose own sites are the
+    ENCLOSING method's: searched there, the id names a different call and fabricates its
+    owner. `_own_method` stamps `caller` on every lifted argument, and it keys
+    `sites_by_caller` the same way (the full symbol). An argument carrying no `caller`
+    was never lifted — `single_call` reads the site's own arguments in the site's own
+    facts — so those facts' own sites are its method's."""
+    caller = argument.get("caller")
+    if caller is None:
+        return reads.caller_call_sites
+    return reads.sites_by_caller.get(str(caller), [])
+
+
+def parameters_of(argument: Mapping[str, Any], reads: CallFacts) -> tuple[dict[str, Any], ...]:
+    """The declared parameters of the method an argument's `parameter` index belongs
+    to — `sites_of`'s companion, for the same reason and with the same fallback."""
+    caller = argument.get("caller")
+    if caller is None:
+        return reads.caller_parameters
+    return reads.parameters_by_caller.get(str(caller), ())
+
+
 def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, Any], ...]]:
     """Every declared method's and constructor's own parameter type references, keyed by
     FULL symbol (`OI-77`).
@@ -1103,7 +1138,7 @@ def field_expression(
             or _properties_field_expression(field, facts)
         )
     if kind == "unresolved":
-        return _properties_getter_expression(argument.get("source"), facts, workspace_types)
+        return _properties_getter_expression(argument, facts, workspace_types)
     if kind == _PARAMETER_KIND:
         return _parameter_expression(argument, facts, caller)
     return None
@@ -1184,7 +1219,7 @@ def _properties_field_expression(field: str, facts: FieldFacts) -> str | None:
 
 
 def _properties_getter_expression(
-    source: Any, facts: FieldFacts, workspace_types: CallFacts
+    argument: dict[str, Any], facts: FieldFacts, workspace_types: CallFacts
 ) -> str | None:
     """Rung 3, the getter form (Task 6 checkpoint F-1): the address argument
     is the RESULT of a zero-argument call — `baseUrl(properties.getUrl())` —
@@ -1196,12 +1231,13 @@ def _properties_getter_expression(
 
     Zero-argument only: an accessor takes none, and a call that does is not
     reading a property, whatever it is named."""
+    source = argument.get("source")
     if source is None:
         return None
     site = next(
         (
             candidate
-            for candidate in workspace_types.caller_call_sites
+            for candidate in sites_of(argument, workspace_types)
             if candidate.get("result") == source and not (candidate.get("arguments") or [])
         ),
         None,
@@ -1527,13 +1563,14 @@ def _reference_of(
         # a comment goes stale with nothing to notice. The declared type is the same claim
         # every shape derived from a signature already makes.
         index = parameter_index(argument)
-        if index is None or index >= len(workspace_types.caller_parameters):
+        declared_parameters = parameters_of(argument, workspace_types)
+        if index is None or index >= len(declared_parameters):
             return None
         # The `type` member, not the entry. A declared parameter is `{name, annotations,
         # erased_symbol, type, type_annotations}`; the D00 §5a reference every other rung
         # here roots is the `type`, and handing the whole entry to `root_type` raises on
         # the `symbol` it does not carry.
-        declared = workspace_types.caller_parameters[index].get("type")
+        declared = declared_parameters[index].get("type")
         return declared if isinstance(declared, dict) else None
     if kind != "instance":
         # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
@@ -1554,7 +1591,9 @@ def _reference_of(
         return carried[0] if carried else None
     payload_ctor_arg = catalog_rules.call_wrappers.get(symbol)
     if payload_ctor_arg is not None:
-        constructor = _linked_constructor(symbol, argument.get("source"), workspace_types)
+        constructor = _linked_constructor(
+            symbol, argument.get("source"), workspace_types, argument=argument
+        )
         if constructor is None:
             return None
         ctor_arguments = constructor.get("arguments") or []
@@ -1658,6 +1697,7 @@ def _linked_constructor(
     name: str = "<init>",
     arity: int | None = None,
     descriptor: str | None = None,
+    argument: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """D02 §2h's join: the call site — an `<init>` by default, or (Task 7's
     `channel_via`) any other named method — within this same caller, whose
@@ -1675,10 +1715,16 @@ def _linked_constructor(
     if source is None:
         return None
     key = "receiver" if name == "<init>" else "result"
+    # `argument`, where the caller has one, names the method the `source` id belongs to.
+    pool = (
+        workspace_types.caller_call_sites
+        if argument is None
+        else sites_of(argument, workspace_types)
+    )
     return next(
         (
             site
-            for site in workspace_types.caller_call_sites
+            for site in pool
             if site.get("name") == name
             and site.get("owner") == owner_symbol
             and site.get(key) == source
@@ -1721,7 +1767,7 @@ def _address_read(argument: dict[str, Any] | None, context: _Reads) -> dict[str,
     a string literal BEFORE any existing resolution path sees it, so an
     imperatively-fed address behaves downstream exactly as a written one. The
     caller handed to the ladder's parameter rung is the one the argument
-    carries (`_own_parameter`) — the method whose signature the index is an
+    carries (`_own_method`) — the method whose signature the index is an
     index into — never the chain's, which a lambda body's capture is not."""
     if isinstance(argument, dict) and argument.get("kind") == "array":
         # A varargs slot is one `array` argument (9.15), one destination per

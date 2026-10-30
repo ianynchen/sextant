@@ -19,7 +19,7 @@ from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
-from sextant.application.resolve.shapes.chains import chain_ends
+from sextant.application.resolve.shapes.chains import _resolve_captures, chain_ends
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -4441,6 +4441,249 @@ def test_a_url_built_inside_a_uri_lambda_is_read(tmp_path: Path):
 
     assert (endpoint["path"], endpoint["resolution"]) == ("/orders", "resolved")
     assert [(e["kind"], e["name"], e["value"]) for e in entries] == [("query", "status", "OPEN")]
+
+
+_LIFTED_MATCHES = {
+    **_LAMBDA_MATCHES,
+    "steps": [
+        *_LAMBDA_MATCHES["steps"],
+        {"method": "body", "owner": "com.acme.http.UriBuilder", "captures": {"body": "arg0"}},
+    ],
+    "field_sources": {
+        "value_annotation": "com.acme.config.Value",
+        "properties_annotation": "com.acme.config.ConfigurationProperties",
+        "prefix_from": "prefix",
+        "getter_prefixes": ["get", "is"],
+    },
+}
+
+
+def _lambda_chain(caller: str, body: str, inside: list) -> list:
+    """`get().uri(b -> ...).retrieve()` over an enclosing method `caller`, whose lambda
+    `body` holds the `inside` calls. The enclosing method also holds a zero-argument
+    `BillingProperties#getUrl()` whose result is value 20 - the id the lambda reuses for
+    a different call, which is the whole point."""
+    return [
+        _call(caller, PROPERTIES, "getUrl", 0, receiver=5, result=20),
+        _call(caller, WEBCLIENT, "get", 1, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            2,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=10, result=13),
+        *inside,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + PROPERTIES,
+            retention="runtime",
+            use=AnnotationUse(annotation=PROPERTIES_ANNOTATION, args={"prefix": "billing"}),
+        ),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + PROPERTIES + "url.", construct_kind="field"
+        ),
+    ]
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_a_value_read_in_a_lambda_is_never_looked_up_in_the_enclosing_method(tmp_path: Path):
+    """Ruling 2 of the object-identity design. A value id is the id the METHOD numbered, and
+    the lambda body is its own method. `b.path(other.compute("k"))` inside the lambda reads
+    value 20 - the lambda's own `compute` call. The enclosing method also has a value 20: a
+    `BillingProperties#getUrl()` whose type is bound to the prefix `billing`. Looked up in
+    the enclosing method's sites, the path became `${billing.url}`, a configuration key this
+    destination never reads, at `resolved`."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = _lambda_chain(
+        caller,
+        body,
+        [
+            _call(
+                _MODULE + body,
+                "com/acme/http/Other#",
+                "compute",
+                0,
+                receiver=None,
+                result=20,
+                arguments=[CallArgument(kind="string", value="k")],
+            ),
+            _call(
+                _MODULE + body,
+                URI_BUILDER,
+                "path",
+                1,
+                receiver=None,
+                result=40,
+                arguments=[CallArgument(kind="unresolved", source=20)],
+            ),
+            _call(_MODULE + body, URI_BUILDER, "build", 2, receiver=40, result=42),
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert "${billing.url}" not in str(endpoint["path"])
+    assert endpoint["resolution"] != "resolved"
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_a_value_read_in_a_lambda_is_found_in_the_lambdas_own_method(tmp_path: Path):
+    """The positive half: the same id read where it was numbered. The lambda's own value 20
+    IS `BillingProperties#getUrl()`, so the path is the configuration key - the id has to be
+    followed in the lambda's sites, not merely refused in the enclosing method's."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = _lambda_chain(
+        caller,
+        body,
+        [
+            _call(_MODULE + body, PROPERTIES, "getUrl", 0, receiver=7, result=20),
+            _call(
+                _MODULE + body,
+                URI_BUILDER,
+                "path",
+                1,
+                receiver=None,
+                result=40,
+                arguments=[CallArgument(kind="unresolved", source=20)],
+            ),
+            _call(_MODULE + body, URI_BUILDER, "build", 2, receiver=40, result=42),
+        ],
+    )
+    # The enclosing method's value 20 is a different call, so a lookup there cannot be
+    # what makes this pass.
+    facts[0] = _call(
+        caller,
+        "com/acme/http/Other#",
+        "compute",
+        0,
+        receiver=5,
+        result=20,
+        arguments=[CallArgument(kind="string", value="k")],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("${billing.url}", "resolved")
+
+
+@pytest.mark.pins("arguments.a-lifted-parameter-is-typed-by-its-own-signature")
+def test_a_lambda_parameter_used_as_a_body_is_typed_by_the_lambdas_signature(tmp_path: Path):
+    """The second reader of the same defect: `body(arg0)` inside the lambda is the LAMBDA's
+    parameter 0 (an `OrderEvent`), and the enclosing method's parameter 0 is an
+    `AuditRecord`. Typed against the enclosing signature the row published `AuditRecord`."""
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    # `bodyValue(<lambda>)`: the lambda is the BODY capture, so its own `body` step is what
+    # folds up into the row.
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(
+            caller,
+            URI_SPEC,
+            "bodyValue",
+            2,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 3, receiver=11, result=13),
+        _call(
+            _MODULE + body,
+            URI_BUILDER,
+            "body",
+            0,
+            receiver=None,
+            result=40,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+    ]
+    facts += [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=caller,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/http/AuditRecord#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + body,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/http/OrderEvent#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LIFTED_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert "AuditRecord" not in str(endpoint["request_shape"])
+    assert "OrderEvent" in str(endpoint["request_shape"])
+
+
+@pytest.mark.pins("chains.a-LIFTED-argument-carries-its-own-method")
+def test_every_captured_argument_carries_its_own_method():
+    """Every argument `_resolve_captures` builds, nested elements and candidates included,
+    names the method of the site it was read at - the stamp the readers look sources and
+    parameters up by."""
+    site = {
+        "caller": _MODULE + "com/acme/http/Client#lambda$x$0().",
+        "ordinal": 3,
+        "arguments": [
+            {"kind": "string", "value": "/a"},
+            {"kind": "unresolved", "source": 20},
+            {"kind": "array", "elements": [{"kind": "parameter", "value": 0}]},
+            {
+                "kind": "merge",
+                "candidates": [
+                    {"kind": "string", "value": "x"},
+                    {"kind": "unresolved", "source": 7},
+                ],
+            },
+            {"kind": "instance", "symbol": "com/acme/Order#"},
+        ],
+    }
+    declared = {
+        "url": "arg0",
+        "base": "arg1",
+        "body": "arg2",
+        "response": "arg3",
+        "channel": "arg4",
+    }
+    captured = _resolve_captures(declared, site)
+
+    def stamped(argument: dict) -> list:
+        nested = [*argument.get("elements", []), *argument.get("candidates", [])]
+        return [argument.get("caller"), *[c for n in nested for c in stamped(n)]]
+
+    assert all(
+        caller == site["caller"] for value in captured.values() for caller in stamped(value)
+    ), captured
 
 
 def test_a_lambda_body_the_catalog_declares_no_step_for_folds_nothing(tmp_path: Path):

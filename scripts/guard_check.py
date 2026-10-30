@@ -6268,6 +6268,35 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-LIFTED-argument-carries-its-own-method": Guard(
+        what="every argument lifted out of a lambda body is stamped with that body's own "
+        "method, whatever its kind, so its value id and parameter index are read there",
+        why="a lambda body's value id 20 is the lambda's call 20, and the enclosing method has "
+        "a call 20 of its own; read there, a destination that came from `other.compute(k)` "
+        "is published as the enclosing method's `properties.getUrl()` key at `resolved`, and "
+        "a lambda's parameter is typed as the enclosing method's",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='    stamped = {**argument, "caller": site["caller"]}\n',
+                replace='    stamped = {**argument, **({"caller": site["caller"]} if argument.get("kind") == "parameter" else {})}  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "arguments.a-lifted-parameter-is-typed-by-its-own-signature": Guard(
+        what="a payload read from a parameter is typed by the signature of the method the "
+        "argument was lifted from, not the chain's enclosing method",
+        why="a lambda's parameter 0 is a captured variable of ITS signature; typed against "
+        "the enclosing method's parameter 0 the row publishes a contract type this send "
+        "never carries, at `resolved`",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find="    return reads.parameters_by_caller.get(str(caller), ())\n",
+                replace="    return reads.caller_parameters  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
 }
 
 
