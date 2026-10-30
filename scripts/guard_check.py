@@ -6425,7 +6425,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find='            if row is None or (row.get("owner"), row["name"]) not in self._configuring:\n',
+                find="            if row is None or _call_of(row) not in self._configuring:\n",
                 replace="            if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

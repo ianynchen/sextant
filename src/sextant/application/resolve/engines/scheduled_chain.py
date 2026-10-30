@@ -317,7 +317,7 @@ class _Context:
     field_sources: FieldFacts | None
     every_call: frozenset[tuple[str, str]]
     builder_calls: frozenset[tuple[str, str]]
-    configuring: frozenset[tuple[str, str]]
+    configuring: frozenset[tuple[str, str, str]]
     rules: _JobRules
     job_ends: list[ChainEnd]
     built: frozenset[tuple[str, str]]

@@ -23,6 +23,7 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import scheduled_chain
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.shapes.chains import configuring_calls
 from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import OriginTier
@@ -481,6 +482,27 @@ def _configuring_quartz() -> Catalog:
         {"owner": "org.quartz.CronScheduleBuilder", "method": _MISFIRE, "returns_receiver": True},
     ]
     return replace(catalog, matches={**catalog.matches, "steps": steps})
+
+
+def test_only_the_flagged_overload_is_a_configuring_call():
+    """A step narrowed by `descriptor` flags that one overload (ruling 4): the set the
+    chain reader takes names the exact call, so `forJob(JobKey)` beside a flagged
+    `forJob(String)` is not one."""
+    flagged = "(Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
+    other = "(Lorg/quartz/JobKey;)Lorg/quartz/TriggerBuilder;"
+    catalog = _quartz(_catalogs())
+    step = {
+        "owner": "org.quartz.TriggerBuilder",
+        "method": "forJob",
+        "descriptor": flagged,
+        "returns_receiver": True,
+    }
+    catalog = replace(catalog, matches={**catalog.matches, "steps": [step]})
+    sites = [
+        {"owner": TRIGGER_BUILDER, "name": "forJob", "descriptor": descriptor}
+        for descriptor in (flagged, other)
+    ]
+    assert configuring_calls(catalog, sites) == {(TRIGGER_BUILDER, "forJob", flagged)}
 
 
 @pytest.mark.pins("values.a-CONFIGURING-call-is-not-an-escape")

@@ -1128,9 +1128,10 @@ def _configures(site: dict[str, Any], context: _ChainContext) -> bool:
 
 def configuring_calls(
     catalog: Catalog, sites: Iterable[Mapping[str, Any]]
-) -> frozenset[tuple[str, str]]:
-    """The `(owner, name)` of each of `sites` that a step or terminal of `catalog` declares
-    `returns_receiver: true`, in the site's own spelling: the set the value walk's chain
+) -> frozenset[tuple[str, str, str]]:
+    """The `(owner, name, descriptor)` of each of `sites` that a step or terminal of
+    `catalog` declares `returns_receiver: true`, in the site's own spelling — the exact
+    overload the step matched, never every overload of its name: the set the value walk's chain
     reader takes as `configuring` (ruling 4, spec 2026-10-30, the backward half). Matched
     as the forward walk matches a step (`_matching_step`), so the two walks agree on which
     calls configure a chain."""
@@ -1141,7 +1142,7 @@ def configuring_calls(
         return frozenset()
     methods = {str(step["method"]) for step in flagged}
     return frozenset(
-        (str(site["owner"]), str(site["name"]))
+        (str(site["owner"]), str(site["name"]), str(site.get("descriptor")))
         for site in sites
         if str(site["name"]) in terminals
         or (str(site["name"]) in methods and _matching_step(dict(site), flagged) is not None)

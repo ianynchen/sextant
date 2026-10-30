@@ -893,7 +893,7 @@ def producers_of(
     declared: AbstractSet[tuple[str, str]],
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
-    configuring: AbstractSet[tuple[str, str]] = frozenset(),
+    configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -934,7 +934,8 @@ def producers_of(
     write through a returned view can change.
 
     **`configuring` names the calls that return the object they were called on** (ruling 4,
-    spec 2026-10-30), as `(owner, name)` in the site's own spelling. `tb = newTrigger();
+    spec 2026-10-30), as `(owner, name, descriptor)` in the site's own spelling — the exact
+    overload, since another overload of one name need not return its receiver. `tb = newTrigger();
     tb.withIdentity("x"); tb.build()` configures `tb` over three statements, and each such
     call is the same object handed back, so one made on the value between its producer and
     its use is not an `escapes`. The chain reader gathers each into `Producer.chain`, in
@@ -1005,7 +1006,7 @@ def producer_paths(
     declared: AbstractSet[tuple[str, str]],
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
-    configuring: AbstractSet[tuple[str, str]] = frozenset(),
+    configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1115,6 +1116,12 @@ def _path(trail: _Trail) -> tuple[str, ...]:
     return tuple(step.label for step in reversed(trail))
 
 
+def _call_of(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """A site's call as `configuring` names it: owner, name and descriptor, so one overload
+    declared to return its receiver never stands for another."""
+    return (str(row.get("owner")), str(row["name"]), str(row.get("descriptor")))
+
+
 def _only(trail: _Trail, answer: Answer) -> tuple[_Reached, ...]:
     return ((trail, answer),)
 
@@ -1154,7 +1161,7 @@ class _Walk:
         along_receivers: bool = False,
         past_accessors: Ancestors | None = None,
         which_object: bool = False,
-        configuring: AbstractSet[tuple[str, str]] = frozenset(),
+        configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
     ) -> None:
         self._index = index
@@ -1976,7 +1983,7 @@ class _Walk:
             if self._accessor((method, ordinal)):
                 continue
             row = self._index.sites.get((method, ordinal))
-            if row is None or (row.get("owner"), row["name"]) not in self._configuring:
+            if row is None or _call_of(row) not in self._configuring:
                 return None
             found.append(ordinal)
             result = row.get("result")
