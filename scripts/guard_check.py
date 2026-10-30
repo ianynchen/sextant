@@ -2462,6 +2462,85 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-field-read-answers-ITS-OWN-OBJECTS-writes": Guard(
+        what="a field read through a getter whose receiver is a construction of the field's "
+        "own type answers only the writes made on that object: its constructor's, and the "
+        "setter calls made on it",
+        why='ruling 1 of the 2026-10-30 review: `a.setCron("A"); b.setCron("B"); '
+        "one(a.getCron())` answered `A` and `B`, both exact, and ruoyi-vue-pro's "
+        "`getAdminApi().getPrefix()` answered `/app-api` beside `/admin-api`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if read_on is not None:\n"
+                "            scoped = self._object_writes(symbol, read_on, trail, frames)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            scoped = self._object_writes(symbol, read_on, trail, frames)\n",
+            ),
+        ),
+    ),
+    "values.a-path-from-OUTSIDE-does-not-unplace-the-built-object": Guard(
+        what="a getter read whose receiver is a construction on some paths and an object from "
+        "outside on others answers each path by itself: the construction's own writes, and "
+        "for the outside path what an object from outside answers",
+        why="OI-250: ruoyi-vue-pro's `WebProperties` is `@Data`, so `adminApi` also has a "
+        "setter nothing here calls; that one path from outside left the read unplaced, and "
+        "`getAdminApi().getPrefix()` answered `/app-api` beside `/admin-api`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if all(built is None for built, _, _ in read):\n",
+                replace="        if any(built is None for built, _, _ in read):"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-object-walk-is-reused-only-for-frames-that-READ-ALIKE": Guard(
+        what="an object walk kept on the index serves another asker only where that asker's "
+        "frames give the same answer at every read the walk made of them",
+        why="fix round 1 of the 2026-10-30 Task 7 review: the memo of `_objects` is keyed on "
+        "the frames a walk read, and a getter inside a helper called on two objects would "
+        "hand the second caller the first caller's object if frames were ignored",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n',
+                replace='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n    return True  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "values.two-reads-of-one-field-pair-ONE-write": Guard(
+        what="two reads of one field on one receiver are on one write step, so a pair of them "
+        "never takes two different writes",
+        why="ruling 1 of the 2026-10-30 review: a field written by `m1` and by `m2` and read "
+        "twice paired `(h1, h2)`, a value the object never held at once",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        merged = _combine(trail, (step,))\n        if merged is None:\n"
+                "            return ()\n",
+                replace="        merged = trail  # guard disabled by scripts/guard_check.py\n"
+                "        if merged is None:\n            return ()\n",
+            ),
+        ),
+    ),
+    "values.an-object-read-in-progress-is-never-asked-again": Guard(
+        what="a field read placed on an object is in progress in every walk it starts, the "
+        "receiver's and each setter call's, so a walk that reaches it again answers it as "
+        "before ruling 1",
+        why="review of ruling 1, Critical: `a.getNext().setNext(new Row())` made the setter "
+        "call's object walk read `next` again through another getter, forever, and a cycle "
+        "through two fields did the same: a RecursionError, not an answer",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        asking = self._asking | {(symbol, site)}\n",
+                replace="        asking = self._asking  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.an-object-a-LIBRARY-call-hands-back-is-not-from-outside": Guard(
         what="the unseen-object rule declares every unscanned call to the producer reader, "
         "so an object a library call hands back ends at that call, not at `external`",

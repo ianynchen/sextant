@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-244 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-251 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -247,6 +247,13 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-241 | [SEXTANT-234](https://app.plane.so/portolan/browse/SEXTANT-234/) | The installed prefix is chosen from the handler's declaring type |
 | OI-242 | [SEXTANT-235](https://app.plane.so/portolan/browse/SEXTANT-235/) | config_join picks binding candidates by method name across every class |
 | OI-243 | [SEXTANT-236](https://app.plane.so/portolan/browse/SEXTANT-236/) | Row presence is decided per class, not per bean |
+| OI-244 | [SEXTANT-237](https://app.plane.so/portolan/browse/SEXTANT-237/) | A direct other.f read carries no receiver |
+| OI-245 | [SEXTANT-238](https://app.plane.so/portolan/browse/SEXTANT-238/) | Two setter calls on one object both answer: setTopic("a"); setTopic("b") |
+| OI-246 | [SEXTANT-239](https://app.plane.so/portolan/browse/SEXTANT-239/) | Two direct reads of one field can pair two different writes |
+| OI-247 | [SEXTANT-240](https://app.plane.so/portolan/browse/SEXTANT-240/) | A constructor the object's constructor never runs still writes every object |
+| OI-248 | [SEXTANT-241](https://app.plane.so/portolan/browse/SEXTANT-241/) | this.setX(…) inside the class is inexact for every object, and a getter called on this is not placed |
+| OI-249 | [SEXTANT-242](https://app.plane.so/portolan/browse/SEXTANT-242/) | The object-read cycle cut has no calling context |
+| OI-250 | [SEXTANT-243](https://app.plane.so/portolan/browse/SEXTANT-243/) | A read with one unplaced receiver end is not placed at all: ruoyi's getAdminApi().getPrefix() still answers /app-api — **closed 2026-10-30** by `c29fc0e8` (value walk: each receiver path is answered by itself) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

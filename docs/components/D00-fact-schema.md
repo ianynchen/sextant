@@ -1166,14 +1166,20 @@ carries it as `OI-15`.
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
 whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
-load of a parameter the method never stores to, an `LDC` constant, or an invoke's result with nothing but a `CHECKCAST` in
-between — and that producer (with a `PUTFIELD`'s `ALOAD 0`) in the write's OWN basic block —
+load of a parameter the method never stores to, an `LDC` constant, an invoke's result with nothing but a `CHECKCAST` in
+between, or a value built with `new X(…)` — and that producer (with a `PUTFIELD`'s `ALOAD 0`) in the write's OWN basic block —
 producing `{kind: field_write, field: <symbol>, written_by: <method symbol>}` plus
 **exactly one** of `from_parameter: N` or `value: <argument-grammar entry>`. A call's result
 is the entry a call argument fed by a call already is — `{"kind": "unresolved", "source": N}`,
 where `N` is that call site's own `result` in the WRITER's frame — so a reader resolves it in
-the writing method exactly as it would that argument. A computed assignment — concatenation,
-a default expression, a value built with `new`, a value parked in a local first, a lambda
+the writing method exactly as it would that argument. **A value built with `new`** is the
+entry a `new` argument already is — `{"kind": "instance", "symbol": <type>, "source": N}`,
+where `N` is the `NEW`'s own index in the full instruction list (the id the constructor call
+site's `receiver` carries in the writer's frame, so the constructor's arguments are the
+payload). The `<init>` right below the write returns nothing, so the `NEW` is found through
+the frame: the one source of the stored value, the `DUP` minting none, in the write's own
+basic block. A computed assignment — concatenation,
+a default expression, a value parked in a local first, a lambda
 (which names a body, not a value) — emits nothing, and the resolution that would have
 followed it degrades honestly rather than guessing a source. **A parameter's own slot counts
 as such a local once the method stores to it**: a load of slot N is `from_parameter` only
@@ -1209,7 +1215,7 @@ nobody can check:
   write's block and the field holds its one result. A read of a field whose only write
   merges answers `no_writer`, which is true.
 
-**History, because the fact's reach changed three times:** constructors only until
+**History, because the fact's reach changed four times:** constructors only until
 2026-10-18, when the `<init>` filter came off and the writes found on real code roughly
 tripled (`spring-petclinic-rest` 86 → 237, `apollo-portal` 553 → 1,638, spec
 `2026-10-18-the-sixth-edge-design.md` §0); then `value` on 2026-10-18 (`OI-138` cause 2),
@@ -1257,6 +1263,11 @@ to that slot): one more write went, `spring-petclinic-api-gateway` 37 → 36, th
 → 9,837 and nothing else anywhere. It is `PetDetails#visits`, a record's compact constructor
 doing `if (visits == null) visits = new ArrayList<>();` before the implicit `this.visits =
 visits` — a null-default, reported until then as parameter 4. No pinned row moved.
+
+**The fourth widening (2026-10-30, object-identity ruling 1):** a field written from `new
+X(…)` reports its `instance` entry. Until then the walk met such a field with no writer and
+answered `no_writer` about an object built one line above the read. `value` was already an
+optional key, so no key was added and no schema version moved.
 
 **Capability 9.19 — the widening this fact needed — IS BUILT as of 2026-10-26**, in three
 steps: the walk's sixth edge reads `written_by` and crosses into the writing method (PR #47),
