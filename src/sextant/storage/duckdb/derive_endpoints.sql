@@ -301,6 +301,11 @@
 --                           direct gate `members: declared_type_methods` reads
 --                           — and `catalog_id` cannot answer it, because all
 --                           three passes stamp it.
+--                           `gate_type` is NULL except on a ruling-8 row (a
+--                           mapping a concrete class inherits without
+--                           overriding), where it names that class: the
+--                           prefix and the gate come from it, the handler
+--                           stays `target`.
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
@@ -348,7 +353,8 @@ WITH RECURSIVE catalog_params AS (
             flip_handlers STRUCT(declaration VARCHAR, handler VARCHAR)[],
             flip_canonical_path BOOLEAN,
             synthetic_annotations
-                STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR, inherited BOOLEAN)[]
+                STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR, inherited BOOLEAN,
+                       gate_type VARCHAR)[]
         )[]
     ) AS s)
 ),
@@ -447,12 +453,19 @@ annotations_effective AS (
     -- rewrite an annotation the author wrote on that very target into the
     -- spelling the catalog declares. One rule reads this column (the direct
     -- gate below); every other join ignores it and derives what it always did.
+    --
+    -- `gate_type` is the third, and only ruling 8's rows carry it: a mapping a
+    -- concrete class inherits without overriding keeps its declaring method as
+    -- `target` — the code that runs — and names here the class it is served
+    -- under. `declared` hands it on, and `derived` takes the prefix and the gate
+    -- from it through the `coalesce(m.gate_type, s.enclosing)` the member rule
+    -- already uses for the same reason. NULL on every other row.
     SELECT CAST(NULL AS VARCHAR) AS catalog_id, target, annotation, args,
-           FALSE AS inherited
+           FALSE AS inherited, CAST(NULL AS VARCHAR) AS gate_type
     FROM annotations
     UNION ALL
     SELECT u.catalog_id AS catalog_id, s.target, s.annotation, s.args::JSON,
-           s.inherited AS inherited
+           s.inherited AS inherited, s.gate_type AS gate_type
     FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.synthetic_annotations) AS s
           FROM catalog_params cp) u
 ),
@@ -552,12 +565,14 @@ declared AS (
     SELECT
         mc.catalog_id AS catalog_id,
         a.target AS target,
-        -- `member_declarations` fills this; an ANNOTATED declaration never
-        -- needs it, because the type that annotated it IS its own enclosing
-        -- type. NULL here rather than `a.target`'s enclosing, so `derived`'s
-        -- `coalesce` reads "no gate type was carried" and falls through to the
-        -- behaviour every catalog written before `A-M15` had.
-        CAST(NULL AS VARCHAR) AS gate_type,
+        -- `member_declarations` fills this, and so does a ruling-8 row (a
+        -- mapping a concrete class inherits without overriding, carried in
+        -- `annotations_effective.gate_type`). Any other ANNOTATED declaration
+        -- never needs it, because the type that annotated it IS its own
+        -- enclosing type — NULL there rather than `a.target`'s enclosing, so
+        -- `derived`'s `coalesce` reads "no gate type was carried" and falls
+        -- through to the behaviour every catalog written before `A-M15` had.
+        a.gate_type AS gate_type,
         -- The matched annotation's own aliases first, then `OI-35`'s sibling
         -- sources, then the empty default that `$path_fallback` answers. That
         -- ORDER is the framework's, not a convenience: CP-15 row 1 puts the

@@ -70,6 +70,11 @@ matches:
       default_attr: defaultValue
       optional_types: [java.util.Optional]
   mapping:
+    # Ruling 8 (2026-10-30): a concrete class serves the mapped methods it inherits
+    # without overriding, under its own prefix; an overridden one only at the
+    # override's own mapping. Measured by CP-58 on Spring MVC 6.2.18 (Boot 3.5.14)
+    # (`scripts/probes/cp58-inherited-mappings/RESULT.md`).
+    inherit_unoverridden: true
     # `value` and `path` are @AliasFor each other, so only the one the author
     # typed reaches the bytecode. First present wins, in this order.
     path_from: [value, path]

@@ -362,6 +362,19 @@ _NAMED_QUERIES = {
         SELECT symbol FROM symbols
         WHERE construct_kind IN ('interface', 'annotation') ORDER BY symbol
     """,
+    # Every declared type nothing can instantiate: an interface or annotation type, or
+    # a class whose own modifiers say `abstract` (D00 §5a, W7). Ruling 8 of the
+    # 2026-10-30 object-identity design reads it — an abstract class is no bean and no
+    # resource, so it serves none of the mappings it inherits. A class from a scanner
+    # that reports no modifiers reads as concrete: the catalog's type gate still has to
+    # admit it before anything derives.
+    "abstract_types": """
+        SELECT symbol FROM symbols
+        WHERE construct_kind IN ('interface', 'annotation')
+           OR (construct_kind = 'class'
+               AND coalesce((modifiers ->> 'abstract')::BOOLEAN, false))
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and signature JSON,
     # module-prefixed exactly as the fact wrote them (D00 §5a) — checkpoint
     # item (4)'s inheritance join needs both, and `method_symbols` above
@@ -1763,6 +1776,7 @@ _FACT_ONLY = frozenset(
         "declared_shapes",
         "method_symbols",
         "interface_symbols",
+        "abstract_types",
         "method_declarations",
         "accessor_declarations",
         "constructor_declarations",

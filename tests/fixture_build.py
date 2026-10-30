@@ -57,6 +57,8 @@ PRIMED_FIXTURES = (
     "orders-contextpath",
     "orders-fieldheld",
     "orders-pathprefixes",
+    # Ruling 8: two controllers sharing an abstract base, one overriding a mapping.
+    "orders-inherited",
     "orders-pathvars",
     "orders-fluentaddress",
     "orders-heldbuilders",

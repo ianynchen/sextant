@@ -1496,6 +1496,18 @@ def test_a_catalog_naming_an_unknown_inherit_siblings_word_is_refused_by_file(tm
     assert "invented-vocabulary.yml" in str(raised.value)
 
 
+def test_a_catalog_naming_inherit_unoverridden_as_anything_but_a_boolean_is_refused(
+    tmp_path: Path,
+):
+    """Ruling 8's opt-in is `true` or `false`. A quoted `"true"` read as "off" drops
+    every inherited row the key exists to add, silently, so it is refused by name."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(inherit_unoverridden="true"))
+
+    assert "inherit_unoverridden" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
 # --- 2I design §2: the two QName forms, on an invented framework ----------
 #
 # Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above

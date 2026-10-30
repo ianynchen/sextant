@@ -3741,6 +3741,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "effective_annotations.an-INHERITED-unoverridden-mapping-is-the-subclasses-row": Guard(
+        what="a concrete class serves every mapped method it inherits without overriding: one "
+        "row per such method per class, the declaring method its target and the class its "
+        "`gate_type`",
+        why="Ruling 8 of the 2026-10-30 object-identity design, measured by CP-58 on Spring MVC, "
+        "Jersey, Quarkus REST and Micronaut: `OrderController extends CrudController` "
+        "overriding nothing serves `GET /orders/list` and `POST /orders`. The walk took "
+        "candidates only from the methods a class declares, so an inherited, non-overridden "
+        "mapping reached no subclass at all, and a base that is no controller itself — the "
+        "common generic-CRUD shape — published nothing for any of them",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="    if inherit_unoverridden:\n        rows.extend(_unoverridden_rows(",
+                replace="    if False:  # guard disabled\n        rows.extend(_unoverridden_rows(",
+            ),
+        ),
+    ),
     "effective-calls.AUTOBOXING-reads-as-its-constant": Guard(
         what="an argument produced by one of the eight javac boxing calls (`<Wrapper>.valueOf"
         "(<prim>)`) handed a constant is read by every engine as that constant, in an array's "

@@ -959,6 +959,15 @@ _MEMBER_RULES = frozenset({"public_methods", "declared_type_methods"})
 # `@Path` beside it) the word exists to remove.
 _INHERIT_SIBLINGS = frozenset({"all_or_nothing"})
 
+# Whether a concrete class serves the mapped methods it INHERITS without
+# overriding, under its own prefix (ruling 8 of the 2026-10-30 object-identity
+# design). A catalog says `true` only after a probe measured its framework doing
+# it — CP-58 measured Spring MVC, Jersey, Quarkus REST and Micronaut — because a
+# framework that does not would have a row published for an address it never
+# answers. Closed to the two booleans: a quoted `"true"` or a misspelled word
+# read as "off" would silently drop every row the key exists to add.
+_INHERIT_UNOVERRIDDEN = frozenset({True, False})
+
 # The two keys a `unless` filter may carry, and no others (2I design §2,
 # word 4). A closed SHAPE rather than a closed vocabulary, because the values
 # are catalog data: which attribute withdraws a declaration, and at which
@@ -1405,6 +1414,14 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `mapping.inherit_siblings: {inherit_siblings}` "
             f"is not one of {', '.join(sorted(_INHERIT_SIBLINGS))} (spec 2026-09-18 §3b word 3)"
+        )
+    inherit_unoverridden = mapping.get("inherit_unoverridden")
+    if inherit_unoverridden is not None and not (
+        isinstance(inherit_unoverridden, bool) and inherit_unoverridden in _INHERIT_UNOVERRIDDEN
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.inherit_unoverridden: "
+            f"{inherit_unoverridden!r}` is not true or false (ruling 8, 2026-10-30)"
         )
     qualifier_format = mapping.get("qualifier_format")
     if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
@@ -1931,6 +1948,7 @@ def _synthetic_annotations(
             mapping_fqns,
             prefix_fqns,
             sibling_fqns=_inherited_sibling_fqns(catalog),
+            inherit_unoverridden=catalog.matches["mapping"].get("inherit_unoverridden") is True,
         )
         if run_inheritance
         else []
@@ -1943,12 +1961,20 @@ def _synthetic_annotations(
     # through the stereotype it was composed into (`A-C7`). `catalog_id` cannot
     # answer this: all three passes write it. Every consumer but the one that
     # asks reads this column not at all, so the other rules are unchanged.
+    #
+    # `gate_type` is the class an inherited, non-overridden mapping is served
+    # under (ruling 8): the row's target stays the declaring method, which is
+    # what runs, and the SQL takes the prefix and the gate from this class
+    # instead of from the method's enclosing one. NULL on every other row, so
+    # the SQL's `coalesce(gate_type, enclosing)` reads them as it always did.
+    # Every row carries every key, or the struct stops binding as one value.
     return [
         {
             "target": row["target"],
             "annotation": row["annotation"],
             "args": json.dumps(row["args"]),
             "inherited": inherited_pass,
+            "gate_type": row.get("gate_type"),
         }
         for rows, inherited_pass in ((folded, False), (composed, False), (inherited, True))
         for row in rows
@@ -2016,6 +2042,7 @@ def _type_hierarchy(workspace: Workspace) -> TypeHierarchy:
         _implementation_rows(workspace),
         _superclass_rows(workspace),
         _method_declaration_rows(workspace),
+        (str(row["symbol"]) for row in workspace.query("abstract_types")),
     )
 
 
@@ -2271,6 +2298,10 @@ def effective_annotation_uses(
                 "args": json.loads(str(row["args"])),
             }
             for row in synthetic
+            # A ruling-8 row repeats, for another class, an annotation its
+            # target already carries — written there or synthesized there — so
+            # it adds no use of its own, and a second copy is a second use.
+            if row["gate_type"] is None
         ),
     ):
         uses.setdefault(str(row["target"]), []).append(row)

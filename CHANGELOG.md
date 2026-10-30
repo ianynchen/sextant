@@ -17,6 +17,18 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A controller serves the mappings it inherits without overriding** (ruling 8 of the
+  2026-10-30 review). `OrderController extends CrudController<Order>`, overriding nothing,
+  published no rows at all: the inheritance walk only looked at methods a class declares
+  itself, and the abstract base is no controller. Probe CP-58 measured Spring MVC, Jersey,
+  Quarkus REST and Micronaut all serving such a method under the subclass's own prefix
+  (`GET /orders/list`), and an overridden one only at the override's mapping. Each inherited
+  method is now a row of its own per concrete controller, with the base method as its handler
+  and the controller's prefix and gate. On for `spring-web`, `spring-mvc`, `jakarta-jaxrs`,
+  `javax-jaxrs` (same JAX-RS rule, not probed), `quarkus-rest` and `micronaut-http`
+  (`mapping.inherit_unoverridden: true`). A condition written on the subclass does not yet
+  reach these rows, since conditions are read through the handler's class. Measured: the six
+  field pins are unchanged.
 - **A field read off an object from outside no longer borrows another object's values**
   (OI-222, ruled 2026-10-29). Where the value walk reads an instance field through a getter on
   an object that arrives from no code in the module — every path to it ends at a parameter
