@@ -234,7 +234,8 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # `argument_descriptor`'s `call_wrappers` one-hop read the list, never text.
     # Indexed once per load, not once per catalog (`Workspace.once`, `CallSiteIndex`);
     # the shared lists are read, never written into.
-    by_caller = workspace.once(call_site_index).by_caller
+    site_index = workspace.once(call_site_index)
+    by_caller = site_index.by_caller
     # The same index keyed by BARE descriptor, for following a `lambda` argument into its
     # own body (`OI-73`): a call argument names the synthetic method without the module
     # coordinates the `caller` column carries, so the two spellings never match directly.
@@ -310,10 +311,17 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     contexts: dict[str, _ChainContext] = {}
 
     def context_of(caller: str) -> _ChainContext:
-        """One caller's context, built once: its own walk's, and a chain walked back across
-        methods folds each of its calls in the context of the method it is in."""
-        if caller in contexts:
-            return contexts[caller]
+        """One caller's context, built once, for a chain walked back across methods: it folds
+        each of its calls in the context of the method it is in. Kept only for the callers a
+        walk back reaches: keeping every caller's held tens of thousands alive on a large
+        module, a measured part of what the walk back first cost (spec 2026-10-30, "As
+        built")."""
+        if caller not in contexts:
+            contexts[caller] = built_context(caller)
+        return contexts[caller]
+
+    def built_context(caller: str) -> _ChainContext:
+        """One caller's context, as its own walk reads it."""
         sites = by_caller[caller]
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`
         # is built fresh per caller, over that caller's own sites alone, so a
@@ -332,7 +340,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             sites_by_caller=by_caller,
             parameters_by_caller=caller_parameters,
         )
-        contexts[caller] = _ChainContext(
+        return _ChainContext(
             workspace=workspace,
             values=walk_index,
             caller=caller,
@@ -358,13 +366,25 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             ends=ends,
             reached=reached,
         )
-        return contexts[caller]
 
     # What the walk back from a rootless terminal stops at and folds, built the first time a
     # caller has one (`_rootless_walk`): most modules have none, and pay nothing for it.
     rootless: _RootlessWalk | None = None
+    # Whether a terminal no root walk reached is looked at at all. A chain the walk back
+    # finds starts at a declared root, and a root matches only a call on one of its owners:
+    # a module calling no such owner has no rootless chain, so its terminals are not tested
+    # one by one. Measured on the estate (spec 2026-10-30, "As built"): testing every call
+    # of every caller was most of what the walk back first cost, on modules that call no
+    # root at all, while the walks themselves cost under a millisecond per module.
+    walks_back = any(
+        owner in site_index.positions_by_owner for root in roots for owner in root["owners"]
+    )
+    ends_a_chain = terminal_names | set(via_argument_names)
     for caller, sites in by_caller.items():
-        context = context_of(caller)
+        # Built at the first root or rootless terminal the caller has: most callers have
+        # neither, and building one per caller per catalog was the walk's largest fixed cost
+        # (spec 2026-10-30, "As built").
+        context: _ChainContext | None = None
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
         # order too (NFR-1), via `by_receiver`'s own insertion order below.
@@ -372,6 +392,8 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             root = _matching_root(site, roots)
             if root is None:
                 continue
+            if context is None:
+                context = contexts.get(caller) or built_context(caller)
             rooted = replace(context, root=site)
             # A root's own captures fold ON TOP of whatever the chain already
             # carried before reaching it — the root is later in the chain, so
@@ -386,11 +408,19 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
         # Ruling 5 (spec 2026-10-30): a terminal no root walk reached has its root in another
         # method — a builder started in a helper and finished here. After the root walks, so
         # a terminal they reached is never walked twice.
-        for site in sites:
-            if _site_key(site) in reached or not _reaches_terminal(site, context):
+        for site in sites if walks_back else ():
+            if str(site["name"]) not in ends_a_chain or _site_key(site) in reached:
+                continue
+            if context is None:
+                context = contexts.get(caller) or built_context(caller)
+            if not _reaches_terminal(site, context):
                 continue
             if rootless is None:
                 rootless = _rootless_walk(catalog, walk_index, roots, steps)
+                # No call of the module matched a root: nothing is walked back from here on.
+                walks_back = bool(rootless.declared)
+                if not walks_back:
+                    break
             _walk_back(site, context, context_of, rootless)
             yield from ends
             ends.clear()
@@ -615,7 +645,7 @@ class _ChainContext:
     via_argument_names: dict[str, _JoinFilter | None]
     # Ruling 4 (spec 2026-10-30): the terminals written `{method, returns_receiver: true}`,
     # which return the object they were called on and so configure it (`_configures`).
-    receiver_terminals: set[str]
+    receiver_terminals: list[dict[str, Any]]
     # The executing calls the value walk pairs with a terminal site, by that site's
     # `(caller, ordinal)` (`_joined_through_values`) — the module's, not this caller's.
     joined: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
@@ -1331,7 +1361,7 @@ def _configures(site: dict[str, Any], context: _ChainContext) -> bool:
     step it matches, or the terminal it names, is declared `returns_receiver: true`. Such a
     call configures that object, so the walk folds it, and what is called on its result,
     into the chain in place, as it folds a void setter, instead of forking."""
-    if str(site["name"]) in context.receiver_terminals:
+    if _matching_step(site, context.receiver_terminals) is not None:
         return True
     step = _matching_step(site, context.steps)
     return step is not None and step["returns_receiver"]
@@ -1351,12 +1381,15 @@ def configuring_calls(
     terminals = _terminal_index(catalog.matches.get("terminal", []), catalog)[2]
     if not flagged and not terminals:
         return frozenset()
-    methods = {str(step["method"]) for step in flagged}
+    methods = {str(entry["method"]) for entry in (*flagged, *terminals)}
     return frozenset(
         (str(site["owner"]), str(site["name"]), str(site.get("descriptor")))
         for site in sites
-        if str(site["name"]) in terminals
-        or (str(site["name"]) in methods and _matching_step(dict(site), flagged) is not None)
+        if str(site["name"]) in methods
+        and (
+            _matching_step(dict(site), flagged) is not None
+            or _matching_step(dict(site), terminals) is not None
+        )
     )
 
 
@@ -1969,7 +2002,7 @@ def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[
 
 def _terminal_index(
     entries: list[Any], catalog: Catalog
-) -> tuple[set[str], dict[str, _JoinFilter | None], set[str]]:
+) -> tuple[set[str], dict[str, _JoinFilter | None], list[dict[str, Any]]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
     ruling: the catalog marks it `terminal_via_argument: true` on the
@@ -1981,17 +2014,29 @@ def _terminal_index(
     builder.build(); log.debug("…", r)` consumes `build`'s own result too,
     and without a filter that non-executing use would complete the chain.
 
-    The third set is the terminals declared `returns_receiver: true` (ruling 4, spec
-    2026-10-30), in either form: they return the object they were called on."""
+    The third is the terminals declared `returns_receiver: true` (ruling 4, spec
+    2026-10-30), in either form: they return the object they were called on. Each keeps its
+    optional `owner` and `descriptor`, and is matched on them as a step is
+    (`_matching_step`), so a flag on one type's `send` says nothing of another's."""
     plain: set[str] = set()
     via_argument: dict[str, _JoinFilter | None] = {}
-    returns_receiver: set[str] = set()
+    returns_receiver: list[dict[str, Any]] = []
     for entry in entries:
         if isinstance(entry, str):
             plain.add(entry)
             continue
         if _validated_returns_receiver(entry, catalog, "terminal"):
-            returns_receiver.add(entry["method"])
+            returns_receiver.append(
+                {
+                    "method": entry["method"],
+                    "owners": (
+                        catalog_symbols(entry["owner"], f"{catalog.source}: terminal[].owner")
+                        if "owner" in entry
+                        else None
+                    ),
+                    "descriptor": _validated_descriptor(entry, catalog, "terminal"),
+                }
+            )
         marker = entry.get("terminal_via_argument")
         if not marker:
             plain.add(entry["method"])

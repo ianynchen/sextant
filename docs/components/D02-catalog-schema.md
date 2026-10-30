@@ -1652,6 +1652,43 @@ mapping:
     override-without-a-verb cell is a COVERAGE row, not a rule here. Spec 2026-09-18 §3b
     word 3.
 
+- **`inherit_unoverridden: true` — a concrete class serves the mapped methods it INHERITS
+  without overriding, each under the class's own prefix.** A boolean, opt-in, and anything
+  but `true` or `false` is refused by name (`annotation_driven.py::_validate_naming`). Ruling
+  8 of the 2026-10-30 object-identity design; switched on only where probe CP-58
+  (`scripts/probes/cp58-inherited-mappings/RESULT.md`) measured the framework doing it —
+  `spring-web`, `spring-mvc` (Spring MVC 6.2.18), `jakarta-jaxrs` (Jersey 3.1.11),
+  `quarkus-rest` (Quarkus REST 3.40.1.1) and `micronaut-http` (Micronaut 4.7.6) — and on
+  `javax-jaxrs`, which is the same JAX-RS dispatch rule under the older package and was not
+  probed (its catalog comment says so). The measured behaviour, identical in all four:
+  `OrderController extends CrudController` overriding nothing serves `GET /orders/list` and
+  `POST /orders`; `ProductController` overriding `list` with `@GetMapping("/all")` serves
+  `/products/all` and never `/products/list`; and a base that is itself a controller keeps
+  its own rows beside its subclass's (`/base/list` and `/sub/list` both answer).
+  - **Which methods.** For every class the module declares that is not abstract (an
+    interface, an annotation type or an `abstract` class serves nothing — D00 §5a's type
+    `modifiers.abstract`): every superclass method, transitively, whose name and descriptor
+    neither the class nor a nearer superclass declares — the nearest declaration is the one
+    that runs — then every interface DEFAULT method nothing in the class chain declares. An
+    abstract or static interface method, and a compiler bridge, never count. Where two
+    interfaces offer one method, the more specific one wins; two unrelated ones give
+    nothing.
+  - **Which mapping.** The inherited method's own, or the one the inheritance walk already
+    carried onto it from ITS ancestors. Only a method that has one becomes a row.
+  - **What the row is.** `{target: <the declaring method>, annotation, args, gate_type: <the
+    class>}` in `$synthetic_annotations`. The handler stays the declaring method, because that
+    is the code that runs; `derive_endpoints.sql` takes the prefix, the type-level gate, the
+    peer and the class-level media from `gate_type` through the same `coalesce(gate_type,
+    enclosing)` the member rule uses, so a class the catalog's gate does not admit derives
+    nothing. One inherited method under two controllers is two rows with one handler, told
+    apart by their paths and their own `row_id`s.
+  - **The conditions are the serving class's.** The row records its serving class in
+    `endpoints.served_by` ([D01](D01-graph-schema.md)), and `endpoint_conditions` reads the
+    bean there (the handler's own where the handler is a bean): Spring reads conditions off
+    the class it registers, and `@Conditional` is not `@Inherited`. So `OrderController`'s
+    `@ConditionalOnProperty` reaches its inherited rows, and a subclass of a conditional
+    controller does not take the base's condition.
+
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
   `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,

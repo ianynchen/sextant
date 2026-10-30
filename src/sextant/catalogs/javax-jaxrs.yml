@@ -80,6 +80,11 @@ matches:
     - { annotation: javax.ws.rs.HeaderParam, kind: header, name_attrs: [value], requirement: optional, default_annotation: javax.ws.rs.DefaultValue }
     - { annotation: javax.ws.rs.CookieParam, kind: cookie, name_attrs: [value], requirement: optional, default_annotation: javax.ws.rs.DefaultValue }
   mapping:
+    # Ruling 8 (2026-10-30): a concrete resource class serves the resource methods
+    # it inherits without overriding, under its own @Path. NOT probed under javax:
+    # CP-58 measured Jersey 3.1.11 on the jakarta namespace, and this is the same
+    # JAX-RS dispatch rule (spec §3.6) under the older package name.
+    inherit_unoverridden: true
     prefix_annotation: javax.ws.rs.Path
     prefix_from: [value]
     path_separator: "/"

@@ -63,6 +63,11 @@ matches:
     - { annotation: io.micronaut.http.annotation.Header,      kind: header, name_attrs: [name, value], requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional], fallback_spelling: hyphenated-capitalized }
     - { annotation: io.micronaut.http.annotation.CookieValue, kind: cookie, name_attrs: [value],       requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional], fallback_spelling: hyphenated }
   mapping:
+    # Ruling 8 (2026-10-30): a concrete class serves the mapped methods it inherits
+    # without overriding, under its own prefix; an overridden one only at the
+    # override's own mapping. Measured by CP-58 on Micronaut 4.7.6
+    # (`scripts/probes/cp58-inherited-mappings/RESULT.md`).
+    inherit_unoverridden: true
     # MEASURED at 4.7.6 (`javap`): every verb annotation declares `value`, `uri` AND
     # `uris` — `value` is the alias of `uri`, `uris` the multi-address form; `@Controller`
     # and `@Client` declare `value`. First present wins, and `uris` last because it is the

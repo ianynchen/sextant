@@ -17,9 +17,14 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import single_call as sc_engine
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.shapes import chains as chains_module
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.arguments import split_url, url_of, url_of_answer
-from sextant.application.resolve.shapes.chains import _resolve_captures, chain_ends
+from sextant.application.resolve.shapes.chains import (
+    _resolve_captures,
+    chain_ends,
+    configuring_calls,
+)
 from sextant.application.resolve.values import EXPRESSION, LITERAL, STRING, Answer
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -7205,6 +7210,67 @@ def test_a_terminal_a_root_walk_reached_is_never_walked_twice(tmp_path: Path):
     assert [(end.caller, end.path) for end in ends] == [(sender, None)]
 
 
+# The final review's Important 1: what the walk back from a rootless terminal costs where
+# there is nothing to walk back to. A catalog rooted at `Root.start()` and ended by `send`.
+_ROOTED_AT_START = {
+    "roots": [{"owner": "com.acme.http.Root", "method": "start"}],
+    "steps": [],
+    "terminal": ["send"],
+}
+_ROOT = "com/acme/http/Root#"
+_SENDER = "com/acme/http/Sender#"
+
+
+def _walks_back_counted(
+    tmp_path: Path, facts: list, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, int, list]:
+    """How many times the walk back was prepared and started, and the rows, for `facts`."""
+    counts = {"prepared": 0, "started": 0}
+    prepare, start = chains_module._rootless_walk, chains_module._walk_back
+
+    def prepared(*args: Any) -> Any:
+        counts["prepared"] += 1
+        return prepare(*args)
+
+    def started(*args: Any) -> Any:
+        counts["started"] += 1
+        return start(*args)
+
+    monkeypatch.setattr(chains_module, "_rootless_walk", prepared)
+    monkeypatch.setattr(chains_module, "_walk_back", started)
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_ROOTED_AT_START))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return counts["prepared"], counts["started"], rows
+
+
+@pytest.mark.pins("chains.a-module-calling-no-ROOT-OWNER-walks-nothing-back")
+def test_a_module_calling_no_root_owner_tests_no_terminal(tmp_path, monkeypatch):
+    """`Sender.send()` is a terminal no root walk reached, but nothing here calls `Root` at
+    all, so no chain can start anywhere: the walk back is never even prepared."""
+    caller = "com/acme/http/Client#only()."
+    facts = [_call(caller, _SENDER, "send", 0, receiver=1, result=2)]
+
+    assert _walks_back_counted(tmp_path, facts, monkeypatch) == (0, 0, [])
+
+
+@pytest.mark.pins("chains.a-module-with-no-ROOT-CALL-stops-looking-back")
+def test_a_module_calling_a_root_owner_but_no_root_stops_at_the_first_terminal(
+    tmp_path, monkeypatch
+):
+    """`Root.configure()` is a call on the root's owner but not a root, so the walk back is
+    prepared once, finds no root call in the module, and starts no walk from either
+    caller's `send`."""
+    first, second = "com/acme/http/Client#first().", "com/acme/http/Client#second()."
+    facts = [
+        _call(first, _ROOT, "configure", 0, receiver=1, result=2),
+        _call(first, _SENDER, "send", 1, receiver=3, result=4),
+        _call(second, _SENDER, "send", 0, receiver=1, result=2),
+    ]
+
+    assert _walks_back_counted(tmp_path, facts, monkeypatch) == (1, 0, [])
+
+
 # verbless fluent chains — a root declaring NO `http_method` capture derives
 # `method` NULL, resolution not penalised for the missing verb, mirroring
 # single_call's own D02 §2 `verbless` row (a topic has no verb). The invented
@@ -12416,6 +12482,54 @@ def test_a_flagged_terminal_folds_in_place_and_what_follows_it_configures_the_ch
     }
 
     assert _rows_of(tmp_path, facts, flagged) == [("GET", "/orders", "h", "resolved")]
+
+
+@pytest.mark.pins("chains.a-flagged-terminal-is-matched-on-its-OWNER")
+def test_a_flagged_terminal_naming_an_owner_does_not_fold_a_call_on_another(tmp_path: Path):
+    """Final review, Minor 4: a flagged terminal is matched as a step is, on its `owner`
+    and `descriptor` where it names them. `{method: send, owner: Sender, returns_receiver:
+    true}` says nothing about `Request$Builder.send`, which is walked as an unflagged
+    terminal: it forks with what it has. Naming the builder's own type, it folds in place."""
+    caller = "com/acme/http/Client#send()."
+    facts = [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(caller, BUILDER, "send", 1, receiver=2, result=7),
+        _url(caller, 2, "https://h/orders", result=8),
+    ]
+
+    def terminal(**entry: Any) -> dict:
+        return {**_RETURNS_RECEIVER_MATCHES, "terminal": [{"method": "send", **entry}]}
+
+    unflagged = _rows_of(tmp_path / "plain", facts, terminal())
+    elsewhere = terminal(owner="com.acme.other.Sender", returns_receiver=True)
+    own = terminal(owner="com.acme.http.Request$Builder", returns_receiver=True)
+
+    assert _rows_of(tmp_path / "elsewhere", facts, elsewhere) == unflagged
+    assert _rows_of(tmp_path / "own", facts, own) == [("GET", "/orders", "h", "resolved")]
+
+
+def test_a_flagged_terminal_naming_an_owner_configures_only_calls_on_it():
+    """The backward half of Minor 4: `configuring_calls`, which the walk back reads, matches
+    a flagged terminal on its owner too, so the two walks agree."""
+    catalog = _fluent_catalog(
+        {
+            **_RETURNS_RECEIVER_MATCHES,
+            "steps": [],
+            "terminal": [
+                {
+                    "method": "send",
+                    "owner": "com.acme.http.Request$Builder",
+                    "returns_receiver": True,
+                }
+            ],
+        }
+    )
+    sites = [
+        {"owner": BUILDER, "name": "send", "descriptor": "()V"},
+        {"owner": "com/acme/other/Sender#", "name": "send", "descriptor": "()V"},
+    ]
+
+    assert configuring_calls(catalog, sites) == {(BUILDER, "send", "()V")}
 
 
 def test_a_base_set_as_a_statement_on_a_held_builder_reaches_the_row(tmp_path: Path):

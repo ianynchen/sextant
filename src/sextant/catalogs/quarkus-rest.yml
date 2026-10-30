@@ -130,6 +130,11 @@ matches:
     - { annotation: org.jboss.resteasy.reactive.RestHeader, kind: header, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
     - { annotation: org.jboss.resteasy.reactive.RestCookie, kind: cookie, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
   mapping:
+    # Ruling 8 (2026-10-30): a concrete class serves the mapped methods it inherits
+    # without overriding, under its own prefix; an overridden one only at the
+    # override's own mapping. Measured by CP-58 on Quarkus REST 3.40.1.1
+    # (`scripts/probes/cp58-inherited-mappings/RESULT.md`).
+    inherit_unoverridden: true
     prefix_annotation: jakarta.ws.rs.Path
     prefix_from: [value]
     path_separator: "/"

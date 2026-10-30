@@ -1,0 +1,31 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-inherited</artifactId>
+  <version>1.0.0</version>
+  <!-- Two controllers sharing one abstract base, for ruling 8 of the 2026-10-30
+       object-identity design: a mapping a controller inherits without overriding is served
+       under that controller's prefix, and an overridden one only at the override's own
+       mapping (CP-58). `OrderController` overrides nothing and `ProductController`
+       overrides `list`, so one base mapping reaches each subclass a different way.
+
+       Its own module because it adds inbound rows, and every figure `orders-service` pins
+       would move with them. Spring 7.0.9 and Boot 4.1.1, the versions `orders-contextpath`
+       already builds with, so the jars are in the local repository. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>7.0.9</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-autoconfigure</artifactId>
+      <version>4.1.1</version>
+    </dependency>
+  </dependencies>
+</project>

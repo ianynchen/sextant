@@ -1294,3 +1294,175 @@ def test_two_ancestors_agreeing_on_the_verb_but_not_on_a_sibling_resolve_nothing
     )
 
     assert [r for r in rows if r["target"] == _C + "find(sig_b)."] == []
+
+
+# --- Ruling 8 (2026-10-30 object-identity spec): an inherited, non-overridden
+# mapping is the subclass's own row ------------------------------------------
+#
+# CP-58 (`scripts/probes/cp58-inherited-mappings/RESULT.md`) measured Spring MVC,
+# Jersey, Quarkus REST and Micronaut serving a mapping a concrete controller
+# inherits without overriding under the CONTROLLER's prefix, and an overridden
+# one only at the override's own mapping. The row keeps the declaring method as
+# its handler, because that is the code that runs; `gate_type` names the class
+# whose prefix and gate it takes.
+
+
+@pytest.mark.pins("effective_annotations.an-INHERITED-unoverridden-mapping-is-the-subclasses-row")
+def test_a_mapping_a_subclass_inherits_without_overriding_is_its_own_row():
+    """`_A extends _B`; `_B#list` carries `@GetMapping("/list")`; `_A` declares
+    nothing. The framework serves `_B#list` under `_A`'s prefix, so the walk
+    names `_A` as the row's gate type and keeps `_B#list` as its target."""
+    base_list = _B + "list()."
+    annotation_rows = [
+        {"target": base_list, "annotation": _GET_MAPPING, "args": {"value": ["/list"]}}
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [],
+        [_extends(_A, _B)],
+        [_method(base_list, _B)],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+        inherit_unoverridden=True,
+    )
+
+    assert {
+        "target": base_list,
+        "annotation": _GET_MAPPING,
+        "args": {"value": ["/list"]},
+        "gate_type": _A,
+    } in rows
+    # `_B` declares the method itself: its own row is the real annotation,
+    # never a synthetic one naming itself.
+    assert [r for r in rows if r.get("gate_type") == _B] == []
+
+
+def test_a_catalog_that_does_not_opt_in_inherits_nothing_new():
+    """The same hierarchy without `inherit_unoverridden`: nothing synthesizes,
+    exactly what every catalog CP-58 did not measure keeps deriving."""
+    base_list = _B + "list()."
+    annotation_rows = [
+        {"target": base_list, "annotation": _GET_MAPPING, "args": {"value": ["/list"]}}
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [],
+        [_extends(_A, _B)],
+        [_method(base_list, _B)],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert rows == []
+
+
+def test_an_overriding_subclass_takes_only_its_own_mapping():
+    """CP-58: `/products/list` is 404 in all four frameworks. An override
+    replaces the inherited method, so the subclass declaring the key gets no
+    row for the base's mapping, whatever the override carries."""
+    base_list = _B + "list()."
+    own_list = _C + "list()."
+    annotation_rows = [
+        {"target": base_list, "annotation": _GET_MAPPING, "args": {"value": ["/list"]}},
+        {"target": own_list, "annotation": _GET_MAPPING, "args": {"value": ["/all"]}},
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [],
+        [_extends(_C, _B)],
+        [_method(base_list, _B), _method(own_list, _C)],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+        inherit_unoverridden=True,
+    )
+
+    assert [r for r in rows if r["target"] == base_list] == []
+
+
+def test_an_abstract_class_inherits_no_row():
+    """An abstract class is neither a bean nor a resource: it serves nothing of
+    its own, so only a CONCRETE subclass takes the inherited mapping."""
+    base_list = _B + "list()."
+    annotation_rows = [
+        {"target": base_list, "annotation": _GET_MAPPING, "args": {"value": ["/list"]}}
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [],
+        [_extends(_C, _B), _extends(_A, _C)],
+        [_method(base_list, _B)],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+        inherit_unoverridden=True,
+        abstract_types={_B, _C},
+    )
+
+    assert [r.get("gate_type") for r in rows if r["target"] == base_list] == [_A]
+
+
+def test_the_nearest_declaration_is_the_one_inherited():
+    """`_A extends _C extends _B`, `_C` overriding `list` with no mapping of its
+    own. `_C#list` is what runs on an `_A`, and it carries `_B`'s mapping by the
+    walk spec §3 already does — so `_A`'s row names `_C#list`, never `_B#list`."""
+    base_list = _B + "list()."
+    middle_list = _C + "list()."
+    annotation_rows = [
+        {"target": base_list, "annotation": _GET_MAPPING, "args": {"value": ["/list"]}}
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [],
+        [_extends(_C, _B), _extends(_A, _C)],
+        [_method(base_list, _B), _method(middle_list, _C)],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+        inherit_unoverridden=True,
+    )
+
+    assert [(r["target"], r.get("gate_type")) for r in rows if r.get("gate_type") == _A] == [
+        (middle_list, _A)
+    ]
+
+
+def test_an_interface_default_method_is_inherited_and_an_abstract_one_is_not():
+    """Spec ruling 8: a class's superclasses AND its interfaces' default methods.
+    A default method runs on the implementing class; an abstract one runs
+    nothing, and a concrete class only compiles by implementing it itself."""
+    default_ping = _I + "ping()."
+    abstract_pong = _I + "pong()."
+    annotation_rows = [
+        {"target": default_ping, "annotation": _GET_MAPPING, "args": {"value": ["/ping"]}},
+        {"target": abstract_pong, "annotation": _GET_MAPPING, "args": {"value": ["/pong"]}},
+    ]
+    method_rows = [
+        {
+            "symbol": default_ping,
+            "enclosing": _I,
+            "signature": None,
+            "modifiers": {"static": False, "synthetic": False, "abstract": False},
+        },
+        {
+            "symbol": abstract_pong,
+            "enclosing": _I,
+            "signature": None,
+            "modifiers": {"static": False, "synthetic": False, "abstract": True},
+        },
+    ]
+
+    rows = inherited_rows(
+        annotation_rows,
+        [_implements(_C, [_I])],
+        [],
+        method_rows,
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+        inherit_unoverridden=True,
+        abstract_types={_I},
+    )
+
+    assert [(r["target"], r.get("gate_type")) for r in rows] == [(default_ping, _C)]

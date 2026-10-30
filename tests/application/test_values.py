@@ -3928,7 +3928,71 @@ def _object_facts() -> list[Fact]:
         _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
         _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
     ]
-    return facts + _cycle_facts() + _bound_props_facts() + _helper_read_facts()
+    return facts + _cycle_facts() + _bound_props_facts() + _helper_read_facts() + _subtype_facts()
+
+
+# Final review, Minor 5: `name` is declared on `BaseProps`, and `AdminProps extends
+# BaseProps` is built here too.
+_BASE_PROPS = _PKG + "BaseProps#"
+_ADMIN_PROPS = _PKG + "AdminProps#"
+_TAKES_BASE_PROPS = "(Lcom/acme/orders/values/BaseProps;)V"
+_READ_NAME = _symbol(_OBJECTS, "readName", _TAKES_BASE_PROPS)
+_SUBTYPES = _symbol(_OBJECTS, "subtypes", "()V")
+
+
+def _subtype_facts() -> list[Fact]:
+    """`void subtypes() { BaseProps b = new BaseProps(); b.setName("B"); readName(b);
+    AdminProps a = new AdminProps(); a.setName("A"); readName(a); }` with
+    `static void readName(BaseProps p) { one(p.getName()); }`: one receiver, two ends, one
+    of them a construction of a subtype of the type declaring the field."""
+    facts: list[Fact] = [
+        _type(_BASE_PROPS),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _ADMIN_PROPS,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _BASE_PROPS,
+        ),
+    ]
+    for owner in (_BASE_PROPS, _ADMIN_PROPS):
+        facts += [
+            SymbolFact(
+                document_id="doc_values",
+                symbol=_symbol(owner, "<init>", "()V"),
+                construct_kind=ConstructKind.CONSTRUCTOR,
+                enclosing=_MODULE + owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+                visibility="public",
+            ),
+            _void(owner, "<init>", "()V"),
+        ]
+    facts += _writes(_BASE_PROPS, "setName", _SETS, "name")
+    facts += _getter(_BASE_PROPS, "getName", "name")
+    facts += [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_READ_NAME,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _OBJECTS,
+            signature=Signature(
+                parameters=[Parameter(name="p", type=TypeRef(symbol=_BASE_PROPS))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+        ),
+        _void(_OBJECTS, "readName", _TAKES_BASE_PROPS),
+        _call(_READ_NAME, 0, (_BASE_PROPS, "getName", _GETS), None, receiver_parameter=0, result=1),
+        _call(_READ_NAME, 1, _ONE_TARGET, None, arguments=_results(1)),
+        _declared(_OBJECTS, "subtypes", "()V"),
+        _void(_OBJECTS, "subtypes", "()V"),
+        _new(_SUBTYPES, 0, _BASE_PROPS, 1),
+        _call(_SUBTYPES, 1, (_BASE_PROPS, "setName", _SETS), 1, arguments=_string("B")),
+        _site(_SUBTYPES, 2, (_OBJECTS, "readName", _TAKES_BASE_PROPS), arguments=_results(1)),
+        _new(_SUBTYPES, 3, _ADMIN_PROPS, 2),
+        _call(_SUBTYPES, 4, (_ADMIN_PROPS, "setName", _SETS), 2, arguments=_string("A")),
+        _site(_SUBTYPES, 5, (_OBJECTS, "readName", _TAKES_BASE_PROPS), arguments=_results(2)),
+    ]
+    return facts
 
 
 def _helper_read_facts() -> list[Fact]:
@@ -4171,6 +4235,17 @@ def test_a_receiver_path_from_outside_does_not_unplace_the_constructed_one(objec
         ("/admin-api", "None"),
         ("None", "external"),
     ]
+
+
+@pytest.mark.pins("values.a-SUBTYPE-construction-reads-the-field-wide-union")
+def test_an_end_built_as_a_subtype_reads_every_write_never_external(objects):
+    """Final review, Minor 5. `readName(p)` reads `p.getName()`, and `p` is the
+    `BaseProps` built with `"B"` or the `AdminProps` built with `"A"`. The subtype is built
+    here, so it is not an object from outside: that end answers every write of the field,
+    as the read did before ruling 1, never `external`."""
+    answers = _values_and_reasons(objects, _READ_NAME, 1)
+    assert ("None", "external") not in answers
+    assert ("A", "None") in answers and ("B", "None") in answers
 
 
 @pytest.mark.pins("values.an-object-walk-is-reused-only-for-frames-that-READ-ALIKE")

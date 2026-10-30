@@ -1496,6 +1496,18 @@ def test_a_catalog_naming_an_unknown_inherit_siblings_word_is_refused_by_file(tm
     assert "invented-vocabulary.yml" in str(raised.value)
 
 
+def test_a_catalog_naming_inherit_unoverridden_as_anything_but_a_boolean_is_refused(
+    tmp_path: Path,
+):
+    """Ruling 8's opt-in is `true` or `false`. A quoted `"true"` read as "off" drops
+    every inherited row the key exists to add, silently, so it is refused by name."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(inherit_unoverridden="true"))
+
+    assert "inherit_unoverridden" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
 # --- 2I design §2: the two QName forms, on an invented framework ----------
 #
 # Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above
@@ -2249,6 +2261,44 @@ def test_a_public_method_inherited_from_an_annotated_base_is_an_exposed_member(
     assert [handler for path, handler in rows if path == "{urn:acme}refund"] == [
         "com/acme/rpc/AbstractMemberService#refund(sig_b17e0011)."
     ]
+
+
+def test_an_inherited_member_takes_the_conditions_of_the_class_that_serves_it(
+    tmp_path: Path,
+):
+    """Ruling 8, fix round 1. `{urn:acme}refund` is the BASE's method served by the
+    gated subclass (`gate_type`), so it exists wherever `MemberService` does, and
+    `{urn:base}refund` wherever the base does. The bean was read off the handler's
+    enclosing class, which gave the subclass's row the base's conditions and none of
+    its own."""
+    _member_facts(tmp_path / "facts", True)
+    _member_base_facts(tmp_path / "facts", "public", True, False)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [_member_catalog(**_qname_mapping(members="public_methods"))],
+        capabilities={"annotation_args"},
+    )
+    for bean, profile in (
+        ("com/acme/rpc/MemberService#", "sub"),
+        ("com/acme/rpc/AbstractMemberService#", "base"),
+    ):
+        workspace._connection.execute(
+            "INSERT INTO bean_conditions VALUES (?, 'class', NULL, 'profile', ?, 'default', "
+            "'false', 'resolved', 'compiler')",
+            [bean, json.dumps({"expressions": [profile]})],
+        )
+    served = {str(r["path"]): r["served_by"] for r in workspace.query("endpoints")}
+    conditions = {
+        (str(r["path"]), str(r["expression"])) for r in workspace.query("endpoint_conditions")
+    }
+    workspace.close()
+
+    assert served["{urn:acme}refund"] == "com/acme/rpc/MemberService#"
+    assert ("{urn:acme}refund", '{"expressions": ["sub"]}') in conditions
+    assert ("{urn:acme}refund", '{"expressions": ["base"]}') not in conditions
+    assert ("{urn:base}refund", '{"expressions": ["base"]}') in conditions
 
 
 def test_a_public_method_inherited_from_an_unannotated_base_is_not_an_exposed_member(

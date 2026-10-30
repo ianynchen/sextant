@@ -221,6 +221,34 @@ def test_an_inbound_endpoint_is_found_the_same_way():
     assert OF_ENVIRONMENTS in block
 
 
+def test_an_inherited_endpoint_states_the_condition_of_the_class_serving_it():
+    """Ruling 8, fix round 1: the row names the class serving it (`served_by`), and the
+    document reads that class's bean, not the handler's owner class — the same rule as the
+    `endpoint_conditions` view. `USERS` (conditional) serves a method declared in `CLIENT`
+    (conditional on another profile): the block states `USERS`' condition only."""
+    handler = CLIENT + "status()."
+    document = _document(
+        endpoints=[{**_inbound(handler), "served_by": USERS}],
+        bean_conditions=[
+            *_condition(USERS, "profile", PROFILE_PROD, PROD_ONLY),
+            *_condition(
+                CLIENT,
+                "profile",
+                PROFILE_STAGING,
+                {"default": "false", "prod": "false", "staging": "true"},
+            ),
+        ],
+        bean_presence=[
+            *_presence(USERS, PROD_ONLY),
+            *_presence(CLIENT, {"default": "false", "prod": "false", "staging": "true"}),
+        ],
+        symbol_beans=[_belongs(handler, CLIENT)],
+    )
+    block = _block(document, "BillingClient#status")
+    assert EXISTS_PROD in block + "\n"
+    assert "staging`\n" not in block.split("Of this module")[0] + "\n"
+
+
 def test_a_lambda_that_is_its_own_bean_is_found_before_its_owner_class():
     """The view's order: the row's own symbol first. A lambda a `@Bean` factory creates is
     the factory's bean, with the factory's route; its owner class's rows are not consulted."""

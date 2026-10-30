@@ -717,7 +717,10 @@ class _BeanConditions:
     All are read once. An endpoint in either direction, a scheduled job and an error handler
     each find their bean in `symbol_beans` — the workspace's one rule, which the
     `endpoint_conditions` view reads too (own symbol first, then owner class) — and state what
-    is here, so no kind, and not this renderer, has a copy of the logic."""
+    is here, so no kind, and not this renderer, has a copy of the logic. An endpoint row
+    names the class SERVING it (`served_by`, ruling 8), and that class stands in for the
+    owner class exactly as the view's second arm has it: a row a controller inherits runs
+    its base's method and exists where the controller's bean does."""
 
     routes: dict[str, dict[str | None, list[Mapping[str, object]]]]
     presence: dict[str, list[Mapping[str, object]]]
@@ -737,6 +740,16 @@ def _bean_conditions(report: ResolveReport, redactor: Redactor) -> _BeanConditio
     return _BeanConditions(routes, presence, beans)
 
 
+def _bean_of(symbol: str, index: _BeanConditions, served_by: str | None) -> str | None:
+    """`endpoint_conditions`' rule, read off the same index: the symbol's own bean where the
+    symbol is one, else the serving class where the row names one (a bean only if it has
+    conditions rows, as the view joins it), else the owner class `symbol_beans` gives."""
+    own = index.beans.get(symbol)
+    if own == symbol or served_by is None:
+        return own
+    return served_by if served_by in index.routes else None
+
+
 def _opt(value: object) -> str | None:
     return None if value is None else str(value)
 
@@ -752,7 +765,9 @@ def _masked_evidence(row: Mapping[str, object], redactor: Redactor) -> Mapping[s
     return {**row, "evidence": redact_condition_evidence(redactor, str(evidence))}
 
 
-def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEntry]:
+def _condition_entries(
+    symbol: object, index: _BeanConditions, served_by: object = None
+) -> list[DetailEntry]:
     """The VERBOSE rendering of a bean's conditions (spec 2026-10-21-conditional-controllers
     §2, ruling 1 of 2026-10-22; spec 2026-10-22-conditional-beans §3): the stored form is the
     tables a machine reads; the document says the same thing in words, two lines — where the
@@ -765,7 +780,7 @@ def _condition_entries(symbol: object, index: _BeanConditions) -> list[DetailEnt
     """
     if symbol is None:
         return []
-    bean = index.beans.get(str(symbol))
+    bean = _bean_of(str(symbol), index, None if served_by is None else str(served_by))
     if bean is None or bean not in index.routes:
         return []
     routes = index.routes[bean]
@@ -1529,7 +1544,9 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
-            conditions = _condition_entries(endpoint.get("handler"), beans)
+            conditions = _condition_entries(
+                endpoint.get("handler"), beans, endpoint.get("served_by")
+            )
             entries = [
                 entry
                 for entry in (via, request, response, streaming, fails_with, *conditions)
@@ -1595,7 +1612,9 @@ def assemble_module_document(
         for endpoint in outbound:
             identity = _wire_identity(endpoint, redactor)
             via = None if identity in attributed else _via_entry(endpoint, origin_by_symbol)
-            conditions = _condition_entries(endpoint.get("caller"), beans)
+            conditions = _condition_entries(
+                endpoint.get("caller"), beans, endpoint.get("served_by")
+            )
             if via is not None or conditions:
                 # One convention with inbound (fix round 1, MEDIUM 1): the
                 # identity, then the caller's own full symbol — the same

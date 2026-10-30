@@ -362,6 +362,19 @@ _NAMED_QUERIES = {
         SELECT symbol FROM symbols
         WHERE construct_kind IN ('interface', 'annotation') ORDER BY symbol
     """,
+    # Every declared type nothing can instantiate: an interface or annotation type, or
+    # a class whose own modifiers say `abstract` (D00 §5a, W7). Ruling 8 of the
+    # 2026-10-30 object-identity design reads it — an abstract class is no bean and no
+    # resource, so it serves none of the mappings it inherits. A class from a scanner
+    # that reports no modifiers reads as concrete: the catalog's type gate still has to
+    # admit it before anything derives.
+    "abstract_types": """
+        SELECT symbol FROM symbols
+        WHERE construct_kind IN ('interface', 'annotation')
+           OR (construct_kind = 'class'
+               AND coalesce((modifiers ->> 'abstract')::BOOLEAN, false))
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and signature JSON,
     # module-prefixed exactly as the fact wrote them (D00 §5a) — checkpoint
     # item (4)'s inheritance join needs both, and `method_symbols` above
@@ -1763,6 +1776,7 @@ _FACT_ONLY = frozenset(
         "declared_shapes",
         "method_symbols",
         "interface_symbols",
+        "abstract_types",
         "method_declarations",
         "accessor_declarations",
         "constructor_declarations",
@@ -2232,8 +2246,12 @@ class DuckDbWorkspace:
         self._connection = duckdb.connect(str(path))
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._drop_tables_the_schema_made_views()
-        self._connection.execute(schema)
+        # BEFORE the schema runs, not after: the schema's views select the tables'
+        # columns, and `CREATE OR REPLACE VIEW` binds at creation — a view naming a
+        # column an older workspace's table lacks (`endpoint_conditions` reading
+        # `endpoints.served_by`) refused to be created at all.
         self._add_columns_the_schema_has_gained(schema)
+        self._connection.execute(schema)
         # Read HERE, while every fact view is still the form `schema.sql` just gave
         # it: once `_materialize_facts` has re-pointed a view at its table, the
         # catalog holds `SELECT * FROM fact_<view>` and the defining SELECT is gone
@@ -2307,11 +2325,23 @@ class DuckDbWorkspace:
         try:
             reference.execute(schema)
             expected = reference.execute(
-                "SELECT table_name, column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema = 'main' ORDER BY table_name, ordinal_position"
+                "SELECT c.table_name, c.column_name, c.data_type "
+                "FROM information_schema.columns c JOIN information_schema.tables t "
+                "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+                "WHERE c.table_schema = 'main' AND t.table_type = 'BASE TABLE' "
+                "ORDER BY c.table_name, c.ordinal_position"
             ).fetchall()
         finally:
             reference.close()
+        # Only the tables this file already holds: it runs before the schema does, and
+        # a table the file lacks is created whole by the schema's own statement.
+        tables = {
+            str(table)
+            for (table,) in self._connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main' AND table_type = 'BASE TABLE'"
+            ).fetchall()
+        }
         held = {
             (str(table), str(column))
             for table, column in self._connection.execute(
@@ -2320,7 +2350,7 @@ class DuckDbWorkspace:
             ).fetchall()
         }
         for table, column, data_type in expected:
-            if (str(table), str(column)) in held:
+            if str(table) not in tables or (str(table), str(column)) in held:
                 continue
             self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {data_type}")
 

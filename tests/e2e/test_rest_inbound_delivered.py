@@ -1963,3 +1963,86 @@ def test_quarkus_rest_and_reactive_routes_parameters_are_optional(quarkus_tables
     }
     assert not any(r[4] == "id" for r in requirements), sorted(requirements, key=str)
     assert len(requirements) == 5, sorted(requirements, key=str)
+
+
+INHERITED = FIXTURES / "orders-inherited"
+_INHERITED_PACKAGE = "com/acme/inherited/"
+
+
+@pytest.fixture(scope="module")
+def inherited_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`fixtures/orders-inherited`, analysed once."""
+    workspace_dir = tmp_path_factory.mktemp("inherited")
+    compile_fixture(INHERITED)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(INHERITED), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    return workspace_dir / "workspace.duckdb"
+
+
+@pytest.fixture(scope="module")
+def inherited_rows_e2e(inherited_workspace: Path) -> list[dict]:
+    """Every inbound HTTP row of the one `orders-inherited` analysis, whole."""
+    workspace = DuckDbWorkspace(inherited_workspace)
+    try:
+        return [
+            {
+                **dict(row),
+                # `Class#method` of the handler, which is where the code that runs lives.
+                "handler": str(row["handler"]).rsplit("/", 1)[1].partition("(")[0],
+            }
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "http" and str(row["direction"]) == "inbound"
+        ]
+    finally:
+        workspace.close()
+
+
+CRUD_LIST = "CrudController#list"
+CRUD_CREATE = "CrudController#create"
+PRODUCT_LIST = "ProductController#list"
+
+
+def test_inherited_and_overridden_mappings_each_take_their_own_subclass_prefix(
+    inherited_rows_e2e,
+):  # Review Focus 5
+    """Ruling 8, measured by CP-58 on four frameworks: a controller serves the mappings
+    it inherits without overriding under its OWN prefix, and an overridden one only at
+    the override's mapping. `OrderController` overrides nothing; `ProductController`
+    overrides `list` with `@GetMapping("/all")`. Both inherit `create`, so one handler
+    stands behind two rows, told apart by their paths."""
+    paths = {(r["method"], r["path"], r["handler"]) for r in inherited_rows_e2e}
+    assert ("GET", "/orders/list", CRUD_LIST) in paths
+    assert ("POST", "/orders", CRUD_CREATE) in paths
+    assert ("GET", "/products/all", PRODUCT_LIST) in paths
+    assert ("GET", "/products/list", CRUD_LIST) not in paths
+    assert ("POST", "/products", CRUD_CREATE) in paths
+    # The abstract base serves nothing under its own (absent) prefix.
+    assert ("GET", "/list", CRUD_LIST) not in paths
+    assert ("POST", "/", CRUD_CREATE) not in paths
+    # The two rows sharing `create` stay two rows, each with its own identity.
+    creates = [r for r in inherited_rows_e2e if r["handler"] == CRUD_CREATE]
+    assert len({r["row_id"] for r in creates}) == 2
+
+
+def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
+    inherited_workspace: Path,
+):
+    """Ruling 8, fix round 1. `OrderController` is `@ConditionalOnProperty(name =
+    "orders.enabled", havingValue = "true")`; the rows it inherits run `CrudController`'s
+    code, and exist exactly where `OrderController` does. Read through the handler's
+    class they carried no condition at all. `ProductController`'s rows, one inherited and
+    one its own, carry none."""
+    workspace = DuckDbWorkspace(inherited_workspace)
+    try:
+        conditioned = {
+            (str(row["method"]), str(row["path"]), str(row["kind"]))
+            for row in workspace.query("endpoint_conditions")
+        }
+    finally:
+        workspace.close()
+
+    assert ("GET", "/orders/list", "property") in conditioned
+    assert ("POST", "/orders", "property") in conditioned
+    assert {path for _, path, _ in conditioned if path.startswith("/products")} == set()

@@ -287,7 +287,8 @@ def test_spring_rest_inbound_reads_as_the_rollup_says():
     # controllers-design.md), the delivery block names no open REST-inbound item, and the
     # one stated boundary (meta-annotations) costs no ✅ by COVERAGE §1's own rule.
     assert "| ✅ full |" in spring[0], spring[0]
-    assert "14/14" in spring[0], spring[0]
+    # 15 since 2026-10-30: the inherited, non-overridden mapping row (object-identity ruling 8).
+    assert "15/15" in spring[0], spring[0]
     assert "1 stated boundary" in spring[0], spring[0]
 
 

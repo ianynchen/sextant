@@ -301,6 +301,11 @@
 --                           direct gate `members: declared_type_methods` reads
 --                           — and `catalog_id` cannot answer it, because all
 --                           three passes stamp it.
+--                           `gate_type` is NULL except on a ruling-8 row (a
+--                           mapping a concrete class inherits without
+--                           overriding), where it names that class: the
+--                           prefix and the gate come from it, the handler
+--                           stays `target`.
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
@@ -348,7 +353,8 @@ WITH RECURSIVE catalog_params AS (
             flip_handlers STRUCT(declaration VARCHAR, handler VARCHAR)[],
             flip_canonical_path BOOLEAN,
             synthetic_annotations
-                STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR, inherited BOOLEAN)[]
+                STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR, inherited BOOLEAN,
+                       gate_type VARCHAR)[]
         )[]
     ) AS s)
 ),
@@ -447,12 +453,19 @@ annotations_effective AS (
     -- rewrite an annotation the author wrote on that very target into the
     -- spelling the catalog declares. One rule reads this column (the direct
     -- gate below); every other join ignores it and derives what it always did.
+    --
+    -- `gate_type` is the third, and only ruling 8's rows carry it: a mapping a
+    -- concrete class inherits without overriding keeps its declaring method as
+    -- `target` — the code that runs — and names here the class it is served
+    -- under. `declared` hands it on, and `derived` takes the prefix and the gate
+    -- from it through the `coalesce(m.gate_type, s.enclosing)` the member rule
+    -- already uses for the same reason. NULL on every other row.
     SELECT CAST(NULL AS VARCHAR) AS catalog_id, target, annotation, args,
-           FALSE AS inherited
+           FALSE AS inherited, CAST(NULL AS VARCHAR) AS gate_type
     FROM annotations
     UNION ALL
     SELECT u.catalog_id AS catalog_id, s.target, s.annotation, s.args::JSON,
-           s.inherited AS inherited
+           s.inherited AS inherited, s.gate_type AS gate_type
     FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.synthetic_annotations) AS s
           FROM catalog_params cp) u
 ),
@@ -552,12 +565,14 @@ declared AS (
     SELECT
         mc.catalog_id AS catalog_id,
         a.target AS target,
-        -- `member_declarations` fills this; an ANNOTATED declaration never
-        -- needs it, because the type that annotated it IS its own enclosing
-        -- type. NULL here rather than `a.target`'s enclosing, so `derived`'s
-        -- `coalesce` reads "no gate type was carried" and falls through to the
-        -- behaviour every catalog written before `A-M15` had.
-        CAST(NULL AS VARCHAR) AS gate_type,
+        -- `member_declarations` fills this, and so does a ruling-8 row (a
+        -- mapping a concrete class inherits without overriding, carried in
+        -- `annotations_effective.gate_type`). Any other ANNOTATED declaration
+        -- never needs it, because the type that annotated it IS its own
+        -- enclosing type — NULL there rather than `a.target`'s enclosing, so
+        -- `derived`'s `coalesce` reads "no gate type was carried" and falls
+        -- through to the behaviour every catalog written before `A-M15` had.
+        a.gate_type AS gate_type,
         -- The matched annotation's own aliases first, then `OI-35`'s sibling
         -- sources, then the empty default that `$path_fallback` answers. That
         -- ORDER is the framework's, not a convenience: CP-15 row 1 puts the
@@ -1689,6 +1704,10 @@ derived AS (
         -- REST Client's `@RegisterRestClient` row correctly.
         coalesce(pr.peer, p.peer) AS peer,
         s.signature AS handler_signature,
+        -- The class serving the row: the type the prefix and the gate below are
+        -- joined on, for the same reason — an inherited row runs its base's
+        -- method and exists where its subclass's bean does (ruling 8).
+        coalesce(m.gate_type, s.enclosing) AS served_by,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
         -- derives used to be stamped `resolved` unconditionally, which is a
         -- claim about the ADDRESS that the address itself can contradict: a
@@ -1845,11 +1864,13 @@ derived AS (
 -- since `handler` (or `caller`) is one of the grouped columns, not an
 -- aggregate. `GROUP BY ALL` groups on every non-aggregated select-list
 -- column, verified empirically against the CASE aggregates below; listed
--- explicitly would be these same eleven: protocol, direction, method, path,
--- handler, caller, peer, handler_signature, resolution, evidence, catalog_id.
+-- explicitly would be these same twelve: protocol, direction, method, path,
+-- handler, caller, peer, handler_signature, resolution, evidence, catalog_id,
+-- served_by. `served_by` follows `handler` for every row but an inherited one,
+-- so it splits nothing a handler did not already split.
 unioned AS (
     SELECT protocol, direction, method, path, handler, caller, peer,
-           handler_signature, resolution, evidence, catalog_id,
+           handler_signature, resolution, evidence, catalog_id, served_by,
            CASE WHEN count(consumes_list) = 0 THEN NULL
                 ELSE to_json(list_sort(list_distinct(flatten(list(consumes_list)
                      FILTER (WHERE consumes_list IS NOT NULL))))) END AS consumes,
@@ -1860,7 +1881,7 @@ unioned AS (
     GROUP BY ALL
 )
 SELECT protocol, direction, method, path, handler, caller, peer,
-       handler_signature, resolution, evidence, catalog_id, consumes, produces
+       handler_signature, resolution, evidence, catalog_id, consumes, produces, served_by
 FROM unioned d
 -- THE ADDRESSES-NOTHING GATE (2O Task 7 Step 4; rewritten by the principles
 -- sweep's mechanism 3, §4 and §7.7). An empty address is not a destination:

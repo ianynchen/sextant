@@ -121,6 +121,8 @@ def test_a_fed_channel_with_one_reader_mints_one_inbound_row_naming_both_ends(
         # The format ladder's two columns, answered by a later pass, NULL as minted.
         "format": None,
         "format_resolution": None,
+        # Composed with no serving class: the conditions fall back to the handler's class.
+        "served_by": None,
     }
 
 

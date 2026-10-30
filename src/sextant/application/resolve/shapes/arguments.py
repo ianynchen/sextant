@@ -1335,7 +1335,10 @@ def linked_channels(
     array carries none — so the ladder runs per element, one destination
     each through the same forms, and an element no form reaches is its own
     `unresolved` tuple (never the whole array given up on, never one failure
-    hiding a readable sibling)."""
+    hiding a readable sibling).
+
+    `argument` must be one that was never lifted out of a lambda body (no `caller` stamp,
+    `sites_of`): its `source` is looked up among `facts.caller_call_sites` alone."""
     elements = _array_elements(argument)
     if elements is not None:
         return [tuple_ for element in elements for tuple_ in linked_channels(element, facts, forms)]
@@ -1685,7 +1688,11 @@ def _linked_constructor(
     its four-string overload once owner and name agree. `descriptor`, when
     the form names one, is the linked call's whole JVM descriptor (spec
     2026-09-21 §5): what tells `ContainerProperties(String...)` from
-    `(Pattern)`, two one-argument constructors arity cannot separate."""
+    `(Pattern)`, two one-argument constructors arity cannot separate.
+
+    Without `argument`, `source` is looked up among `caller_call_sites` alone, which is
+    right only for an argument never lifted out of a lambda body; a lifted one is passed as
+    `argument`, so its own method's sites are searched (`sites_of`)."""
     if source is None:
         return None
     key = "receiver" if name == "<init>" else "result"

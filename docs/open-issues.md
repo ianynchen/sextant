@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-251 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-252 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -254,6 +254,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-248 | [SEXTANT-241](https://app.plane.so/portolan/browse/SEXTANT-241/) | this.setX(…) inside the class is inexact for every object, and a getter called on this is not placed |
 | OI-249 | [SEXTANT-242](https://app.plane.so/portolan/browse/SEXTANT-242/) | The object-read cycle cut has no calling context |
 | OI-250 | [SEXTANT-243](https://app.plane.so/portolan/browse/SEXTANT-243/) | A read with one unplaced receiver end is not placed at all: ruoyi's getAdminApi().getPrefix() still answers /app-api — **closed 2026-10-30** by `c29fc0e8` (value walk: each receiver path is answered by itself) |
+| OI-251 | [SEXTANT-244](https://app.plane.so/portolan/browse/SEXTANT-244/) | candidate_presence decides a call's presence per class, not per object: a call through an inherited method stands for every subclass; needs a receiver-class column on call_edges (related to OI-243) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

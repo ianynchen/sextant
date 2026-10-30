@@ -34,6 +34,7 @@ Left alone; a future phase widens that lookup the same way this one widens
 """
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -225,12 +226,19 @@ class TypeHierarchy:
     interfaces_of: dict[str, list[str]]
     supertype_of: dict[str, str]
     classes: frozenset[str]
+    # Every type nothing can instantiate — an interface, an annotation type, or a
+    # class whose own modifiers say `abstract` (D00 §5a). Ruling 8 reads it: such a
+    # type is no bean and no resource, so it serves no mapping it inherits. A type
+    # the module never declared (a `type_header` read off a jar) is absent, and it
+    # inherits nothing the walk can see either, since its methods were never read.
+    abstract_types: frozenset[str] = frozenset()
 
 
 def type_hierarchy(
     implementation_rows: list[dict[str, Any]],
     superclass_rows: list[dict[str, Any]],
     method_rows: list[dict[str, Any]],
+    abstract_types: Iterable[str] = (),
 ) -> TypeHierarchy:
     """`TypeHierarchy` over the plain-Python rows `inherited_rows` documents."""
     methods_by_type: dict[str, dict[str, str]] = {}
@@ -274,6 +282,7 @@ def type_hierarchy(
         interfaces_of=interfaces_of,
         supertype_of=supertype_of,
         classes=classes,
+        abstract_types=frozenset(str(symbol) for symbol in abstract_types),
     )
 
 
@@ -284,6 +293,9 @@ def inherited_rows(
     method_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
     prefix_fqns: list[str] | None,
+    *,
+    inherit_unoverridden: bool = False,
+    abstract_types: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Synthesizes one row per method that carries no mapping annotation of
     its own but implements or overrides one that does (spec §3): the same
@@ -369,10 +381,11 @@ def inherited_rows(
     many catalogs over one module folds them once and calls `inherited_rows_over`.
     """
     return inherited_rows_over(
-        type_hierarchy(implementation_rows, superclass_rows, method_rows),
+        type_hierarchy(implementation_rows, superclass_rows, method_rows, abstract_types),
         annotation_rows,
         mapping_fqns,
         prefix_fqns,
+        inherit_unoverridden=inherit_unoverridden,
     )
 
 
@@ -382,9 +395,19 @@ def inherited_rows_over(
     mapping_fqns: set[str],
     prefix_fqns: list[str] | None,
     sibling_fqns: frozenset[str] = frozenset(),
+    inherit_unoverridden: bool = False,
 ) -> list[dict[str, Any]]:
     """`inherited_rows` over an already-folded `TypeHierarchy` — the same rows, the
     same order; the hierarchy is read and never written into.
+
+    `inherit_unoverridden` is ruling 8 of the 2026-10-30 object-identity design,
+    and a catalog opts into it (`mapping.inherit_unoverridden: true`) only where
+    probe CP-58 measured the framework doing it: a concrete class serves every
+    mapped method it INHERITS without overriding, under its own prefix. Each such
+    method gets a row of its own per class, `{target: <the declaring method>, ...,
+    gate_type: <the class>}` — the target is the code that runs, and `gate_type` is
+    the class whose prefix and gate the SQL composes it with
+    (`_unoverridden_rows`). Off, nothing below it runs and the walk is what it was.
 
     `sibling_fqns` is the catalog's declared SIBLING annotations — the ones its
     `path_from_siblings`/`produces_from_siblings`/`consumes_from_siblings` lists
@@ -535,12 +558,145 @@ def inherited_rows_over(
                 annotation, args = found_prefix
                 rows.append({"target": type_symbol, "annotation": annotation, "args": args})
 
+    # AFTER the loop above, because an inherited method's mapping may itself be
+    # one that loop synthesized: `Mid#list` overriding `Base#list` with no
+    # annotation carries `Base`'s mapping only once the walk has put it there,
+    # and `Mid#list` is what runs on a subclass that does not override it again.
+    if inherit_unoverridden:
+        rows.extend(_unoverridden_rows(hierarchy, rows, annotations_by_target, mapping_fqns))
+
     # NFR-1: deterministic order, sorted by (target, annotation) — the same
     # ordering `composed_mapping_rows` sorts its own output by, so the
     # caller's concatenation of the two lists stays predictable regardless
-    # of which pass produced which row.
-    rows.sort(key=lambda row: (row["target"], row["annotation"]))
+    # of which pass produced which row. One method inherited by two classes is
+    # two rows on one target and one annotation, so the class breaks the tie.
+    rows.sort(key=lambda row: (row["target"], row["annotation"], row.get("gate_type") or ""))
     return rows
+
+
+def _unoverridden_rows(
+    hierarchy: TypeHierarchy,
+    walked: list[dict[str, Any]],
+    annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]],
+    mapping_fqns: set[str],
+) -> list[dict[str, Any]]:
+    """Ruling 8: one row per mapped method a CONCRETE class inherits without
+    declaring it, `gate_type` naming that class.
+
+    **Which methods.** A method of a superclass, transitively, whose member key
+    (name plus descriptor) neither the class nor any nearer superclass declares —
+    the nearest declaration is the one that runs (JLS 8.4.8). Then an interface's
+    DEFAULT method no class in the chain declares; an abstract interface method
+    runs nothing, and a static one is not a member of the class at all (JLS
+    8.4.8). Two interfaces offering one key leave the more specific one (JLS
+    9.4.1.3); two unrelated ones are a class javac refuses, and give nothing here.
+    A compiler bridge is never one: the method it forwards to is inherited too and
+    carries the row.
+
+    **Which mapping.** The method's own — real or composed — or, failing that, the
+    one the walk above already synthesized onto it. That is the mapping the method
+    carries wherever it is declared, so it is the one every subclass inherits with
+    it; no second resolution runs from the subclass's side.
+
+    **Which classes.** Every class this module declares that is not abstract
+    (`TypeHierarchy.abstract_types`). The catalog's type gate is not read here:
+    the SQL joins `gate_type` against `controllers`, which already composes the
+    gate the way the framework does, so a class carrying no gate derives nothing.
+
+    No sibling rows ride with these. The declaring method already carries its
+    siblings — written there or synthesized there by the walk above — and the SQL
+    reads them by target, which is the same method."""
+    methods_by_type = hierarchy.methods_by_type
+    interfaces_of = hierarchy.interfaces_of
+    supertype_of = hierarchy.supertype_of
+    modifiers_by_symbol = hierarchy.modifiers_by_symbol
+
+    walked_mapping: dict[str, tuple[str, dict[str, Any]]] = {}
+    for row in walked:
+        if row["annotation"] in mapping_fqns:
+            walked_mapping.setdefault(str(row["target"]), (row["annotation"], row["args"]))
+
+    def flagged(method: str, flag: str) -> bool:
+        return bool((modifiers_by_symbol.get(method) or {}).get(flag))
+
+    rows: list[dict[str, Any]] = []
+    for type_symbol in sorted(hierarchy.classes - hierarchy.abstract_types):
+        declared = set(methods_by_type.get(type_symbol, {}))
+        # The superclass chain, nearest first; `seen` stops a cyclic fact stream.
+        chain = [type_symbol]
+        seen = {type_symbol}
+        superclass = supertype_of.get(type_symbol)
+        while superclass is not None and superclass not in seen:
+            chain.append(superclass)
+            seen.add(superclass)
+            superclass = supertype_of.get(superclass)
+        inherited: dict[str, tuple[str, str]] = {}
+        for ancestor in chain[1:]:
+            for key, method in methods_by_type.get(ancestor, {}).items():
+                if key not in declared and key not in inherited:
+                    inherited[key] = (method, ancestor)
+        offered: dict[str, list[tuple[str, str]]] = {}
+        for interface in _interfaces_of_chain(chain, interfaces_of):
+            for key, method in methods_by_type.get(interface, {}).items():
+                if key not in declared and key not in inherited:
+                    offered.setdefault(key, []).append((method, interface))
+        for key, choices in offered.items():
+            specific = [
+                (method, interface)
+                for method, interface in choices
+                if not any(
+                    other != interface and interface in _superinterfaces(other, interfaces_of)
+                    for _, other in choices
+                )
+            ]
+            if len(specific) == 1 and not flagged(specific[0][0], "static"):
+                inherited[key] = specific[0]
+        for method, owner in inherited.values():
+            if flagged(method, "abstract"):
+                continue
+            if _is_synthetic(
+                method,
+                methods_by_type.get(owner, {}).values(),
+                hierarchy.signature_by_symbol,
+                modifiers_by_symbol,
+            ):
+                continue
+            mapping = _own_mapping(method, mapping_fqns, annotations_by_target) or (
+                walked_mapping.get(method)
+            )
+            if mapping is None:
+                continue
+            annotation, args = mapping
+            rows.append(
+                {"target": method, "annotation": annotation, "args": args, "gate_type": type_symbol}
+            )
+    return rows
+
+
+def _interfaces_of_chain(chain: list[str], interfaces_of: dict[str, list[str]]) -> list[str]:
+    """Every interface a class in `chain` implements, directly or through another
+    interface, each once — nearest class first, declaration order within it."""
+    found: list[str] = []
+    pending = [interface for klass in chain for interface in interfaces_of.get(klass, [])]
+    while pending:
+        interface = pending.pop(0)
+        if interface in found:
+            continue
+        found.append(interface)
+        pending.extend(interfaces_of.get(interface, []))
+    return found
+
+
+def _superinterfaces(interface: str, interfaces_of: dict[str, list[str]]) -> set[str]:
+    """Every interface `interface` extends, transitively — not itself."""
+    found: set[str] = set()
+    pending = list(interfaces_of.get(interface, []))
+    while pending:
+        current = pending.pop()
+        if current not in found:
+            found.add(current)
+            pending.extend(interfaces_of.get(current, []))
+    return found
 
 
 def _own_mapping(

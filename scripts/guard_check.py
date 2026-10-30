@@ -1720,7 +1720,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            conditions = _condition_entries(endpoint.get("caller"), beans)\n',
+                find="            conditions = _condition_entries(\n"
+                '                endpoint.get("caller"), beans, endpoint.get("served_by")\n'
+                "            )\n",
                 replace="            conditions = []  # guard disabled by scripts/guard_check.py\n",
             ),
             Edit(
@@ -2509,8 +2511,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if all(built is None for built, _, _ in read):\n",
-                replace="        if any(built is None for built, _, _ in read):"
+                find="        if all(built is None for built, _, _, _ in read):\n",
+                replace="        if any(built is None for built, _, _, _ in read):"
                 "  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -3001,10 +3003,68 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="            if _site_key(site) in reached or not _reaches_terminal(site, "
-                "context):\n",
-                replace="            if not _reaches_terminal(site, context):  "
+                find='            if str(site["name"]) not in ends_a_chain or _site_key(site) in reached:\n',
+                replace='            if str(site["name"]) not in ends_a_chain:  '
                 "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-module-calling-no-ROOT-OWNER-walks-nothing-back": Guard(
+        what="the walk back from a rootless terminal tests no terminal in a module that calls "
+        "no owner any root of the catalog names (final review of spec 2026-10-30, Important 1)",
+        why="a chain the walk back finds starts at a root, so such a module has none; testing "
+        "every call of every caller there cost a third of `chain_ends` on `mall-admin` and "
+        "`apollo-portal`, for walks that cost under a millisecond on the whole estate",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    walks_back = any(\n",
+                replace="    walks_back = True or any(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-module-with-no-ROOT-CALL-stops-looking-back": Guard(
+        what="once the walk back finds no call of the module matching a root, it tests no "
+        "further terminal (final review of spec 2026-10-30, Important 1)",
+        why="`spring-integration-amqp` and `-pubsub` end a chain at `<init>`, so every "
+        "constructor call of a module calling a root owner but no root was tested and handed "
+        "to a walk that started nothing: 1,883 of them per catalog on `mall-admin`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                if not walks_back:\n                    break\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-flagged-terminal-is-matched-on-its-OWNER": Guard(
+        what="a terminal declared `returns_receiver: true` configures only calls matching its "
+        "own `owner` and `descriptor`, as a step does (final review of spec 2026-10-30, "
+        "Minor 4)",
+        why="matched by name alone, a flag meant for one type's `send` folded every same-named "
+        "call on any type into the chain in place, so configuration made after it reached a "
+        "row it does not belong to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if _matching_step(site, context.receiver_terminals) is not None:\n",
+                replace='    if str(site["name"]) in {str(t["method"]) for t in '
+                "context.receiver_terminals}:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-SUBTYPE-construction-reads-the-field-wide-union": Guard(
+        what="a getter read whose receiver ends at a construction of a subtype of the field's "
+        "type built here answers that end with every write of the field, never `external` "
+        "(final review of spec 2026-10-30, Minor 5)",
+        why="`new AdminProps()` where the field is `BaseProps`'s was not counted as a "
+        "construction and was answered as an object from outside: `external` and an inexact "
+        "value, for an object the module builds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if subtype:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3738,6 +3798,40 @@ GUARDS: dict[str, Guard] = {
                 "                        for sib_annotation, sib_args in siblings\n"
                 "                    ),\n",
                 replace="                    frozenset(),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "effective_annotations.an-INHERITED-unoverridden-mapping-is-the-subclasses-row": Guard(
+        what="a concrete class serves every mapped method it inherits without overriding: one "
+        "row per such method per class, the declaring method its target and the class its "
+        "`gate_type`",
+        why="Ruling 8 of the 2026-10-30 object-identity design, measured by CP-58 on Spring MVC, "
+        "Jersey, Quarkus REST and Micronaut: `OrderController extends CrudController` "
+        "overriding nothing serves `GET /orders/list` and `POST /orders`. The walk took "
+        "candidates only from the methods a class declares, so an inherited, non-overridden "
+        "mapping reached no subclass at all, and a base that is no controller itself — the "
+        "common generic-CRUD shape — published nothing for any of them",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="    if inherit_unoverridden:\n        rows.extend(_unoverridden_rows(",
+                replace="    if False:  # guard disabled\n        rows.extend(_unoverridden_rows(",
+            ),
+        ),
+    ),
+    "conditions.a-row-is-conditioned-by-the-class-that-SERVES-it": Guard(
+        what="an endpoint row's bean is its code's own where the code is a bean, and otherwise "
+        "the class serving the row (`endpoints.served_by`), never the handler's enclosing class",
+        why="Ruling 8, fix round 1. Spring reads a bean's conditions off the class it registers, "
+        "and `@Conditional` is not `@Inherited`. A mapping `OrderController` inherits runs "
+        "`CrudController`'s method, so reading the handler's class lost `OrderController`'s "
+        "`@ConditionalOnProperty` and published the row as present everywhere; and a subclass "
+        "of a conditional controller took the base's condition, absent where it is served",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/schema.sql",
+                find="    JOIN beans served ON served.bean = coalesce(e.served_by, s.enclosing)\n",
+                replace="    JOIN beans served ON served.bean = s.enclosing  -- guard disabled\n",
             ),
         ),
     ),

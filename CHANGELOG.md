@@ -17,6 +17,17 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A controller serves the mappings it inherits without overriding** (ruling 8 of the
+  2026-10-30 review). `OrderController extends CrudController<Order>`, overriding nothing,
+  published no rows at all: the inheritance walk only looked at methods a class declares
+  itself, and the abstract base is no controller. Probe CP-58 measured Spring MVC, Jersey,
+  Quarkus REST and Micronaut all serving such a method under the subclass's own prefix
+  (`GET /orders/list`), and an overridden one only at the override's mapping. Each inherited
+  method is now a row of its own per concrete controller, with the base method as its handler
+  and the controller's prefix and gate. On for `spring-web`, `spring-mvc`, `jakarta-jaxrs`,
+  `javax-jaxrs` (same JAX-RS rule, not probed), `quarkus-rest` and `micronaut-http`
+  (`mapping.inherit_unoverridden: true`). Each row carries the conditions of the controller
+  serving it, never the base's. Measured: the six field pins are unchanged.
 - **A field read off an object from outside no longer borrows another object's values**
   (OI-222, ruled 2026-10-29). Where the value walk reads an instance field through a getter on
   an object that arrives from no code in the module — every path to it ends at a parameter
@@ -62,6 +73,11 @@ here would restate those documents rather than add anything.
   helper, not that it is read at runtime. An `@Scheduled` job's name is empty rather than
   NULL, printed `—`: the framework gives none. `not in the code` is left for a value the
   code really does not state. `GRAPH_SCHEMA_VERSION` 10.
+- **`GRAPH_SCHEMA_VERSION` 12**: `endpoints` gains `served_by`, the class a row is served by
+  (ruling 8). A row's conditions are read off that class's bean — the handler's own where the
+  handler is a bean — so a row a conditional controller inherits carries the controller's
+  condition, and a subclass of a conditional controller no longer takes the base's. The
+  export carries the column; a workspace of the older vintage is refused and re-analysed.
 - **`GRAPH_SCHEMA_VERSION` 11**: `endpoints` and `endpoint_metadata` gain `row_id`, a row's
   number for one resolve (ruling 7). The export leaves it out, so no bundle column changes; a
   workspace of the older vintage is refused and re-analysed.

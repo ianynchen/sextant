@@ -485,14 +485,29 @@ class ValueIndex:
     # read of a field whose type nothing here builds is not walked for its objects at all:
     # every end of that walk would be no construction.
     constructed: frozenset[str] = dataclass_field(init=False, compare=False, repr=False)
+    # Each type's direct superclass, as bare symbols (the `superclasses` query).
+    superclasses: Mapping[str, str] = dataclass_field(default_factory=dict)
+    # Every type -> the types in `constructed` that extend it, at any depth: a receiver of
+    # the type can be a construction of one of them (`_Walk._objects`).
+    constructed_below: Mapping[str, frozenset[str]] = dataclass_field(
+        init=False, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
+        constructed = frozenset(
+            str(row.get("owner")) for row in self.sites.values() if row["name"] == "<init>"
+        )
+        object.__setattr__(self, "constructed", constructed)
+        below: dict[str, set[str]] = {}
+        for built in constructed:
+            seen = {built}
+            ancestor = self.superclasses.get(built)
+            while ancestor is not None and ancestor not in seen:
+                seen.add(ancestor)
+                below.setdefault(ancestor, set()).add(built)
+                ancestor = self.superclasses.get(ancestor)
         object.__setattr__(
-            self,
-            "constructed",
-            frozenset(
-                str(row.get("owner")) for row in self.sites.values() if row["name"] == "<init>"
-            ),
+            self, "constructed_below", {key: frozenset(value) for key, value in below.items()}
         )
 
 
@@ -740,6 +755,10 @@ def value_index(workspace: Workspace) -> ValueIndex:
         static_fields=static_fields,
         unscanned=unscanned,
         called_at={key: tuple(value) for key, value in called_at.items()},
+        superclasses={
+            bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
+            for row in workspace.query("superclasses")
+        },
     )
 
 
@@ -1183,8 +1202,9 @@ class _Walk:
         # on the value does not open `escapes`. None for every other reader.
         self._past_accessors = past_accessors
         # The calls that return the object they were called on (ruling 4, spec 2026-10-30),
-        # as `(owner, name)`: one made on the value does not open `escapes`, and the chain
-        # reader gathers it into the chain (`_configured_on`). Empty for every other reader.
+        # as `(owner, name, descriptor)`: one made on the value does not open `escapes`, and
+        # the chain reader gathers it into the chain (`_configured_on`). Empty for every other
+        # reader.
         self._configuring = frozenset(configuring)
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
@@ -2824,9 +2844,11 @@ class _Walk:
 
         **Which objects.** The getter's receiver is followed to the constructions of the
         field's own type (`_objects`). An end that is not one — a parameter nothing binds, a
-        library call, a subclass built — is an object from outside and answers as one
-        (`_from_outside`, OI-250). Only where no end is a construction is the read not
-        placed, and it answers as before.
+        library call — is an object from outside and answers as one (`_from_outside`,
+        OI-250). An end at a construction of a SUBTYPE built here is not from outside: it
+        answers every write of the field, as the read did before (final review, Minor 5).
+        Only where no end is a construction is the read not placed, and it answers as
+        before.
 
         **What each object holds.** For each construction `C`:
 
@@ -2860,19 +2882,21 @@ class _Walk:
         # (`a.getNext().setNext(…)`), or a cycle through two fields, reaches this read again,
         # and the walk that would ask it answers as it did before ruling 1 instead.
         asking = self._asking | {(symbol, site)}
+        # `_base` is None outside an object walk, and 0 for one started with no frames of the
+        # asker's: neither has asker's frames to record a read of.
         if self._base:
             # What follows reads the asker's frames whole (an object walk keyed on them, the
             # receiver's frame): this walk's answer serves only the very same frames.
             self._reads.append((_WHOLE,))
         outer = frames[:-1]
         read = self._objects(symbol, site, outer, asking)
-        if all(built is None for built, _, _ in read):
+        if all(built is None for built, _, _, _ in read):
             return None
         receiver = self._receiver_of(self._index.sites[site], outer)
         groups = self._writes_by(symbol)
         calls = self._setter_calls_of(symbol, asking)
         reached: list[_Reached] = []
-        for built, crossed, entered in read:
+        for built, crossed, entered, subtype in read:
             on_path = _combine(trail, crossed)
             if on_path is None:
                 continue
@@ -2881,6 +2905,20 @@ class _Walk:
             )
             on_object = _combine(on_path, (step,))
             if on_object is None:
+                continue
+            if subtype:
+                # **A subtype built here is not an object from outside** (final review, Minor
+                # 5): `new AdminProps()` where the field is `BaseProps`'s. Its own writes are
+                # not told apart from the other objects' yet, so that end answers what the read
+                # answered before ruling 1, every write of the field — never `external`.
+                written, constants, produced = (
+                    self._index.writers.get(symbol, ()),
+                    self._index.constants.get(symbol, ()),
+                    self._index.produced.get(symbol, ()),
+                )
+                reached.extend(
+                    self._binding_writes(written, constants, produced, symbol, on_object, frames)
+                )
                 continue
             if built is None:
                 # **One path from outside does not unplace the others** (OI-250): ruoyi's
@@ -2921,7 +2959,7 @@ class _Walk:
                 for called, call, ends in calls:
                     if called != writer:
                         continue
-                    for target, made, made_entered in ends:
+                    for target, made, made_entered, _ in ends:
                         if target is not None and (
                             target != built or _combine(entered, made_entered) is None
                         ):
@@ -3009,9 +3047,14 @@ class _Walk:
             if _reads_alike(frames, held, reads):
                 return cached
         declared = (str(owner), "<init>")
+        # A construction of a subtype built here ends the walk too, so that end is told from
+        # one the walk cannot read (final review, Minor 5).
+        subtypes = frozenset(
+            (below, "<init>") for below in self._index.constructed_below.get(str(owner), ())
+        )
         walk = _Walk(
             self._index,
-            declared=frozenset({declared}),
+            declared=frozenset({declared}) | subtypes,
             which_object=True,
             asking=asking,
         )
@@ -3020,6 +3063,7 @@ class _Walk:
         for crossed, answer in walk._of_site(self._index.sites[site], RECEIVER, (), frames):
             entered = _entered(crossed, self._index)
             built: tuple[str, int] | None = None
+            subtype = False
             if answer.kind == _PRODUCED and entered is not None:
                 producer = answer.value
                 if (
@@ -3028,7 +3072,8 @@ class _Walk:
                     and producer.ordinal is not None
                 ):
                     built = (producer.caller, producer.ordinal)
-            ends.append((built, crossed, crossed if entered is None else entered))
+                subtype = producer.identity in subtypes
+            ends.append((built, crossed, crossed if entered is None else entered, subtype))
         found = tuple(dict.fromkeys(ends))
         self._index.objects.setdefault(key, []).append(
             (frames, tuple(dict.fromkeys(walk._reads)), found)
@@ -3104,9 +3149,11 @@ def _constructs(writer: str | None, field: str) -> bool:
 _Frames = tuple[tuple[str, tuple[str, int]], ...]
 
 # One end of an object read (`_Walk._objects`): the construction the receiver is, or None
-# where the path ends anywhere else; the path as the walk took it; and the same path as
-# `producer_paths` writes it (`_entered`), which is what two object reads compare.
-_End = tuple[tuple[str, int] | None, _Trail, _Trail]
+# where the path ends anywhere else; the path as the walk took it; the same path as
+# `producer_paths` writes it (`_entered`), which is what two object reads compare; and
+# whether the path ends at a construction of a subtype of the field's type built here
+# (`built` is None there: the object is not one of the type's own constructions).
+_End = tuple[tuple[str, int] | None, _Trail, _Trail, bool]
 # One call of a method writing a field (`_Walk._setter_calls_of`): the writing method, the
 # call site, and the objects the call was made on.
 _SetterCall = tuple[str, tuple[str, int], tuple[_End, ...]]
