@@ -329,7 +329,55 @@ only constructor writes made without a parameter (inexact), and `external` besid
 anything was dropped. It needed no new fact: the producer reader, with every unscanned call
 declared, ends a path at a library call that hands an object back, so "every path ends
 `external`" means the object arrives from a parameter nothing here passes. A static field is
-never asked about. The second half still needs `from_value` (§1) and
-stays unbuilt; §4's over-report of `setTopic("a"); setTopic("b")` on one visible object is
+never asked about. The second half still needed `from_value` (§1) and
+stayed unbuilt then (§9 records it built); §4's over-report of `setTopic("a"); setTopic("b")` on one visible object is
 unchanged. Measured: every answer over 44 modules is the same with the rule on and off.
 
+
+## 9. Step 2, its second half — built 2026-10-30 (ruling 1 of the object-identity review)
+
+The second half is built, on `fix/object-identity-4`. The extractor reports `field_write`
+with `value = {kind: instance, symbol, source}` for `this.f = new X(…)` and `F = new X(…)`;
+that is §1's `from_value`, carried in the slot the fact already had. The walk
+(`values.py`, `_object_writes`) follows a getter read's receiver to the constructions of
+the field's own type. Where every path ends at one, the read answers that object's
+constructor writes and the writes of setter calls made on it; a setter called on an object
+the walk cannot place is kept for every object, inexact. Where any path ends elsewhere, the
+read answers every write, as before. Two steps keyed on the receiver as the reading method
+holds it keep two reads of one receiver on one object and one write.
+
+**Measured** on the same corpora state, the code and extractor before the part (`ea9be288`)
+against after it, every example scan re-extracted by each side's own extractor, 1,810
+positions at 1,486 sites over 42 modules:
+
+| | before | after |
+|---|---|---|
+| bindings max (`apollo-portal`) | 11,496 | 11,496 |
+| paths max | 1,481 | 1,481 |
+| visits max / total | 3,467 / 29,044 | 3,467 / 29,201 |
+| every walk's computations, nested object walks included | 85,062 | 99,715 |
+| walk s | 0.12 | 0.12 |
+| `resolve_site` s | 0.23 | 0.30 |
+| slowest site s | 0.046 | 0.057 |
+
+The object walks are memoised for the index's lifetime, and a type nothing here constructs
+is not walked at all. Without those two, the computations were 108,229 and `resolve_site`
+0.34s. Every figure §7 bounds (bindings, paths) is at or under §7's.
+
+**What moved.** One answer fewer: `mall-portal`'s `RabbitMqConfig#orderQueue` reads
+`QueueEnum.QUEUE_ORDER_CANCEL.getName()` and no longer gains the TTL queue's name, which
+belongs to another enum constant. New answers come from the new fact, not from the
+walk: six `apollo-portal` sites whose receiver or argument is a field set to
+`new RestTemplate()`, `new ConcurrentHashMap<>()` or an anonymous
+`ParameterizedTypeReference` now name that type where they answered `no_writer`. Six
+`apollo-portal` sites gain bindings with the same answers, split per object. On one
+(`LdapUserService#findByUserId`) some paths are now marked inexact because a setter on the
+path is called on an object the walk cannot place.
+
+**The prediction did not hold on ruoyi-vue-pro.** `getAdminApi().getPrefix()` still answers
+`/admin-api`, `/app-api` and `external` at all three reads. `WebProperties` is `@Data`, so
+`adminApi` has a second writer, the setter `setAdminApi`, which nothing here calls. One
+path to the receiver therefore ends `external`, and the read is not placed. That is OI-250.
+§4's `setTopic("a"); setTopic("b")` over-report is unchanged, because it is a question of
+statement order and not of object identity (OI-245). The other recorded limits are OI-244 and
+OI-246 to OI-249.

@@ -36,6 +36,20 @@ here would restate those documents rather than add anything.
   attached to a row is bound to that number when it is written, and every later pass finds
   the row by it. A header written as the row is minted follows the row through the prefix
   and a protocol change too, and is removed with a row the self-call pass removes.
+- **A field read through a getter answers its own object's writes** (ruling 1 of the
+  2026-10-30 review; the second half of the sixth edge's step 2). The extractor now reports
+  the object a field is set to when the code writes `this.f = new X(…)`, and the value walk
+  follows a getter's receiver back to the `new` that built it: the read answers what that
+  object's constructor wrote and what setters called on that object wrote, and nothing
+  another object of the same class was given. A setter called on an object the walk cannot
+  place still counts for every object, marked inexact. `RabbitMqConfig#orderQueue` in
+  `mall-portal` now answers `mall.order.cancel` alone, where it also answered the TTL
+  queue's name. Where any path to the receiver ends somewhere other than a `new` — a
+  parameter nothing here passes, a setter nothing here calls — the read answers every write
+  as before; on ruoyi-vue-pro that is why `getAdminApi().getPrefix()` still answers
+  `/app-api` beside `/admin-api` (OI-250). Measured: the six field pins pass; over 1,810
+  positions the deterministic figures (worst bindings 11,496, worst path count 1,481, worst
+  visits 3,467) are unchanged, and `resolve_site` takes 0.30s where it took 0.23s.
 
 ### Changed
 
