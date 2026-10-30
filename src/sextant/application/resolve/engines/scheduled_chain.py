@@ -106,7 +106,7 @@ from sextant.application.resolve.shapes.arguments import (
     supertypes_of,
 )
 from sextant.application.resolve.shapes.chain_text import chain_text
-from sextant.application.resolve.shapes.chains import ChainEnd, chain_ends
+from sextant.application.resolve.shapes.chains import ChainEnd, chain_ends, configuring_calls
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
@@ -226,6 +226,11 @@ def entries(
         builder_calls=frozenset(
             (str(s["owner"]), str(s["name"])) for s in index.sites.values() if s["owner"] in kinds
         ),
+        # The calls the catalog declares `returns_receiver: true` on either walk, which
+        # configure the builder they are called on (ruling 4, spec 2026-10-30): the chain
+        # reader gathers one made on the builder in a statement of its own (`_schedules`).
+        configuring=configuring_calls(trigger_walk, index.sites.values())
+        | configuring_calls(job_walk, index.sites.values()),
         rules=rules,
         job_ends=job_ends,
         # The `build()` calls the two walks ended at, by identity: where a walk from a
@@ -312,6 +317,7 @@ class _Context:
     field_sources: FieldFacts | None
     every_call: frozenset[tuple[str, str]]
     builder_calls: frozenset[tuple[str, str]]
+    configuring: frozenset[tuple[str, str]]
     rules: _JobRules
     job_ends: list[ChainEnd]
     built: frozenset[tuple[str, str]]
@@ -920,7 +926,9 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     with the path it took: every call
     on a `kinds` type that built the value, root first, across returns and helpers and in
     the path's own calling contexts — a helper's parameter is the argument at the call the
-    walk came through, never another caller's."""
+    walk came through, never another caller's. A call the catalog declares
+    `returns_receiver: true`, made on the builder in a statement of its own, is in the
+    chain too (`configuring`, ruling 4)."""
     if _SCHEDULE not in captures:
         return [context.default_schedule]
     position = _position(captures.get(_SCHEDULE), context)
@@ -932,7 +940,12 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     chains = [
         (producer, path)
         for producer, path in producer_paths(
-            context.index, site, slot, context.builder_calls, along_receivers=True
+            context.index,
+            site,
+            slot,
+            context.builder_calls,
+            along_receivers=True,
+            configuring=context.configuring,
         )
         if producer.chain
     ]

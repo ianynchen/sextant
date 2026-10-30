@@ -893,6 +893,7 @@ def producers_of(
     declared: AbstractSet[tuple[str, str]],
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
+    configuring: AbstractSet[tuple[str, str]] = frozenset(),
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -932,6 +933,15 @@ def producers_of(
     answer for a reader that reads the producer's ARGUMENTS as what the value holds, which a
     write through a returned view can change.
 
+    **`configuring` names the calls that return the object they were called on** (ruling 4,
+    spec 2026-10-30), as `(owner, name)` in the site's own spelling. `tb = newTrigger();
+    tb.withIdentity("x"); tb.build()` configures `tb` over three statements, and each such
+    call is the same object handed back, so one made on the value between its producer and
+    its use is not an `escapes`. The chain reader gathers each into `Producer.chain`, in
+    ordinal order, after the chain of the call that produced the value, with what is called
+    on its result in turn (`_Walk._configured_on`). A call after the use never joins: the
+    window `_Walk._through` reads is the same one.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
@@ -941,6 +951,7 @@ def producers_of(
         declared=declared,
         along_receivers=along_receivers,
         past_accessors=past_accessors,
+        configuring=configuring,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -994,6 +1005,7 @@ def producer_paths(
     declared: AbstractSet[tuple[str, str]],
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
+    configuring: AbstractSet[tuple[str, str]] = frozenset(),
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1013,6 +1025,7 @@ def producer_paths(
         declared=declared,
         along_receivers=along_receivers,
         past_accessors=past_accessors,
+        configuring=configuring,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1141,6 +1154,7 @@ class _Walk:
         along_receivers: bool = False,
         past_accessors: Ancestors | None = None,
         which_object: bool = False,
+        configuring: AbstractSet[tuple[str, str]] = frozenset(),
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
     ) -> None:
         self._index = index
@@ -1158,6 +1172,10 @@ class _Walk:
         # The producer-identity reader (`producers_of(..., past_accessors=...)`): an accessor
         # on the value does not open `escapes`. None for every other reader.
         self._past_accessors = past_accessors
+        # The calls that return the object they were called on (ruling 4, spec 2026-10-30),
+        # as `(owner, name)`: one made on the value does not open `escapes`, and the chain
+        # reader gathers it into the chain (`_configured_on`). Empty for every other reader.
+        self._configuring = frozenset(configuring)
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
         self._which_object = which_object
@@ -1910,16 +1928,64 @@ class _Walk:
         **For a producer-identity reader, an ACCESSOR is not in the window** (Quartz fix
         rounds 2-3, 2026-10-29): `producers_of(..., past_accessors=...)` only. `_accessor`
         has the rule and why it is a reader's switch rather than the default.
+
+        **Nor is a call that CONFIGURES the value** (ruling 4, spec 2026-10-30), for a reader
+        that declares which calls do (`configuring`): `_configured_on` has the rule. A chain
+        answered for the value gains those calls after its own, so reading `tb.build()`'s
+        receiver gives the chain `_along` puts `build` after.
         """
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
         produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
-        for ordinal in () if self._which_object else self._index.receivers.get((method, value), ()):
-            if ordinal > produced_at and (used_at is None or ordinal < used_at):
-                if self._accessor((method, ordinal)):
-                    continue
-                return _only(trail, _unresolved(ESCAPES))
-        return self._resolve((_VALUE, method, value), trail, frames)
+        configured = self._configured_on(method, value, produced_at, used_at)
+        if configured is None:
+            return _only(trail, _unresolved(ESCAPES))
+        reached = self._resolve((_VALUE, method, value), trail, frames)
+        if not configured:
+            return reached
+        sites = tuple((method, ordinal) for ordinal in configured)
+        return tuple(
+            (
+                crossed,
+                replace(answer, value=replace(answer.value, chain=(*answer.value.chain, *sites))),
+            )
+            if answer.kind == _PRODUCED and answer.value.chain
+            else (crossed, answer)
+            for crossed, answer in reached
+        )
+
+    def _configured_on(
+        self, method: str, value: int, after: int, used_at: int | None
+    ) -> tuple[int, ...] | None:
+        """The ordinals of the calls made on `value` after `after` and before `used_at`
+        that CONFIGURE it, in order — or None where one of them is neither that nor an
+        accessor, which is `escapes`.
+
+        **A call that returns the object it was called on configures that object** (ruling
+        4, spec 2026-10-30): the reader declared it so (`configuring`), and its result is
+        the same object, so what is called on that result in the window is gathered too,
+        under the same rule. The chain reader appends these to the chain of the call that
+        produced the value (`_through`); for every other reader they only stay out of
+        `escapes`, since which call built the value is unchanged."""
+        if self._which_object:
+            return ()
+        found: list[int] = []
+        for ordinal in self._index.receivers.get((method, value), ()):
+            if ordinal <= after or (used_at is not None and ordinal >= used_at):
+                continue
+            if self._accessor((method, ordinal)):
+                continue
+            row = self._index.sites.get((method, ordinal))
+            if row is None or (row.get("owner"), row["name"]) not in self._configuring:
+                return None
+            found.append(ordinal)
+            result = row.get("result")
+            if result is not None:
+                further = self._configured_on(method, int(str(result)), ordinal, used_at)
+                if further is None:
+                    return None
+                found.extend(further)
+        return tuple(sorted(found))
 
     def _accessor(self, site_key: tuple[str, int]) -> bool:
         """Whether a call made ON a value is an accessor: it takes no argument and hands back

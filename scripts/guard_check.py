@@ -615,8 +615,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                if self._accessor((method, ordinal)):\n"
-                "                    continue\n",
+                find="            if self._accessor((method, ordinal)):\n"
+                "                continue\n",
                 replace="",
             ),
         ),
@@ -6410,6 +6410,23 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="        if _chain_key(next_site) is None or _configures(next_site, context):\n",
                 replace="        if _chain_key(next_site) is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONFIGURING-call-is-not-an-escape": Guard(
+        what="a call the reader declares returns the object it was called on (`configuring`), "
+        "made on a value between its producer and its use, is not `escapes`: the chain reader "
+        "gathers it into the chain, with what is called on its result (ruling 4, spec "
+        "2026-10-30, the backward half)",
+        why="a builder configured in statements of its own, `cb = cronSchedule(c); "
+        "cb.withMisfireHandlingInstructionDoNothing(); tb.withSchedule(cb)`, reads as a value "
+        "something unknown wrote into, so the chain is never found: the schedule loses its "
+        "cron and the row drops to `partial`, for a trigger whose cron the code states",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='            if row is None or (row.get("owner"), row["name"]) not in self._configuring:\n',
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -37,7 +37,7 @@ change in behaviour, so a second consumer can read the same walk.
 """
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -1124,6 +1124,28 @@ def _configures(site: dict[str, Any], context: _ChainContext) -> bool:
         return True
     step = _matching_step(site, context.steps)
     return step is not None and step["returns_receiver"]
+
+
+def configuring_calls(
+    catalog: Catalog, sites: Iterable[Mapping[str, Any]]
+) -> frozenset[tuple[str, str]]:
+    """The `(owner, name)` of each of `sites` that a step or terminal of `catalog` declares
+    `returns_receiver: true`, in the site's own spelling: the set the value walk's chain
+    reader takes as `configuring` (ruling 4, spec 2026-10-30, the backward half). Matched
+    as the forward walk matches a step (`_matching_step`), so the two walks agree on which
+    calls configure a chain."""
+    _, _, steps = _declared_entries(catalog)
+    flagged = [step for step in steps if step["returns_receiver"]]
+    terminals = _terminal_index(catalog.matches.get("terminal", []), catalog)[2]
+    if not flagged and not terminals:
+        return frozenset()
+    methods = {str(step["method"]) for step in flagged}
+    return frozenset(
+        (str(site["owner"]), str(site["name"]))
+        for site in sites
+        if str(site["name"]) in terminals
+        or (str(site["name"]) in methods and _matching_step(dict(site), flagged) is not None)
+    )
 
 
 def _receiver_of(site: dict[str, Any], extension_steps: dict[str, list[dict[str, Any]]]) -> Any:
