@@ -3,7 +3,8 @@
 -- removes the row after it was minted.
 --
 -- Nothing is decided here. Which rows move, and where to, is decided by the pass that just
--- ran (`resolve/path_prefix.py`, `resolve/protocol_hint.py`, `resolve/self_calls.py`); this
+-- ran (`resolve/endpoints.py` after the borrowed-row drop, `resolve/path_prefix.py`,
+-- `resolve/protocol_hint.py`, `resolve/self_calls.py`); this
 -- file only brings the attached entries back into line with the rows as they now stand. No
 -- parameters, so it is the same statement after every one of them — a pass that rewrites a
 -- row's identity runs it rather than restating, column by column, what it moved.
@@ -15,8 +16,8 @@
 -- nothing moved costs nothing.
 --
 -- **An entry whose row is gone goes with it.** A row the self-call pass removed is not an
--- outbound call, and an entry stating what that call sends would describe a row no reader can
--- find. An entry bound to NO row (`row_id` NULL: nothing matched when it was written) is left
+-- outbound call, nor is a reactor sibling's row the borrowed-row drop removed, and an entry
+-- stating what that call sends would describe a row no reader can find. An entry bound to NO row (`row_id` NULL: nothing matched when it was written) is left
 -- as it was — it never followed a row, so no pass can have moved it.
 UPDATE endpoint_metadata m
 SET protocol  = e.protocol,
