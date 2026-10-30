@@ -1720,7 +1720,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            conditions = _condition_entries(endpoint.get("caller"), beans)\n',
+                find="            conditions = _condition_entries(\n"
+                '                endpoint.get("caller"), beans, endpoint.get("served_by")\n'
+                "            )\n",
                 replace="            conditions = []  # guard disabled by scripts/guard_check.py\n",
             ),
             Edit(
@@ -3756,6 +3758,22 @@ GUARDS: dict[str, Guard] = {
                 path=_EFFECTIVE_ANNOTATIONS,
                 find="    if inherit_unoverridden:\n        rows.extend(_unoverridden_rows(",
                 replace="    if False:  # guard disabled\n        rows.extend(_unoverridden_rows(",
+            ),
+        ),
+    ),
+    "conditions.a-row-is-conditioned-by-the-class-that-SERVES-it": Guard(
+        what="an endpoint row's bean is its code's own where the code is a bean, and otherwise "
+        "the class serving the row (`endpoints.served_by`), never the handler's enclosing class",
+        why="Ruling 8, fix round 1. Spring reads a bean's conditions off the class it registers, "
+        "and `@Conditional` is not `@Inherited`. A mapping `OrderController` inherits runs "
+        "`CrudController`'s method, so reading the handler's class lost `OrderController`'s "
+        "`@ConditionalOnProperty` and published the row as present everywhere; and a subclass "
+        "of a conditional controller took the base's condition, absent where it is served",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/schema.sql",
+                find="    JOIN beans served ON served.bean = coalesce(e.served_by, s.enclosing)\n",
+                replace="    JOIN beans served ON served.bean = s.enclosing  -- guard disabled\n",
             ),
         ),
     ),

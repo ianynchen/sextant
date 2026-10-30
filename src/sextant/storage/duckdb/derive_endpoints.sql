@@ -1704,6 +1704,10 @@ derived AS (
         -- REST Client's `@RegisterRestClient` row correctly.
         coalesce(pr.peer, p.peer) AS peer,
         s.signature AS handler_signature,
+        -- The class serving the row: the type the prefix and the gate below are
+        -- joined on, for the same reason — an inherited row runs its base's
+        -- method and exists where its subclass's bean does (ruling 8).
+        coalesce(m.gate_type, s.enclosing) AS served_by,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
         -- derives used to be stamped `resolved` unconditionally, which is a
         -- claim about the ADDRESS that the address itself can contradict: a
@@ -1860,11 +1864,13 @@ derived AS (
 -- since `handler` (or `caller`) is one of the grouped columns, not an
 -- aggregate. `GROUP BY ALL` groups on every non-aggregated select-list
 -- column, verified empirically against the CASE aggregates below; listed
--- explicitly would be these same eleven: protocol, direction, method, path,
--- handler, caller, peer, handler_signature, resolution, evidence, catalog_id.
+-- explicitly would be these same twelve: protocol, direction, method, path,
+-- handler, caller, peer, handler_signature, resolution, evidence, catalog_id,
+-- served_by. `served_by` follows `handler` for every row but an inherited one,
+-- so it splits nothing a handler did not already split.
 unioned AS (
     SELECT protocol, direction, method, path, handler, caller, peer,
-           handler_signature, resolution, evidence, catalog_id,
+           handler_signature, resolution, evidence, catalog_id, served_by,
            CASE WHEN count(consumes_list) = 0 THEN NULL
                 ELSE to_json(list_sort(list_distinct(flatten(list(consumes_list)
                      FILTER (WHERE consumes_list IS NOT NULL))))) END AS consumes,
@@ -1875,7 +1881,7 @@ unioned AS (
     GROUP BY ALL
 )
 SELECT protocol, direction, method, path, handler, caller, peer,
-       handler_signature, resolution, evidence, catalog_id, consumes, produces
+       handler_signature, resolution, evidence, catalog_id, consumes, produces, served_by
 FROM unioned d
 -- THE ADDRESSES-NOTHING GATE (2O Task 7 Step 4; rewritten by the principles
 -- sweep's mechanism 3, §4 and §7.7). An empty address is not a destination:

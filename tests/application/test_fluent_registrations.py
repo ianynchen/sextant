@@ -221,6 +221,7 @@ def test_an_inbound_chain_carries_the_lambda_it_was_handed_as_its_handler(tmp_pa
         "produces": None,
         "format": None,
         "format_resolution": None,
+        "served_by": None,
     }
 
 

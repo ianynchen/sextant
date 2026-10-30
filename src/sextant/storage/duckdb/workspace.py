@@ -2246,8 +2246,12 @@ class DuckDbWorkspace:
         self._connection = duckdb.connect(str(path))
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._drop_tables_the_schema_made_views()
-        self._connection.execute(schema)
+        # BEFORE the schema runs, not after: the schema's views select the tables'
+        # columns, and `CREATE OR REPLACE VIEW` binds at creation — a view naming a
+        # column an older workspace's table lacks (`endpoint_conditions` reading
+        # `endpoints.served_by`) refused to be created at all.
         self._add_columns_the_schema_has_gained(schema)
+        self._connection.execute(schema)
         # Read HERE, while every fact view is still the form `schema.sql` just gave
         # it: once `_materialize_facts` has re-pointed a view at its table, the
         # catalog holds `SELECT * FROM fact_<view>` and the defining SELECT is gone
@@ -2321,11 +2325,23 @@ class DuckDbWorkspace:
         try:
             reference.execute(schema)
             expected = reference.execute(
-                "SELECT table_name, column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema = 'main' ORDER BY table_name, ordinal_position"
+                "SELECT c.table_name, c.column_name, c.data_type "
+                "FROM information_schema.columns c JOIN information_schema.tables t "
+                "ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+                "WHERE c.table_schema = 'main' AND t.table_type = 'BASE TABLE' "
+                "ORDER BY c.table_name, c.ordinal_position"
             ).fetchall()
         finally:
             reference.close()
+        # Only the tables this file already holds: it runs before the schema does, and
+        # a table the file lacks is created whole by the schema's own statement.
+        tables = {
+            str(table)
+            for (table,) in self._connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main' AND table_type = 'BASE TABLE'"
+            ).fetchall()
+        }
         held = {
             (str(table), str(column))
             for table, column in self._connection.execute(
@@ -2334,7 +2350,7 @@ class DuckDbWorkspace:
             ).fetchall()
         }
         for table, column, data_type in expected:
-            if (str(table), str(column)) in held:
+            if str(table) not in tables or (str(table), str(column)) in held:
                 continue
             self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {data_type}")
 

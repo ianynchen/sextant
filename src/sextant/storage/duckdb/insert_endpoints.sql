@@ -42,16 +42,17 @@
 -- column so two runs over the same facts number the rows identically.
 INSERT INTO endpoints (
     row_id, protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence, catalog_id, consumes, produces
+    handler_signature, resolution, evidence, catalog_id, consumes, produces, served_by
 )
 SELECT (SELECT coalesce(max(row_id), 0) FROM endpoints)
            + row_number() OVER (
                ORDER BY d.protocol, d.direction, d.method, d.path, d.handler, d.caller, d.peer,
                         d.resolution, d.evidence, d.catalog_id, d.consumes, d.produces,
-                        d.handler_signature::VARCHAR
+                        d.handler_signature::VARCHAR, d.served_by
            ),
        d.protocol, d.direction, d.method, d.path, d.handler, d.caller, d.peer,
-       d.handler_signature, d.resolution, d.evidence, d.catalog_id, d.consumes, d.produces
+       d.handler_signature, d.resolution, d.evidence, d.catalog_id, d.consumes, d.produces,
+       d.served_by
 FROM (
     SELECT c.*
     FROM endpoint_candidates c

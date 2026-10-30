@@ -62,7 +62,17 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- the two columns mean, whether or not any writer currently separates
     -- them.
     format            TEXT,
-    format_resolution TEXT
+    format_resolution TEXT,
+    -- The class that SERVES this row (ruling 8 of the 2026-10-30 object-identity
+    -- design): the type whose prefix and gate an annotation-derived row was
+    -- composed with — the handler's own class for an ordinary mapping, and the
+    -- concrete subclass for a mapping it inherits without overriding, or for an
+    -- inherited exposed member (`A-M15`), whose handler is declared in a base.
+    -- The row exists where this class's bean does, so `endpoint_conditions` reads
+    -- the bean here. NULL from an engine that composes no type with a row, which
+    -- then falls back to the handler's (or caller's) enclosing class. Last, so a
+    -- workspace migrated by adding columns has the same column order.
+    served_by         TEXT
 );
 
 -- Pre-declared for the same reason as `endpoints` above: a scanner too weak
@@ -1362,12 +1372,35 @@ WHERE own.bean IS NULL;
 -- EXISTS in an environment is `bean_presence`'s answer (OR across routes), never "every row
 -- here holds". Condition-less route rows (`kind` NULL) are no condition and are left out.
 -- Last in this file because a view binds at creation, and `symbols` is defined above.
+--
+-- **The bean is the code's own where the code is a bean, and otherwise the class SERVING
+-- the row** (ruling 8 of the 2026-10-30 object-identity design, fix round 1) — not
+-- `symbol_beans`' owner class. Spring reads a bean's conditions off the class it registers,
+-- and `@Conditional` is not `@Inherited`: a mapping `OrderController` inherits runs
+-- `CrudController`'s method, so reading the handler's enclosing class gave that row the
+-- base's conditions (none, or the wrong ones) and never `OrderController`'s. `served_by` is
+-- that class; NULL from an engine composing none, which falls back to the enclosing class
+-- exactly as `symbol_beans` reads it. Two equi-joins, never one `OR` join, for the reason
+-- `symbol_beans` gives (§8.7): the own-symbol arm, then the serving-class arm anti-joined
+-- against it.
 CREATE OR REPLACE VIEW endpoint_conditions AS
+WITH beans AS (SELECT DISTINCT bean FROM bean_conditions),
+endpoint_beans AS (
+    SELECT e.protocol, e.direction, e.method, e.path, e.handler, e.caller, own.bean
+    FROM endpoints e
+    JOIN beans own ON own.bean = coalesce(e.handler, e.caller)
+    UNION ALL
+    SELECT e.protocol, e.direction, e.method, e.path, e.handler, e.caller, served.bean
+    FROM endpoints e
+    LEFT JOIN symbols s ON s.symbol = coalesce(e.handler, e.caller)
+    JOIN beans served ON served.bean = coalesce(e.served_by, s.enclosing)
+    LEFT JOIN beans own ON own.bean = coalesce(e.handler, e.caller)
+    WHERE own.bean IS NULL
+)
 SELECT DISTINCT e.protocol, e.direction, e.method, e.path, e.handler, b.kind, b.expression,
-       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind, m.bean
-FROM endpoints e
-JOIN symbol_beans m ON m.symbol = coalesce(e.handler, e.caller)
-JOIN bean_conditions b ON b.bean = m.bean
+       b.environment, b.holds, b.resolution, b.evidence, e.caller, b.via, b.bean_kind, e.bean
+FROM endpoint_beans e
+JOIN bean_conditions b ON b.bean = e.bean
 WHERE b.kind IS NOT NULL;
 
 -- Where each conditional bean EXISTS, per environment (ruled 2026-10-22): a class exists

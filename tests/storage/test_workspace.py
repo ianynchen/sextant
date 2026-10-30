@@ -3827,3 +3827,29 @@ def test_a_graph_missing_a_table_the_queries_read_is_unreadable_by_name(tmp_path
     (bundle / "graph" / "shapes.parquet").unlink()
     with pytest.raises(NotABoundarySource, match="shapes"):
         open_read_only(bundle)
+
+
+def test_a_workspace_whose_endpoints_predate_a_column_a_view_reads_still_opens(tmp_path: Path):
+    """`endpoint_conditions` selects `endpoints.served_by` (ruling 8), and a view binds when
+    it is created. A workspace written before the column existed refused to open at all —
+    `Table "e" does not have a column named "served_by"` — because the schema's views ran
+    before the column was added. The column is added first now, and arrives empty, for the
+    run that re-derives the table to fill."""
+    path = tmp_path / "ws.duckdb"
+    DuckDbWorkspace(path).close()
+    stale = duckdb.connect(str(path))
+    stale.execute("DROP VIEW endpoint_conditions")
+    stale.execute("ALTER TABLE endpoints DROP COLUMN served_by")
+    stale.close()
+
+    workspace = DuckDbWorkspace(path)
+    try:
+        assert workspace.query("endpoint_conditions") == []
+        assert "served_by" in {
+            str(name)
+            for (name,) in workspace._connection.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'endpoints'"
+            ).fetchall()
+        }
+    finally:
+        workspace.close()

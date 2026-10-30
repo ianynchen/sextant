@@ -376,3 +376,132 @@ def _rows_through_spring_web(tmp_path: Path, facts: Path) -> list[dict[str, obje
     rows = workspace.query("endpoint_conditions")
     workspace.close()
     return rows
+
+
+# --- a row's bean is the class that SERVES it (ruling 8, fix round 1) --------------------
+#
+# Spring reads a bean's conditions off the class it registers, and `@Conditional` is not
+# `@Inherited`. A mapping a controller inherits runs code declared in its base, so the
+# handler's enclosing class is the wrong place to look: the row exists exactly where the
+# controller serving it does.
+
+
+def _class_fact(
+    owner: str,
+    *,
+    superclass: str | None = None,
+    abstract: bool = False,
+    annotations: list[AnnotationUse] = (),  # type: ignore[assignment]
+) -> list[object]:
+    return [
+        SymbolFact(
+            document_id=owner,
+            symbol=_MODULE + owner,
+            construct_kind=ConstructKind.CLASS,
+            modifiers={"abstract": abstract, "final": False},
+            **({"superclass": _MODULE + superclass} if superclass else {}),
+        ),
+        *[
+            AnnotationFact(document_id=owner, target=_MODULE + owner, retention="runtime", use=u)
+            for u in annotations
+        ],
+    ]
+
+
+def _mapped_method(owner: str, name: str, path: str) -> list[object]:
+    symbol = _MODULE + owner + f"{name}(sig_00000010)."
+    return [
+        SymbolFact(
+            document_id=owner,
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            modifiers={"static": False, "synthetic": False, "abstract": False},
+        ),
+        AnnotationFact(
+            document_id=owner,
+            target=symbol,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/GetMapping#",
+                args={"value": [path]},
+            ),
+        ),
+    ]
+
+
+_REST = AnnotationUse(annotation="org/springframework/web/bind/annotation/RestController#", args={})
+_PROD = AnnotationUse(
+    annotation="org/springframework/context/annotation/Profile#", args={"value": ["prod"]}
+)
+
+
+def _prefix(path: str) -> AnnotationUse:
+    return AnnotationUse(
+        annotation="org/springframework/web/bind/annotation/RequestMapping#",
+        args={"value": [path]},
+    )
+
+
+def _conditions_by_path(tmp_path: Path, classes: list[list[object]]) -> dict[str, set[str]]:
+    """Each derived inbound path, with the condition kinds `endpoint_conditions` gives it."""
+    facts = tmp_path / "facts"
+    for index, class_facts in enumerate(classes):
+        owner = str(class_facts[0].document_id)  # type: ignore[attr-defined]
+        write_fact_file(
+            facts / f"c{index}.jsonl",
+            _document(owner, owner.rstrip("#") + ".java", "java", "sextant-jvm-extractor"),
+            class_facts,
+        )
+    _config(facts, "application.yml", {})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
+    resolve_config(workspace, [spring])
+    workspace.derive("bean_conditions_reset")
+    record_endpoint_conditions(workspace, [spring])
+    paths: dict[str, set[str]] = {str(r["path"]): set() for r in workspace.query("endpoints")}
+    for row in workspace.query("endpoint_conditions"):
+        paths.setdefault(str(row["path"]), set()).add(str(row["kind"]))
+    workspace.close()
+    return paths
+
+
+@pytest.mark.pins("conditions.a-row-is-conditioned-by-the-class-that-SERVES-it")
+def test_a_subclass_of_a_conditional_controller_does_not_take_its_condition(tmp_path: Path):
+    """`BaseController` (`/base`, `@Profile("prod")`) maps `list`; `SubController`
+    (`/sub`, no condition) extends it and overrides nothing. CP-58 measured both served;
+    `/sub/list` exists wherever `SubController` does, which is everywhere — reading the
+    handler's own class gave it the base's profile."""
+    base = "com/acme/orders/BaseController#"
+    sub = "com/acme/orders/SubController#"
+    paths = _conditions_by_path(
+        tmp_path,
+        [
+            [
+                *_class_fact(base, annotations=[_REST, _prefix("/base"), _PROD]),
+                *_mapped_method(base, "list", "/list"),
+            ],
+            _class_fact(sub, superclass=base, annotations=[_REST, _prefix("/sub")]),
+        ],
+    )
+
+    assert paths == {"/base/list": {"profile"}, "/sub/list": set()}
+
+
+def test_an_inherited_row_takes_the_condition_of_the_controller_serving_it(tmp_path: Path):
+    """The other direction: an unconditional abstract base, and `OrderController` under
+    `@Profile("prod")` inheriting its mapping. `/orders/list` exists only where
+    `OrderController` does; read through the base it read as present everywhere."""
+    crud = "com/acme/orders/CrudController#"
+    orders = "com/acme/orders/OrderController#"
+    paths = _conditions_by_path(
+        tmp_path,
+        [
+            [*_class_fact(crud, abstract=True), *_mapped_method(crud, "list", "/list")],
+            _class_fact(orders, superclass=crud, annotations=[_REST, _prefix("/orders"), _PROD]),
+        ],
+    )
+
+    assert paths == {"/orders/list": {"profile"}}

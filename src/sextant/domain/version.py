@@ -140,6 +140,16 @@ SEXTANT_VERSION = version("sextant")
 #             one resolve and the export leaves it out, so the bundle's columns are
 #             unchanged; a workspace of the older vintage has rows with no id, which no
 #             pass could find again, so it is refused and re-analysed.
+#     12      `endpoints` gains `served_by`: the class that serves a row — the type its
+#             prefix and gate were composed with, which for a mapping a controller
+#             inherits without overriding (and an inherited exposed member) is the
+#             subclass, not the base declaring the handler. `endpoint_conditions` and the
+#             documents read the row's bean there, because Spring reads a bean's
+#             conditions off the class it registers and `@Conditional` is not
+#             `@Inherited` (spec 2026-10-30-object-identity, ruling 8). The export carries
+#             the column — it names a class, which means something outside the run. A
+#             workspace of the older vintage has no serving class, and would read every
+#             inherited row's conditions off the base, so it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -157,5 +167,5 @@ SEXTANT_VERSION = version("sextant")
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 11
+GRAPH_SCHEMA_VERSION = 12
 BOUNDARY_VOCABULARY_VERSION = 3

@@ -1970,15 +1970,21 @@ _INHERITED_PACKAGE = "com/acme/inherited/"
 
 
 @pytest.fixture(scope="module")
-def inherited_rows_e2e(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """`fixtures/orders-inherited`, analysed once: every inbound HTTP row, whole."""
+def inherited_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`fixtures/orders-inherited`, analysed once."""
     workspace_dir = tmp_path_factory.mktemp("inherited")
     compile_fixture(INHERITED)
     result = CliRunner().invoke(
         cli, ["module", "analyze", str(INHERITED), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    return workspace_dir / "workspace.duckdb"
+
+
+@pytest.fixture(scope="module")
+def inherited_rows_e2e(inherited_workspace: Path) -> list[dict]:
+    """Every inbound HTTP row of the one `orders-inherited` analysis, whole."""
+    workspace = DuckDbWorkspace(inherited_workspace)
     try:
         return [
             {
@@ -2018,3 +2024,25 @@ def test_inherited_and_overridden_mappings_each_take_their_own_subclass_prefix(
     # The two rows sharing `create` stay two rows, each with its own identity.
     creates = [r for r in inherited_rows_e2e if r["handler"] == CRUD_CREATE]
     assert len({r["row_id"] for r in creates}) == 2
+
+
+def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
+    inherited_workspace: Path,
+):
+    """Ruling 8, fix round 1. `OrderController` is `@ConditionalOnProperty(name =
+    "orders.enabled", havingValue = "true")`; the rows it inherits run `CrudController`'s
+    code, and exist exactly where `OrderController` does. Read through the handler's
+    class they carried no condition at all. `ProductController`'s rows, one inherited and
+    one its own, carry none."""
+    workspace = DuckDbWorkspace(inherited_workspace)
+    try:
+        conditioned = {
+            (str(row["method"]), str(row["path"]), str(row["kind"]))
+            for row in workspace.query("endpoint_conditions")
+        }
+    finally:
+        workspace.close()
+
+    assert ("GET", "/orders/list", "property") in conditioned
+    assert ("POST", "/orders", "property") in conditioned
+    assert {path for _, path, _ in conditioned if path.startswith("/products")} == set()

@@ -2263,6 +2263,44 @@ def test_a_public_method_inherited_from_an_annotated_base_is_an_exposed_member(
     ]
 
 
+def test_an_inherited_member_takes_the_conditions_of_the_class_that_serves_it(
+    tmp_path: Path,
+):
+    """Ruling 8, fix round 1. `{urn:acme}refund` is the BASE's method served by the
+    gated subclass (`gate_type`), so it exists wherever `MemberService` does, and
+    `{urn:base}refund` wherever the base does. The bean was read off the handler's
+    enclosing class, which gave the subclass's row the base's conditions and none of
+    its own."""
+    _member_facts(tmp_path / "facts", True)
+    _member_base_facts(tmp_path / "facts", "public", True, False)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [_member_catalog(**_qname_mapping(members="public_methods"))],
+        capabilities={"annotation_args"},
+    )
+    for bean, profile in (
+        ("com/acme/rpc/MemberService#", "sub"),
+        ("com/acme/rpc/AbstractMemberService#", "base"),
+    ):
+        workspace._connection.execute(
+            "INSERT INTO bean_conditions VALUES (?, 'class', NULL, 'profile', ?, 'default', "
+            "'false', 'resolved', 'compiler')",
+            [bean, json.dumps({"expressions": [profile]})],
+        )
+    served = {str(r["path"]): r["served_by"] for r in workspace.query("endpoints")}
+    conditions = {
+        (str(r["path"]), str(r["expression"])) for r in workspace.query("endpoint_conditions")
+    }
+    workspace.close()
+
+    assert served["{urn:acme}refund"] == "com/acme/rpc/MemberService#"
+    assert ("{urn:acme}refund", '{"expressions": ["sub"]}') in conditions
+    assert ("{urn:acme}refund", '{"expressions": ["base"]}') not in conditions
+    assert ("{urn:base}refund", '{"expressions": ["base"]}') in conditions
+
+
 def test_a_public_method_inherited_from_an_unannotated_base_is_not_an_exposed_member(
     tmp_path: Path,
 ):

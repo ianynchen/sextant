@@ -1682,10 +1682,12 @@ mapping:
     enclosing)` the member rule uses, so a class the catalog's gate does not admit derives
     nothing. One inherited method under two controllers is two rows with one handler, told
     apart by their paths and their own `row_id`s.
-  - **Boundary: bean conditions read the handler's class.** `endpoint_conditions` finds a
-    row's bean through its handler, and an inherited row's handler lives in the base — so a
-    condition written on the SUBCLASS (`@ConditionalOnProperty` on `OrderController`) does
-    not reach that subclass's inherited rows.
+  - **The conditions are the serving class's.** The row records its serving class in
+    `endpoints.served_by` ([D01](D01-graph-schema.md)), and `endpoint_conditions` reads the
+    bean there (the handler's own where the handler is a bean): Spring reads conditions off
+    the class it registers, and `@Conditional` is not `@Inherited`. So `OrderController`'s
+    `@ConditionalOnProperty` reaches its inherited rows, and a subclass of a conditional
+    controller does not take the base's condition.
 
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
