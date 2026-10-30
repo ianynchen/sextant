@@ -2494,6 +2494,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.an-object-read-in-progress-is-never-asked-again": Guard(
+        what="a field read placed on an object is in progress in every walk it starts, the "
+        "receiver's and each setter call's, so a walk that reaches it again answers it as "
+        "before ruling 1",
+        why="review of ruling 1, Critical: `a.getNext().setNext(new Row())` made the setter "
+        "call's object walk read `next` again through another getter, forever, and a cycle "
+        "through two fields did the same: a RecursionError, not an answer",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        asking = self._asking | {(symbol, site)}\n",
+                replace="        asking = self._asking  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.an-object-a-LIBRARY-call-hands-back-is-not-from-outside": Guard(
         what="the unseen-object rule declares every unscanned call to the producer reader, "
         "so an object a library call hands back ends at that call, not at `external`",

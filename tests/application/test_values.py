@@ -3641,6 +3641,13 @@ _SETS = _TAKES_STRING
 _GETS = _MAKES_STRING
 # `make`'s consuming sites.
 _ONE_A, _PAIR_A, _PAIR_AB = 7, 10, 13
+# Fix round 1: a setter called on an object read through a getter of the same field, a cycle
+# through two fields, and a writing method nothing here calls.
+_LINK = _PKG + "Link#"
+_DEFAULTED = _PKG + "Defaulted#"
+_LOOP = _symbol(_OBJECTS, "loop", "()V")
+_CYCLE = _symbol(_OBJECTS, "cycle", "()V")
+_UNCALLED = _symbol(_OBJECTS, "uncalled", "()V")
 
 
 def _object_facts() -> list[Fact]:
@@ -3806,6 +3813,66 @@ def _object_facts() -> list[Fact]:
         _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
         _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
     ]
+    return facts + _cycle_facts()
+
+
+def _cycle_facts() -> list[Fact]:
+    """Reads whose setter calls are made on objects read through the same fields."""
+    next_of = (_ROW, "setNext", _SETS)
+    get_next = (_ROW, "getNext", _GETS)
+    facts: list[Fact] = [_type(_LINK), _type(_DEFAULTED)]
+    facts += _writes(_ROW, "setNext", _SETS, "next") + _getter(_ROW, "getNext", "next")
+    for owner in (_LINK, _DEFAULTED):
+        facts += [
+            SymbolFact(
+                document_id="doc_values",
+                symbol=_symbol(owner, "<init>", "()V"),
+                construct_kind=ConstructKind.CONSTRUCTOR,
+                enclosing=_MODULE + owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+                visibility="public",
+            ),
+            _void(owner, "<init>", "()V"),
+        ]
+    for field in ("a", "b"):
+        facts += _writes(_LINK, "set" + field.upper(), _SETS, field)
+        facts += _getter(_LINK, "get" + field.upper(), field)
+    # `useDefault() { cron = "x"; }`, which nothing here calls.
+    facts += _writes(_DEFAULTED, "useDefault", "()V", "cron", "x")
+    facts += _writes(_DEFAULTED, "setCron", _SETS, "cron") + _getter(_DEFAULTED, "getCron", "cron")
+    for method in ("loop", "cycle", "uncalled"):
+        facts += [_declared(_OBJECTS, method, "()V"), _void(_OBJECTS, method, "()V")]
+    # `Row a = new Row(); Row b = new Row(); a.setNext(b); a.getNext().setNext(new Row());
+    # one(a.getNext());`
+    facts += [
+        _new(_LOOP, 0, _ROW, 1),
+        _new(_LOOP, 1, _ROW, 2),
+        _call(_LOOP, 2, next_of, 1, arguments=_results(2)),
+        _call(_LOOP, 3, get_next, 1, result=3),
+        _new(_LOOP, 4, _ROW, 4),
+        _call(_LOOP, 5, next_of, 3, arguments=_results(4)),
+        _call(_LOOP, 6, get_next, 1, result=5),
+        _call(_LOOP, 7, _ONE_TARGET, None, arguments=_results(5)),
+    ]
+    # `Link x = new Link(); Link y = new Link(); x.getA().setB("B1"); y.getB().setA("A1");
+    # one(x.getA());`
+    facts += [
+        _new(_CYCLE, 0, _LINK, 1),
+        _new(_CYCLE, 1, _LINK, 2),
+        _call(_CYCLE, 2, (_LINK, "getA", _GETS), 1, result=3),
+        _call(_CYCLE, 3, (_LINK, "setB", _SETS), 3, arguments=_string("B1")),
+        _call(_CYCLE, 4, (_LINK, "getB", _GETS), 2, result=5),
+        _call(_CYCLE, 5, (_LINK, "setA", _SETS), 5, arguments=_string("A1")),
+        _call(_CYCLE, 6, (_LINK, "getA", _GETS), 1, result=7),
+        _call(_CYCLE, 7, _ONE_TARGET, None, arguments=_results(7)),
+    ]
+    # `Defaulted d = new Defaulted(); d.setCron("Y"); one(d.getCron());`
+    facts += [
+        _new(_UNCALLED, 0, _DEFAULTED, 1),
+        _call(_UNCALLED, 1, (_DEFAULTED, "setCron", _SETS), 1, arguments=_string("Y")),
+        _call(_UNCALLED, 2, (_DEFAULTED, "getCron", _GETS), 1, result=70),
+        _call(_UNCALLED, 3, _ONE_TARGET, None, arguments=_results(70)),
+    ]
     return facts
 
 
@@ -3878,6 +3945,37 @@ def test_two_objects_of_one_class_read_in_one_call_each_keep_their_own_value(obj
     """`pair(a.getCron(), b.getCron())`: two objects of one class are two objects. The pair is
     `(A, B)` and nothing else, and the site keeps its slots."""
     assert _pairs(objects, _MAKE, _PAIR_AB) == [("A", "B")]
+
+
+@pytest.mark.pins("values.an-object-read-in-progress-is-never-asked-again")
+def test_a_setter_called_on_an_object_read_through_the_same_field_terminates(objects):
+    """Fix round 1, Critical: `a.getNext().setNext(new Row())` is a setter of `next` called on
+    an object read through a getter of `next`, so the setter call's object walk reads `next`
+    again. Without the read in progress threaded into every walk it starts, this recursed
+    until the stack ran out. `a`'s next is `b`, an object the walk cannot read as a value; the
+    second `setNext` was made on `b`, not on `a`, and is not `a`'s."""
+    assert _values_and_reasons(objects, _LOOP, 7) == [("None", "not_readable")]
+
+
+@pytest.mark.pins("values.an-object-read-in-progress-is-never-asked-again")
+def test_a_cycle_through_two_fields_terminates(objects):
+    """`x.getA().setB(…)` and `y.getB().setA(…)`: reading `a` asks `b`'s setter calls, whose
+    object is read through `a`, whose setter calls are read through `b`. The read in progress
+    answers as before ruling 1 when it is reached again. `setA` was called on an object the
+    walk cannot place, so `A1` is possible for `x` and inexact."""
+    [binding] = _bindings(objects, _CYCLE, 7)
+    assert (binding.slots[0].value, binding.slots[0].inexact) == ("A1", True)
+
+
+def test_a_write_by_a_method_nothing_here_calls_is_possible_and_inexact(objects):
+    """`useDefault()` writes `x` and nothing here calls it: something outside what was scanned
+    may, on any object, so `x` stays for `d`, inexact, beside the exact `Y` set on `d`."""
+    answers = {
+        binding.slots[0].value: binding.slots[0] for binding in _bindings(objects, _UNCALLED, 3)
+    }
+    assert sorted(answers) == ["Y", "x"]
+    assert answers["x"].inexact
+    assert not answers["Y"].inexact
 
 
 _FETCHER = _PKG + "Fetcher#"

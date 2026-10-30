@@ -1146,8 +1146,10 @@ class _Walk:
         # rather than recurse.
         self._asking = asking
         # Per field: each call of a method writing it, with the objects that call was made on
-        # (`_Walk._setter_calls_of`). Built once per field per walk.
-        self._setter_calls: dict[str, tuple[_SetterCall, ...]] = {}
+        # (`_Walk._setter_calls_of`), per field and reads in progress.
+        self._setter_calls: dict[
+            tuple[str, frozenset[tuple[str, tuple[str, int]]]], tuple[_SetterCall, ...]
+        ] = {}
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -2726,13 +2728,18 @@ class _Walk:
         owner = owner_of(symbol)
         if owner is None or (symbol, site) in self._asking:
             return None
+        # **This read is in progress in every walk it starts**, the receiver's and each
+        # setter call's: a setter called on an object read through a getter of the same field
+        # (`a.getNext().setNext(…)`), or a cycle through two fields, reaches this read again,
+        # and the walk that would ask it answers as it did before ruling 1 instead.
+        asking = self._asking | {(symbol, site)}
         outer = frames[:-1]
-        read = self._objects(symbol, site, outer)
+        read = self._objects(symbol, site, outer, asking)
         if not read or any(built is None for built, _, _ in read):
             return None
         receiver = self._receiver_of(self._index.sites[site], outer)
         groups = self._writes_by(symbol)
-        calls = self._setter_calls_of(symbol)
+        calls = self._setter_calls_of(symbol, asking)
         reached: list[_Reached] = []
         for built, crossed, entered in read:
             assert built is not None
@@ -2762,8 +2769,11 @@ class _Walk:
                     )
                     continue
                 if writer not in self._index.called_at:
+                    # Called by nothing here, so by something outside what was scanned, on
+                    # an object nothing says: what a call on an unplaced object writes.
                     reached.extend(
-                        self._written(
+                        (path, replace(answer, inexact=True))
+                        for path, answer in self._written(
                             symbol, writer, "-", writes, on_object, receiver, frames, None
                         )
                     )
@@ -2831,21 +2841,29 @@ class _Walk:
             held = ("field", row.get("receiver_field"))
         return (caller, _frame_of(frames, caller), held)
 
-    def _objects(self, symbol: str, site: tuple[str, int], frames: "_Frames") -> tuple["_End", ...]:
+    def _objects(
+        self,
+        symbol: str,
+        site: tuple[str, int],
+        frames: "_Frames",
+        asking: frozenset[tuple[str, tuple[str, int]]],
+    ) -> tuple["_End", ...]:
         """Which constructions of the type declaring `symbol` the receiver of `site` can be:
         one end per path, the construction or None where the path ends anywhere else.
 
         The receiver is followed in `frames`, so a receiver that is a parameter of a helper
         the walk descended into is the argument at the call it came through. Every call
         made on the object is let past (`which_object`): a call on an object does not change
-        which `new` built it, and the setter calls this rule is about are such calls."""
+        which `new` built it, and the setter calls this rule is about are such calls.
+
+        `asking` is every object read in progress, the one this serves included."""
         owner = owner_of(symbol)
         declared = (str(owner), "<init>")
         walk = _Walk(
             self._index,
             declared=frozenset({declared}),
             which_object=True,
-            asking=self._asking | {(symbol, site)},
+            asking=asking,
         )
         ends: list[_End] = []
         for crossed, answer in walk._of_site(self._index.sites[site], RECEIVER, (), frames):
@@ -2877,12 +2895,17 @@ class _Walk:
             for writer, (written, constants, produced) in groups.items()
         }
 
-    def _setter_calls_of(self, symbol: str) -> tuple["_SetterCall", ...]:
+    def _setter_calls_of(
+        self, symbol: str, asking: frozenset[tuple[str, tuple[str, int]]]
+    ) -> tuple["_SetterCall", ...]:
         """Every call of a method other than a constructor that writes `symbol`, with the
-        objects it was made on — once per field per walk (GUIDELINES §8.7): the object walks
-        are bounded by the calls of that field's writers, and every read of the field shares
-        them."""
-        cached = self._setter_calls.get(symbol)
+        objects it was made on — once per field and reads in progress per walk (GUIDELINES
+        §8.7): the object walks are bounded by the calls of that field's writers, and every
+        read of the field under the same reads in progress shares them. Keyed on `asking`
+        too, because what a call's object walk answers depends on which reads it may not
+        ask again."""
+        key = (symbol, asking)
+        cached = self._setter_calls.get(key)
         if cached is not None:
             return cached
         writing = sorted(
@@ -2894,9 +2917,9 @@ class _Walk:
         for writer in writing:
             for call in self._index.called_at.get(writer, ()):
                 if call in self._index.sites:
-                    calls.append((writer, call, self._objects(symbol, call, ())))
+                    calls.append((writer, call, self._objects(symbol, call, (), asking)))
         found = tuple(calls)
-        self._setter_calls[symbol] = found
+        self._setter_calls[key] = found
         return found
 
 
