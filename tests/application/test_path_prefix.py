@@ -24,6 +24,11 @@ from sextant.application.resolve.path_prefix import (
     apply_path_prefixes,
 )
 from sextant.application.resolve.values import ValueIndex
+from sextant.domain.closed_sets import OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import Document, ModuleFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
@@ -328,7 +333,7 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
     `/shop/x`, and the entry moves with it: it is bound to the row's `row_id` when written, and
     the prefix rewrites both by that id. Left at `/x`, it would name an address nothing serves,
     and a reader joining the two tables on the address would lose it."""
-    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
     workspace.derive("endpoint_metadata_reset")
     handler = "sextant-jvm maven com.acme/shop 1.0.0 com/acme/Shop#x(sig_00000001)."
     workspace._connection.execute(
@@ -370,14 +375,8 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
         nullability={},
         serialization={},
         known_types=[],
-        server_model=[
-            {
-                "framework": "org.springframework.boot",
-                "versions": ">=2.0",
-                "keys": ["server.servlet.context-path"],
-                "protocols": ["http"],
-            }
-        ],
+        dispatcher="spring",
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
     )
     apply_path_prefixes(workspace, [catalog])
     (endpoint_id,) = workspace._connection.execute(
@@ -389,3 +388,101 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
     workspace.close()
 
     assert metadata == [("/shop/x", endpoint_id)]
+
+
+def _module_workspace(tmp_path: Path, coordinates: list[str]) -> DuckDbWorkspace:
+    """A workspace holding one module fact with these dependency coordinates — the facts
+    `_web_stack` reads the module's stack off — and nothing else yet."""
+    document = Document(
+        document_id="doc_module",
+        relative_path="module",
+        module_id="com.acme:shop",
+        language="module",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="detector",
+        content_hash="sha256:a",
+        origin_entry="com.acme/shop",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        tmp_path / "facts" / "module.jsonl",
+        document,
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:shop",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+                dependency_coordinates=coordinates,
+                dependency_versions={},
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    return workspace
+
+
+def _served(workspace: DuckDbWorkspace, config: dict[str, str], dispatcher: str | None) -> str:
+    """The path one inbound `GET /x` row is published at, after the shipped server model has
+    been applied under `config`, the row derived by a catalog declaring `dispatcher`."""
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id) "
+        "VALUES (1, 'http', 'inbound', 'GET', '/x', 'h', 'invented')"
+    )
+    for key, value in config.items():
+        workspace._connection.execute(
+            "INSERT INTO resolved_config (key, value, source, environment) "
+            "VALUES (?, ?, 'application.properties', 'default')",
+            [key, value],
+        )
+    catalog = Catalog(
+        id="invented",
+        style="annotation",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={},
+        source=Path("tests/invented.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+        dispatcher=dispatcher,
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
+    )
+    apply_path_prefixes(workspace, [catalog])
+    (path,) = workspace._connection.execute("SELECT path FROM endpoints").fetchone()
+    workspace.close()
+    return str(path)
+
+
+def test_a_reactive_module_ignores_a_leftover_servlet_context_path(tmp_path):
+    """Ruling 3. A WebFlux module serves under `spring.webflux.base-path` and nothing else:
+    CP-57 set `server.servlet.context-path=/c` beside `spring.webflux.base-path=/w` on a
+    reactive app and every handler — controller, functional route, Gateway route, Actuator —
+    answered at `/w/…`, never `/c/…`. The context path is a servlet container's, and a
+    reactive app has none.
+
+    The stack is read the way Spring Boot deduces it, off the module's dependencies:
+    `spring-webflux` without `spring-webmvc` or Jersey's servlet container is reactive.
+    Measured before the fix: published at `/c/x`, the servlet entry winning because it is
+    declared first."""
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webflux"])
+    config = {"server.servlet.context-path": "/c", "spring.webflux.base-path": "/w"}
+
+    assert _served(workspace, config, "spring") == "/w/x"
+
+
+def test_a_catalog_without_a_dispatcher_takes_no_configured_prefix(tmp_path):
+    """Ruling 3. A configured prefix belongs to a dispatcher, and a catalog that names none —
+    Quarkus, Micronaut, Javalin, Ktor — is served by something Spring Boot's keys do not
+    configure. Measured before the fix: `/shop/x`, every inbound row taking the prefix its
+    protocol had."""
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
+
+    assert _served(workspace, {"server.servlet.context-path": "/shop"}, None) == "/x"

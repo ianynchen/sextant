@@ -3,6 +3,9 @@ displayName: Spring Data REST (repository-derived CRUD API)
 style: derived_resource
 protocol: http
 direction: inbound
+# Served by the DispatcherServlet (ruling 3), so it takes the configured prefix a controller
+# does; its own `spring.data.rest.base-path` is read by the engine, inside that prefix.
+dispatcher: spring
 
 # THE API NOBODY WROTE A CONTROLLER FOR (2O design §2). Spring Data REST
 # exposes a CRUD HTTP API from a repository INTERFACE — no controller, no

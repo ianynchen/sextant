@@ -522,12 +522,28 @@ def test_a_configured_context_path_and_servlet_path_reach_the_published_rows(con
         # `RouterConfig`'s functional route: the prefix covers every row the server
         # dispatches, the functional ones included.
         ("GET", "/shop/api/versioned"),
+        # `LegacyServlet`: the container serves it beside the DispatcherServlet, so the
+        # context path reaches it and the servlet path does not (ruling 3, CP-57).
+        ("GET", "/shop/legacy"),
     }
     # And the rows stay resolved: a prefix every environment agrees on is an answer, not a
     # reason to doubt the address (spec §1's second outcome).
     assert {row["resolution"] for row in context_path_rows if row["direction"] == "inbound"} == {
         "resolved"
     }
+
+
+@pytest.mark.pins("path_prefix.a-prefix-applies-to-ITS-OWN-dispatchers-rows")
+def test_the_mvc_servlet_path_never_reaches_a_plain_servlet(context_path_rows):
+    """Ruling 3 of the 2026-10-30 object-identity design. `spring.mvc.servlet.path=/api` is
+    where the DispatcherServlet is mapped inside the context, so it prefixes what the
+    DispatcherServlet serves and nothing else. `LegacyServlet` is a `@WebServlet` the container
+    registers on its own, beside the DispatcherServlet, and CP-57 measured it answering at
+    `/c/legacy` with `spring.mvc.servlet.path=/m` set — the context path only.
+
+    Measured before the fix: published at `/shop/api/legacy`, because every inbound row took
+    the one prefix its protocol had, whichever dispatcher served it."""
+    assert ("GET", "/shop/legacy") in {(r["method"], r["path"]) for r in context_path_rows}
 
 
 def test_a_prefixed_functional_route_keeps_its_header(context_path_rows, context_path_requirements):

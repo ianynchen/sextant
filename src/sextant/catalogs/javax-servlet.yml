@@ -3,6 +3,9 @@ displayName: Javax Servlet (@WebServlet on an HttpServlet subclass, pre-Jakarta)
 style: supertype_dispatch
 protocol: http
 direction: inbound
+# Registered with the container itself, beside the DispatcherServlet (ruling 3), as
+# `jakarta-servlet`: CP-57 measured the jakarta generation; the registration is the same.
+dispatcher: servlet
 
 # THE SAME RULE UNDER THE OTHER PACKAGE SPELLING, and a separate file because
 # `matches.supertype` names one type. `jakarta-servlet.yml` is where the

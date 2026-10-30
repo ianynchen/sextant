@@ -315,6 +315,13 @@ class Catalog:
     # environments disagree is refused.
     server_model: list[dict[str, Any]] = field(default_factory=list)
 
+    # What serves this catalog's inbound rows inside the module's server — one of
+    # `domain.closed_sets.Dispatcher`, or None where the catalog names none (ruling 3 of the
+    # 2026-10-30 object-identity design). It is how a row finds its configured prefix: the
+    # server model says which dispatchers each key applies to, and a catalog naming none
+    # takes no configured prefix at all, because Spring Boot's keys do not configure it.
+    dispatcher: str | None = None
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

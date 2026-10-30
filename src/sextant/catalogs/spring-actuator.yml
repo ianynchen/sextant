@@ -3,6 +3,10 @@ displayName: Spring Boot Actuator (@Endpoint)
 style: annotation_driven
 protocol: http
 direction: inbound
+# Served by Spring's own dispatcher on the main port (ruling 3): CP-57's Actuator answered
+# under the context path AND `spring.mvc.servlet.path` on a servlet app, and under
+# `spring.webflux.base-path` on a reactive one.
+dispatcher: spring
 
 detect:
   coordinates: ["org.springframework.boot:spring-boot-actuator"]

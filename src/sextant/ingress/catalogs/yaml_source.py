@@ -99,13 +99,44 @@ class YamlCatalogSource:
             entries = raw.get("prefixes")
             if not isinstance(entries, list):
                 raise CatalogError(f"loading server model {path}: `prefixes` must be a list")
+            # Ruling 3's two vocabularies, declared in the file because both are framework
+            # words: what serves a catalog's rows (`dispatchers`), and the stacks a module
+            # can run on, each with the coordinates that select it.
+            dispatchers = _server_words(raw, "dispatchers", path)
+            stacks = raw.get("stacks")
+            if not isinstance(stacks, list) or not stacks:
+                raise CatalogError(
+                    f"loading server model {path}: `stacks` is a non-empty list, got {stacks!r}"
+                )
+            for stack in stacks:
+                coordinates = stack.get("coordinates") if isinstance(stack, dict) else None
+                if (
+                    not isinstance(stack, dict)
+                    or "stack" not in stack
+                    or not isinstance(coordinates, list)
+                    or not coordinates
+                ):
+                    raise CatalogError(
+                        f"loading server model {path}: each `stacks` item is "
+                        f"`{{stack, coordinates: [group:artifact…]}}`, got {stack!r}"
+                    )
+                # IN ORDER: the first stack whose coordinates the module carries is its
+                # stack, which is how the framework's own deduction reads.
+                model.append(
+                    {
+                        "deduces": str(stack["stack"]),
+                        "coordinates": [str(one) for one in coordinates],
+                    }
+                )
+            stack_names = {str(stack["stack"]) for stack in stacks}
             for entry in entries:
-                required = {"framework", "versions", "measured", "keys", "protocols"}
+                required = {"framework", "versions", "measured", "stack", "keys", "protocols"}
                 if not isinstance(entry, dict) or not required <= set(entry):
                     raise CatalogError(
                         f"loading server model {path}: each entry is a mapping with "
                         f"`framework`, `versions`, `measured` — the versions whose own "
-                        f"metadata was read (§5.4) — `keys` and `protocols`, got {entry!r}"
+                        f"metadata was read (§5.4) — `stack`, `keys` and `protocols`, "
+                        f"got {entry!r}"
                     )
                 keys = entry["keys"]
                 protocols = entry["protocols"]
@@ -125,8 +156,10 @@ class YamlCatalogSource:
                         "framework": str(entry["framework"]),
                         "versions": str(entry["versions"]),
                         "measured": [str(one) for one in measured],
-                        # ORDERED: the keys compose left to right.
-                        "keys": [str(key) for key in keys],
+                        "stack": _server_word(entry["stack"], stack_names, "stack", path),
+                        # ORDERED: the keys compose left to right, each for the
+                        # dispatchers it applies to (ruling 3).
+                        "keys": [_server_key(key, dispatchers, path) for key in keys],
                         "protocols": [str(one) for one in protocols],
                     }
                 )
@@ -325,6 +358,11 @@ class YamlCatalogSource:
         # types, and mirroring a language's own rule is not optional).
         conformance = self.type_model()
         servers = self.server_model()
+        # The words a catalog's `dispatcher` may take: every one a server-model key applies
+        # to, each already checked against its file's own `dispatchers`.
+        dispatchers = {
+            one for entry in servers for key in entry.get("keys", ()) for one in key["applies_to"]
+        }
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
@@ -337,6 +375,8 @@ class YamlCatalogSource:
                     style=_required(raw, "style", path),
                     protocol=_closed_or_absent(raw, "protocol", Protocol, path),
                     direction=_closed_or_absent(raw, "direction", Direction, path),
+                    # Ruling 3 — optional, and a closed word where it is written.
+                    dispatcher=_dispatcher(raw, dispatchers, path),
                     requires=tuple(raw.get("requires", [])),
                     # Spec 2026-09-21 §5: the step model's `steps` and
                     # `undeclared_steps` merged in beside the catalog's own, so
@@ -1182,6 +1222,70 @@ def _detect_superseded_by(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
             f"names what this catalog yields to without saying what it is FOR"
         )
     return tuple(declared)
+
+
+def _server_key(key: Any, dispatchers: set[str], path: Path) -> dict[str, Any]:
+    """One `keys` item of a server-model entry: `{key, applies_to: [dispatcher…]}` (ruling 3).
+
+    `applies_to` is what a key means at all. CP-57 measured `spring.mvc.servlet.path`
+    reaching the DispatcherServlet's rows and not a `@WebServlet`'s, so a key carrying no
+    list, or a word its file does not declare under `dispatchers`, would be read as reaching
+    nothing — the silent shape a server model must never have, refused here as every other
+    entry field is."""
+    applies_to = key.get("applies_to") if isinstance(key, dict) else None
+    if not isinstance(key, dict) or "key" not in key or not isinstance(applies_to, list):
+        raise CatalogError(
+            f"loading server model {path}: each `keys` item is `{{key, applies_to: "
+            f"[dispatcher…]}}`, got {key!r}"
+        )
+    if not applies_to:
+        raise CatalogError(
+            f"loading server model {path}: `{key['key']}` applies to no dispatcher, got {key!r}"
+        )
+    return {
+        "key": str(key["key"]),
+        "applies_to": [_server_word(one, dispatchers, "applies_to", path) for one in applies_to],
+    }
+
+
+def _server_words(raw: dict[str, Any], name: str, path: Path) -> set[str]:
+    """A server model's own closed vocabulary: a non-empty list of words."""
+    words = raw.get(name)
+    if not isinstance(words, list) or not words:
+        raise CatalogError(
+            f"loading server model {path}: `{name}` is a non-empty list, got {words!r}"
+        )
+    return {str(word) for word in words}
+
+
+def _server_word(value: Any, allowed: set[str], name: str, path: Path) -> str:
+    """One word of a server model's closed vocabulary, or a `CatalogError` naming it."""
+    if value not in allowed:
+        raise CatalogError(
+            f"loading server model {path}: `{name}: {value}` is not one of "
+            f"{', '.join(sorted(allowed))}"
+        )
+    return str(value)
+
+
+def _dispatcher(raw: dict[str, Any], dispatchers: set[str], path: Path) -> str | None:
+    """A catalog's `dispatcher` (ruling 3): absent is None, and a written word must be one
+    the source's server model applies a key to.
+
+    Closed in the server model rather than in `domain/closed_sets.py` because every word in
+    it names a framework, and framework words are catalog data. A word outside it is a typo,
+    not an absence: read as absent, `dispatcher: sping` would quietly take every configured
+    prefix off the catalog's rows, which is exactly what naming no dispatcher means."""
+    if "dispatcher" not in raw:
+        return None
+    value = raw["dispatcher"]
+    if value not in dispatchers:
+        raise CatalogError(
+            f"loading catalog {path}: `dispatcher: {value}` is not one of "
+            f"{', '.join(sorted(dispatchers))} — the dispatchers the server model's keys "
+            f"apply to"
+        )
+    return str(value)
 
 
 def _closed_or_absent(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) -> str:

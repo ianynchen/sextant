@@ -76,7 +76,8 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Prefixes every inbound row the module's own server declares a prefix for.
 
     Reads the server model (hoisted onto every catalog, so the first non-empty one is the
-    whole table), `resolved_config` and the module fact's `dependency_versions` for §2, and
+    whole table), `resolved_config`, the module fact's `dependency_versions` and its
+    coordinates (for the stack, ruling 3) for §2, each catalog's `dispatcher`, and
     the call sites for §4; writes one column, on rows that already existed, and the
     `endpoint_metadata` entries bound to those rows follow them (ruling 7).
 
@@ -93,10 +94,19 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
         return
     config = _per_environment(workspace)
     versions = _framework_versions(workspace)
+    stack = _web_stack(workspace, model) if config else None
 
-    prefixes: dict[str, str] = {}
+    # Keyed by the DISPATCHER and the protocol (ruling 3): one servlet container holds the
+    # DispatcherServlet, the container's own `@WebServlet`s and Jersey, and CP-57 measured
+    # the three taking different keys. Keyed by protocol alone, every inbound row took the
+    # DispatcherServlet's prefix — a `@WebServlet("/legacy")` published at
+    # `/shop/api/legacy`, an address nothing serves.
+    prefixes: dict[tuple[str | None, str], str] = {}
     installed: dict[str, tuple[_Installed, ...]] = {}
     for entry in model:
+        if "deduces" in entry:
+            # A `stacks` item, read by `_web_stack` above.
+            continue
         if entry.get("installed"):
             # §4's declaration names framework SYMBOLS rather than configuration keys, so
             # it is read from the call sites and not from `resolved_config` — and it carries
@@ -106,22 +116,31 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 for protocol in entry["protocols"]:
                     installed.setdefault(protocol, declared)
             continue
-        if not config or not _version_admits(entry, versions):
+        # Only the module's own stack: a reactive app has no servlet container, and CP-57
+        # measured a leftover `server.servlet.context-path` doing nothing there.
+        if not config or entry["stack"] != stack or not _version_admits(entry, versions):
             continue
-        prefix = _composed(entry["keys"], config)
-        if not prefix:
-            continue
-        for protocol in entry["protocols"]:
-            # Two entries claiming one protocol would be a contradiction in the model
-            # rather than in the module — one server, one prefix per wire — so the first
-            # declaration wins and the second is ignored rather than concatenated. The
-            # shipped file has no such pair: its two entries differ by stack and their
-            # keys cannot both be present (a module is servlet or reactive, not both).
-            prefixes.setdefault(protocol, prefix)
+        for dispatcher in sorted({one for key in entry["keys"] for one in key["applies_to"]}):
+            prefix = _composed(
+                [key["key"] for key in entry["keys"] if dispatcher in key["applies_to"]], config
+            )
+            if not prefix:
+                continue
+            for protocol in entry["protocols"]:
+                # Two entries claiming one dispatcher's protocol would be a contradiction in
+                # the model rather than in the module — one dispatcher, one prefix per wire
+                # — so the first declaration wins and the second is ignored rather than
+                # concatenated. The shipped servlet pair are alternatives by version, and
+                # where a module records none both admit it and the first is read.
+                prefixes.setdefault((dispatcher, protocol), prefix)
     if not prefixes and not installed:
         return
     # Read once, and only where an installed prefix exists to ask about it.
     annotated = _annotated_types(workspace) if installed else {}
+
+    # Which dispatcher serves each catalog's rows; a catalog naming none takes no configured
+    # prefix, because Spring Boot's keys do not configure what serves it.
+    dispatchers = {catalog.id: catalog.dispatcher for catalog in catalogs}
 
     rows: list[dict[str, Any]] = []
     for endpoint in workspace.query("endpoints"):
@@ -133,10 +152,11 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
             # A row with no path has no address to prefix, and one that does not start at
             # the root is not a path this server dispatches — both keep what they had.
             continue
-        # The CONFIGURED prefix covers every row the server dispatches; the INSTALLED one
-        # covers the rows whose handler sits in a package it names. A row can take both,
-        # one, or neither, and `""` from either reader is the neutral element.
-        served_under = prefixes.get(protocol, "")
+        # The CONFIGURED prefix covers every row its catalog's dispatcher serves; the
+        # INSTALLED one covers the rows whose handler sits in a package it names. A row can
+        # take both, one, or neither, and `""` from either reader is the neutral element.
+        dispatcher = dispatchers.get(str(endpoint.get("catalog_id")))
+        served_under = prefixes.get((dispatcher, protocol), "")
         by_package = _for_handler(endpoint.get("handler"), installed.get(protocol, ()), annotated)
         if not served_under and not by_package:
             continue
@@ -702,6 +722,31 @@ def _per_environment(workspace: Workspace) -> dict[str, dict[str, str | None]]:
         value = row["value"]
         environments[str(row["environment"])] = None if value is None else str(value)
     return values
+
+
+def _web_stack(workspace: Workspace, model: list[dict[str, Any]]) -> str | None:
+    """The stack the module runs on, or None where it runs none (ruling 3): the first of the
+    server model's `stacks` whose coordinates the module carries.
+
+    The framework deduces it from the classpath, so it is read off the module's dependency
+    coordinates — the same `module_dependencies` rows `_framework_versions` reads — and
+    the model's ORDER is the framework's: the shipped one tests the servlet stack first,
+    so a servlet app that also carries the reactive stack's coordinates is a servlet app.
+    """
+    import json
+
+    coordinates: set[str] = set()
+    for row in workspace.query("module_dependencies"):
+        recorded = row.get("dependency_coordinates")
+        if recorded is None:
+            continue
+        parsed = json.loads(str(recorded)) if isinstance(recorded, str) else recorded
+        if isinstance(parsed, list):
+            coordinates.update(str(one) for one in parsed)
+    for entry in model:
+        if "deduces" in entry and coordinates.intersection(entry["coordinates"]):
+            return str(entry["deduces"])
+    return None
 
 
 def _framework_versions(workspace: Workspace) -> dict[str, str]:

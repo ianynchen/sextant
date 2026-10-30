@@ -3,6 +3,9 @@ displayName: JAX-RS (javax.ws.rs) — pre-Jakarta (2.1.x)
 style: annotation_driven
 protocol: http
 direction: inbound
+# Served by Jersey's own servlet (ruling 3), as `jakarta-jaxrs`: CP-57 measured the jakarta
+# generation.
+dispatcher: jaxrs
 
 # THE SAME RULE UNDER THE OTHER PACKAGE SPELLING, the `javax-servlet.yml` /
 # `jakarta-servlet.yml` precedent: `jakarta-jaxrs.yml` is where every rule

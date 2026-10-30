@@ -3,6 +3,9 @@ displayName: Spring WebFlux (functional routing)
 style: combinator
 protocol: http
 direction: inbound
+# Served by the DispatcherHandler (ruling 3): CP-57's reactive functional route answered
+# under `spring.webflux.base-path`.
+dispatcher: spring
 
 detect:
   coordinates: ["org.springframework:spring-webflux"]

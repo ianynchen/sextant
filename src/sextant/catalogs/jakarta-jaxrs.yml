@@ -3,6 +3,9 @@ displayName: JAX-RS (jakarta.ws.rs) — Jersey, RESTEasy, Helidon
 style: annotation_driven
 protocol: http
 direction: inbound
+# Served by Jersey's own servlet (ruling 3): CP-57's resource answered under the context
+# path and `spring.jersey.application-path`, and NOT under `spring.mvc.servlet.path`.
+dispatcher: jaxrs
 
 # JAX-RS puts the verb, the path and the media on THREE SEPARATE annotations of
 # one method — `@GET` carries nothing at all (CP-18 rows 1a-1c: all seven verb

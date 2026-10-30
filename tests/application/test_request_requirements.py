@@ -54,6 +54,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.redaction import REDACTED
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
@@ -232,6 +233,10 @@ def test_a_stashed_value_whose_name_could_not_be_read_is_masked_whole(tmp_path: 
     ]
 
 
+# The coordinate that puts a module on the servlet stack in the shipped server model.
+WEBMVC = "org.springframework:spring-webmvc"
+
+
 @pytest.mark.pins("endpoints.a-rewrite-matches-a-row-by-its-ROW-ID")
 @pytest.mark.pins("endpoints.a-stashed-requirement-is-joined-by-ROW-ID")
 def test_a_prefixed_route_keeps_its_header_requirement(tmp_path: Path):
@@ -257,16 +262,15 @@ def test_a_prefixed_route_keeps_its_header_requirement(tmp_path: Path):
         "INSERT INTO resolved_config (key, value, source, environment) "
         "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
     )
+    # A servlet-stack module, which is what the context path belongs to (ruling 3).
+    workspace._connection.execute(
+        "INSERT INTO raw_facts (kind, document_id, payload) VALUES ('module', 'doc_module', ?)",
+        [json.dumps({"module_id": "com.acme:shop", "dependency_coordinates": [WEBMVC]})],
+    )
     prefixed = replace(
         _catalog(),
-        server_model=[
-            {
-                "framework": "org.springframework.boot",
-                "versions": ">=2.0",
-                "keys": ["server.servlet.context-path"],
-                "protocols": ["http"],
-            }
-        ],
+        dispatcher="spring",
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
     )
     apply_path_prefixes(workspace, [prefixed])
     record_request_requirements(workspace, [prefixed])
