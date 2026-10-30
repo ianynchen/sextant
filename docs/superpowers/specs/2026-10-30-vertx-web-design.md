@@ -127,7 +127,13 @@ what it does rather than for Vert.x:
 4. **A prefix join** — `leading_slash`, applied to the prefix §3c finds.
 
 5. **A call that returns its own receiver configures it** (ruled 2026-10-30, review
-   issue 3). A step or terminal declared `returns_receiver: true` folds into the chain the
+   issue 3).
+   **BUILT by object-identity ruling 4** (branch `fix/object-identity-5`, in both the forward
+   and the backward walk), not by this work. The Vert.x work only adds the catalog flags: it
+   flags Vert.x's self-returning calls (`Route`, `HttpRequest`, `MessageConsumer`), each after
+   `javap` evidence that the method returns `this`. Ruling 4 flagged the other shipped
+   catalogs but NOT the Vert.x eventbus-chain catalog (`MessageConsumer#handler` etc.) or
+   Ktor's builder calls that return themselves; those are still unflagged. A step or terminal declared `returns_receiver: true` folds into the chain the
    way a void call already does (`shapes/chains.py` `_walk`, the 2026-09-21 §4 rule): in
    ordinal order, the walk going on to the next sibling, never a fork. Without it, the
    Vert.x docs' own style —
@@ -291,6 +297,12 @@ request on; it is middleware.** (DR-6: Vert.x's own dispatch rule, not ours.)
 
 ### 3d. Outbound — catalog `vertx-webclient.yml`, style `fluent`, direction `outbound`
 
+**Status of the cross-method walk (the last bullet below): BUILT by object-identity ruling 5**
+(branch `fix/object-identity-6`) as a general `fluent` capability, with fixture rows for an SQS
+helper and an OkHttp helper. This work adds only the catalog entries and the Hono
+`newQueryRequest(…).send()` fixture row. Rulings 1 and 2 (a value read per object; a value id
+with its method) also land underneath it, on `fix/object-identity-4` and `fix/object-identity-2`.
+
 This is the shape `ktor-client.yml` and `spring-webclient.yml` already ship.
 
 - **Roots** (owner `io.vertx.ext.web.client.WebClient`):
@@ -387,6 +399,10 @@ list, so it does not hold either line below `✅`. The tier says what closing it
 | **`WebClientOptions.setDefaultHost/Port`** | §3d: the options object's host is not read; such a row's `peer` is NULL | A |
 
 ## 5. Cost (§8.7)
+
+The `returns_receiver` flag (§3a item 5) and the cross-method walk back from `send()` (§3d)
+are built and priced by the object-identity spec (`2026-10-30-object-identity-design.md`, built on branches `fix/object-identity` … `fix/object-identity-8`, not yet pushed); this work adds no engine cost for them, only catalog
+flags and entries.
 
 - **Inbound:** one fluent pass over the module's `Router` roots, as for the event-bus chain.
 - **The pass-through check:** one backward producer walk per `passes_on` call site in the
