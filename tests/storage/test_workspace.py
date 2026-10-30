@@ -456,6 +456,67 @@ def test_null_method_rows_dedup_on_the_same_identity(tmp_path: Path):
     ]
 
 
+def _a_workspace_with_both_kinds_of_endpoint_row(tmp_path: Path) -> DuckDbWorkspace:
+    """One row from the annotation-driven insert and two from `call_endpoints`
+    — the two statements that write the table."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    for path in ("order-events", "order-audit"):
+        workspace.derive(
+            "call_endpoints",
+            rows=[
+                {
+                    "protocol": "kafka",
+                    "direction": "outbound",
+                    "method": None,
+                    "path": path,
+                    "handler": None,
+                    "caller": "com/acme/notify/OrderPublisher#publish(sig_1a2b3c4d).",
+                    "peer": None,
+                    "handler_signature": None,
+                    "resolution": "resolved",
+                    "evidence": "compiler",
+                    "request_shape": None,
+                    "response_shape": None,
+                    "catalog_id": "cat-out",
+                }
+            ],
+        )
+    return workspace
+
+
+def test_every_endpoint_row_carries_a_unique_row_id(tmp_path: Path):
+    workspace = _a_workspace_with_both_kinds_of_endpoint_row(tmp_path)
+    rows = workspace.query("endpoints")
+    workspace.close()
+    assert len(rows) >= 3
+    assert all(r["row_id"] is not None for r in rows)
+    assert len({r["row_id"] for r in rows}) == len(rows)
+
+
+def test_row_ids_are_the_same_on_a_second_resolve_of_the_same_facts(tmp_path: Path):
+    ids = []
+    for run in ("first", "second"):
+        (tmp_path / run).mkdir()
+        workspace = _a_workspace_with_both_kinds_of_endpoint_row(tmp_path / run)
+        ids.append(sorted((r["row_id"], r["path"]) for r in workspace.query("endpoints")))
+        workspace.close()
+    assert ids[0] == ids[1]
+
+
+def test_the_exported_endpoints_table_has_no_row_id(tmp_path: Path):
+    workspace = _a_workspace_with_both_kinds_of_endpoint_row(tmp_path)
+    workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
+    workspace.close()
+    columns = [
+        row[0]
+        for row in duckdb.sql(
+            f"DESCRIBE SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoints.parquet'}')"
+        ).fetchall()
+    ]
+    assert "row_id" not in columns
+    assert "path" in columns
+
+
 def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
     """2E-prep spec §1a, Task 1: every endpoints row is stamped with the id
     of the catalog that derived it — an inbound row via `derive("endpoints",
@@ -2132,8 +2193,8 @@ def test_no_exported_table_ships_a_credential_another_one_masks(tmp_path: Path):
     # `roots.path` are masked in `graph/` and are what the index's two path-carrying files
     # are built from.
     workspace._connection.execute(
-        "INSERT INTO endpoints (protocol, direction, method, path, handler, catalog_id) "
-        "VALUES ('http', 'inbound', 'GET', ?, 'mod com/acme/A#go(sig_1).', 'c')",
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id) "
+        "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', 'GET', ?, 'mod com/acme/A#go(sig_1).', 'c')",
         [secret],
     )
     workspace._connection.execute(
@@ -3408,8 +3469,8 @@ def test_the_endpoint_conditions_view_answers_through_a_read_only_federation(tmp
     workspace.close()
     with duckdb.connect(str(participant)) as connection:
         connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
-            "VALUES ('http', 'inbound', 'GET', '/balances', ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+            "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', 'GET', '/balances', ?)",
             [handler],
         )
     system = DuckDbWorkspace(tmp_path / "system.duckdb")
@@ -3511,8 +3572,8 @@ def _workspace_for_the_view(tmp_path: Path, methods: int) -> Path:
     workspace.close()
     with duckdb.connect(str(path)) as connection:
         connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler) "
-            f"SELECT 'http', 'inbound', 'GET', '/p' || i, '{prefix}C' || (i // 5) || '#m' || i "
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+            f"SELECT (SELECT coalesce(max(row_id), 0) + 1 FROM endpoints) + i, 'http', 'inbound', 'GET', '/p' || i, '{prefix}C' || (i // 5) || '#m' || i "
             f"|| '().' FROM range({methods}) t(i)"
         )
     return path
@@ -3705,8 +3766,8 @@ def _described_workspace(root: Path) -> Path:
     workspace = DuckDbWorkspace(directory / "workspace.duckdb")
     for direction, route in (("inbound", "/in"), ("outbound", "/out")):
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, peer) "
-            "VALUES ('http', ?, 'GET', ?, 'H#h().', 'C#c().', 'billing')",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, peer) "
+            "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', ?, 'GET', ?, 'H#h().', 'C#c().', 'billing')",
             [direction, route],
         )
     workspace.close()

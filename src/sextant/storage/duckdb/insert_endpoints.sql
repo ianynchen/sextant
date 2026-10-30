@@ -34,25 +34,40 @@
 --
 -- Parameters:
 --   $catalog_id -- the catalog whose turn it is.
+--
+-- EVERY INSERTED ROW IS MINTED A `row_id` (follow-the-object, Ruling 7): one
+-- above the highest id already in the table, numbered in a fixed order. The
+-- numbering runs over the candidates that SURVIVE the guard (the inner
+-- SELECT), so a refused candidate leaves no gap, and the order names every
+-- column so two runs over the same facts number the rows identically.
 INSERT INTO endpoints (
-    protocol, direction, method, path, handler, caller, peer,
+    row_id, protocol, direction, method, path, handler, caller, peer,
     handler_signature, resolution, evidence, catalog_id, consumes, produces
 )
-SELECT d.protocol, d.direction, d.method, d.path, d.handler, d.caller, d.peer,
+SELECT (SELECT coalesce(max(row_id), 0) FROM endpoints)
+           + row_number() OVER (
+               ORDER BY d.protocol, d.direction, d.method, d.path, d.handler, d.caller, d.peer,
+                        d.resolution, d.evidence, d.catalog_id, d.consumes, d.produces,
+                        d.handler_signature::VARCHAR
+           ),
+       d.protocol, d.direction, d.method, d.path, d.handler, d.caller, d.peer,
        d.handler_signature, d.resolution, d.evidence, d.catalog_id, d.consumes, d.produces
-FROM endpoint_candidates d
-WHERE d.catalog_id = $catalog_id
-  AND NOT EXISTS (
-    SELECT 1 FROM endpoints existing
-    WHERE existing.protocol  = d.protocol
-      AND existing.direction = d.direction
-      AND existing.method IS NOT DISTINCT FROM d.method
-      AND existing.path      = d.path
-      AND (
-          d.direction <> 'outbound'
-          OR (
-              existing.caller IS NOT DISTINCT FROM d.caller
-              AND existing.peer IS NOT DISTINCT FROM d.peer
+FROM (
+    SELECT c.*
+    FROM endpoint_candidates c
+    WHERE c.catalog_id = $catalog_id
+      AND NOT EXISTS (
+        SELECT 1 FROM endpoints existing
+        WHERE existing.protocol  = c.protocol
+          AND existing.direction = c.direction
+          AND existing.method IS NOT DISTINCT FROM c.method
+          AND existing.path      = c.path
+          AND (
+              c.direction <> 'outbound'
+              OR (
+                  existing.caller IS NOT DISTINCT FROM c.caller
+                  AND existing.peer IS NOT DISTINCT FROM c.peer
+              )
           )
-      )
-);
+    )
+) d;

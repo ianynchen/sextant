@@ -203,6 +203,7 @@ def test_an_inbound_chain_carries_the_lambda_it_was_handed_as_its_handler(tmp_pa
     workspace.close()
 
     assert row == {
+        "row_id": 1,
         "protocol": "amqp",
         "direction": "inbound",
         "method": None,

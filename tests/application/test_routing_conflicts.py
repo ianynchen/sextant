@@ -106,8 +106,8 @@ def _workspace(
     workspace.load_facts(facts)
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, catalog_id, "
-            "consumes, produces) VALUES ('http', 'inbound', ?, ?, ?, 'invented-rest', NULL, NULL)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id, "
+            "consumes, produces) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', ?, ?, ?, 'invented-rest', NULL, NULL)",
             [method, path, None if handler is None else _MODULE + handler],
         )
     return workspace

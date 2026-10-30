@@ -98,8 +98,8 @@ def _workspace(
     workspace.derive("route_requirements_reset")
     for protocol, method, path, handler, caller in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id, handler_signature) VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id, handler_signature) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), ?, 'inbound', ?, ?, ?, ?, ?, ?)",
             [
                 protocol,
                 method,
@@ -807,8 +807,8 @@ def _mapping_workspace(
     workspace.derive("route_requirements_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', ?, ?, ?, ?, ?)",
             [method, path, None if handler is None else _MODULE + handler, None, CATALOG],
         )
     return workspace
@@ -1134,8 +1134,8 @@ def _reads_workspace(
     workspace.derive("route_requirements_reset")
     for method, path, handler in rows:
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
-            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), 'http', 'inbound', ?, ?, ?, ?, ?)",
             [method, path, handler, ROUTES, CATALOG],
         )
     return workspace

@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS raw_facts (
 -- skipped_catalogs, not crash. derive_endpoints.sql still replaces this
 -- table whole via CREATE OR REPLACE TABLE whenever at least one catalog runs.
 CREATE TABLE IF NOT EXISTS endpoints (
+    -- This row's identity for one resolve (follow-the-object, Ruling 7): minted
+    -- by the INSERT that writes the row, one above the highest id already in
+    -- the table, in a fixed order, so a second resolve of the same facts mints
+    -- the same ids. Never a DEFAULT or sequence: a migrated workspace gets a
+    -- column added with its TYPE only, so the id must come from the writer.
+    -- It names nothing outside the run, so the export leaves it out.
+    row_id            BIGINT,
     protocol          TEXT,
     direction         TEXT,
     method            TEXT,

@@ -58,8 +58,8 @@ def _workspace(
             symbol, _, peer = symbol.partition("@")
         stored = None if symbol is None else _MODULE + symbol
         workspace._connection.execute(
-            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, peer) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, caller, peer) "
+            "VALUES ((SELECT coalesce(max(row_id), 0) + 1 FROM endpoints), ?, ?, ?, ?, ?, ?, ?)",
             [
                 protocol,
                 direction,

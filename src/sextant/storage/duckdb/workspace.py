@@ -1381,9 +1381,11 @@ _EXPORT_QUERIES = {
     # `path` and `peer` are the columns that can carry a whole address (D01
     # §3, 2I's unsplit-expression ruling), so they carry URL userinfo too.
     # Ordered on the table's own columns — `e.path`, not the projected alias —
-    # so masking a row cannot reorder the file (NFR-1).
+    # so masking a row cannot reorder the file (NFR-1). `row_id` is left out:
+    # it names a row for one resolve and nothing outside it.
     "endpoints": f"""
-        SELECT e.* REPLACE (coalesce(p.masked, e.path) AS path,
+        SELECT e.* EXCLUDE (row_id)
+                   REPLACE (coalesce(p.masked, e.path) AS path,
                             coalesce(q.masked, e.peer) AS peer)
         FROM endpoints e
         LEFT JOIN {_REDACTED_ADDRESSES} p ON p.address = e.path
