@@ -221,8 +221,28 @@ request on; it is middleware.** (DR-6: Vert.x's own dispatch rule, not ours.)
   - each route root's **receiver** is followed to the `Router.router(vertx)` call that built
     it;
   - the mount call's **router argument** is followed the same way;
-  - routes whose receiver has the same producer as a mount's argument take that mount's
+  - routes whose receiver reaches the same object as a mount's argument take that mount's
     prefix.
+
+  **Same object means the same producer reached along the same call path** (ruled
+  2026-10-30, review issue 2), never merely the same `Router.router(vertx)` line. Both reads
+  use `producer_paths`, which returns each producer with the path it was reached by, and
+  the mount's prefix arguments are then read **within that path**
+  (`resolve_positions(..., within=path)`, as Quartz's pairing reads a trigger's parts). A
+  helper that builds and mounts a router per call —
+
+  ```java
+  Router createSubRouter(String mountPoint) {
+      Router sub = Router.router(vertx);
+      root.route("/" + mountPoint + "*").subRouter(sub);
+      return sub;
+  }
+  ```
+
+  — called as `createSubRouter("users")` and `createSubRouter("groups")` gives `/users/…`
+  to the routes on the first router only. Reading the prefix without the path would answer
+  `mountPoint` with every caller's argument and publish `/groups/:userUuid` at `resolved`;
+  that is the mixing OI-222 fixed for fields, and the fixture pins against it.
 
   This crosses locals, parameters and fields: Hono builds its router in a base class and
   hands it to `addRoutes(router)`.
@@ -318,6 +338,7 @@ test instead).
 | A request built in `newRequest()` and sent by its caller | one outbound row |
 | `WebClient.create(vertx, new WebClientOptions().setDefaultHost("search"))` then `client.get("/q").send()` | `GET /q`, peer NULL (the stated boundary) |
 | A router built by `v(vertx)` and mounted at `/v1` and `/v2` | its routes under both, each `resolved` |
+| `createSubRouter(name)` building and mounting a router at `"/" + name`, called for `users` and `groups`, each getting its own routes | each route under its own prefix only; no `/groups/:userUuid` |
 
 Pinned by an e2e intention test, `tests/e2e/test_rest_inbound_delivered.py` and
 `…outbound…`, beside the Ktor and Javalin ones.
