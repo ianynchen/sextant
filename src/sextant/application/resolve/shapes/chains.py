@@ -310,6 +310,8 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             # `OI-77`, the same fix `single_call` takes: a body handed straight through
             # from the caller's own signature names its type there and nowhere else.
             caller_parameters=caller_parameters.get(caller, ()),
+            sites_by_caller=by_caller,
+            parameters_by_caller=caller_parameters,
         )
         ends: list[ChainEnd] = []
         context = _ChainContext(
@@ -2101,7 +2103,7 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
             }
         elif _reads_an_argument(field, value):
             slot = _arg_index(value)
-            read = _own_parameter(_arg_at(site["arguments"], slot), site)
+            read = _own_method(_arg_at(site["arguments"], slot), site)
             # No slot, nothing to name: `_arg_index` answers None for a capture that is
             # not a positional read, and a position the walk cannot be told is one it must
             # not be asked about.
@@ -2130,7 +2132,7 @@ def _captured_at(
     one missed would be silent.
 
     Every reader of these arguments selects the keys it wants (`kind`, `value`, `source`,
-    `elements`), so an extra key travels harmlessly — the same way `_own_parameter`'s
+    `elements`), so an extra key travels harmlessly — the same way `_own_method`'s
     `caller` already does.
     """
     if argument is None:
@@ -2138,29 +2140,28 @@ def _captured_at(
     return {**argument, _CAPTURED_AT: (site["caller"], site["ordinal"], slot)}
 
 
-def _own_parameter(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
-    """A `parameter`-kind argument with the site's own caller beside it (spec
-    2026-09-21 §3c: a destination handed in as the constructing method's
-    `@Value` parameter reads its expression through the field ladder's rung
-    2a, which needs the declaration the index is an index INTO). The same
-    discipline as the `bean_via` marker above, for the same reason: captures
-    fold up out of lambda bodies, and a lambda's `parameter 1` is a captured
-    variable of ITS signature — read against the enclosing method's it would
-    fabricate that method's expression. Every other kind travels untouched."""
+def _own_method(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
+    """The argument with the site's own caller stamped on it, of every kind and through
+    every `elements` and `candidates` it holds (ruling 2 of the object-identity design).
+
+    A value id (`source`) and a parameter index are both meaningful only inside the
+    method that wrote them (D00 §5), and captures fold up out of lambda bodies into a
+    chain whose own method is the enclosing one: read there, a lambda's `source: 20` is
+    the enclosing method's call 20, and its `parameter 1` is the enclosing signature's.
+    So each argument carries its method, and its readers (`sites_of`, `parameters_of`)
+    look it up there rather than in the chain's. The same discipline as the `bean_via`
+    marker above, for the same reason. The `parameter` rung of the field ladder (spec
+    2026-09-21 §3c) reads the same key."""
     if argument is None:
         return None
-    if argument.get("kind") == "array":
-        # Each element of a varargs slot is read on its own (`_address_read`),
-        # so each parameter among them carries the caller too.
-        return {
-            **argument,
-            "elements": [
-                _own_parameter(element, site) for element in argument.get("elements") or []
-            ],
-        }
-    if argument.get("kind") != "parameter":
-        return argument
-    return {**argument, "caller": site["caller"]}
+    stamped = {**argument, "caller": site["caller"]}
+    for key in ("elements", "candidates"):
+        held = argument.get(key)
+        if isinstance(held, list):
+            stamped[key] = [
+                _own_method(member, site) if isinstance(member, dict) else member for member in held
+            ]
+    return stamped
 
 
 def _reads_an_argument(field: str, value: Any) -> bool:

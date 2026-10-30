@@ -136,7 +136,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     — derives its `${…}` expression where it derived `unresolved`, and so does
     each element of a varargs slot. Every shipped fluent catalog sees it; it is
     more resolution in the direction the ladder already took, never a new claim
-    (`_own_parameter`, `_address_read`).
+    (`_own_method`, `_address_read`).
 
     The walk is `shapes.chains.chain_ends`, which validates and reads the chain's own
     keys; this engine checks its own words first — a root's `direction:`, the
@@ -211,6 +211,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     # through from the caller's own signature names its type there and
                     # nowhere else.
                     caller_parameters=caller_parameters.get(end.caller, ()),
+                    sites_by_caller=by_caller,
+                    parameters_by_caller=caller_parameters,
                 ),
                 carrier_rules=carrier_rules,
                 field_sources=field_sources,
