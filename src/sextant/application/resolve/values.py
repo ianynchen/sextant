@@ -831,6 +831,7 @@ def resolve_positions(
     index: ValueIndex | None = None,
     identities: "Identities" = (),
     within: "Path | None" = None,
+    branches: bool = True,
 ) -> list[dict[str, Answer]]:
     """Slots of SEVERAL sites, resolved together on one coherent path.
 
@@ -865,9 +866,11 @@ def resolve_positions(
     agree with it: the positions are read as further steps of THAT path. A cron read where
     a trigger was built, within the path the trigger took to the call that scheduled it,
     is the cron of that one scheduling.
+
+    `branches` is `resolve_site`'s.
     """
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold, identities)
+    walk = _Walk(fold, identities, branches=branches)
     combined: list[tuple[_Trail, dict[str, Answer]]] = [
         (within.trail if within is not None else (), {})
     ]
@@ -2177,6 +2180,16 @@ class _Walk:
             constructed = self._construction(method, value)
             if constructed is not None:
                 stopped = self._declared_producer((method, constructed))
+                if stopped is not None and self._along_receivers:
+                    # A construction is a chain's first call (ruling 5, spec 2026-10-30):
+                    # nothing is called before the object exists, so the chain is whole.
+                    # Its `receiver` is the object it builds, which `_along` would read
+                    # as a value the chain was called on.
+                    here = (method, constructed)
+                    return _only(
+                        trail,
+                        replace(stopped, value=replace(stopped.value, chain=(here,), rooted=True)),
+                    )
                 if stopped is not None:
                     return _only(trail, stopped)
             slot = None if constructed is None else self._identified((method, constructed))

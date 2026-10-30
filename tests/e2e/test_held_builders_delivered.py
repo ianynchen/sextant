@@ -148,3 +148,37 @@ def test_a_trigger_built_over_statements_keeps_its_name_and_cron(quartz_rows):
     ]
     assert held == [("SweepJob#executeInternal", "cron", "0 0 * * * ?", "resolved")]
     assert not [row for row in quartz_rows if row["expression"] == "simpleSchedule()"]
+
+
+def test_an_sqs_request_started_in_a_helper_is_sent_by_its_caller(held_rows):
+    """`SqsRequestHelper`: `base()` returns the builder with its queue set, and `send` adds
+    the body, builds and sends. No root is in `send` and no terminal is in `base()`, so the
+    walk goes back from `build()` across the helper's return (ruling 5): one row, the
+    caller's, with the helper's queue and the caller's `String` body."""
+    assert _of(held_rows, "aws-sqs-sdk", "SqsRequestHelper") == [
+        (
+            None,
+            "sqs.us-east-1.amazonaws.com",
+            "/123456789012/helper-orders",
+            "resolved",
+            True,
+            False,
+        )
+    ]
+
+
+def test_each_caller_of_an_okhttp_request_helper_names_its_own_service(held_rows):
+    """`OkHttpRequestHelper`: `req(svc)` returns `new Request.Builder().url("http://" + svc +
+    "/x")`, and `callA` and `callB` build and send it with `"svc-a"` and `"svc-b"`. Each row
+    reads the address on the path its own caller took into the helper (Review Focus 2)."""
+    rows = sorted(
+        (str(row["caller"]).split("#")[1].split("(")[0], row["method"], row["peer"], row["path"])
+        for row in held_rows
+        if row["catalog_id"] == "okhttp" and "/OkHttpRequestHelper#" in str(row["caller"])
+    )
+    assert rows == [("callA", "GET", "svc-a", "/x"), ("callB", "GET", "svc-b", "/x")]
+    assert {
+        row["resolution"]
+        for row in held_rows
+        if row["catalog_id"] == "okhttp" and "/OkHttpRequestHelper#" in str(row["caller"])
+    } == {"resolved"}

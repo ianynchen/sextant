@@ -7009,6 +7009,201 @@ def test_the_same_method_join_is_unchanged(tmp_path: Path):
     ]
 
 
+# --- A builder STARTED in a helper and finished by its caller (ruling 5, spec 2026-10-30).
+# The root is in one method and the terminal in another, so no root walk ever reaches the
+# terminal: the walk goes back from the terminal's receiver, across the helper's return, to
+# the root.
+
+_SQS_BUILDER_JVM = "()Lsoftware/amazon/awssdk/services/sqs/model/SendMessageRequest$Builder;"
+
+
+def _sqs_started_by_a_helper() -> tuple[str, list]:
+    """`base(){ return SendMessageRequest.builder().queueUrl(Q); }` and
+    `send(){ sqs.sendMessage(base().messageBody("{}").build()); }`. The body is a literal so
+    the row's shape needs no declared signature."""
+    base = _sqs_method("base", _SQS_BUILDER_JVM)
+    send = _sqs_method("send")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "base", _SQS_BUILDER_JVM),
+        _declared_method(_SQS_PRODUCER, "send", "()V"),
+        _call(base, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            base,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=base,
+            ordinal=2,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(owner=_SQS_PRODUCER, name="base", descriptor=_SQS_BUILDER_JVM),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner=_SQS_REQUEST,
+                name="messageBody",
+                descriptor="(Ljava/lang/String;)" + _SQS_BUILDER_JVM[2:],
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=5,
+            result=6,
+            arguments=[CallArgument(kind="string", value="{}")],
+        ),
+        _call(send, _SQS_REQUEST, "build", 2, receiver=6, result=7),
+        _sqs_send(send, 3, source=7),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=4, value=None),
+    ]
+    return send, facts
+
+
+@pytest.mark.pins("chains.a-ROOTLESS-terminal-walks-back-across-methods")
+def test_a_request_started_in_a_helper_and_sent_by_its_caller_is_one_row(tmp_path: Path):
+    """`send` holds the body, the build and the send; `base()` holds the root and the queue.
+    The walk from `build()`'s receiver crosses `base()`'s return to `builder()`, folding the
+    queue from the helper and the body from the caller: one row, the caller's, with the
+    helper's queue."""
+    send, facts = _sqs_started_by_a_helper()
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+
+    rows = [(r["path"], r["resolution"]) for r in found]
+    assert rows == [("/acme/orders", "resolved")]
+    assert [r["caller"] for r in found] == [send]
+
+
+_OKHTTP_BUILDER = "okhttp3/Request$Builder#"
+_OKHTTP_HELPER = "com/acme/http/Helper#"
+_REQ_JVM = "(Ljava/lang/String;)Lokhttp3/Request$Builder;"
+
+
+def _okhttp_request_helper(callers: dict[str, str]) -> tuple[dict[str, str], list]:
+    """`req(String svc){ return new Request.Builder().url("http://" + svc + "/x"); }` and,
+    per entry of `callers` (method name to service), `name(){ client.newCall(req(svc).build());
+    }`. Returns each caller's symbol by its service."""
+    req = _MODULE + method_descriptor(_OKHTTP_HELPER, "req", _REQ_JVM)
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _OKHTTP_HELPER, construct_kind="class"),
+        _declared_method(_OKHTTP_HELPER, "req", _REQ_JVM),
+        _call(req, _OKHTTP_BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=req,
+            target=CallTarget(
+                owner="java/lang/invoke/StringConcatFactory#",
+                name="makeConcatWithConstants",
+                descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+            ),
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=19,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(
+            req,
+            _OKHTTP_BUILDER,
+            "url",
+            2,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="concat", source=19, value="http://{}/x")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=req,
+            ordinal=3,
+            value=CallArgument(kind="unresolved", source=8),
+        ),
+    ]
+    symbols: dict[str, str] = {}
+    for name, service in callers.items():
+        caller = _MODULE + method_descriptor(_OKHTTP_HELPER, name, "()V")
+        symbols[service] = caller
+        facts += [
+            _declared_method(_OKHTTP_HELPER, name, "()V"),
+            CallSiteFact(
+                document_id="doc_1",
+                caller=caller,
+                target=CallTarget(owner=_OKHTTP_HELPER, name="req", descriptor=_REQ_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                receiver=None,
+                result=5,
+                arguments=[CallArgument(kind="string", value=service)],
+            ),
+            _call(caller, _OKHTTP_BUILDER, "build", 1, receiver=5, result=6),
+            _call(
+                caller,
+                "okhttp3/OkHttpClient#",
+                "newCall",
+                2,
+                receiver=99,
+                result=20,
+                arguments=[CallArgument(kind="instance", source=6, symbol="okhttp3/Request#")],
+            ),
+            MethodReturnFact(document_id="doc_1", method=caller, ordinal=3, value=None),
+        ]
+    return symbols, facts
+
+
+@pytest.mark.pins("chains.a-ROOTLESS-terminal-walks-back-across-methods")
+@pytest.mark.pins("values.a-CONSTRUCTION-is-a-whole-chain")
+@pytest.mark.pins("fluent.a-chain-walked-back-reads-on-its-own-path")
+def test_each_caller_of_a_request_helper_gets_its_own_value(tmp_path: Path):
+    """Review Focus 2: one helper, two callers, `"svc-a"` and `"svc-b"`. Each caller's chain
+    is read on the path it took into the helper, so each row holds its own caller's service,
+    never one row holding both and never a row with the service unread."""
+    symbols, facts = _okhttp_request_helper({"a": "svc-a", "b": "svc-b"})
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("okhttp"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert sorted((r["caller"], r["peer"]) for r in rows) == [
+        (symbols["svc-a"], "svc-a"),
+        (symbols["svc-b"], "svc-b"),
+    ]
+    assert {(r["path"], r["resolution"]) for r in rows} == {("/x", "resolved")}
+
+
+def test_a_terminal_a_root_walk_reached_is_never_walked_twice(tmp_path: Path):
+    """The whole chain in one method: the root walk reaches `build()`, so the walk back from
+    a terminal no root reached never starts there. One end and one row, not two."""
+    sender = _sqs_method("inline")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "inline", "()V"),
+        *_sqs_request_chain(sender),
+        _sqs_send(sender, 3, source=3),
+        MethodReturnFact(document_id="doc_1", method=sender, ordinal=4, value=None),
+    ]
+    catalog = _shipped("aws-sqs-sdk")
+    workspace = _resolve_fluent_walked(tmp_path, facts, catalog)
+    rows = workspace.query("endpoints")
+    ends = list(chain_ends(workspace, catalog))
+    workspace.close()
+
+    assert [(r["caller"], r["path"]) for r in rows] == [(sender, "/acme/orders")]
+    assert [(end.caller, end.path) for end in ends] == [(sender, None)]
+
+
 # verbless fluent chains — a root declaring NO `http_method` capture derives
 # `method` NULL, resolution not penalised for the missing verb, mirroring
 # single_call's own D02 §2 `verbless` row (a topic has no verb). The invented

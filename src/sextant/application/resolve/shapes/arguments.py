@@ -32,7 +32,9 @@ from sextant.application.resolve.values import (
     LITERAL,
     STRING,
     Answer,
+    Path,
     ValueIndex,
+    resolve_positions,
     resolve_site,
 )
 from sextant.domain.closed_sets import Resolution
@@ -1763,6 +1765,7 @@ def _walked_channels(
     argument: dict[str, Any] | None,
     context: _Reads,
     forms: Sequence[dict[str, Any]] = (),
+    within: Path | None = None,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """One channel capture's destinations, resolved by the backward walk (Task 9).
 
@@ -1777,6 +1780,8 @@ def _walked_channels(
     **One tuple per distinct destination, not one per path** (§1c), the same reasoning
     `single_call` and `interface_implementation` state: several paths routinely agree about
     this one slot, and keeping them apart would mint a second row for one registration.
+
+    `within` is `_walked_with`'s.
     """
     # The provenance, the index and the site are all checked by `_walked_with`, which
     # does the walk; what is decided HERE is only which identities it may consult.
@@ -1814,7 +1819,7 @@ def _walked_channels(
     ]
     if not identities:
         return None
-    return _walked_with(argument, context, identities)
+    return _walked_with(argument, context, identities, within=within)
 
 
 def _walked_with(
@@ -1823,6 +1828,7 @@ def _walked_with(
     identities: Sequence[dict[str, Any]],
     reader: "Callable[[Answer | None], tuple[str | None, str | None, str]]" = channel_of_answer,
     branches: bool = True,
+    within: Path | None = None,
 ) -> Sequence[tuple[str | None, str | None, str]] | None:
     """`_walked_channels`' walk, with the identity list decided by the caller.
 
@@ -1842,6 +1848,11 @@ def _walked_with(
 
     `branches` is `resolve_site`'s: False reads a branch between literals as the walk did
     before ruling 7.
+
+    `within` is the path a chain walked back across methods took (`chains.ChainEnd.path`,
+    ruling 5, spec 2026-10-30): the argument is read as a further step of that path
+    (`resolve_positions`), so a helper's parameter is the argument at the call the chain
+    came through, never every caller the helper has. None reads every path, as before.
     """
     if context.values is None or context.workspace is None:
         return None
@@ -1852,14 +1863,26 @@ def _walked_with(
     site = context.values.sites.get((str(caller), int(str(ordinal))))
     if site is None:
         return None
-    walked = list(
-        dict.fromkeys(
-            reader(binding.slots.get(slot))
+    if within is not None:
+        answers = [
+            answered.get("value")
+            for answered in resolve_positions(
+                context.workspace,
+                {"value": (site, slot)},
+                context.values,
+                identities,
+                within,
+                branches,
+            )
+        ]
+    else:
+        answers = [
+            binding.slots.get(slot)
             for binding in resolve_site(
                 context.workspace, site, context.values, identities, branches
             )
-        )
-    )
+        ]
+    walked = list(dict.fromkeys(reader(answer) for answer in answers))
     return walked or [(None, None, "unresolved")]
 
 

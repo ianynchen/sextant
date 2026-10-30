@@ -775,8 +775,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        assembled = _walked_with(argument, context, (), reader=_assembled_text)",
-                replace="        assembled = _walked_with(argument, context, ())  # guard disabled",
+                find="        assembled = _walked_with(argument, context, (), "
+                "reader=_assembled_text, within=context.path)",
+                replace="        assembled = _walked_with(argument, context, (), "
+                "within=context.path)  # guard disabled",
             ),
         ),
     ),
@@ -2692,10 +2694,12 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="""            if constructed is not None:
                 stopped = self._declared_producer((method, constructed))
-                if stopped is not None:
-                    return _only(trail, stopped)
+                if stopped is not None and self._along_receivers:
 """,
-                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+                replace="""            if False:  # guard disabled by scripts/guard_check.py
+                stopped = self._declared_producer((method, constructed))
+                if stopped is not None and self._along_receivers:
+""",
             ),
         ),
     ),
@@ -2921,6 +2925,52 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="    for consumer in context.joined.get(_site_key(site), ()):\n",
                 replace="    for consumer in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-ROOTLESS-terminal-walks-back-across-methods": Guard(
+        what="a terminal no root walk reached is walked back from its receiver across "
+        "returns and parameters to a declared root, and becomes a chain end carrying the "
+        "path it took (ruling 5, spec 2026-10-30)",
+        why="a builder started in a helper and finished and sent by its caller — "
+        "`sqs.sendMessage(base().messageBody(m).build())` with the queue set in `base()` — "
+        "has a root without a terminal in one method and a terminal without a root in the "
+        "other, so the forward walk derives no row for a message the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            _walk_back(site, context, context_of, rootless)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONSTRUCTION-is-a-whole-chain": Guard(
+        what="on the chain reader (`along_receivers`), a declared construction is the first "
+        "call of a whole chain (`rooted`), never a call on a receiver it was handed",
+        why="a constructor's `receiver` is the object it builds, so read as any other call "
+        "the chain stopped at the step after it, unrooted: `new Request.Builder().url(u)` "
+        "returned from a helper reached no root, and its caller's send derived no row "
+        "(ruling 5, spec 2026-10-30)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if stopped is not None and self._along_receivers:\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-chain-walked-back-reads-on-its-own-path": Guard(
+        what="a chain end walked back across methods is derived with its captures read on "
+        "the path the walk took (`ChainEnd.path`, `_walked_with(..., within=)`)",
+        why="a shared helper's parameter is one value per caller: read on every path, "
+        '`req("svc-a")` and `req("svc-b")` gave each row both services, which is no '
+        "address, and both rows lost their peer (Review Focus 2, ruling 5)",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        _derive(end, context if end.path is None else "
+                "replace(context, path=end.path))\n",
+                replace="        _derive(end, context)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
