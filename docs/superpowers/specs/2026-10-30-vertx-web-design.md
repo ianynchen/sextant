@@ -1,6 +1,6 @@
 # Vert.x Web and WebClient — design
 
-**Status: DRAFT 2026-10-30, for the user's approval.** Java/Kotlin framework order 3
+**Status: DRAFT 2026-10-30, reviewed 2026-10-30 (three rulings: §3a item 5, §3b, §3c), for the user's approval.** Java/Kotlin framework order 3
 (`docs/COVERAGE.md` "Priority order"). Moves two COVERAGE lines: §5.1's **Vert.x Web**
 (`◐ 0/1`, tier B) and §5.2's **Vert.x WebClient** (`✗`, no row). The §2c Vert.x family row
 goes from `◐ (1 not shipped) | ✗ | … | ✅` to `✅ | ✅ | … | ✅`. The language-level REST in
@@ -88,7 +88,7 @@ The probe must also record:
 | `vert-x3/vertx-examples` | `091b03f` | 5.x | The official shapes. 66 files use Vert.x Web: 121 `verb("…")` routes, 43 `route()`, 32 `route("…")`, 11 `subRouter` (most mount a SockJS bridge or an OpenAPI-built router), 29 `WebClient.create`, 24 `client.verb(port, host, uri)`, 3 `*Abs`, 29 `send*`, 12 RxJava, 9 Kotlin coroutine, 9 `RouterBuilder` |
 | `strimzi/strimzi-kafka-bridge` | `d55d42b` | 5.2.2 | Routes come from `src/main/resources/openapi.json` through `RouterBuilder` (`routerBuilder.getRoute(operationId).addHandler(h)`); no `router.verb(…)` route |
 | `eclipse-hono/hono` | `e1c98be` | per its build | A production HTTP adapter (`VertxBasedHttpProtocolAdapter`): `router.post(ROUTE_TELEMETRY_ENDPOINT).handler(this::handlePostTelemetry)`, the same verb and path registered twice (once with auth and body handlers, once with the answering handler), `routeWithRegex`/`putWithRegex`, a path built with `String.format`, 24 verb calls on constant paths, and `client.post(QUERY_URI)` WebClient calls built in a helper |
-| `gentics/mesh` | `315fc22` | 5.1.5 | Most routes go through Mesh's own wrapper (`InternalEndpointRoute`, a library jar), whose `Router` calls are inside that jar. 26 direct `route("…")` and 12 `subRouter` calls |
+| `gentics/mesh` | `315fc22` | 5.1.5 | Most routes go through Mesh's own wrapper (`InternalEndpointRoute`, implemented in its `mesh/common` module and called from `mesh/core`), so from the module that declares the routes the `Router` calls are in another module's jar. 26 direct `route("…")` and 12 `subRouter` calls |
 
 **What the corpora say about the design:**
 - **Several routes, one identity, is the common production shape, not a corner** (Hono).
@@ -114,7 +114,7 @@ one *tree* of calls — Ktor's nested `route { get { } }`, Spring's `route().GET
 already has verb fan-out (`all_methods`), media and the `leading_slash` prefix join. A Vert.x
 router is not a tree: each route is its own statement on a shared `Router` object, joined
 to a mount only by object identity (§3c), which is a per-chain walk plus the producer
-reader. So routes stay on `fluent`, and `fluent` gains four GENERAL features, each named for
+reader. So routes stay on `fluent`, and `fluent` gains five GENERAL features, each named for
 what it does rather than for Vert.x:
 
 1. **Repeating steps** — a step declared `repeats: true` adds each call's capture to a list
@@ -125,6 +125,24 @@ what it does rather than for Vert.x:
 3. **Media** — `consumes`/`produces` captures filling the row's media columns (today
    `fluent` sets both NULL).
 4. **A prefix join** — `leading_slash`, applied to the prefix §3c finds.
+
+5. **A call that returns its own receiver configures it** (ruled 2026-10-30, review
+   issue 3). A step or terminal declared `returns_receiver: true` folds into the chain the
+   way a void call already does (`shapes/chains.py` `_walk`, the 2026-09-21 §4 rule): in
+   ordinal order, the walk going on to the next sibling, never a fork. Without it, the
+   Vert.x docs' own style —
+
+   ```java
+   Route route = router.route("/orders/:id");
+   route.method(HttpMethod.GET);
+   route.handler(this::readOrder);
+   ```
+
+   — is two forks of one root: one with the verb and no handler (no row), one with the
+   handler and no verb (nine rows, eight invented, all `resolved`). The flag goes only on
+   methods the framework documents as returning `this` (every `Route` builder method, per
+   its Javadoc); a call that returns a new object keeps forking. One-statement chains are
+   unchanged.
 
 `all_methods` expansion, the media columns and the `leading_slash` join already exist in
 `engines/combinator.py`; they are **moved into a shared module and called from both engines**,
@@ -202,7 +220,9 @@ request on; it is middleware.** (DR-6: Vert.x's own dispatch rule, not ours.)
   wire identity. The middleware-only chain produces no row, and the answering chain produces
   the one row. `fluent`'s own dedup key includes the caller and the peer, so for an INBOUND
   row the builder dedups on `(verb, path, handler)` instead, wherever the chains were
-  registered. Two different answering handlers on one `(verb, path)` stay two rows, each
+  registered. The new key applies to rows that carry a verb; the event-bus chain's inbound
+  rows keep today's key, and their existing tests and goldens must not move. Two different
+  answering handlers on one `(verb, path)` stay two rows, each
   `narrowed`: Vert.x dispatches to whichever was registered first, and registration order
   across methods is not in the code.
 - **The admitted incompleteness** (OI-143's rule: a structural rule, stated):
@@ -246,8 +266,10 @@ request on; it is middleware.** (DR-6: Vert.x's own dispatch rule, not ours.)
 
   This crosses locals, parameters and fields: Hono builds its router in a base class and
   hands it to `addRoutes(router)`.
-- **Nested mounts compose.** The prefix is `/api` from `/api/*` (the trailing `/*` is the
-  mount wildcard) or the `mountSubRouter` string. It is joined by `leading_slash`, the rule
+- **Nested mounts compose.** The prefix is the mount path with its trailing wildcard
+  removed: `*`, and a `/` right before it, so `/api/*`, `/api*` and `"/" + name + "*"` all
+  give `/api` or `/<name>` (vertx-examples' `"/eventbus*"`, Mesh's `mountPoint + "*"`); or
+  the `mountSubRouter` string. It is joined by `leading_slash`, the rule
   Ktor and Javalin already use.
 - **New catalog key:** `mount: [{ method: subRouter, router_arg: 0, prefix_from: receiver_path },
   { method: mountSubRouter, router_arg: 1, prefix_arg: 0 }]`, with `router_root` naming
@@ -322,6 +344,7 @@ test instead).
 | `router.get("/orders").handler(this::list)` and `router.post("/orders").handler(this::create)` | two rows |
 | `router.route(HttpMethod.PUT, "/orders/:id").handler(…)` | one row, verb from the constant |
 | `router.route("/orders/:id").method(GET).method(DELETE).handler(…)` | two rows |
+| The same route as separate statements on a `Route` local: `r.method(GET); r.method(DELETE); r.handler(…)` | the same two rows, no others |
 | `router.get("/health").respond(ctx -> Future.succeededFuture(status))` | one row |
 | Hono's pair: `router.post(EVENTS).handler(auth).handler(BodyHandler.create())` then `router.post(EVENTS).handler(this::ingest)` | one row, handler `ingest` |
 | An in-module `assertTenant` that calls `ctx.next()`, as the only handler of a `route("/t/*")` | no row |
@@ -352,7 +375,7 @@ list, so it does not hold either line below `✅`. The tier says what closing it
 | Shape | Why | Tier |
 |---|---|---|
 | **Routes from an OpenAPI file** (`RouterBuilder`, vertx-web-openapi(-router)) — Strimzi, 9 examples | The verb and path are in `openapi.json`/`.yaml`, not in a call; the code only names an `operationId`. Reading it is a document reader, a capability of its own | B |
-| **Routes registered through an in-house wrapper library** (Mesh's `InternalEndpointRoute`) | The `Router` calls are inside a jar Sextant does not read; the module only calls the wrapper | C |
+| **Routes registered through an in-house wrapper library** (Mesh's `InternalEndpointRoute`) | The `Router` calls are inside another module's jar (for Mesh, its own `mesh/common`), which a per-module analysis does not read; the module only calls the wrapper | C |
 | **Vert.x core `HttpClient`** (`vertx.createHttpClient().request(GET, port, host, uri).compose(req -> req.send())`) | A different API whose send sits inside a lambda passed to `compose`. It shares the address forms and would be a catalog of its own | B |
 | **A path served only by a library handler** (`StaticHandler`, `ProxyHandler`) | §3b: nothing in the module answers | C |
 | **A handler that calls `next()` on one branch** | §3b: read as middleware | C |
