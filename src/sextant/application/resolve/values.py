@@ -475,9 +475,10 @@ class ValueIndex:
     # constant (`useDefault() { cron = "…"; }`) has none there.
     called_at: Mapping[str, tuple[tuple[str, int], ...]] = dataclass_field(default_factory=dict)
     # Which constructions a getter's receiver can be (`_Walk._objects`), per (type, site,
-    # calling context, reads in progress), for as long as this index lives. The answer reads
-    # nothing but the index, and every site resolved asks it again: on `apollo-portal` one
-    # run asked 1,243 times for 463 distinct walks, each a full walk (GUIDELINES §8.7).
+    # reads in progress) and the calling context as far as the walk read it, for as long as
+    # this index lives. The answer reads nothing but the index, and every site resolved asks
+    # it again: on `apollo-portal` one run asked 1,243 times for 463 distinct walks, each a
+    # full walk (GUIDELINES §8.7).
     objects: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
     # Every type some call site here constructs (`owner` of an `<init>` site), read off
     # `sites`. A receiver can be a construction of a type only where one is in this set, so a
@@ -1164,6 +1165,13 @@ class _Walk:
         # of: a read that would ask one of them again answers as it did before ruling 1
         # rather than recurse.
         self._asking = asking
+        # Set on an object walk (`_objects`) only: how many of the frames it was started in
+        # are the asker's, and every read this walk made of those frames (`_frame_in`,
+        # `_object_site`, `_object_writes`). What the walk answers depends on the asker's
+        # frames through these reads and nothing else, so its answer serves every asker
+        # whose frames read the same.
+        self._base: int | None = None
+        self._reads: list[tuple[Any, ...]] = []
         # Per field: each call of a method writing it, with the objects that call was made on
         # (`_Walk._setter_calls_of`), per field and reads in progress.
         self._setter_calls: dict[
@@ -2513,7 +2521,7 @@ class _Walk:
         so whatever it receives comes from outside what was scanned — a framework calling
         an entry point, or a caller in a dependency nobody read.
         """
-        frame = _frame_of(frames, method)
+        frame = self._frame_in(frames, method)
         if frame is not None:
             return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
         callers = self._index.callers.get((method, index), ())
@@ -2588,42 +2596,48 @@ class _Walk:
         if not written and not constants and not produced:
             return _only(trail, _unresolved(NO_WRITER))
         if unseen:
-            # **A field read on an object from outside what was scanned borrows no other
-            # object's writes** (OI-222, ruled 2026-10-29). A write a setter or a
-            # constructor's PARAMETER makes is a value for the object that call was made on,
-            # and nothing ties that object to this one: DolphinScheduler's `CronUtils` sets
-            # a default cron on a `Schedule` it builds itself, and a trigger reading
-            # `schedule.getCrontab()` off a row from the database published that default as
-            # its schedule. What a constructor writes WITHOUT a parameter (an initialiser)
-            # every instance gets, so it stays; where anything was dropped, `external` stands
-            # beside it and the kept value is INEXACT, because the dropped writes are proof
-            # the value can be something else: an entity's field default read off a database
-            # row is a default, never the row's value.
-            kept_constants = tuple(
-                (writer, entry) for writer, entry in constants if _constructs(writer, symbol)
-            )
-            kept_produced = tuple(
-                (writer, entry) for writer, entry in produced if _constructs(writer, symbol)
-            )
-            overwritten = bool(
-                written
-                or len(kept_constants) < len(constants)
-                or len(kept_produced) < len(produced)
-            )
-            kept = self._binding_writes((), kept_constants, kept_produced, symbol, trail, frames)
-            if not overwritten:
-                return kept
-            return tuple(
-                dict.fromkeys(
-                    [(path, replace(answer, inexact=True)) for path, answer in kept]
-                    + [(trail, _unresolved(EXTERNAL))]
-                )
-            )
+            return self._from_outside(symbol, trail, frames)
         if read_on is not None:
             scoped = self._object_writes(symbol, read_on, trail, frames)
             if scoped is not None:
                 return scoped
         return self._binding_writes(written, constants, produced, symbol, trail, frames)
+
+    def _from_outside(self, symbol: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
+        """**A field read on an object from outside what was scanned borrows no other
+        object's writes** (OI-222, ruled 2026-10-29). A write a setter or a constructor's
+        PARAMETER makes is a value for the object that call was made on, and nothing ties
+        that object to this one: DolphinScheduler's `CronUtils` sets a default cron on a
+        `Schedule` it builds itself, and a trigger reading `schedule.getCrontab()` off a row
+        from the database published that default as its schedule. What a constructor writes
+        WITHOUT a parameter (an initialiser) every instance gets, so it stays; where anything
+        was dropped, `external` stands beside it and the kept value is INEXACT, because the
+        dropped writes are proof the value can be something else: an entity's field default
+        read off a database row is a default, never the row's value.
+
+        Read for an object every path to which is from outside (`_binding`'s `unseen`), and
+        for each such path to an object that other paths place (`_object_writes`)."""
+        written = self._index.writers.get(symbol, ())
+        constants = self._index.constants.get(symbol, ())
+        produced = self._index.produced.get(symbol, ())
+        kept_constants = tuple(
+            (writer, entry) for writer, entry in constants if _constructs(writer, symbol)
+        )
+        kept_produced = tuple(
+            (writer, entry) for writer, entry in produced if _constructs(writer, symbol)
+        )
+        overwritten = bool(
+            written or len(kept_constants) < len(constants) or len(kept_produced) < len(produced)
+        )
+        kept = self._binding_writes((), kept_constants, kept_produced, symbol, trail, frames)
+        if not overwritten:
+            return kept
+        return tuple(
+            dict.fromkeys(
+                [(path, replace(answer, inexact=True)) for path, answer in kept]
+                + [(trail, _unresolved(EXTERNAL))]
+            )
+        )
 
     def _binding_writes(
         self,
@@ -2679,6 +2693,8 @@ class _Walk:
         else is the method's own `this`, or a shape this does not place, and is answered as
         it always was. A field the facts mark `static` holds one value for every reader and
         is never placed."""
+        if self._base is not None and len(frames) <= self._base:
+            self._reads.append((_LAST, frames[-1] if frames else None))
         if not frames or reader is None or symbol in self._index.static_fields:
             return None
         callee, (caller, ordinal) = frames[-1]
@@ -2721,8 +2737,10 @@ class _Walk:
         other's zone.
 
         **Which objects.** The getter's receiver is followed to the constructions of the
-        field's own type (`_objects`). If any end is not one — a parameter nothing binds, a
-        library call, a subclass built — the read is not placed, and answers as before.
+        field's own type (`_objects`). An end that is not one — a parameter nothing binds, a
+        library call, a subclass built — is an object from outside and answers as one
+        (`_from_outside`, OI-250). Only where no end is a construction is the read not
+        placed, and it answers as before.
 
         **What each object holds.** For each construction `C`:
 
@@ -2756,22 +2774,35 @@ class _Walk:
         # (`a.getNext().setNext(…)`), or a cycle through two fields, reaches this read again,
         # and the walk that would ask it answers as it did before ruling 1 instead.
         asking = self._asking | {(symbol, site)}
+        if self._base:
+            # What follows reads the asker's frames whole (an object walk keyed on them, the
+            # receiver's frame): this walk's answer serves only the very same frames.
+            self._reads.append((_WHOLE,))
         outer = frames[:-1]
         read = self._objects(symbol, site, outer, asking)
-        if not read or any(built is None for built, _, _ in read):
+        if all(built is None for built, _, _ in read):
             return None
         receiver = self._receiver_of(self._index.sites[site], outer)
         groups = self._writes_by(symbol)
         calls = self._setter_calls_of(symbol, asking)
         reached: list[_Reached] = []
         for built, crossed, entered in read:
-            assert built is not None
             on_path = _combine(trail, crossed)
             if on_path is None:
                 continue
-            step = _Step((_OBJECT_OF, *receiver), f"{built[0]}@{built[1]}")
+            step = _Step(
+                (_OBJECT_OF, *receiver), "-" if built is None else f"{built[0]}@{built[1]}"
+            )
             on_object = _combine(on_path, (step,))
             if on_object is None:
+                continue
+            if built is None:
+                # **One path from outside does not unplace the others** (OI-250): ruoyi's
+                # `adminApi` is the object `WebProperties` builds, or whatever its `@Data`
+                # setter, which nothing here calls, is handed. That second object is from
+                # outside, and answers what one does (`_from_outside`), never the other
+                # construction's `/app-api`.
+                reached.extend(self._from_outside(symbol, on_object, frames))
                 continue
             constructed = self._index.sites[built]
             constructor = with_descriptor(
@@ -2882,12 +2913,15 @@ class _Walk:
         `asking` is every object read in progress, the one this serves included.
 
         Kept on the index (`ValueIndex.objects`): the walk below starts from nothing but
-        these four, so its answer is the same for every walk that asks."""
+        these four, and reads `frames` only where it records doing so (`_Walk._reads`). An
+        answer is reused for any frames that read the same, which is most of them: a receiver
+        that never reaches a parameter of a framed method reads none."""
         owner = owner_of(symbol)
-        key = (owner, site, frames, asking)
-        cached: tuple[_End, ...] | None = self._index.objects.get(key)
-        if cached is not None:
-            return cached
+        key = (owner, site, asking)
+        cached: tuple[_End, ...]
+        for held, reads, cached in self._index.objects.get(key, ()):
+            if _reads_alike(frames, held, reads):
+                return cached
         declared = (str(owner), "<init>")
         walk = _Walk(
             self._index,
@@ -2895,6 +2929,7 @@ class _Walk:
             which_object=True,
             asking=asking,
         )
+        walk._base = len(frames)
         ends: list[_End] = []
         for crossed, answer in walk._of_site(self._index.sites[site], RECEIVER, (), frames):
             entered = _entered(crossed, self._index)
@@ -2909,7 +2944,19 @@ class _Walk:
                     built = (producer.caller, producer.ordinal)
             ends.append((built, crossed, crossed if entered is None else entered))
         found = tuple(dict.fromkeys(ends))
-        self._index.objects[key] = found
+        self._index.objects.setdefault(key, []).append(
+            (frames, tuple(dict.fromkeys(walk._reads)), found)
+        )
+        return found
+
+    def _frame_in(self, frames: "_Frames", method: str) -> tuple[str, int] | None:
+        """`_frame_of`, recording on an object walk which of the asker's frames it read."""
+        if self._base is None:
+            return _frame_of(frames, method)
+        found = _frame_of(frames[self._base :], method)
+        if found is None:
+            found = _frame_of(frames[: self._base], method)
+            self._reads.append((_FRAME, method, found))
         return found
 
     def _writes_by(self, symbol: str) -> "dict[str | None, _Writes]":
@@ -2983,6 +3030,26 @@ _Writes = tuple[
     tuple[tuple[str | None, Mapping[str, Any]], ...],
     tuple[tuple[str, Mapping[str, Any]], ...],
 ]
+
+
+# What an object walk read of its asker's frames (`_Walk._reads`): the frame of a method, the
+# innermost frame, or the frames whole.
+_FRAME = "frame"
+_LAST = "last"
+_WHOLE = "whole"
+
+
+def _reads_alike(frames: _Frames, held: _Frames, reads: tuple[tuple[Any, ...], ...]) -> bool:
+    """Whether `frames` read as `held` did, at every read an object walk made of `held`."""
+    for read in reads:
+        if read[0] == _WHOLE:
+            return frames == held
+        if read[0] == _LAST:
+            if (frames[-1] if frames else None) != read[1]:
+                return False
+        elif _frame_of(frames, read[1]) != read[2]:
+            return False
+    return True
 
 
 def _frame_of(frames: _Frames, method: str) -> tuple[str, int] | None:

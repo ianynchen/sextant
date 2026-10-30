@@ -3574,6 +3574,12 @@ _PROPS = _PKG + "Props#"
 _TAKES_CELL = "(Lcom/acme/orders/values/Cell;)V"
 _TAKES_SPARE = "(Lcom/acme/orders/values/Spare;)V"
 _TAKES_PROPS = "(Lcom/acme/orders/values/Props;)V"
+# OI-250: `BoundProps` is `Props` with a setter nothing here calls, as Lombok's `@Data` gives
+# ruoyi's `WebProperties`.
+_BOUND_PROPS = _PKG + "BoundProps#"
+_TAKES_BOUND_PROPS = "(Lcom/acme/orders/values/BoundProps;)V"
+_TAKES_PREFIXED = "(Lcom/acme/orders/values/Prefixed;)V"
+_MAKES_PREFIXED = "()Lcom/acme/orders/values/Prefixed;"
 
 
 def _writes(owner: str, name: str, jvm: str, field: str, value: str | None = None) -> list[Fact]:
@@ -3637,6 +3643,7 @@ _HOSTS = _symbol(_OBJECTS, "hosts", "()V")
 _SPARES = _symbol(_OBJECTS, "spares", "()V")
 _TOUCH = _symbol(_OBJECTS, "touch", _TAKES_SPARE)
 _READ_PROPS = _symbol(_OBJECTS, "reader", _TAKES_PROPS)
+_READ_BOUND = _symbol(_OBJECTS, "boundReader", _TAKES_BOUND_PROPS)
 _SETS = _TAKES_STRING
 _GETS = _MAKES_STRING
 # `make`'s consuming sites.
@@ -3813,7 +3820,99 @@ def _object_facts() -> list[Fact]:
         _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
         _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
     ]
-    return facts + _cycle_facts()
+    return facts + _cycle_facts() + _bound_props_facts()
+
+
+def _bound_props_facts() -> list[Fact]:
+    """`BoundProps() { admin = new Prefixed("/admin-api"); app = new Prefixed("/app-api"); }`
+    with a getter for each, `void setAdmin(Prefixed a) { this.admin = a; }`, which nothing
+    here calls, and `void boundReader(BoundProps props) { one(props.getAdmin().getPrefix()); }`.
+    """
+    init = _symbol(_BOUND_PROPS, "<init>", "()V")
+    set_admin = _symbol(_BOUND_PROPS, "setAdmin", _TAKES_PREFIXED)
+    facts: list[Fact] = [
+        _type(_BOUND_PROPS),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=init,
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=_MODULE + _BOUND_PROPS,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            visibility="public",
+        ),
+        _void(_BOUND_PROPS, "<init>", "()V"),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=set_admin,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _BOUND_PROPS,
+            signature=Signature(
+                parameters=[Parameter(name="a", type=TypeRef(symbol=_PREFIXED))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+        ),
+        _void(_BOUND_PROPS, "setAdmin", _TAKES_PREFIXED),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_BOUND_PROPS + "admin.",
+            from_parameter=0,
+            written_by=set_admin,
+        ),
+    ]
+    for ordinal, (field, prefix, value) in enumerate(
+        (("admin", "/admin-api", 5), ("app", "/app-api", 6))
+    ):
+        getter = "get" + field.capitalize()
+        facts += [
+            _site(
+                init,
+                ordinal,
+                (_PREFIXED, "<init>", _SETS),
+                kind="special",
+                receiver=value,
+                arguments=_string(prefix),
+            ),
+            FieldWriteFact(
+                document_id="doc_values",
+                field=_BOUND_PROPS + field + ".",
+                value=CallArgument(kind="instance", symbol=_PREFIXED, source=value),
+                written_by=init,
+            ),
+            _declared(_BOUND_PROPS, getter, _MAKES_PREFIXED),
+            _returns(
+                _BOUND_PROPS,
+                getter,
+                _MAKES_PREFIXED,
+                0,
+                CallArgument(kind="field", symbol=_BOUND_PROPS + field + "."),
+            ),
+        ]
+    facts += [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_READ_BOUND,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _OBJECTS,
+            signature=Signature(
+                parameters=[Parameter(name="props", type=TypeRef(symbol=_BOUND_PROPS))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+        ),
+        _void(_OBJECTS, "boundReader", _TAKES_BOUND_PROPS),
+        _call(
+            _READ_BOUND,
+            0,
+            (_BOUND_PROPS, "getAdmin", _MAKES_PREFIXED),
+            None,
+            receiver_parameter=0,
+            result=50,
+        ),
+        _call(_READ_BOUND, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
+        _call(_READ_BOUND, 2, _ONE_TARGET, None, arguments=_results(51)),
+    ]
+    return facts
 
 
 def _cycle_facts() -> list[Fact]:
@@ -3920,6 +4019,19 @@ def test_an_object_built_into_a_field_is_read_through_its_own_construction(objec
     """The ruoyi shape: `Props` builds `/admin-api` into `admin` and `/app-api` into `app`, so
     `props.getAdmin().getPrefix()` is `/admin-api` alone."""
     assert _values_and_reasons(objects, _READ_PROPS, 2) == [("/admin-api", "None")]
+
+
+@pytest.mark.pins("values.a-field-read-answers-ITS-OWN-OBJECTS-writes")
+@pytest.mark.pins("values.a-path-from-OUTSIDE-does-not-unplace-the-built-object")
+def test_a_receiver_path_from_outside_does_not_unplace_the_constructed_one(objects):
+    """OI-250, the ruoyi shape with its `@Data` setter: `admin` is the `/admin-api` object
+    `BoundProps` builds, or whatever `setAdmin`, which nothing here calls, is handed. The
+    built object answers its own `/admin-api`; the other is an object from outside, which
+    answers `external`. `/app-api` is a different object's and is never the answer."""
+    assert _values_and_reasons(objects, _READ_BOUND, 2) == [
+        ("/admin-api", "None"),
+        ("None", "external"),
+    ]
 
 
 def test_a_setter_called_by_a_helper_on_the_object_counts_for_that_object_only(objects):

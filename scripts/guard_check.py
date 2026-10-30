@@ -2479,6 +2479,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-path-from-OUTSIDE-does-not-unplace-the-built-object": Guard(
+        what="a getter read whose receiver is a construction on some paths and an object from "
+        "outside on others answers each path by itself: the construction's own writes, and "
+        "for the outside path what an object from outside answers",
+        why="OI-250: ruoyi-vue-pro's `WebProperties` is `@Data`, so `adminApi` also has a "
+        "setter nothing here calls; that one path from outside left the read unplaced, and "
+        "`getAdminApi().getPrefix()` answered `/app-api` beside `/admin-api`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if all(built is None for built, _, _ in read):\n",
+                replace="        if any(built is None for built, _, _ in read):"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.two-reads-of-one-field-pair-ONE-write": Guard(
         what="two reads of one field on one receiver are on one write step, so a pair of them "
         "never takes two different writes",
