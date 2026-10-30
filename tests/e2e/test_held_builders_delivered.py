@@ -80,21 +80,20 @@ def test_a_jdk_request_built_over_statements_is_one_row(held_rows):
 
 
 def test_an_sqs_request_built_over_statements_names_its_queue(held_rows):
-    """`builder.queueUrl(…/orders); builder.messageBody(body); sendMessage(builder.build())`."""
-    [(method, _peer, path, _resolution, _request, _response)] = _of(
-        held_rows, "aws-sqs-sdk", "HeldSqsSender"
-    )
-    assert (method, path) == (None, "/123456789012/orders")
+    """`builder.queueUrl(…/orders); builder.messageBody(body); sendMessage(builder.build())`:
+    the queue's host and path reach the row, and the `String` body is the request shape."""
+    assert _of(held_rows, "aws-sqs-sdk", "HeldSqsSender") == [
+        (None, "sqs.us-east-1.amazonaws.com", "/123456789012/orders", "resolved", True, False)
+    ]
 
 
 def test_a_message_built_over_statements_names_its_topic(held_rows):
     """`builder = MessageBuilder.withPayload(order); builder.setHeader(TOPIC, "orders");
     kafkaTemplate.send(builder.build())`: the topic header reaches the row, and the payload
     is the request shape."""
-    [(method, _peer, path, _resolution, request, _response)] = _of(
-        held_rows, "spring-kafka-message", "HeldKafkaMessage"
-    )
-    assert (method, path, request) == (None, "orders", True)
+    assert _of(held_rows, "spring-kafka-message", "HeldKafkaMessage") == [
+        (None, None, "orders", "resolved", True, False)
+    ]
 
 
 def test_a_sink_spec_configured_over_statements_names_its_topic(held_rows):

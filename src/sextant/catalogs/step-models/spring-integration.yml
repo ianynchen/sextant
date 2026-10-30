@@ -86,7 +86,7 @@ displayName: The Spring Integration Java DSL flow definition (every member, clas
 # (`handler: none`) and `to(...)` (a divert) write nothing at a terminal either,
 # so they are not declared as one.
 
-# EVERY STEP BELOW BUT FOUR NAMES RETURNS THE FLOW DEFINITION IT WAS CALLED ON, and says
+# EVERY STEP BELOW BUT THREE NAMES RETURNS THE FLOW DEFINITION IT WAS CALLED ON, and says
 # so with `returns_receiver: true` (ruling 4, spec 2026-10-30): `b = IntegrationFlow.from(…);
 # b.transform(…); b.handle(…); b.get()`, each result dropped, is the flow written in one
 # chain. Measured with `javap -c -p`, spring-integration-core 6.2.4: the members are

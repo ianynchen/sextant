@@ -32,9 +32,9 @@ matches:
   # `returns_receiver: true` (ruling 4, spec 2026-10-30): a trigger, a job or a schedule
   # held in a local and configured over statements of their own, each result dropped, is
   # the chain written in one expression. Measured with `javap -c`, quartz 2.5.1: every one
-  # of these bodies ends `aload_0; areturn`, except `JobBuilder.storeDurably()` and
-  # `DailyTimeIntervalScheduleBuilder.onDaysOfTheWeek(Integer...)` (not steps here), which
-  # return an overload that does.
+  # of these bodies ends `aload_0; areturn`, except
+  # `DailyTimeIntervalScheduleBuilder.onDaysOfTheWeek(Integer...)`, which returns its
+  # `onDaysOfTheWeek(Set)` overload called on `this`, which does.
   steps:
     # The trigger's key (ruling 5). `withIdentity(name)`, `withIdentity(name, group)` and
     # `withIdentity(TriggerKey)` all match; the third captures an object, which is no
