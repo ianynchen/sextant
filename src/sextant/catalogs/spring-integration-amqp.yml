@@ -172,7 +172,12 @@ matches:
         method: <init>, captures: {} }
   steps:
     # The container's queue setters (row 12), reached on the concrete container
-    # (javac names the receiver's static type) or on the abstract owner.
+    # (javac names the receiver's static type) or on the abstract owner. These, the
+    # adapter's channel setters and the outbound bean's setters below are `void`
+    # (`public void setQueueNames(java.lang.String...);`, spring-rabbit 3.1.4;
+    # `public void setExchangeName(java.lang.String);`, spring-integration-amqp 6.2.4), so
+    # they return nothing to declare `returns_receiver` on: a void call already folds in
+    # place (ruling 4, spec 2026-10-30).
     - { method: setQueueNames,
         owner: [org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
                 org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
@@ -229,31 +234,46 @@ matches:
                 org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
         poisons: [routing_key] }
     # The DSL sink's two halves (row 9): declared on `AmqpBaseOutboundEndpointSpec`,
-    # reached on the concrete spec the factory returned.
+    # reached on the concrete spec the factory returned. Each returns the spec it was
+    # called on, so each is `returns_receiver: true` (ruling 4, spec 2026-10-30):
+    # `sink.exchangeName("x"); flow.handle(sink)` reads as the chain. `javap`,
+    # spring-integration-amqp 6.2.4, `AmqpBaseOutboundEndpointSpec`:
+    #   public S exchangeName(java.lang.String);
+    #   public S exchangeNameExpression(java.lang.String);
+    #   public S exchangeNameExpression(org.springframework.expression.Expression);
+    #   public S exchangeNameFunction(java.util.function.Function<org.springframework.messaging.Message<?>, java.lang.String>);
+    #   public S routingKey(java.lang.String);
+    #   public S routingKeyExpression(java.lang.String);
+    #   public S routingKeyExpression(org.springframework.expression.Expression);
+    #   public S routingKeyFunction(java.util.function.Function<org.springframework.messaging.Message<?>, java.lang.String>);
+    # `S` is the spec's own type parameter: `exchangeName`, `routingKey` and the two
+    # `Expression` forms end `invokevirtual _this(); areturn`, the others return an
+    # `Expression` form called on `this`, and `IntegrationComponentSpec._this()`
+    # (spring-integration-core 6.2.4) is `aload_0; areturn`.
     - { method: exchangeName,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        captures: { exchange: arg0 } }
+        captures: { exchange: arg0 }, returns_receiver: true }
     - { method: routingKey,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        captures: { routing_key: arg0 } }
+        captures: { routing_key: arg0 }, returns_receiver: true }
     - { method: exchangeNameExpression,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        poisons: [exchange] }
+        poisons: [exchange], returns_receiver: true }
     - { method: exchangeNameFunction,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        poisons: [exchange] }
+        poisons: [exchange], returns_receiver: true }
     - { method: routingKeyExpression,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        poisons: [routing_key] }
+        poisons: [routing_key], returns_receiver: true }
     - { method: routingKeyFunction,
         owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
                 org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
-        poisons: [routing_key] }
+        poisons: [routing_key], returns_receiver: true }
   # A constructor root is its own terminal; `get()` ends a flow — and is a
   # declared word, so the builder's own `get` poisons nothing under the step
   # model's `undeclared_steps`. A continued chain is executable from its

@@ -49,6 +49,28 @@ matches:
   # `retrieve`/`exchange*` mark the chain executable, not the walk's end:
   # `bodyToMono`/`bodyToFlux` follow `retrieve` in every real chain, so the
   # engine keeps folding step captures past a terminal (D02 §4, Task 11).
+  #
+  # `returns_receiver: true` (ruling 4, spec 2026-10-30) on every step that returns the spec
+  # or builder it was called on, so a spec held in a local and configured over statements
+  # of its own is the chain written in one expression. The interfaces declare a self type,
+  # whose erasure `javap` shows as the bound, not the object:
+  #   public abstract S uri(java.lang.String, java.lang.Object...);         (WebClient$UriSpec, and its four overloads)
+  #   public abstract S header(java.lang.String, java.lang.String...);      (WebClient$RequestHeadersSpec)
+  #   public abstract org.springframework.web.reactive.function.client.WebClient$RequestHeadersSpec<?> bodyValue(java.lang.Object);
+  #   public abstract org.springframework.web.reactive.function.client.WebClient$RequestHeadersSpec<?> body(…);   (five overloads)
+  #   public abstract org.springframework.web.reactive.function.client.WebClient$Builder baseUrl(java.lang.String);
+  #   public abstract org.springframework.web.reactive.function.client.WebClient$ResponseSpec onStatus(…);
+  #   public abstract org.springframework.web.reactive.function.client.WebClient$ResponseSpec onRawStatus(…);
+  #   public abstract org.springframework.web.util.UriBuilder path(java.lang.String);
+  #   public abstract org.springframework.web.util.UriBuilder queryParam(java.lang.String, …);   (two overloads)
+  # so the evidence is the implementations' own bodies (`javap -c`, spring-webflux and
+  # spring-web 6.1.6 and 7.0.2): every overload of `uri`, `header`, `bodyValue` and `body`
+  # on `DefaultWebClient$DefaultRequestBodyUriSpec` (the one spec `WebClient`'s verb methods
+  # return), `onStatus` and `onRawStatus` on `DefaultWebClient$DefaultResponseSpec`,
+  # `baseUrl` on `DefaultWebClientBuilder`, and `path` and `queryParam` on both
+  # `UriBuilder` implementations (`DefaultUriBuilderFactory$DefaultUriBuilder`,
+  # `UriComponentsBuilder`) end `aload_0; areturn`, or return an overload that does.
+  # `bodyToMono` and `bodyToFlux` return the response body, a value of its own, and fork.
   steps:
     # `baseUrl` sits BEFORE the verb root in a real chain
     # (`WebClient.builder().baseUrl(...).build().get()`), which is why the
@@ -59,8 +81,9 @@ matches:
     # part of a chain no root has vouched for yet (fix round 1). The type is
     # the one the facts carry — `WebClient$Builder`, `$`-dotted exactly as
     # OkHttp's own `Request$Builder`.
-    - { method: baseUrl,    owner: org.springframework.web.reactive.function.client.WebClient$Builder, captures: { base: arg0 } }
-    - { method: uri,        captures: { url: arg0 } }
+    - { method: baseUrl,    owner: org.springframework.web.reactive.function.client.WebClient$Builder, captures: { base: arg0 },
+        returns_receiver: true }
+    - { method: uri,        captures: { url: arg0 }, returns_receiver: true }
     # F5 §6.2 (W29). `collects`, not `captures`, and the difference is the whole reason
     # the key exists: a capture is LAST-WINS, so a chain calling `.header(...)` three
     # times would keep the third and silently claim it was the only one. A collecting
@@ -72,7 +95,7 @@ matches:
     # LAMBDA that mutates a headers object, and what it puts there is a body this engine
     # does not walk into. Declaring it would name an entry with no readable name and no
     # readable value, which is not an unresolved entry — it is no entry at all.
-    - { method: header,     collects: { kind: header, name: arg0, value: arg1 } }
+    - { method: header,     collects: { kind: header, name: arg0, value: arg1 }, returns_receiver: true }
     # `OI-73`. `uri(Function)` hands a `UriBuilder` to a lambda, and the URL — path AND
     # query parameters — is built inside that lambda's own synthetic method. Before this
     # the chain derived a row with `path` NULL: the call recorded and its whole address
@@ -82,14 +105,22 @@ matches:
     # Owner-declared, unlike the steps above, because these names are generic: `path` and
     # `queryParam` would otherwise match any builder in any chain this catalog roots.
     - { method: path,       owner: org.springframework.web.util.UriBuilder,
-        captures: { url: arg0 } }
+        captures: { url: arg0 }, returns_receiver: true }
     - { method: queryParam, owner: org.springframework.web.util.UriBuilder,
-        collects: { kind: query, name: arg0, value: arg1 } }
+        collects: { kind: query, name: arg0, value: arg1 }, returns_receiver: true }
 
-    - { method: bodyValue,  captures: { body: arg0 } }
-    - { method: body,       captures: { body: arg0 } }
+    - { method: bodyValue,  captures: { body: arg0 }, returns_receiver: true }
+    - { method: body,       captures: { body: arg0 }, returns_receiver: true }
     - { method: bodyToMono, captures: { response: arg0 } }
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
+    # The response spec's error-status handlers, which capture nothing and return the
+    # response spec they were called on: `spec = …retrieve(); spec.onStatus(…);
+    # spec.bodyToMono(T)` is the chain `retrieve().onStatus(…).bodyToMono(T)`, one row
+    # with its response shape, where a fork at `onStatus` gave a second row with none.
+    - { method: onStatus,    owner: org.springframework.web.reactive.function.client.WebClient$ResponseSpec,
+        returns_receiver: true }
+    - { method: onRawStatus, owner: org.springframework.web.reactive.function.client.WebClient$ResponseSpec,
+        returns_receiver: true }
   # MEASURED per Spring minor, and it is the one place in this file where the
   # two minors DISAGREE (CP-12 Q2). `WebClient$RequestHeadersSpec`'s
   # response-obtaining methods — the ones returning anything other than the

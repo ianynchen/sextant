@@ -2066,6 +2066,94 @@ def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
     )
 
 
+# Ruling 4 (spec 2026-10-30): the sink spec's `topic` returns the spec it was called on, as
+# the shipped spring-integration catalogs declare it.
+_FLAGGED_FLOW_MATCHES = {
+    **_FLOW_MATCHES,
+    "steps": [
+        {**step, "returns_receiver": True} if step["method"] == "topic" else step
+        for step in _FLOW_MATCHES["steps"]
+    ],
+}
+
+
+def _sink_flow(handed: int) -> list:
+    """`from("ch")`, then `spec = Sinks.senderSpec(t)` (value 29) and `spec.topic("out")`
+    (its result 30), then `handle(<value handed>)` and `get()`: the sink spec chained when
+    `handed` is 30, held in a local and configured in a statement of its own when 29."""
+    return [
+        _channel_sourced_flow()[0],
+        _call(
+            CALLER,
+            SINKS,
+            "senderSpec",
+            1,
+            receiver=None,
+            result=29,
+            arguments=[CallArgument(kind="instance", source=3, symbol="com/acme/flows/Template#")],
+            invoke_kind="static",
+        ),
+        _call(
+            CALLER,
+            SINK_SPEC,
+            "topic",
+            2,
+            receiver=29,
+            result=30,
+            arguments=[CallArgument(kind="string", value="out")],
+        ),
+        _call(
+            CALLER,
+            FLOW_DEF,
+            "handle",
+            3,
+            receiver=20,
+            result=21,
+            arguments=[CallArgument(kind="unresolved", source=handed)],
+        ),
+        _call(CALLER, FLOW_DEF, "get", 4, receiver=21, result=22),
+    ]
+
+
+@pytest.mark.pins("chains.a-CONFIGURING-call-hands-the-chain-on")
+def test_a_spec_step_that_returns_the_spec_still_hands_the_chain_to_its_consumer(
+    tmp_path: Path,
+):
+    """`handle(Sinks.senderSpec(t).topic("out"))` with `topic` declared
+    `returns_receiver: true`. The walk folds `topic` in place instead of walking it as a
+    fork, and `handle` takes `topic`'s result: the chain is still handed on there, so the
+    outbound row is the one an unflagged `topic` gives. Folded without the hand-on, the
+    sink's chain ended at `topic` with no terminal and the row was lost."""
+    workspace = _run(tmp_path, _sink_flow(handed=30), _catalog(_FLAGGED_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["direction"], row["path"], row["caller"], row["resolution"]) == (
+        "outbound",
+        "out",
+        CALLER,
+        "resolved",
+    )
+
+
+@pytest.mark.pins("chains.a-HELD-value-hands-on-what-configured-it")
+def test_a_spec_configured_in_a_statement_of_its_own_hands_its_topic_on(tmp_path: Path):
+    """`spec = Sinks.senderSpec(t); spec.topic("out"); flow.handle(spec)`: `handle` takes
+    the spec itself, and `topic`, called on it before, returns it, so it configured the
+    spec that `handle` reads. The continued chain carries the topic: one outbound row on
+    `out`, where it used to carry only what the root captured."""
+    workspace = _run(tmp_path, _sink_flow(handed=29), _catalog(_FLAGGED_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["direction"], row["path"], row["caller"], row["resolution"]) == (
+        "outbound",
+        "out",
+        CALLER,
+        "resolved",
+    )
+
+
 def _channel_sourced_flow(*steps: tuple[str, list[CallArgument]]) -> list:
     """`Flow.from("ch")` followed by `steps` and `get()` — a flow nothing continues."""
     return [

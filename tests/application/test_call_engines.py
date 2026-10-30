@@ -12081,3 +12081,210 @@ def test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cor
         )
         == []
     )
+
+
+# --- Ruling 4 (spec 2026-10-30): a call that returns its own receiver configures it ---
+
+# The OkHttp shape with `url` and `post` flagged `returns_receiver: true`: each returns the
+# builder it was called on, so a statement that drops its result still configures the
+# builder the later `build()` reads.
+_RETURNS_RECEIVER_MATCHES = {
+    **_OKHTTP_MATCHES,
+    "steps": [
+        {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+        {
+            "method": "post",
+            "returns_receiver": True,
+            "captures": {"http_method": "POST", "body": "arg0"},
+        },
+    ],
+}
+
+
+def _url(caller: str, ordinal: int, url: str, result: int) -> CallSiteFact:
+    return _call(
+        caller,
+        BUILDER,
+        "url",
+        ordinal,
+        receiver=2,
+        result=result,
+        arguments=[CallArgument(kind="string", value=url)],
+    )
+
+
+def _new_call(caller: str, ordinal: int, request: int) -> CallSiteFact:
+    return _call(
+        caller,
+        OKHTTP_CLIENT,
+        "newCall",
+        ordinal,
+        receiver=99,
+        result=ordinal + 100,
+        arguments=[CallArgument(kind="instance", source=request, symbol=REQUEST)],
+    )
+
+
+def _builder_over_statements(caller: str) -> list:
+    """`b = new Builder(); b.url("https://h/orders"); b.post(body); newCall(b.build())` —
+    four statements on one builder, the results of `url` and `post` dropped."""
+    return [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _url(caller, 1, "https://h/orders", result=8),
+        _call(
+            caller,
+            BUILDER,
+            "post",
+            2,
+            receiver=2,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=5, symbol=ORDER_REQUEST)],
+        ),
+        _call(caller, BUILDER, "build", 3, receiver=2, result=14),
+        _new_call(caller, 4, request=14),
+    ]
+
+
+def _rows_of(tmp_path: Path, facts: list, matches: dict) -> list:
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(matches, "invented-receiver"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return [(r["method"], r["path"], r["peer"], r["resolution"]) for r in rows]
+
+
+@pytest.mark.pins("chains.a-call-returning-its-RECEIVER-configures-it")
+def test_a_builder_configured_over_several_statements_is_one_chain(tmp_path: Path):
+    """`url` and `post` return the builder they were called on, so a statement dropping
+    that result still configures the builder: the walk folds both into the chain in place,
+    as it folds a void setter, and `build()` reads them. Walked as forks, each saw only
+    itself, and `build()` read a builder with no address and the root's verb."""
+    facts = _builder_over_statements("com/acme/http/Client#export().")
+
+    assert _rows_of(tmp_path, facts, _RETURNS_RECEIVER_MATCHES) == [
+        ("POST", "/orders", "h", "resolved")
+    ]
+
+
+def test_configuration_after_a_build_never_reaches_the_built_request(tmp_path: Path):
+    """Review Focus 1: `b.url(a); r1 = b.build(); newCall(r1); b.url(c); r2 = b.build();
+    newCall(r2)`. `build()` returns a new value, so it still forks, copying the captures
+    as they stand when it is reached: r1 carries `a` alone, and the later `url(c)` reaches
+    r2 only."""
+    caller = "com/acme/http/Client#twice()."
+    facts = [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _url(caller, 1, "https://h/a-path", result=8),
+        _call(caller, BUILDER, "build", 2, receiver=2, result=14),
+        _new_call(caller, 3, request=14),
+        _url(caller, 4, "https://h/c-path", result=9),
+        _call(caller, BUILDER, "build", 5, receiver=2, result=15),
+        _new_call(caller, 6, request=15),
+    ]
+
+    paths = [path for _, path, _, _ in _rows_of(tmp_path, facts, _RETURNS_RECEIVER_MATCHES)]
+
+    assert sorted(paths) == ["/a-path", "/c-path"]
+
+
+def test_an_unflagged_call_returning_a_value_still_forks(tmp_path: Path):
+    """The flag is per step. `post` left unflagged is walked as it always was, a fork of
+    its own: its verb never reaches the `build()` called on the builder beside it, while
+    the flagged `url` does."""
+    matches = {
+        **_RETURNS_RECEIVER_MATCHES,
+        "steps": [
+            {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+            {"method": "post", "captures": {"http_method": "POST", "body": "arg0"}},
+        ],
+    }
+    facts = _builder_over_statements("com/acme/http/Client#export().")
+
+    assert _rows_of(tmp_path, facts, matches) == [("GET", "/orders", "h", "resolved")]
+
+
+def test_a_flagged_terminal_folds_in_place_and_what_follows_it_configures_the_chain(
+    tmp_path: Path,
+):
+    """A terminal written `{method: send, returns_receiver: true}` makes the chain
+    executable and folds in place: the `url` set on the same object afterwards reaches the
+    row. Unflagged, `send` forks with what it has, and that row has no address."""
+    caller = "com/acme/http/Client#send()."
+    facts = [
+        _call(caller, BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(caller, BUILDER, "send", 1, receiver=2, result=7),
+        _url(caller, 2, "https://h/orders", result=8),
+    ]
+    flagged = {
+        **_RETURNS_RECEIVER_MATCHES,
+        "terminal": [{"method": "send", "returns_receiver": True}],
+    }
+
+    assert _rows_of(tmp_path, facts, flagged) == [("GET", "/orders", "h", "resolved")]
+
+
+def test_a_base_set_as_a_statement_on_a_held_builder_reaches_the_row(tmp_path: Path):
+    """`b = WebClient.builder(); b.baseUrl("http://a"); c = b.build(); c.get().uri("/x")
+    .retrieve()`. The base is set by a statement on `b`, not on the chain that leads to the
+    root, so the pre-root fold reaches it only because `baseUrl` is flagged: it returns
+    `b`, and a flagged call on a value the chain passes through, before that chain reads
+    it, configures it."""
+    caller = "com/acme/http/Client#heldBuilder()."
+    matches = {
+        **_BASE_MATCHES,
+        "steps": [
+            {
+                "method": "baseUrl",
+                "owner": "com.acme.http.WebClient$Builder",
+                "returns_receiver": True,
+                "captures": {"base": "arg0"},
+            },
+            *_BASE_MATCHES["steps"][1:],
+        ],
+    }
+    facts = [
+        _call(caller, WEBCLIENT, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            BUILDER_SPEC,
+            "baseUrl",
+            1,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="string", value="http://a")],
+        ),
+        _call(caller, BUILDER_SPEC, "build", 2, receiver=2, result=10),
+        _call(caller, WEBCLIENT, "get", 3, receiver=10, result=11),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            4,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="string", value="/x")],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 5, receiver=12, result=13),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(matches))
+    row = _endpoint_of(workspace, caller)
+    workspace.close()
+
+    assert row["peer"] == "a" and row["path"] == "/x"
+
+
+@pytest.mark.parametrize(
+    "matches",
+    [
+        {
+            **_OKHTTP_MATCHES,
+            "steps": [{"method": "url", "returns_receiver": "yes", "captures": {"url": "arg0"}}],
+        },
+        {**_OKHTTP_MATCHES, "terminal": [{"method": "build", "returns_receiver": 1}]},
+    ],
+    ids=["a step", "a terminal"],
+)
+def test_a_non_bool_returns_receiver_is_refused(tmp_path: Path, matches: dict):
+    """`returns_receiver` is true or false. Anything else is a broken catalog, refused at
+    load and naming the key, never read as truthy."""
+    with pytest.raises(CatalogError, match="returns_receiver"):
+        _resolve_fluent(tmp_path, [], _fluent_catalog(matches, "invented-receiver"))

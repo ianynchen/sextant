@@ -615,8 +615,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                if self._accessor((method, ordinal)):\n"
-                "                    continue\n",
+                find="            if self._accessor((method, ordinal)):\n"
+                "                continue\n",
                 replace="",
             ),
         ),
@@ -6393,6 +6393,70 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find='    stamped = {**argument, "caller": site["caller"]}\n',
                 replace='    stamped = {**argument, **({"caller": site["caller"]} if argument.get("kind") == "parameter" else {})}  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "chains.a-call-returning-its-RECEIVER-configures-it": Guard(
+        what="a call declared `returns_receiver: true` folds into the chain in place, as a "
+        "void setter does, with what is called on its result, instead of forking a walk of "
+        "its own (ruling 4, spec 2026-10-30)",
+        why="a builder configured over several statements, `b.url(u); b.post(x); "
+        "newCall(b.build())`, drops the results of `url` and `post`. Walked as forks each "
+        "saw only itself, and the `build()` beside them read a builder with no address and "
+        "the root's default verb: a row with no destination, for a request the module does "
+        "send to a known address",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if _chain_key(next_site) is None or _configures(next_site, context):\n",
+                replace="        if _chain_key(next_site) is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-CONFIGURING-call-hands-the-chain-on": Guard(
+        what="a call folded in place because it returns the object it was called on still "
+        "hands the chain on to a consumer that takes its result (ruling 4, spec 2026-10-30; "
+        "spec 2026-09-21 §5)",
+        why="`handle(Amqp.outboundAdapter(t).exchangeName(x).routingKey(k))`: once the spec "
+        "steps are declared `returns_receiver: true` they are folded, never walked, so the "
+        "continuation `_walk` asks for at each site was never asked for them and the sink's "
+        "chain ended with no terminal. The outbound row of every chained sink spec was lost",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                handed_on = _continuations(next_site, captures, context)\n",
+                replace="                handed_on = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-HELD-value-hands-on-what-configured-it": Guard(
+        what="a value handed to a consumer carries the configuring calls made on it before "
+        "the consumer took it (ruling 4, spec 2026-10-30)",
+        why='`spec = Kafka.outboundChannelAdapter(t); spec.topic("orders"); '
+        "flow.handle(spec)`: the continuation was taken from the root with the root's "
+        "captures alone, before `topic` was folded, so the outbound row had no topic",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        _continue(consumer, _configured_for(site, consumer, captures, context), context)\n",
+                replace="        _continue(consumer, captures, context)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONFIGURING-call-is-not-an-escape": Guard(
+        what="a call the reader declares returns the object it was called on (`configuring`), "
+        "made on a value between its producer and its use, is not `escapes`: the chain reader "
+        "gathers it into the chain, with what is called on its result (ruling 4, spec "
+        "2026-10-30, the backward half)",
+        why="a builder configured in statements of its own, `cb = cronSchedule(c); "
+        "cb.withMisfireHandlingInstructionDoNothing(); tb.withSchedule(cb)`, reads as a value "
+        "something unknown wrote into, so the chain is never found: the schedule loses its "
+        "cron and the row drops to `partial`, for a trigger whose cron the code states",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if row is None or _call_of(row) not in self._configuring:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

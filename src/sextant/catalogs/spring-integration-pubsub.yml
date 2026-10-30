@@ -127,6 +127,11 @@ matches:
         descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
         captures: { channel_source: { bean_via: arg0 } } }
   steps:
+    # Every step of this file is a `void` setter (`public void setOutputChannelName(java.lang.String);`,
+    # spring-integration-core 6.2.4; `public void setTopic(java.lang.String);`,
+    # spring-cloud-gcp-pubsub 5.1.2), so none declares `returns_receiver`: a void call
+    # returns nothing, and already folds in place (ruling 4, spec 2026-10-30).
+    #
     # `MessageProducerSupport`'s two setters (CP-27 row 5), reached on the
     # adapter's own owner — javac names the receiver's static type, and the
     # adapter redeclares neither (CP-28 row 1).

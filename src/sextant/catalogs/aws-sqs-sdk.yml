@@ -44,9 +44,18 @@ matches:
   # by a root, so it consults owner-DECLARED steps only. An owner-free step
   # like these two is therefore still forward-only, exactly as this comment
   # describes.
+  #
+  # BOTH STEPS RETURN THE BUILDER THEY WERE CALLED ON, so each is `returns_receiver: true`
+  # (ruling 4, spec 2026-10-30): `b.queueUrl(q); b.messageBody(m); sendMessage(b.build())`
+  # is one request. `SendMessageRequest$Builder` is an interface, and `builder()` returns its
+  # one implementation (`new SendMessageRequest$BuilderImpl`), whose bodies end
+  # `aload_0; areturn` — `javap -c`, software.amazon.awssdk:sqs 2.25.31, the version
+  # `fixtures/orders-service` builds against:
+  #   public final software.amazon.awssdk.services.sqs.model.SendMessageRequest$Builder queueUrl(java.lang.String);
+  #   public final software.amazon.awssdk.services.sqs.model.SendMessageRequest$Builder messageBody(java.lang.String);
   steps:
-    - { method: queueUrl,    captures: { url: arg0 } }
-    - { method: messageBody, captures: { body: arg0 } }
+    - { method: queueUrl,    captures: { url: arg0 }, returns_receiver: true }
+    - { method: messageBody, captures: { body: arg0 }, returns_receiver: true }
   # `Builder.build()` erases to `()Ljava/lang/Object;` (a generic builder
   # interface) — a `CHECKCAST` back to `SendMessageRequest` links the
   # erased result to `sendMessage`'s own argument (2C's CHECKCAST

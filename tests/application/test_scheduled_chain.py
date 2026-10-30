@@ -11,6 +11,7 @@ pairs them (§3c): `forJob(...)` on the chain, or a `scheduleJob(job, trigger)` 
 reaches, and the handler is the body the JVM's dispatch rule picks for the job class.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import scheduled_chain
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.shapes.chains import configuring_calls
 from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import OriginTier
@@ -300,14 +302,17 @@ def _cron_trigger(caller: str, *identity: str) -> list[CallSiteFact]:
     return sites
 
 
-def _scheduled(tmp_path: Path, facts: list[CallSiteFact]) -> list[dict]:
+def _scheduled(
+    tmp_path: Path, facts: list[CallSiteFact], catalog: Catalog | None = None
+) -> list[dict]:
     write_fact_file(tmp_path / "facts" / "Triggers.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace.load_facts(tmp_path / "facts")
         record_return_flows(workspace)
         record_call_edges(workspace)
-        skipped = derive_endpoints(workspace, [_quartz(_catalogs())], capabilities=CAPABILITIES)
+        catalog = catalog if catalog is not None else _quartz(_catalogs())
+        skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
         assert skipped == []
         return workspace.query("scheduled_work")
     finally:
@@ -461,6 +466,126 @@ def test_the_kind_comes_from_a_helpers_declared_return_type(tmp_path: Path):
     )
     [row] = _scheduled(tmp_path, facts)
     assert (row["trigger"], row["expression"], row["resolution"]) == ("cron", None, "partial")
+
+
+_MISFIRE = "withMisfireHandlingInstructionDoNothing"
+
+
+def _configuring_quartz() -> Catalog:
+    """The shipped catalog, which declares its trigger steps and every schedule builder's own
+    setters `returns_receiver: true`, as Quartz's builders do (ruling 4, spec 2026-10-30):
+    each returns `this`. The `CronScheduleBuilder` step is what the chain reader that reads
+    the schedule (`_schedules`) takes as configuring."""
+    catalog = _quartz(_catalogs())
+    assert any(
+        step["method"] == _MISFIRE and step.get("returns_receiver")
+        for step in catalog.matches["steps"]
+    )
+    return catalog
+
+
+def test_only_the_flagged_overload_is_a_configuring_call():
+    """A step narrowed by `descriptor` flags that one overload (ruling 4): the set the
+    chain reader takes names the exact call, so `forJob(JobKey)` beside a flagged
+    `forJob(String)` is not one."""
+    flagged = "(Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
+    other = "(Lorg/quartz/JobKey;)Lorg/quartz/TriggerBuilder;"
+    catalog = _quartz(_catalogs())
+    step = {
+        "owner": "org.quartz.TriggerBuilder",
+        "method": "forJob",
+        "descriptor": flagged,
+        "returns_receiver": True,
+    }
+    catalog = replace(catalog, matches={**catalog.matches, "steps": [step]})
+    sites = [
+        {"owner": TRIGGER_BUILDER, "name": "forJob", "descriptor": descriptor}
+        for descriptor in (flagged, other)
+    ]
+    assert configuring_calls(catalog, sites) == {(TRIGGER_BUILDER, "forJob", flagged)}
+
+
+@pytest.mark.pins("values.a-CONFIGURING-call-is-not-an-escape")
+def test_a_trigger_built_over_several_statements_keeps_its_name_and_cron(tmp_path: Path):
+    """`tb = newTrigger(); tb.withIdentity("x"); cb = cronSchedule("0 0 * * * ?");
+    cb.withMisfireHandlingInstructionDoNothing(); tb.withSchedule(cb);
+    scheduleJob(newJob(AJob.class).build(), tb.build())`. Each step returns the builder it
+    was called on, so each configures it (ruling 4): the trigger walked forward is named
+    `x`, the schedule read backward from `withSchedule` is the cron with the misfire call
+    in its chain rather than `escapes`, and the job it is paired with is `AJob`."""
+    caller = f"{_JOBS}Triggers#hourly()."
+    builder = "Lorg/quartz/TriggerBuilder;"
+    facts = [
+        *_classes("AJob"),
+        _site(caller, 0, TRIGGER_BUILDER, "newTrigger", f"(){builder}", result=1),
+        _site(
+            caller,
+            1,
+            TRIGGER_BUILDER,
+            "withIdentity",
+            f"(Ljava/lang/String;){builder}",
+            receiver=1,
+            result=2,
+            arguments=(_string("x"),),
+        ),
+        _site(
+            caller,
+            2,
+            CRON_BUILDER,
+            "cronSchedule",
+            "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;",
+            result=3,
+            arguments=(_string("0 0 * * * ?"),),
+        ),
+        _site(
+            caller,
+            9,
+            CRON_BUILDER,
+            _MISFIRE,
+            "()Lorg/quartz/CronScheduleBuilder;",
+            receiver=3,
+            result=10,
+        ),
+        _site(
+            caller,
+            10,
+            TRIGGER_BUILDER,
+            "withSchedule",
+            f"(Lorg/quartz/ScheduleBuilder;){builder}",
+            receiver=1,
+            result=4,
+            arguments=(CallArgument(kind="unresolved", source=3),),
+        ),
+        _site(caller, 11, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=1, result=5),
+        _site(
+            caller,
+            12,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=6,
+            arguments=(_class("AJob"),),
+        ),
+        _site(caller, 13, JOB_BUILDER, "build", "()Lorg/quartz/JobDetail;", receiver=6, result=7),
+        _site(
+            caller,
+            14,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            _SCHEDULE_JVM,
+            receiver=99,
+            result=8,
+            arguments=(
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="unresolved", source=5),
+            ),
+        ),
+    ]
+    rows = _scheduled(tmp_path, facts, _configuring_quartz())
+    assert [
+        (row["name"], _handler_of(row), row["trigger"], row["expression"], row["resolution"])
+        for row in rows
+    ] == [("DEFAULT.x", "AJob#execute", "cron", "0 0 * * * ?", "resolved")]
 
 
 # --- the job and its handler (§3c) ---------------------------------------------------------

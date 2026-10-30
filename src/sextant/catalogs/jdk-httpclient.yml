@@ -71,24 +71,37 @@ matches:
   # `path` NULL at `unresolved` — honest, never silent. A `"…/" + id` concatenation
   # handed to either factory reads the same way, since `url_of` reads a string literal
   # and nothing else.
+  #
+  # EVERY STEP RETURNS THE BUILDER IT WAS CALLED ON, so each is `returns_receiver: true`
+  # (ruling 4, spec 2026-10-30). `HttpRequest.Builder` is an interface, so `javap --module
+  # java.net.http` gives only the declared type:
+  #   public abstract java.net.http.HttpRequest$Builder uri(java.net.URI);
+  #   public abstract java.net.http.HttpRequest$Builder GET();
+  #   public default java.net.http.HttpRequest$Builder HEAD();
+  #   public abstract java.net.http.HttpRequest$Builder DELETE();
+  #   public abstract java.net.http.HttpRequest$Builder POST(java.net.http.HttpRequest$BodyPublisher);
+  #   public abstract java.net.http.HttpRequest$Builder PUT(java.net.http.HttpRequest$BodyPublisher);
+  #   public abstract java.net.http.HttpRequest$Builder method(java.lang.String, java.net.http.HttpRequest$BodyPublisher);
+  # and the Javadoc of each of the seven (`HttpRequest.java` in the JDK 21 `src.zip`) states
+  # "@return this builder".
   steps:
-    - { method: uri,    captures: { url: arg0 },
+    - { method: uri,    captures: { url: arg0 }, returns_receiver: true,
         url_via: [{ owner: java.net.URI, method: create, arg: 0 },
                   { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
-    - { method: GET,    captures: { http_method: GET } }
-    - { method: HEAD,   captures: { http_method: HEAD } }
-    - { method: DELETE, captures: { http_method: DELETE } }
+    - { method: GET,    captures: { http_method: GET }, returns_receiver: true }
+    - { method: HEAD,   captures: { http_method: HEAD }, returns_receiver: true }
+    - { method: DELETE, captures: { http_method: DELETE }, returns_receiver: true }
     # `body` captures a `BodyPublisher`, which is never a payload TYPE — `ofString(s)`,
     # `ofByteArray`, `ofFile` — so `request_shape` stays NULL and the row is
     # `unresolved` (ruling I1: a capture reached and unread). The same answer
     # `okhttp.yml`'s `post(RequestBody)` gives on the same fixture, and the honest one:
     # this request carries a body whose wire type nothing here can read. Reading through
     # `BodyPublishers.ofString(x)` to `x`'s own type is its own item.
-    - { method: POST,   captures: { http_method: POST, body: arg0 } }
-    - { method: PUT,    captures: { http_method: PUT, body: arg0 } }
+    - { method: POST,   captures: { http_method: POST, body: arg0 }, returns_receiver: true }
+    - { method: PUT,    captures: { http_method: PUT, body: arg0 }, returns_receiver: true }
     # The fully generic setter (`A-C2`): the verb is argument 0, read as a string, and
     # a verb held in a variable derives `method` NULL at `unresolved`.
-    - { method: method, captures: { http_method: arg0, body: arg1 } }
+    - { method: method, captures: { http_method: arg0, body: arg1 }, returns_receiver: true }
   # `header`/`headers`/`setHeader`/`timeout`/`version`/`expectContinue`/`copy` pass
   # through undeclared (D02 §4): none sets a verb or an address.
   #

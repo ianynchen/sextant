@@ -313,6 +313,44 @@ def _accessed(name: str, jvm: str, call: str = "contents") -> list[Fact]:
     ]
 
 
+# `Buffer#append(String)`, and an overload of it, each handing back a `Buffer`.
+_APPENDS = "(Ljava/lang/String;)L" + _BUFFER[:-1] + ";"
+_APPENDS_INT = "(I)L" + _BUFFER[:-1] + ";"
+
+
+def _configured(name: str, second: str, second_jvm: str = _APPENDS) -> list[Fact]:
+    """`Mutator#<name>`: `b = Names.one(); b.append("x").<second>("y"); use(b);
+    b.append("z")` — each `Buffer` call hands back a `Buffer`; the second is the overload
+    `second_jvm` describes."""
+    caller = _symbol(_MUTATOR, name, "()V")
+
+    def call(ordinal: int, method: str, receiver: int, text: str, jvm: str = _APPENDS) -> Fact:
+        return _site(
+            caller,
+            ordinal,
+            (_BUFFER, method, jvm),
+            kind="virtual",
+            receiver=receiver,
+            arguments=[CallArgument(kind="string", value=text)],
+            result=ordinal + 10,
+        )
+
+    return [
+        _declared(_MUTATOR, name, "()V"),
+        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        call(1, "append", 7, "x"),
+        call(2, second, 11, "y", second_jvm),
+        _site(
+            caller,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+        call(4, "append", 7, "z"),
+    ]
+
+
 def _facts() -> list[Fact]:
     """One fact set, one arm per rule the walk implements.
 
@@ -481,6 +519,12 @@ def _facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="unresolved", source=7)],
         ),
+        # A value configured over several statements by calls that return it (ruling 4):
+        # `b = one(); b.append("x").append("y"); use(b); b.append("z")`, and the same with
+        # one call on the returned value that is not declared to return it.
+        *_configured("configured", "append"),
+        *_configured("reconfigured", "reset"),
+        *_configured("overloaded", "append", _APPENDS_INT),
         # A binding whose WRITER is reported: the field is assigned from the
         # constructor's parameter 0, and two callers construct it with different
         # literals. The sixth edge crosses to both (spec 2026-10-18 §4 case 1 —
@@ -1959,6 +2003,66 @@ def test_the_same_chain_with_nothing_in_between_resolves(walked):
     would look correct all the way down."""
     bindings = _bindings(walked, _symbol(_MUTATOR, "kept", "()V"), 1)
     assert [b.slots[0].value for b in bindings] == ["solo"]
+
+
+def _chain_reader(
+    workspace: DuckDbWorkspace, name: str, configuring: set[tuple[str, str, str]]
+) -> tuple[Producer, ...]:
+    """`Mutator#<name>`'s use of the value, read by the chain reader with `configuring`."""
+    site = _at(workspace, _symbol(_MUTATOR, name, "()V"), 3)
+    return producers_of(
+        value_index(workspace),
+        site,
+        0,
+        {(_NAMES, "one")},
+        along_receivers=True,
+        configuring=configuring,
+    )
+
+
+@pytest.mark.pins("values.a-CONFIGURING-call-is-not-an-escape")
+def test_calls_that_return_the_value_join_its_chain_in_order(walked):
+    """`b = one(); b.append("x").append("y"); use(b); b.append("z")`, with `append`
+    declared to return the object it was called on (ruling 4): both calls before the use
+    configure `b`, the second on the first's result, so the chain is `one`, `append("x")`,
+    `append("y")`. The call after the use never joins."""
+    caller = _symbol(_MUTATOR, "configured", "()V")
+    [producer] = _chain_reader(walked, "configured", {(_BUFFER, "append", _APPENDS)})
+    assert (producer.identity, producer.chain, producer.rooted) == (
+        (_NAMES, "one"),
+        ((caller, 0), (caller, 1), (caller, 2)),
+        True,
+    )
+
+
+def test_an_unflagged_overload_of_a_configuring_call_is_still_an_escape(walked):
+    """`b.append("x").append(1)` with only `append(String)` declared to return its receiver:
+    the `append(int)` overload is not, so it is a call on the value nothing says the
+    effect of, and the read is `escapes` rather than a chain holding it."""
+    assert _chain_reader(walked, "overloaded", {(_BUFFER, "append", _APPENDS)}) == (
+        Producer(reason="escapes"),
+    )
+    caller = _symbol(_MUTATOR, "overloaded", "()V")
+    [producer] = _chain_reader(
+        walked, "overloaded", {(_BUFFER, "append", _APPENDS), (_BUFFER, "append", _APPENDS_INT)}
+    )
+    assert producer.chain == ((caller, 0), (caller, 1), (caller, 2))
+
+
+def test_an_unflagged_call_on_the_value_is_still_an_escape(walked):
+    """The near-misses: with nothing declared, or another method declared, the calls are
+    `escapes` as before; and a call on a configuring call's result that is not declared
+    (`b.append("x").reset("y")`) is one too, since it is made on the same object."""
+    for configuring in (
+        set(),
+        {(_BUFFER, "other", _APPENDS)},
+        {("other/Buffer#", "append", _APPENDS)},
+    ):
+        assert _chain_reader(walked, "configured", configuring) == (Producer(reason="escapes"),)
+    assert _chain_reader(walked, "reconfigured", {(_BUFFER, "append", _APPENDS)}) == (
+        Producer(reason="escapes"),
+    )
+    assert _reasons(_bindings(walked, _symbol(_MUTATOR, "configured", "()V"), 3)) == ["escapes"]
 
 
 def test_a_binding_read_whose_writer_nobody_reported_is_unresolved_no_writer(walked):

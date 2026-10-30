@@ -1048,7 +1048,8 @@ def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
     """One entry per `newTrigger()` root (ruling 3): the three builder triggers of
     `QuartzConfig` that name a job by key, the one that names it by bean, the jobs-table
     cron (RuoYi), the private-method trigger (ruoyi-vue-pro) and the `Set` pair
-    (dolphinscheduler). The `QuartzJobBean` handler is `executeInternal`; the name is
+    (dolphinscheduler), and the trigger whose builders are held in locals
+    (`HeldTriggerScheduler`). The `QuartzJobBean` handler is `executeInternal`; the name is
     `group.name` where the code states one and NULL where it does not. A non-cron schedule
     is its builder chain as written (ruling 4), with `Calendar.TUESDAY` as the `3` javac
     compiled it to. `updateJob`'s `trigger.getTriggerBuilder()` chain is a re-schedule of an
@@ -1076,6 +1077,9 @@ def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
             "resolved",
         ),
         ("SweepJob#executeInternal", "cron", "orders.nightly", "0 0 2 * * ?", "resolved"),
+        # `HeldTriggerScheduler`: the same builders held in locals and configured over
+        # statements of their own (ruling 4, spec 2026-10-30), read as the chained form is.
+        ("SweepJob#executeInternal", "cron", "DEFAULT.x", "0 0 * * * ?", "resolved"),
         ("AuditJob#execute", "cron", None, "${orders.sweep.cron}", "unresolved"),
         (
             "SweepJob#executeInternal",
