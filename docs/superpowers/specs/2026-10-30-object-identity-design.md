@@ -1,6 +1,6 @@
 # Follow the object — eight fixes before Vert.x
 
-**Status: RULED 2026-10-30, for planning.** Every ruling below is the user's, made one finding
+**Status: BUILT 2026-10-30/31 on branches `fix/object-identity` … `fix/object-identity-8` (not yet pushed).** Every ruling below is the user's, made one finding
 at a time on 2026-10-30. Built **before** the Vert.x Web/WebClient work
 (`2026-10-30-vertx-web-design.md`, branch `cov/vertx`), which depends on rulings 1, 4 and 5.
 
@@ -223,3 +223,90 @@ and none is triggered by real input today.
 - Ruling 7: a prefixed functional route keeps its requirement.
 - No other pinned corpus output moves except where a ruling says it should. Each movement
   is explained in its PR.
+
+## 6. As built
+
+Eight stacked branches, part n cut from part n-1: `fix/object-identity` (rulings 7) through
+`fix/object-identity-8` (ruling 8). PR: not opened yet. Every part went through the per-item
+loop; Critical and Major review findings were fixed in the part. Schema versions: part 1
+defines 11, part 8 takes 12 (parts merge as separate PRs).
+
+**Ruling 7 (`7875bbce..acf7a2b9`).** Every endpoint row is minted with a `row_id`. The
+requirements stash, the prefix rewrite, `reclassify_protocol`, `stamp_format` and the borrowed-row
+drop match on it. Deviations: the follow step is a separate parameter-free statement
+(`follow_endpoint_rows.sql`) because DuckDB binds `$rows` on the last statement only, and the
+fixture's requirement is `param X-Ver=2` because Spring MVC functional routing has no
+header-value predicate. Stamps and derivations that match by address or handler at engine time
+(stamp_declared_request/response, stamp_media, derive_endpoint_contracts) still do; the scope is
+narrower than "every later pass".
+
+**Ruling 2 (`acf7a2b9..010bbb20`).** Every argument lifted out of another method (lambda bodies,
+the bean hop) carries the method it belongs to, and readers look the id up there. Deviation: an
+argument without `caller` falls back to the reader's own method rather than raising, because
+`single_call` and `scheduled_chain` hand raw arguments to readers in their own method's facts; a
+guard pins that lifted arguments are stamped.
+
+**Ruling 6 (`010bbb20..ea9be288`).** A concatenation hole keeps every calling context: literal
+fills it, a config expression fills it as `${key}`, an unknown leaves a named `{param}` (or
+`<host>` leading). A mid-template host called from two contexts publishes one row per context.
+`carries_expression` moved down to `sextant/domain` so the value walk can use it without a copy.
+
+**Ruling 1 (`ea9be288..e110d7d6`, `3a92261d`).** A field read answers its own object's writes.
+Deviation from the spec: no `from_value` column; the extractor reports a field written from
+`new X(...)` through the existing `value` slot as an instance entry. The plan's coherence keyed on
+class and field refused true cross-object pairs, so it is keyed on the read's receiver identity;
+a write step is added only on the object route. A write by a method nothing calls answers
+inexact. A read with one unplaced receiver end (ruoyi's uncalled Lombok `setAdminApi`) places
+each end separately (OI-250, fixed): measured ruoyi `getAdminApi().getPrefix()` answers
+`/admin-api` plus `external`, never `/app-api`. The spec predicted `/admin-api` only; the
+`external` answer is the honest one for the object built outside. Accepted cost on the whole
+1,810-position estate: `resolve_site` 0.23s to 0.39s (+0.16s total), slowest site 0.087s, paths
+max 3,317 on one apollo site with the same six answers; bindings max unchanged (11,496). The
+growth is the per-object path keeping ruling 1 requires, not repeated work, since a memo proved
+the answers byte-identical. Moved answers (each reviewed): mall-portal `orderQueue` slot 0 lost
+the other enum's TTL name; apollo-portal gained six anonymous type answers and several receivers;
+no fixture expectation moved; all six field pins pass. Residuals: OI-244..249.
+
+**Ruling 4 (`3a92261d..0da30d65`).** The `returns_receiver` step flag is built in both walks: the
+forward walk folds a flagged call like a void one, the backward walk gathers flagged calls on the
+same value before the declared call, keyed on (owner, name, descriptor). Shipped builders that
+return `this` are flagged after javap/Javadoc evidence (OkHttp, JDK `HttpRequest.Builder`, Quartz
+trigger/job and schedule builders, AWS SDK v2, `MessageBuilder`, Spring Integration specs,
+WebClient/RestClient specs). Beyond the candidate list: `baseUrl` on both clients, `UriBuilder`
+path/queryParam, WebClient `onRawStatus`, RestClient `onStatus`. A fix in `chains.py` hands a folded
+call's chain on to a continuing consumer (Spring Integration `handle(spec)` rows had vanished).
+Held-builder fixture rows pin OkHttp, Quartz, SQS, `MessageBuilder` and others in variable style.
+Not flagged: the Vert.x eventbus chain and Ktor builder calls that return themselves.
+
+**Ruling 5 (`0da30d65..301c70c3`).** A builder returned from a helper is followed to its send.
+A declared constructor starts a whole chain, and a rootless end needs only `chain[0]` to match a
+catalog root (a WebClient `get()`'s client is never traced). `scheduled_chain` reads walked-back
+ends on their own path. Fixture rows cover an SQS helper and an OkHttp helper.
+
+**Ruling 3 (`3d95581f..034e666a`; probe CP-57).** Each prefix key names its dispatcher and each
+inbound catalog names the one that serves it, declared in the server model, not an engine enum.
+CP-57 (Boot 3.5.14) measured: MVC, functional and actuator under `/c/m`; `@WebServlet` under `/c`;
+Jersey under `/c/j` (`spring.jersey.application-path`, so the spec's "stays undeclared" is
+satisfied by the measurement); WebFlux ignores a leftover servlet context-path. Not measured, so
+not declared: `management.server.port` and the management base path. Deviations: stack detection
+also reads Boot starter coordinates (a declared-only dependency list still finds its stack);
+`spring-http-interface` takes the Spring dispatcher by inference; the six non-Spring catalogs no
+longer take Spring Boot keys. Two new open-question kinds: `web_stack` (a module with Spring
+dispatcher rows and no readable stack: no prefix guessed) and `prefix_not_measured` (a configured
+key no measured version admits). Quarkus and Micronaut were not built (Spring Boot only).
+
+**Ruling 8 (`a0f1b76f..0e9d691b`; probe CP-58).** CP-58 measured Spring MVC 6.2.18, Jersey 3.1.11,
+Quarkus REST 3.40.1.1 and Micronaut 4.7.6: every one serves an inherited, non-overridden mapping
+under the subclass's prefix; an override only at its own mapping; a mapped base class is additive.
+`inherit_unoverridden` is on for spring-web, spring-mvc, jakarta-jaxrs, javax-jaxrs (inference),
+quarkus-rest and micronaut-http. Beyond the spec: `endpoints.served_by` (the serving class, from
+`derive_endpoints.sql`; NULL from other engines) and condition/presence resolution reads the
+handler if it is a bean, else the serving class, so an inherited row is not gated by the base's
+bean; `GRAPH_SCHEMA_VERSION` 11 to 12. `candidate_presence` was left unchanged (OI-251).
+
+**Residuals logged.** OI-236..243 (the section 4 Minors, before the build); OI-244..250 (Task 7;
+OI-250 closed); OI-251 (candidate_presence per class: a call through an inherited method stands
+for every subclass, needs a receiver-class column on `call_edges`; related to OI-243). Environment
+note: `fixtures/grpc-probe` cannot be rebuilt on this Mac (protoc-gen-grpc-java 1.62.2 has no
+native arm64 binary and Rosetta is absent), so the gate shows one known error until the user
+decides.
