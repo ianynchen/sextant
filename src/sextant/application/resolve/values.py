@@ -128,6 +128,7 @@ import json
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from itertools import product
 from typing import Any
 from weakref import WeakKeyDictionary
@@ -137,6 +138,7 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
+    method_descriptor,
     method_name,
     owner_of,
     returned_type,
@@ -226,6 +228,13 @@ _UNSEEN = "unseen"
 # are independent, and combining them is not a fabrication but the code's own product.
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
+# A field read through a getter on one object (ruling 1, `_Walk._object_writes`): WHICH
+# construction the read's receiver is, and WHICH write of the field the read takes. Both are
+# keyed on the receiver as the reading method holds it, never on the field's class: two
+# reads on one receiver are one object and read one write, and two receivers are free to be
+# two objects (`pair(a.getCron(), b.getCron())` is `(A, B)`).
+_OBJECT_OF = "object-of"
+_WRITE_OF = "write-of"
 _ELEMENT_OF = "element-of"
 # Which candidate of a merge with no root a path took (ruling 7, `_Walk._branched`).
 _BRANCH_OF = "branch-of"
@@ -459,6 +468,12 @@ class ValueIndex:
     # HANDS BACK (`List.get`, a mapper) ends at that call rather than at `external`: only an
     # object that arrives from no code at all is from outside.
     unscanned: frozenset[tuple[str, str]] = frozenset()
+    # Every method that writes a field -> the call sites that call it, `(caller, ordinal)`,
+    # off `call_edges`. A field read on one object answers a setter's write only where the
+    # setter was called on that object (`_Walk._object_writes`), so it needs the CALLS of a
+    # writer, which `callers` holds only for one that binds a parameter: a setter writing a
+    # constant (`useDefault() { cron = "…"; }`) has none there.
+    called_at: Mapping[str, tuple[tuple[str, int], ...]] = dataclass_field(default_factory=dict)
 
 
 # The index, built once per RESOLVE instead of once per catalog that asks for it.
@@ -671,6 +686,17 @@ def value_index(workspace: Workspace) -> ValueIndex:
 
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
     reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
+    writing = (
+        {method for entries in writers.values() for method, _ in entries}
+        | {str(writer) for entries in constants.values() for writer, _ in entries if writer}
+        | {writer for entries in produced.values() for writer, _ in entries}
+    )
+    called_at: dict[str, list[tuple[str, int]]] = {}
+    for row in edges:
+        if str(row["callee"]) in writing:
+            called_at.setdefault(str(row["callee"]), []).append(
+                (str(row["caller"]), int(str(row["ordinal"])))
+            )
     static_fields = frozenset(
         bare_descriptor(str(row["symbol"])) for row in workspace.query("fields") if row["static"]
     )
@@ -693,6 +719,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
         reached=reached,
         static_fields=static_fields,
         unscanned=unscanned,
+        called_at={key: tuple(value) for key, value in called_at.items()},
     )
 
 
@@ -1093,6 +1120,8 @@ class _Walk:
         branches: bool = True,
         along_receivers: bool = False,
         past_accessors: Ancestors | None = None,
+        which_object: bool = False,
+        asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -1109,6 +1138,16 @@ class _Walk:
         # The producer-identity reader (`producers_of(..., past_accessors=...)`): an accessor
         # on the value does not open `escapes`. None for every other reader.
         self._past_accessors = past_accessors
+        # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
+        # on an object changes which `new` built it, so the `escapes` window does not apply.
+        self._which_object = which_object
+        # The object reads `(field, getter site)` the walks above this one are in the middle
+        # of: a read that would ask one of them again answers as it did before ruling 1
+        # rather than recurse.
+        self._asking = asking
+        # Per field: each call of a method writing it, with the objects that call was made on
+        # (`_Walk._setter_calls_of`). Built once per field per walk.
+        self._setter_calls: dict[str, tuple[_SetterCall, ...]] = {}
         self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
@@ -1171,8 +1210,16 @@ class _Walk:
         if kind == _PARAMETER:
             return self._parameter(position[1], position[2], trail, frames)
         # `(_BINDING, symbol)` — the symbol the `field` argument carried, which the sixth
-        # edge is keyed on.
-        return self._binding(position[1], trail, frames, unseen=len(position) > 2)
+        # edge is keyed on — marked `_UNSEEN`, or carrying the getter site the read was made
+        # through (`_Walk._object_site`).
+        mark = position[2] if len(position) > 2 else None
+        return self._binding(
+            position[1],
+            trail,
+            frames,
+            unseen=mark == _UNSEEN,
+            read_on=mark if isinstance(mark, tuple) else None,
+        )
 
     def _of_site(
         self, site: Mapping[str, Any], slot: int | str, trail: _Trail, frames: "_Frames"
@@ -1307,6 +1354,12 @@ class _Walk:
             # are unchanged wherever the rule does not fire.
             if self._unseen_object(str(symbol), frames, method):
                 return self._resolve((_BINDING, str(symbol), _UNSEEN), trail, frames)
+            # A read placed on an object carries the getter site in its position: what it
+            # answers depends on that site's receiver (ruling 1), so two reads of one field
+            # through two sites are two positions, for the memo and for cycle detection.
+            read_on = self._object_site(str(symbol), frames, method)
+            if read_on is not None:
+                return self._resolve((_BINDING, str(symbol), read_on), trail, frames)
             return self._resolve((_BINDING, str(symbol)), trail, frames)
         if kind == "parameter":
             index = argument.get("value")
@@ -1832,7 +1885,7 @@ class _Walk:
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
         produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
-        for ordinal in self._index.receivers.get((method, value), ()):
+        for ordinal in () if self._which_object else self._index.receivers.get((method, value), ()):
             if ordinal > produced_at and (used_at is None or ordinal < used_at):
                 if self._accessor((method, ordinal)):
                     continue
@@ -2457,7 +2510,12 @@ class _Walk:
         return tuple(reached)
 
     def _binding(
-        self, symbol: str, trail: _Trail, frames: "_Frames", unseen: bool = False
+        self,
+        symbol: str,
+        trail: _Trail,
+        frames: "_Frames",
+        unseen: bool = False,
+        read_on: tuple[str, int] | None = None,
     ) -> tuple[_Reached, ...]:
         """A value read out of a named mutable location (§5a: a binding, never a field —
         it is a field in one language, a module-level variable in another, a package var
@@ -2540,6 +2598,10 @@ class _Walk:
                     + [(trail, _unresolved(EXTERNAL))]
                 )
             )
+        if read_on is not None:
+            scoped = self._object_writes(symbol, read_on, trail, frames)
+            if scoped is not None:
+                return scoped
         return self._binding_writes(written, constants, produced, symbol, trail, frames)
 
     def _binding_writes(
@@ -2584,33 +2646,258 @@ class _Walk:
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
         return tuple(dict.fromkeys(reached))
 
+    def _object_site(
+        self, symbol: str, frames: "_Frames", reader: str | None
+    ) -> tuple[str, int] | None:
+        """The getter call the instance field `symbol` was read through, where the read can
+        be placed on an object, and None everywhere else.
+
+        It can be placed in the method that READS the field (`reader`), when that is the
+        method the walk descended into through an instance call (`frames`' innermost),
+        declared by the field's own type — a getter, `schedule.getCrontab()`. A read anywhere
+        else is the method's own `this`, or a shape this does not place, and is answered as
+        it always was. A field the facts mark `static` holds one value for every reader and
+        is never placed."""
+        if not frames or reader is None or symbol in self._index.static_fields:
+            return None
+        callee, (caller, ordinal) = frames[-1]
+        if callee != reader or owner_of(bare_descriptor(callee)) != owner_of(symbol):
+            return None
+        site = self._index.sites.get((caller, ordinal))
+        if site is None or site.get("invoke_kind") == "static":
+            return None
+        return (caller, ordinal)
+
     def _unseen_object(self, symbol: str, frames: "_Frames", reader: str | None) -> bool:
         """Whether the instance field `symbol` is read on an object that arrives from no code
         this module has — a parameter of a method nothing here calls, through any number of
         locals, parameters and fields.
 
-        Asked only where the read can be placed on an object: in the method that READS the
-        field (`reader`), when that is the method the walk descended into through an instance
-        call (`frames`' innermost), declared by the field's own type — a getter,
-        `schedule.getCrontab()`. A read anywhere else is the method's own `this`, or a shape
-        this does not place, and is answered as it always was. A field the facts mark
-        `static` holds one value for every reader and is never asked about.
+        Asked only where the read can be placed on an object (`_object_site`).
 
         The object is followed by the producer reader with every library call declared
         (`ValueIndex.unscanned`), so one a library call hands back — `List.get`, a mapper —
         ends at that call and is NOT unseen: it may be an object this module built and put
         there. Only every path ending `external` with no call at all is. Telling two objects
-        the module builds apart is spec 2026-10-18's step 2, not this rule."""
-        if not frames or reader is None or symbol in self._index.static_fields:
+        the module builds apart is `_object_writes`, not this rule."""
+        read_on = self._object_site(symbol, frames, reader)
+        if read_on is None:
             return False
-        callee, (caller, ordinal) = frames[-1]
-        if callee != reader or owner_of(bare_descriptor(callee)) != owner_of(symbol):
-            return False
-        site = self._index.sites.get((caller, ordinal))
-        if site is None or site.get("invoke_kind") == "static":
-            return False
+        site = self._index.sites[read_on]
         ends = producers_of(self._index, site, RECEIVER, self._index.unscanned)
         return bool(ends) and all(end.caller is None and end.reason == EXTERNAL for end in ends)
+
+    def _object_writes(
+        self, symbol: str, site: tuple[str, int], trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...] | None:
+        """A field read through the getter call `site` answers only the writes made on the
+        object that call was made on (ruling 1, 2026-10-30), or None where the read cannot
+        be held to one object and answers as it did before.
+
+        `Row a = new Row(); a.setCron("A"); Row b = new Row(); b.setCron("B");
+        one(a.getCron())` is `A`. Keyed on the field symbol alone, the read was `A` and `B`,
+        both exact, and `pair(a.getCron(), a.getZone())` paired one object's cron with the
+        other's zone.
+
+        **Which objects.** The getter's receiver is followed to the constructions of the
+        field's own type (`_objects`). If any end is not one — a parameter nothing binds, a
+        library call, a subclass built — the read is not placed, and answers as before.
+
+        **What each object holds.** For each construction `C`:
+
+        * what the constructors write. A parameter write reads the argument at `C`, through
+          the frame of the constructor `C` calls; a write without a parameter is every
+          instance's.
+        * what each CALL of another writing method writes, where that call was made on `C`:
+          a setter's parameter is the argument at that call. A call made on an object the
+          walk cannot place may be made on any object, so it stays for every `C`, INEXACT.
+          A writing method nothing here calls is answered as before: whatever calls it is
+          outside what was scanned.
+
+        **Coherence.** Each answer is on the path its receiver took, and on two steps keyed on
+        the receiver as the reading method holds it (`_receiver_of`): `_OBJECT_OF` names `C`
+        and `_WRITE_OF` names the write. Two reads on one receiver are one object reading one
+        write; two receivers are free to be two objects, which `pair(a.getCron(),
+        b.getCron())` needs.
+
+        **Recorded, not handled.** A constructor overload `C` does not call, and does not
+        delegate to, still contributes its writes, as before.
+        """
+        owner = owner_of(symbol)
+        if owner is None or (symbol, site) in self._asking:
+            return None
+        outer = frames[:-1]
+        read = self._objects(symbol, site, outer)
+        if not read or any(built is None for built, _, _ in read):
+            return None
+        receiver = self._receiver_of(self._index.sites[site], outer)
+        groups = self._writes_by(symbol)
+        calls = self._setter_calls_of(symbol)
+        reached: list[_Reached] = []
+        for built, crossed, entered in read:
+            assert built is not None
+            on_path = _combine(trail, crossed)
+            if on_path is None:
+                continue
+            step = _Step((_OBJECT_OF, *receiver), f"{built[0]}@{built[1]}")
+            on_object = _combine(on_path, (step,))
+            if on_object is None:
+                continue
+            constructed = self._index.sites[built]
+            constructor = with_descriptor(
+                frames[-1][0],
+                method_descriptor(
+                    str(constructed["owner"]),
+                    str(constructed["name"]),
+                    str(constructed["descriptor"]),
+                ),
+            )
+            for writer, writes in groups.items():
+                if writer is None or _constructs(writer, symbol):
+                    entered_by = (constructor, built)
+                    reached.extend(
+                        self._written(
+                            symbol, writer, "-", writes, on_object, receiver, frames, entered_by
+                        )
+                    )
+                    continue
+                if writer not in self._index.called_at:
+                    reached.extend(
+                        self._written(
+                            symbol, writer, "-", writes, on_object, receiver, frames, None
+                        )
+                    )
+                    continue
+                for called, call, ends in calls:
+                    if called != writer:
+                        continue
+                    for target, made, made_entered in ends:
+                        if target is not None and (
+                            target != built or _combine(entered, made_entered) is None
+                        ):
+                            continue
+                        merged = _combine(on_object, made)
+                        if merged is None:
+                            continue
+                        answers = self._written(
+                            symbol,
+                            writer,
+                            f"{call[0]}@{call[1]}",
+                            writes,
+                            merged,
+                            receiver,
+                            frames,
+                            (writer, call),
+                        )
+                        reached.extend(
+                            answers
+                            if target is not None
+                            else [(path, replace(answer, inexact=True)) for path, answer in answers]
+                        )
+        return tuple(dict.fromkeys(reached))
+
+    def _written(
+        self,
+        symbol: str,
+        writer: str | None,
+        at: str,
+        writes: "_Writes",
+        trail: _Trail,
+        receiver: tuple[Any, ...],
+        frames: "_Frames",
+        entered_by: tuple[str, tuple[str, int]] | None,
+    ) -> tuple[_Reached, ...]:
+        """One writing method's writes of `symbol`, on the step naming that write for this
+        receiver, answered in the frame of the call that ran it (`entered_by`) where there
+        is one: its parameter is the argument at that call."""
+        step = _Step((_WRITE_OF, symbol, *receiver), f"{writer or '-'}@{at}")
+        merged = _combine(trail, (step,))
+        if merged is None:
+            return ()
+        written, constants, produced = writes
+        entered = frames if entered_by is None else frames + (entered_by,)
+        return self._binding_writes(written, constants, produced, symbol, merged, entered)
+
+    def _receiver_of(self, row: Mapping[str, Any], frames: "_Frames") -> tuple[Any, ...]:
+        """The receiver of a getter call as the reading method holds it, in this calling
+        context of that method: a value id, a parameter, or a static field. Two reads on one
+        such receiver read one object."""
+        caller = str(row["caller"])
+        if row.get("receiver") is not None:
+            held: tuple[str, Any] = ("value", int(str(row["receiver"])))
+        elif row.get("receiver_parameter") is not None:
+            held = ("parameter", int(str(row["receiver_parameter"])))
+        else:
+            held = ("field", row.get("receiver_field"))
+        return (caller, _frame_of(frames, caller), held)
+
+    def _objects(self, symbol: str, site: tuple[str, int], frames: "_Frames") -> tuple["_End", ...]:
+        """Which constructions of the type declaring `symbol` the receiver of `site` can be:
+        one end per path, the construction or None where the path ends anywhere else.
+
+        The receiver is followed in `frames`, so a receiver that is a parameter of a helper
+        the walk descended into is the argument at the call it came through. Every call
+        made on the object is let past (`which_object`): a call on an object does not change
+        which `new` built it, and the setter calls this rule is about are such calls."""
+        owner = owner_of(symbol)
+        declared = (str(owner), "<init>")
+        walk = _Walk(
+            self._index,
+            declared=frozenset({declared}),
+            which_object=True,
+            asking=self._asking | {(symbol, site)},
+        )
+        ends: list[_End] = []
+        for crossed, answer in walk._of_site(self._index.sites[site], RECEIVER, (), frames):
+            entered = _entered(crossed, self._index)
+            built: tuple[str, int] | None = None
+            if answer.kind == _PRODUCED and entered is not None:
+                producer = answer.value
+                if (
+                    producer.identity == declared
+                    and producer.caller is not None
+                    and producer.ordinal is not None
+                ):
+                    built = (producer.caller, producer.ordinal)
+            ends.append((built, crossed, crossed if entered is None else entered))
+        return tuple(dict.fromkeys(ends))
+
+    def _writes_by(self, symbol: str) -> "dict[str | None, _Writes]":
+        """Every write of `symbol`, by the method that made it (None for a write naming no
+        method), in the three shapes `_binding_writes` answers."""
+        groups: dict[str | None, tuple[list[Any], list[Any], list[Any]]] = {}
+        for method, index in self._index.writers.get(symbol, ()):
+            groups.setdefault(method, ([], [], []))[0].append((method, index))
+        for writer, entry in self._index.constants.get(symbol, ()):
+            groups.setdefault(writer, ([], [], []))[1].append((writer, entry))
+        for method, entry in self._index.produced.get(symbol, ()):
+            groups.setdefault(method, ([], [], []))[2].append((method, entry))
+        return {
+            writer: (tuple(written), tuple(constants), tuple(produced))
+            for writer, (written, constants, produced) in groups.items()
+        }
+
+    def _setter_calls_of(self, symbol: str) -> tuple["_SetterCall", ...]:
+        """Every call of a method other than a constructor that writes `symbol`, with the
+        objects it was made on — once per field per walk (GUIDELINES §8.7): the object walks
+        are bounded by the calls of that field's writers, and every read of the field shares
+        them."""
+        cached = self._setter_calls.get(symbol)
+        if cached is not None:
+            return cached
+        writing = sorted(
+            writer
+            for writer in self._writes_by(symbol)
+            if writer is not None and not _constructs(writer, symbol)
+        )
+        calls: list[_SetterCall] = []
+        for writer in writing:
+            for call in self._index.called_at.get(writer, ()):
+                if call in self._index.sites:
+                    calls.append((writer, call, self._objects(symbol, call, ())))
+        found = tuple(calls)
+        self._setter_calls[symbol] = found
+        return found
 
 
 def _constructs(writer: str | None, field: str) -> bool:
@@ -2627,6 +2914,20 @@ def _constructs(writer: str | None, field: str) -> bool:
 # innermost last. A method appears more than once only where the walk descended into it
 # twice on one path, and the innermost is the one that answers.
 _Frames = tuple[tuple[str, tuple[str, int]], ...]
+
+# One end of an object read (`_Walk._objects`): the construction the receiver is, or None
+# where the path ends anywhere else; the path as the walk took it; and the same path as
+# `producer_paths` writes it (`_entered`), which is what two object reads compare.
+_End = tuple[tuple[str, int] | None, _Trail, _Trail]
+# One call of a method writing a field (`_Walk._setter_calls_of`): the writing method, the
+# call site, and the objects the call was made on.
+_SetterCall = tuple[str, tuple[str, int], tuple[_End, ...]]
+# One method's writes of one field, in the three shapes `_Walk._binding_writes` answers.
+_Writes = tuple[
+    tuple[tuple[str, int], ...],
+    tuple[tuple[str | None, Mapping[str, Any]], ...],
+    tuple[tuple[str, Mapping[str, Any]], ...],
+]
 
 
 def _frame_of(frames: _Frames, method: str) -> tuple[str, int] | None:

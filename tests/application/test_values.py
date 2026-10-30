@@ -3559,6 +3559,327 @@ def test_a_field_read_on_an_object_the_module_builds_is_read_as_before(unseen):
     assert (_DEFAULT_CRON, "None") in _values_and_reasons(unseen, make, 4)
 
 
+# --- Ruling 1: a field read answers only its own object's writes ---------------------------
+# Spec 2026-10-30 ruling 1. Every holder below is built with `new` in the reading method, so
+# the walk can follow the receiver of each getter call back to the construction it came from:
+# `Row` (`cron`, `zone`, nothing written by its constructor), `Cell` (`cron = "D"` in its
+# constructor), `Host` (`host` written by two methods), `Spare` (`cron`, also set by a helper
+# nobody calls), and the ruoyi shape: `Props` building two `Prefixed` objects into two fields.
+_OBJECTS = _PKG + "Objects#"
+_CELL = _PKG + "Cell#"
+_HOST = _PKG + "Host#"
+_SPARE = _PKG + "Spare#"
+_PREFIXED = _PKG + "Prefixed#"
+_PROPS = _PKG + "Props#"
+_TAKES_CELL = "(Lcom/acme/orders/values/Cell;)V"
+_TAKES_SPARE = "(Lcom/acme/orders/values/Spare;)V"
+_TAKES_PROPS = "(Lcom/acme/orders/values/Props;)V"
+
+
+def _writes(owner: str, name: str, jvm: str, field: str, value: str | None = None) -> list[Fact]:
+    """`public void <name>(…)` on `owner`, writing `field` from its parameter 0, or the string
+    `value` where one is given."""
+    parameters = (
+        [Parameter(name="v", type=TypeRef(symbol="java/lang/String#"))] if value is None else []
+    )
+    return [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(owner, name, jvm),
+            construct_kind=ConstructKind.CONSTRUCTOR if name == "<init>" else ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=parameters, returns=TypeRef(symbol="void#")),
+            visibility="public",
+        ),
+        _void(owner, name, jvm),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=owner + field + ".",
+            from_parameter=0 if value is None else None,
+            value=None if value is None else CallArgument(kind="string", value=value),
+            written_by=_symbol(owner, name, jvm),
+        ),
+    ]
+
+
+def _getter(owner: str, name: str, field: str) -> list[Fact]:
+    """`String <name>() { return this.<field>; }` on `owner`."""
+    return [
+        _declared(owner, name, _MAKES_STRING),
+        _returns(
+            owner, name, _MAKES_STRING, 0, CallArgument(kind="field", symbol=owner + field + ".")
+        ),
+    ]
+
+
+def _new(caller: str, ordinal: int, owner: str, value: int) -> Fact:
+    return _site(caller, ordinal, (owner, "<init>", "()V"), kind="special", receiver=value)
+
+
+def _call(
+    caller: str, ordinal: int, target: tuple[str, str, str], value: int, **given: Any
+) -> Fact:
+    return _site(caller, ordinal, target, kind="virtual", receiver=value, **given)
+
+
+def _string(text: str) -> list[CallArgument]:
+    return [CallArgument(kind="string", value=text)]
+
+
+def _results(*values: int) -> list[CallArgument]:
+    return [CallArgument(kind="unresolved", source=value) for value in values]
+
+
+_MAKE = _symbol(_OBJECTS, "make", "()V")
+_CELLS = _symbol(_OBJECTS, "cells", "()V")
+_FILL = _symbol(_OBJECTS, "fill", _TAKES_CELL)
+_HOSTS = _symbol(_OBJECTS, "hosts", "()V")
+_SPARES = _symbol(_OBJECTS, "spares", "()V")
+_TOUCH = _symbol(_OBJECTS, "touch", _TAKES_SPARE)
+_READ_PROPS = _symbol(_OBJECTS, "reader", _TAKES_PROPS)
+_SETS = _TAKES_STRING
+_GETS = _MAKES_STRING
+# `make`'s consuming sites.
+_ONE_A, _PAIR_A, _PAIR_AB = 7, 10, 13
+
+
+def _object_facts() -> list[Fact]:
+    facts: list[Fact] = [
+        _type(owner) for owner in (_ROW, _CELL, _HOST, _SPARE, _PREFIXED, _PROPS, _OBJECTS)
+    ] + [_type(_REGISTRY)]
+    for owner in (_ROW, _CELL, _HOST, _SPARE, _PROPS):
+        facts += [
+            SymbolFact(
+                document_id="doc_values",
+                symbol=_symbol(owner, "<init>", "()V"),
+                construct_kind=ConstructKind.CONSTRUCTOR,
+                enclosing=_MODULE + owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+                visibility="public",
+            ),
+            _void(owner, "<init>", "()V"),
+        ]
+    for owner, field in ((_ROW, "cron"), (_ROW, "zone"), (_CELL, "cron"), (_SPARE, "cron")):
+        setter = "set" + field.capitalize()
+        facts += _writes(owner, setter, _SETS, field) + _getter(
+            owner, "get" + field.capitalize(), field
+        )
+    # `Cell() { cron = "D"; }`
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_CELL + "cron.",
+            value=CallArgument(kind="string", value="D"),
+            written_by=_symbol(_CELL, "<init>", "()V"),
+        )
+    )
+    # `void m1() { host = "h1"; }  void m2() { host = "h2"; }`
+    facts += _writes(_HOST, "m1", "()V", "host", "h1") + _writes(_HOST, "m2", "()V", "host", "h2")
+    facts += _getter(_HOST, "getHost", "host")
+    # `Prefixed(String prefix) { this.prefix = prefix; }`, and `Props() { admin = new
+    # Prefixed("/admin-api"); app = new Prefixed("/app-api"); }` with a getter for each.
+    facts += _writes(_PREFIXED, "<init>", _SETS, "prefix") + _getter(
+        _PREFIXED, "getPrefix", "prefix"
+    )
+    props_init = _symbol(_PROPS, "<init>", "()V")
+    for ordinal, (field, prefix, value) in enumerate(
+        (("admin", "/admin-api", 5), ("app", "/app-api", 6))
+    ):
+        facts += [
+            _site(
+                props_init,
+                ordinal,
+                (_PREFIXED, "<init>", _SETS),
+                kind="special",
+                receiver=value,
+                arguments=_string(prefix),
+            ),
+            FieldWriteFact(
+                document_id="doc_values",
+                field=_PROPS + field + ".",
+                value=CallArgument(kind="instance", symbol=_PREFIXED, source=value),
+                written_by=props_init,
+            ),
+            _declared(_PROPS, "get" + field.capitalize(), "()Lcom/acme/orders/values/Prefixed;"),
+            _returns(
+                _PROPS,
+                "get" + field.capitalize(),
+                "()Lcom/acme/orders/values/Prefixed;",
+                0,
+                CallArgument(kind="field", symbol=_PROPS + field + "."),
+            ),
+        ]
+    for method, jvm in (
+        ("make", "()V"),
+        ("cells", "()V"),
+        ("hosts", "()V"),
+        ("spares", "()V"),
+    ):
+        facts += [_declared(_OBJECTS, method, jvm), _void(_OBJECTS, method, jvm)]
+    for method, jvm, held in (
+        ("fill", _TAKES_CELL, _CELL),
+        ("touch", _TAKES_SPARE, _SPARE),
+        ("reader", _TAKES_PROPS, _PROPS),
+    ):
+        facts += [
+            SymbolFact(
+                document_id="doc_values",
+                symbol=_symbol(_OBJECTS, method, jvm),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + _OBJECTS,
+                signature=Signature(
+                    parameters=[Parameter(name="it", type=TypeRef(symbol=held))],
+                    returns=TypeRef(symbol="void#"),
+                ),
+                visibility="public",
+            ),
+            _void(_OBJECTS, method, jvm),
+        ]
+    # `Row a = new Row(); a.setCron("A"); a.setZone("ZA"); Row b = new Row(); b.setCron("B");
+    # b.setZone("ZB"); one(a.getCron()); pair(a.getCron(), a.getZone());
+    # pair(a.getCron(), b.getCron());`
+    facts += [
+        _new(_MAKE, 0, _ROW, 1),
+        _call(_MAKE, 1, (_ROW, "setCron", _SETS), 1, arguments=_string("A")),
+        _call(_MAKE, 2, (_ROW, "setZone", _SETS), 1, arguments=_string("ZA")),
+        _new(_MAKE, 3, _ROW, 2),
+        _call(_MAKE, 4, (_ROW, "setCron", _SETS), 2, arguments=_string("B")),
+        _call(_MAKE, 5, (_ROW, "setZone", _SETS), 2, arguments=_string("ZB")),
+        _call(_MAKE, 6, (_ROW, "getCron", _GETS), 1, result=20),
+        _call(_MAKE, _ONE_A, _ONE_TARGET, None, arguments=_results(20)),
+        _call(_MAKE, 8, (_ROW, "getCron", _GETS), 1, result=21),
+        _call(_MAKE, 9, (_ROW, "getZone", _GETS), 1, result=22),
+        _call(_MAKE, _PAIR_A, _PAIR_TARGET, None, arguments=_results(21, 22)),
+        _call(_MAKE, 11, (_ROW, "getCron", _GETS), 1, result=23),
+        _call(_MAKE, 12, (_ROW, "getCron", _GETS), 2, result=24),
+        _call(_MAKE, _PAIR_AB, _PAIR_TARGET, None, arguments=_results(23, 24)),
+    ]
+    # `Cell a = new Cell(); Cell b = new Cell(); fill(a); one(b.getCron()); one(a.getCron());`
+    # with `static void fill(Cell c) { c.setCron("F"); }`.
+    facts += [
+        _call(
+            _FILL, 0, (_CELL, "setCron", _SETS), None, receiver_parameter=0, arguments=_string("F")
+        ),
+        _new(_CELLS, 0, _CELL, 1),
+        _new(_CELLS, 1, _CELL, 2),
+        _site(_CELLS, 2, (_OBJECTS, "fill", _TAKES_CELL), arguments=_results(1)),
+        _call(_CELLS, 3, (_CELL, "getCron", _GETS), 2, result=30),
+        _call(_CELLS, 4, _ONE_TARGET, None, arguments=_results(30)),
+        _call(_CELLS, 5, (_CELL, "getCron", _GETS), 1, result=31),
+        _call(_CELLS, 6, _ONE_TARGET, None, arguments=_results(31)),
+    ]
+    # `Host h = new Host(); h.m1(); h.m2(); pair(h.getHost(), h.getHost());`
+    facts += [
+        _new(_HOSTS, 0, _HOST, 1),
+        _call(_HOSTS, 1, (_HOST, "m1", "()V"), 1),
+        _call(_HOSTS, 2, (_HOST, "m2", "()V"), 1),
+        _call(_HOSTS, 3, (_HOST, "getHost", _GETS), 1, result=40),
+        _call(_HOSTS, 4, (_HOST, "getHost", _GETS), 1, result=41),
+        _call(_HOSTS, 5, _PAIR_TARGET, None, arguments=_results(40, 41)),
+    ]
+    # `Spare s = new Spare(); s.setCron("S"); one(s.getCron());`, and
+    # `static void touch(Spare s) { s.setCron("U"); }`, which nothing here calls.
+    facts += [
+        _call(
+            _TOUCH,
+            0,
+            (_SPARE, "setCron", _SETS),
+            None,
+            receiver_parameter=0,
+            arguments=_string("U"),
+        ),
+        _new(_SPARES, 0, _SPARE, 1),
+        _call(_SPARES, 1, (_SPARE, "setCron", _SETS), 1, arguments=_string("S")),
+        _call(_SPARES, 2, (_SPARE, "getCron", _GETS), 1, result=60),
+        _call(_SPARES, 3, _ONE_TARGET, None, arguments=_results(60)),
+    ]
+    # `void reader(Props props) { one(props.getAdmin().getPrefix()); }`
+    facts += [
+        _call(
+            _READ_PROPS,
+            0,
+            (_PROPS, "getAdmin", "()Lcom/acme/orders/values/Prefixed;"),
+            None,
+            receiver_parameter=0,
+            result=50,
+        ),
+        _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
+        _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
+    ]
+    return facts
+
+
+@pytest.fixture(scope="module")
+def objects(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_objects")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "objects.jsonl", _document(), _object_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _pairs(workspace: DuckDbWorkspace, method: str, ordinal: int) -> list[tuple]:
+    return [
+        (str(binding.slots[0].value), str(binding.slots[1].value))
+        for binding in _bindings(workspace, method, ordinal)
+    ]
+
+
+@pytest.mark.pins("values.a-field-read-answers-ITS-OWN-OBJECTS-writes")
+def test_a_setter_value_is_read_only_on_the_object_it_was_set_on(objects):
+    """Ruling 1. `a` and `b` are two `Row`s, each with its own cron; `a.getCron()` is `A`,
+    never `B` beside it."""
+    assert _values_and_reasons(objects, _MAKE, _ONE_A) == [("A", "None")]
+
+
+def test_two_fields_of_one_object_never_pair_with_another_objects(objects):
+    """`pair(a.getCron(), a.getZone())` reads two fields of ONE object: `(A, ZA)`, never `a`'s
+    cron with `b`'s zone."""
+    assert _pairs(objects, _MAKE, _PAIR_A) == [("A", "ZA")]
+
+
+@pytest.mark.pins("values.two-reads-of-one-field-pair-ONE-write")
+def test_a_field_written_in_two_methods_and_read_twice_pairs_one_write(objects):
+    """`h.m1()` writes `h1` and `h.m2()` writes `h2`; two reads of `h.getHost()` hold the same
+    value, so the pairs are `(h1, h1)` and `(h2, h2)`, never `(h1, h2)`."""
+    assert sorted(_pairs(objects, _HOSTS, 5)) == [("h1", "h1"), ("h2", "h2")]
+
+
+def test_an_object_built_into_a_field_is_read_through_its_own_construction(objects):
+    """The ruoyi shape: `Props` builds `/admin-api` into `admin` and `/app-api` into `app`, so
+    `props.getAdmin().getPrefix()` is `/admin-api` alone."""
+    assert _values_and_reasons(objects, _READ_PROPS, 2) == [("/admin-api", "None")]
+
+
+def test_a_setter_called_by_a_helper_on_the_object_counts_for_that_object_only(objects):
+    """Review Focus 3. `fill(a)` sets `F` on `a` through a helper: `a` reads its constructor's
+    `D` and `F`, and `b`, which `fill` never saw, reads `D` alone."""
+    assert _values_and_reasons(objects, _CELLS, 4) == [("D", "None")]
+    assert sorted(_values_and_reasons(objects, _CELLS, 6)) == [("D", "None"), ("F", "None")]
+
+
+def test_a_setter_on_an_object_of_unknown_origin_stays_possible_and_inexact(objects):
+    """`touch(Spare s)` sets `U` on a spare nothing here hands it, which may be any spare,
+    `s` included: `U` stays, inexact, beside the `S` set on `s` itself, which is exact."""
+    answers = {
+        binding.slots[0].value: binding.slots[0] for binding in _bindings(objects, _SPARES, 3)
+    }
+    assert sorted(answers) == ["S", "U"]
+    assert answers["U"].inexact
+    assert not answers["S"].inexact
+
+
+@pytest.mark.pins("values.a-field-read-answers-ITS-OWN-OBJECTS-writes")
+def test_two_objects_of_one_class_read_in_one_call_each_keep_their_own_value(objects):
+    """`pair(a.getCron(), b.getCron())`: two objects of one class are two objects. The pair is
+    `(A, B)` and nothing else, and the site keeps its slots."""
+    assert _pairs(objects, _MAKE, _PAIR_AB) == [("A", "B")]
+
+
 _FETCHER = _PKG + "Fetcher#"
 _FETCH_CALLERS = _PKG + "FetchCallers#"
 
