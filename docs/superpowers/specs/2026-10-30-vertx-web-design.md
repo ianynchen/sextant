@@ -175,11 +175,23 @@ request on; it is middleware.** (DR-6: Vert.x's own dispatch rule, not ours.)
 - **New catalog key on the `fluent` style:**
   `passes_on: { owner: io.vertx.ext.web.RoutingContext, method: next }`. (Not
   `pass_through`, which `combinator` already uses for a filter step that carries a chain on.)
-  - A captured handler whose body is in the module and **calls that method anywhere** is a
-    pass-through handler.
-  - A handler whose body is **not in the module** (`BodyHandler.create()`,
-    `CorsHandler.create()`, an `AuthenticationHandler`) is treated the same way: nothing in
-    the module answers through it.
+  - **Which code a handler runs** (ruled 2026-10-30, review issue 1): Vert.x calls
+    `handle(ctx)` on the object passed, so the handler argument is followed to that object
+    with the producer reader. `this::h` runs `h`, a lambda its own synthetic body, `new X(…)`
+    `X.handle`, and a field, local or factory call (`createDefaultCorsHandler(origin)`) the
+    object it holds or returns. An object of a class **not in the module**
+    (`BodyHandler.create()`, the `CorsHandler` Hono's factory returns, an
+    `AuthenticationHandler`) passes on: nothing in the module answers through it.
+  - **Whether it passes on** (same ruling): a handler passes on if `next()` is called on
+    **the `RoutingContext` it received**, wherever that happens: in its own body, in a method
+    it hands the context to (Hono's `extractRequiredJsonPayload` → `extractRequiredJson` →
+    `ctx.next()`), or in a lambda that captured it. This follows the call graph only along
+    the edges that carry the context, and is computed **backwards**: once per module, each
+    `passes_on` call site's receiver is walked to the parameters it came from with
+    `producer_paths(along_receivers=True)`, and every handler whose context parameter is
+    reached is a pass-through handler. A forward walk from every handler through everything
+    it calls was rejected: it costs most of the module per handler, and it would count a
+    `next()` on some other request's context.
   - The key names no framework type in the engine. Express's `next()` (JS, priority 3) has
     the same shape.
 - **A route chain is a row only if at least one of its handlers answers**, meaning its body
@@ -293,6 +305,10 @@ test instead).
 | `router.get("/health").respond(ctx -> Future.succeededFuture(status))` | one row |
 | Hono's pair: `router.post(EVENTS).handler(auth).handler(BodyHandler.create())` then `router.post(EVENTS).handler(this::ingest)` | one row, handler `ingest` |
 | An in-module `assertTenant` that calls `ctx.next()`, as the only handler of a `route("/t/*")` | no row |
+| Hono's `put(p).handler(this::extractJson).handler(this::update)`, where `extractJson` hands `ctx` to a helper that calls `ctx.next()` | one row, handler `update`, `resolved` |
+| An answering handler that hands `ctx` to a helper and the helper replies | that handler's row |
+| A `next()` inside a lambda that captured `ctx` (`auth.authenticate(c).onSuccess(u -> ctx.next())`) | no row for that handler |
+| Hono's `route(p).handler(createCorsHandler(origin))`, a module method returning a library `CorsHandler` | no row |
 | `router.route().handler(BodyHandler.create())` | no row |
 | A sub-router built in `ApiRoutes.build(vertx)` and mounted as `root.route("/api/*").subRouter(api)` | its routes under `/api` |
 | `router.getWithRegex("\\/files\\/.+")` | one row, path the regex |
@@ -329,8 +345,10 @@ list, so it does not hold either line below `✅`. The tier says what closing it
 ## 5. Cost (§8.7)
 
 - **Inbound:** one fluent pass over the module's `Router` roots, as for the event-bus chain.
-- **The pass-through check:** one lookup per captured handler body in `call_sites`, indexed
-  by caller.
+- **The pass-through check:** one backward producer walk per `passes_on` call site in the
+  module, done once and cached (Hono: 6 `next()` calls, each a few methods deep), plus one
+  producer read per handler argument to find the object it runs. Never a forward walk from
+  each handler.
 - **The mount join:** one producer-reader read per route root receiver, plus one per mount
   argument. That is bounded by the number of routes: Hono has ~40, the largest example ~30.
   Each read shares the cached `value_index`.
