@@ -340,29 +340,37 @@ The second half is built, on `fix/object-identity-4`. The extractor reports `fie
 with `value = {kind: instance, symbol, source}` for `this.f = new X(…)` and `F = new X(…)`;
 that is §1's `from_value`, carried in the slot the fact already had. The walk
 (`values.py`, `_object_writes`) follows a getter read's receiver to the constructions of
-the field's own type. Where every path ends at one, the read answers that object's
-constructor writes and the writes of setter calls made on it; a setter called on an object
-the walk cannot place is kept for every object, inexact. Where any path ends elsewhere, the
-read answers every write, as before. Two steps keyed on the receiver as the reading method
+the field's own type. A path that ends at one answers that object's constructor writes and
+the writes of setter calls made on it; a setter called on an object the walk cannot place is
+kept for every object, inexact. A path that ends anywhere else is an object from outside and
+answers as §8's rule does, on its own path (OI-250). Only a read with no path to a
+construction answers every write, as before. Two steps keyed on the receiver as the reading method
 holds it keep two reads of one receiver on one object and one write.
 
 **Measured** on the same corpora state, the code and extractor before the part (`ea9be288`)
 against after it, every example scan re-extracted by each side's own extractor, 1,810
 positions at 1,486 sites over 42 modules:
 
-| | before | after |
-|---|---|---|
-| bindings max (`apollo-portal`) | 11,496 | 11,496 |
-| paths max | 1,481 | 1,481 |
-| visits max / total | 3,467 / 29,044 | 3,467 / 29,201 |
-| every walk's computations, nested object walks included | 85,062 | 99,715 |
-| walk s | 0.12 | 0.12 |
-| `resolve_site` s | 0.23 | 0.30 |
-| slowest site s | 0.046 | 0.057 |
+| | before | after | §7 |
+|---|---|---|---|
+| bindings max (`apollo-portal`) | 11,496 | 11,672 | 11,913 |
+| paths max | 1,481 | 3,317 | 1,481 |
+| visits max / total | 3,467 / 29,044 | 4,784 / 31,157 | — |
+| every walk's computations, nested object walks included | 85,062 | 100,193 | — |
+| walk s | 0.12 | 0.14 | 0.09 |
+| `resolve_site` s | 0.23 | 0.39 | 0.18 |
+| slowest site s | 0.046 | 0.087 | 0.05 |
 
-The object walks are memoised for the index's lifetime, and a type nothing here constructs
-is not walked at all. Without those two, the computations were 108,229 and `resolve_site`
-0.34s. Every figure §7 bounds (bindings, paths) is at or under §7's.
+The object walks are memoised for the index's lifetime, keyed on the calling context only as
+far as each walk read it, and a type nothing here constructs is not walked at all; every
+answer and binding is byte-identical with and without the three. **The bound is not met,
+and what holds it is the enumeration itself, not repeated work.** Before part 4 this estate
+already sat above §7 on time (0.23s against 0.18s; it has 200 more positions). What part 4
+adds is a path per object: `UserDisplayNameEnricher#enrichAdditionalUserInfo` reads
+`getUserId()` on `UserInfo` objects some of which the module builds and some it does not,
+and its paths and bindings went 1,481 to 3,317 with the same six answers: the worst path
+count. The slowest site, `RetryableRestTemplate#doExecute`, went 275 to 375 bindings with
+the same answers. Bindings max stays under §7's.
 
 **What moved.** One answer fewer: `mall-portal`'s `RabbitMqConfig#orderQueue` reads
 `QueueEnum.QUEUE_ORDER_CANCEL.getName()` and no longer gains the TTL queue's name, which
@@ -374,10 +382,21 @@ walk: six `apollo-portal` sites whose receiver or argument is a field set to
 (`LdapUserService#findByUserId`) some paths are now marked inexact because a setter on the
 path is called on an object the walk cannot place.
 
-**The prediction did not hold on ruoyi-vue-pro.** `getAdminApi().getPrefix()` still answers
-`/admin-api`, `/app-api` and `external` at all three reads. `WebProperties` is `@Data`, so
-`adminApi` has a second writer, the setter `setAdminApi`, which nothing here calls. One
-path to the receiver therefore ends `external`, and the read is not placed. That is OI-250.
+**The prediction holds on ruoyi-vue-pro, after one correction.** As first built, the three
+`getAdminApi().getPrefix()` reads still answered `/admin-api`, `/app-api` and `external`:
+`WebProperties` is `@Data`, so `adminApi` has a second writer, the setter `setAdminApi`,
+which nothing here calls, and one path to the receiver ending `external` left the read
+unplaced (OI-250). With each path answered by itself, `WebFrameworkUtils:112` and
+`AuthorizeRequestsCustomizer:24` answer `/admin-api` and `external`, and
+`ApiRequestFilter:24`'s array answers `/admin-api` through `getAdminApi` and `/app-api`
+only through `getAppApi`. `external` is true: Spring's binder may set the prefix from
+configuration.
+
+That correction moved more: fourteen `petclinic-rest` JDBC sites gain an inexact `external`
+beside their answers (an object from outside read on one path), and `apollo-portal`'s
+`DefaultRolePermissionService#createPermissions` gains an inexact `external` too; thirteen other
+`apollo-portal` sites gain bindings with the same answers.
+
 §4's `setTopic("a"); setTopic("b")` over-report is unchanged, because it is a question of
 statement order and not of object identity (OI-245). The other recorded limits are OI-244 and
 OI-246 to OI-249.

@@ -253,7 +253,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-247 | [SEXTANT-240](https://app.plane.so/portolan/browse/SEXTANT-240/) | A constructor the object's constructor never runs still writes every object |
 | OI-248 | [SEXTANT-241](https://app.plane.so/portolan/browse/SEXTANT-241/) | this.setX(…) inside the class is inexact for every object, and a getter called on this is not placed |
 | OI-249 | [SEXTANT-242](https://app.plane.so/portolan/browse/SEXTANT-242/) | The object-read cycle cut has no calling context |
-| OI-250 | [SEXTANT-243](https://app.plane.so/portolan/browse/SEXTANT-243/) | A read with one unplaced receiver end is not placed at all: ruoyi's getAdminApi().getPrefix() still answers /app-api |
+| OI-250 | [SEXTANT-243](https://app.plane.so/portolan/browse/SEXTANT-243/) | A read with one unplaced receiver end is not placed at all: ruoyi's getAdminApi().getPrefix() still answers /app-api — **closed 2026-10-30** by `c29fc0e8` (value walk: each receiver path is answered by itself) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

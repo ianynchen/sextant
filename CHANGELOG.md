@@ -44,12 +44,14 @@ here would restate those documents rather than add anything.
   another object of the same class was given. A setter called on an object the walk cannot
   place still counts for every object, marked inexact. `RabbitMqConfig#orderQueue` in
   `mall-portal` now answers `mall.order.cancel` alone, where it also answered the TTL
-  queue's name. Where any path to the receiver ends somewhere other than a `new` — a
-  parameter nothing here passes, a setter nothing here calls — the read answers every write
-  as before; on ruoyi-vue-pro that is why `getAdminApi().getPrefix()` still answers
-  `/app-api` beside `/admin-api` (OI-250). Measured: the six field pins pass; over 1,810
-  positions the deterministic figures (worst bindings 11,496, worst path count 1,481, worst
-  visits 3,467) are unchanged, and `resolve_site` takes 0.30s where it took 0.23s.
+  queue's name. A path to the receiver that ends somewhere other than a `new` — a parameter
+  nothing here passes, a setter nothing here calls — is an object from outside and answers
+  as one, on its own path, without unplacing the objects the other paths build (OI-250):
+  ruoyi-vue-pro's `getAdminApi().getPrefix()` answers `/admin-api` and `external`, where it
+  also answered `/app-api`. Only a read with no path to a `new` answers every write as
+  before. Measured: the six field pins pass; over 1,810 positions the worst bindings went
+  11,496 to 11,672, the worst path count 1,481 to 3,317 (one site, enumerating each
+  object), and `resolve_site` takes 0.39s where it took 0.23s.
 
 ### Changed
 
