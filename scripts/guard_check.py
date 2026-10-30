@@ -2511,8 +2511,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if all(built is None for built, _, _ in read):\n",
-                replace="        if any(built is None for built, _, _ in read):"
+                find="        if all(built is None for built, _, _, _ in read):\n",
+                replace="        if any(built is None for built, _, _, _ in read):"
                 "  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -3050,6 +3050,21 @@ GUARDS: dict[str, Guard] = {
                 find="    if _matching_step(site, context.receiver_terminals) is not None:\n",
                 replace='    if str(site["name"]) in {str(t["method"]) for t in '
                 "context.receiver_terminals}:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-SUBTYPE-construction-reads-the-field-wide-union": Guard(
+        what="a getter read whose receiver ends at a construction of a subtype of the field's "
+        "type built here answers that end with every write of the field, never `external` "
+        "(final review of spec 2026-10-30, Minor 5)",
+        why="`new AdminProps()` where the field is `BaseProps`'s was not counted as a "
+        "construction and was answered as an object from outside: `external` and an inexact "
+        "value, for an object the module builds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if subtype:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
