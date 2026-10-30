@@ -7183,6 +7183,7 @@ def test_each_caller_of_a_request_helper_gets_its_own_value(tmp_path: Path):
     assert {(r["path"], r["resolution"]) for r in rows} == {("/x", "resolved")}
 
 
+@pytest.mark.pins("chains.a-REACHED-terminal-is-not-walked-back")
 def test_a_terminal_a_root_walk_reached_is_never_walked_twice(tmp_path: Path):
     """The whole chain in one method: the root walk reaches `build()`, so the walk back from
     a terminal no root reached never starts there. One end and one row, not two."""

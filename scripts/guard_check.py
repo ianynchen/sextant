@@ -2974,6 +2974,37 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-REACHED-terminal-is-not-walked-back": Guard(
+        what="the walk back from a rootless terminal skips every terminal a root walk "
+        "already reached (ruling 5, spec 2026-10-30)",
+        why="a chain whose root and terminal are in one method is reached forward AND, "
+        "walked back from its terminal, reaches the same root: two ends for one request, "
+        "and two rows wherever the two reads differ",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            if _site_key(site) in reached or not _reaches_terminal(site, "
+                "context):\n",
+                replace="            if not _reaches_terminal(site, context):  "
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "quartz.a-walked-back-trigger-reads-on-its-own-path": Guard(
+        what="a trigger chain walked back across methods is read on the path that walk took: "
+        "each schedule's path is joined with the end's (`ChainEnd.path`)",
+        why="a trigger started in `base(n)` and built and scheduled by each caller holds its "
+        "key in the helper; read on every path, each caller's row took every caller's name, "
+        "two false rows at `resolved` (Review Focus 2 in Quartz rows, ruling 5)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="        if end.path is not None:\n            on_end = ",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            on_end = ",
+            ),
+        ),
+    ),
     "fluent.no-terminal-no-row": Guard(
         what="a chain derives a row only where it REACHED a terminal — a builder that was "
         "constructed, configured and never executed derives nothing",

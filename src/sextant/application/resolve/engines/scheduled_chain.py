@@ -412,10 +412,21 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
     took to the call that paired them (`_pairings`). So the `addJob(jobClass, cron)` helper
     two callers call is two rows, and a trigger built in `trigger(cron)` and scheduled by
     each of its callers keeps each caller's cron with that caller's job. A pairing no path
-    can hold is read part by part (`_apart`), and such a row is never `resolved`."""
+    can hold is read part by part (`_apart`), and such a row is never `resolved`.
+
+    **A chain walked back across methods is read on the path that walk took** (`ChainEnd.
+    path`, ruling 5, spec 2026-10-30): a trigger started in `base(n)` and built by each of
+    its callers is one end per caller, and its key, read in the helper, is that caller's
+    argument. So each schedule's path is joined with the end's, and a schedule on a path
+    the end's disagrees with is not this end's."""
     pairings = _pairings(end, context)
     found: list[_Found] = []
     for schedule in _schedules(end.captures, context):
+        if end.path is not None:
+            on_end = schedule.path.joined(end.path)
+            if on_end is None:
+                continue
+            schedule = replace(schedule, path=on_end)
         rows: list[_Found] = []
         for job, path in pairings:
             if path is None:
@@ -570,7 +581,7 @@ def _apart(
     )
     classes = {_job_class(answers.get(_CLASS)) for answers in read or [{}]}
     job_class, narrowed = classes.pop() if len(classes) == 1 else (None, False)
-    names = _keys(end.captures.get(_NAME), end.captures.get(_GROUP), context)
+    names = _keys(end.captures.get(_NAME), end.captures.get(_GROUP), context, end.path)
     untied = {
         "handler": len(classes) > 1,
         "name": len(names) > 1,
@@ -842,10 +853,13 @@ def _key(
 
 
 def _keys(
-    name: Mapping[str, Any] | None, group: Mapping[str, Any] | None, context: _Context
+    name: Mapping[str, Any] | None,
+    group: Mapping[str, Any] | None,
+    context: _Context,
+    within: Path | None = None,
 ) -> set[str]:
-    """Every key two captures name on some path (`_keys_at`)."""
-    return _keys_at(_position(name, context), _position(group, context), context)
+    """Every key two captures name on some path (`_keys_at`), within `within` where given."""
+    return _keys_at(_position(name, context), _position(group, context), context, within)
 
 
 def _key_at(
