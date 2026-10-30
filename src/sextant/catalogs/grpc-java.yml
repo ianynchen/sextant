@@ -16,6 +16,15 @@ direction: inbound
 detect:
   coordinates: ["io.grpc:grpc-stub", "io.grpc:grpc-protobuf"]
 
+# The rule is read out of what protoc-gen-grpc-java GENERATES, so that is the
+# artifact measured, not the runtime jars `detect` names. 1.62.2 is CP-3/CP-8's
+# original run (2O); 1.81.0 is the 2026-10-30 re-measure, where every marker
+# below was unchanged and the one new stub (`<Service>BlockingV2Stub`) already
+# extends `AbstractStub` and sends through `ClientCalls`.
+measured:
+  - { artifact: io.grpc:protoc-gen-grpc-java, versions: ["1.62.2", "1.81.0"],
+      identity: reported, by: scripts/probes/cp3_cp8_grpc_facts.md }
+
 requires: [call_site, string_constants, superclass]
 
 matches:

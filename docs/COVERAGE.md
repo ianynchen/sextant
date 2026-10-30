@@ -796,7 +796,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**93 of 108 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**94 of 108 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -804,6 +804,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
+| `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |
 | `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
 | `grpc-quarkus-client` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
 |  | `io.quarkus:quarkus-grpc-deployment` | 3.17.5 |
@@ -956,7 +957,6 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `aws-sqs-sdk` |
 | `google-pubsub-publisher` |
 | `graphql-schema` |
-| `grpc-java` |
 | `grpc-schema` |
 | `jakarta-jws-client` |
 | `netflix-dgs` |

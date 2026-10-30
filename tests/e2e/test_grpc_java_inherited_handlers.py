@@ -3,7 +3,8 @@
 interface, and the base class itself declares only its constructor and `bindService`.
 
 `fixtures/grpc-probe` is that generated code, compiled by protoc and protoc-gen-grpc-java
-1.62.2 from `order_service.proto`. `OrderServiceImpl extends OrderServiceImplBase` overrides
+from `order_service.proto` (1.62.2 when this test was written, 1.81.0 since 2026-10-30; the
+shape is the same at both, `scripts/probes/cp3_cp8_grpc_facts.md`). `OrderServiceImpl extends OrderServiceImplBase` overrides
 `getOrder`, which the base INHERITS from `AsyncService`. Measured before this test: the module
 derived only the `.proto`'s row, with handler NULL, and no `supertype_derived` row, because the
 engine looked for `getOrder` on the base class alone.
