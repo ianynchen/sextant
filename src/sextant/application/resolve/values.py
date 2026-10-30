@@ -474,6 +474,25 @@ class ValueIndex:
     # writer, which `callers` holds only for one that binds a parameter: a setter writing a
     # constant (`useDefault() { cron = "…"; }`) has none there.
     called_at: Mapping[str, tuple[tuple[str, int], ...]] = dataclass_field(default_factory=dict)
+    # Which constructions a getter's receiver can be (`_Walk._objects`), per (type, site,
+    # calling context, reads in progress), for as long as this index lives. The answer reads
+    # nothing but the index, and every site resolved asks it again: on `apollo-portal` one
+    # run asked 1,243 times for 463 distinct walks, each a full walk (GUIDELINES §8.7).
+    objects: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+    # Every type some call site here constructs (`owner` of an `<init>` site), read off
+    # `sites`. A receiver can be a construction of a type only where one is in this set, so a
+    # read of a field whose type nothing here builds is not walked for its objects at all:
+    # every end of that walk would be no construction.
+    constructed: frozenset[str] = dataclass_field(init=False, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "constructed",
+            frozenset(
+                str(row.get("owner")) for row in self.sites.values() if row["name"] == "<init>"
+            ),
+        )
 
 
 # The index, built once per RESOLVE instead of once per catalog that asks for it.
@@ -2728,6 +2747,10 @@ class _Walk:
         owner = owner_of(symbol)
         if owner is None or (symbol, site) in self._asking:
             return None
+        if str(owner) not in self._index.constructed:
+            # Nothing here builds the type, so no end of the object walk could be a
+            # construction: answered as before without walking (GUIDELINES §8.7).
+            return None
         # **This read is in progress in every walk it starts**, the receiver's and each
         # setter call's: a setter called on an object read through a getter of the same field
         # (`a.getNext().setNext(…)`), or a cycle through two fields, reaches this read again,
@@ -2856,8 +2879,15 @@ class _Walk:
         made on the object is let past (`which_object`): a call on an object does not change
         which `new` built it, and the setter calls this rule is about are such calls.
 
-        `asking` is every object read in progress, the one this serves included."""
+        `asking` is every object read in progress, the one this serves included.
+
+        Kept on the index (`ValueIndex.objects`): the walk below starts from nothing but
+        these four, so its answer is the same for every walk that asks."""
         owner = owner_of(symbol)
+        key = (owner, site, frames, asking)
+        cached: tuple[_End, ...] | None = self._index.objects.get(key)
+        if cached is not None:
+            return cached
         declared = (str(owner), "<init>")
         walk = _Walk(
             self._index,
@@ -2878,7 +2908,9 @@ class _Walk:
                 ):
                     built = (producer.caller, producer.ordinal)
             ends.append((built, crossed, crossed if entered is None else entered))
-        return tuple(dict.fromkeys(ends))
+        found = tuple(dict.fromkeys(ends))
+        self._index.objects[key] = found
+        return found
 
     def _writes_by(self, symbol: str) -> "dict[str | None, _Writes]":
         """Every write of `symbol`, by the method that made it (None for a write naming no
