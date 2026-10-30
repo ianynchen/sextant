@@ -86,6 +86,20 @@ displayName: The Spring Integration Java DSL flow definition (every member, clas
 # (`handler: none`) and `to(...)` (a divert) write nothing at a terminal either,
 # so they are not declared as one.
 
+# EVERY STEP BELOW BUT FOUR NAMES RETURNS THE FLOW DEFINITION IT WAS CALLED ON, and says
+# so with `returns_receiver: true` (ruling 4, spec 2026-10-30): `b = IntegrationFlow.from(…);
+# b.transform(…); b.handle(…); b.get()`, each result dropped, is the flow written in one
+# chain. Measured with `javap -c -p`, spring-integration-core 6.2.4: the members are
+# declared `public … B <name>(…);`, `B` the definition's own type parameter, and
+#   protected final B _this();    Code: 0: aload_0  1: areturn
+# Every public instance member of `BaseIntegrationFlowDefinition` returning `B` — 142
+# overloads across the thirty-one names flagged here — ends in `_this()`, in `aload_0; areturn`,
+# or in a call on `this` to another member that does (`register`, `addComponent`,
+# `registerOutputChannelIfCan`, or another overload); `IntegrationFlowDefinition`'s nine
+# functional-interface overloads each return a base member called on `this`. NOT flagged,
+# because they return the finished `IntegrationFlow` from `get()` rather than the
+# definition: `handleReactive` (all four), `nullChannel()` and `to(IntegrationFlow)`.
+
 owners: &owners
   - org.springframework.integration.dsl.IntegrationFlowDefinition
   - org.springframework.integration.dsl.BaseIntegrationFlowDefinition
@@ -93,88 +107,88 @@ owners: &owners
 
 steps:
   # --- pass-through: every overload of each name (twenty names) --------------
-  - { method: aggregate,      owner: *owners, captures: {} }
-  - { method: barrier,        owner: *owners, captures: {} }
-  - { method: bridge,         owner: *owners, captures: {} }
-  - { method: claimCheckIn,   owner: *owners, captures: {} }
-  - { method: claimCheckOut,  owner: *owners, captures: {} }
-  - { method: convert,        owner: *owners, captures: {} }
-  - { method: delay,          owner: *owners, captures: {} }
-  - { method: enrich,         owner: *owners, captures: {} }
-  - { method: enrichHeaders,  owner: *owners, captures: {} }
-  - { method: filter,         owner: *owners, captures: {} }
-  - { method: fluxTransform,  owner: *owners, captures: {} }
-  - { method: headerFilter,   owner: *owners, captures: {} }
-  - { method: intercept,      owner: *owners, captures: {} }
-  - { method: log,            owner: *owners, captures: {} }
-  - { method: resequence,     owner: *owners, captures: {} }
-  - { method: split,          owner: *owners, captures: {} }
-  - { method: splitWith,      owner: *owners, captures: {} }
-  - { method: transform,      owner: *owners, captures: {} }
-  - { method: transformWith,  owner: *owners, captures: {} }
-  - { method: wireTap,        owner: *owners, captures: {} }
+  - { method: aggregate,      owner: *owners, captures: {}, returns_receiver: true }
+  - { method: barrier,        owner: *owners, captures: {}, returns_receiver: true }
+  - { method: bridge,         owner: *owners, captures: {}, returns_receiver: true }
+  - { method: claimCheckIn,   owner: *owners, captures: {}, returns_receiver: true }
+  - { method: claimCheckOut,  owner: *owners, captures: {}, returns_receiver: true }
+  - { method: convert,        owner: *owners, captures: {}, returns_receiver: true }
+  - { method: delay,          owner: *owners, captures: {}, returns_receiver: true }
+  - { method: enrich,         owner: *owners, captures: {}, returns_receiver: true }
+  - { method: enrichHeaders,  owner: *owners, captures: {}, returns_receiver: true }
+  - { method: filter,         owner: *owners, captures: {}, returns_receiver: true }
+  - { method: fluxTransform,  owner: *owners, captures: {}, returns_receiver: true }
+  - { method: headerFilter,   owner: *owners, captures: {}, returns_receiver: true }
+  - { method: intercept,      owner: *owners, captures: {}, returns_receiver: true }
+  - { method: log,            owner: *owners, captures: {}, returns_receiver: true }
+  - { method: resequence,     owner: *owners, captures: {}, returns_receiver: true }
+  - { method: split,          owner: *owners, captures: {}, returns_receiver: true }
+  - { method: splitWith,      owner: *owners, captures: {}, returns_receiver: true }
+  - { method: transform,      owner: *owners, captures: {}, returns_receiver: true }
+  - { method: transformWith,  owner: *owners, captures: {}, returns_receiver: true }
+  - { method: wireTap,        owner: *owners, captures: {}, returns_receiver: true }
   # `fixedSubscriberChannel()` — the no-argument form is a pass-through (an
   # anonymous channel, §0b A5); the `(String)` form below is a link.
-  - { method: fixedSubscriberChannel, owner: *owners, captures: {},
+  - { method: fixedSubscriberChannel, owner: *owners, returns_receiver: true, captures: {},
       descriptor: "()Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
 
   # --- channel link ----------------------------------------------------------
-  - { method: channel, owner: *owners, captures: { channel_link: arg0 },
+  - { method: channel, owner: *owners, returns_receiver: true, captures: { channel_link: arg0 },
       descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: fixedSubscriberChannel, owner: *owners, captures: { channel_link: arg0 },
+  - { method: fixedSubscriberChannel, owner: *owners, returns_receiver: true, captures: { channel_link: arg0 },
       descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: channel, owner: *owners, captures: { channel_link: { bean_via: arg0 } },
+  - { method: channel, owner: *owners, returns_receiver: true, captures: { channel_link: { bean_via: arg0 } },
       descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   # A channel SPEC (`MessageChannels.direct("x")`, or a function building one):
   # the name is inside the spec's own chain, which this walk does not open —
   # a stated boundary, never a guess at the name, and the handler after it
   # is credited to nobody (see the classification above).
-  - { method: channel, owner: *owners, poisons: [channel_link],
+  - { method: channel, owner: *owners, returns_receiver: true, poisons: [channel_link],
       descriptor: "(Lorg/springframework/integration/dsl/MessageChannelSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: channel, owner: *owners, poisons: [channel_link],
+  - { method: channel, owner: *owners, returns_receiver: true, poisons: [channel_link],
       descriptor: "(Ljava/util/function/Function;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
 
   # --- handler: the lambda forms, by the slot the handler sits in --------------
   # The subclass's own `handle(GenericHandler[, Consumer])` (CP-27 row 3b) — the
   # form a flow most often writes — with its own return type.
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/integration/core/GenericHandler;)Lorg/springframework/integration/dsl/IntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/integration/core/GenericHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/IntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg1 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg1 },
       descriptor: "(Ljava/lang/Class;Lorg/springframework/integration/core/GenericHandler;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg1 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg1 },
       descriptor: "(Ljava/lang/Class;Lorg/springframework/integration/core/GenericHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/messaging/MessageHandler;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/messaging/MessageHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   # A bean, a bean-and-method pair, a bean NAME, or a processor spec: a consumer
   # this walk cannot name — `handler` reads the argument and answers NULL for
   # anything but a lambda, and the row stays resolved (the handler never moves
   # the wire's resolution). `handle(Object bean, String method)` where the bean
   # is the module's own is a stated boundary (spec §5).
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Ljava/lang/Object;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Ljava/lang/Object;Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Ljava/lang/Object;Ljava/lang/String;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/integration/dsl/MessageProcessorSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: { handler: arg0 },
+  - { method: handle, owner: *owners, returns_receiver: true, captures: { handler: arg0 },
       descriptor: "(Lorg/springframework/integration/dsl/MessageProcessorSpec;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   # A SINK spec (`Kafka.outboundChannelAdapter(t).topic("x")`): its own chain
   # continues into this call and derives the OUTBOUND row; nothing to capture
   # here, and the source's own chain reaches this step with its handler absent —
   # the message leaves on the sink's wire.
-  - { method: handle, owner: *owners, captures: {},
+  - { method: handle, owner: *owners, returns_receiver: true, captures: {},
       descriptor: "(Lorg/springframework/integration/dsl/MessageHandlerSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
-  - { method: handle, owner: *owners, captures: {},
+  - { method: handle, owner: *owners, returns_receiver: true, captures: {},
       descriptor: "(Lorg/springframework/integration/dsl/MessageHandlerSpec;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   # `handleReactive` — the same two shapes, a reactive handler or a reactive
   # sink spec; it returns the finished flow (no `get()` follows).
@@ -191,14 +205,14 @@ steps:
   - { method: nullChannel, owner: *owners, captures: { handler: none } }
 
   # --- divert (nine names; CP-27 row 4 for what each constructs) -------------
-  - { method: route,                   owner: *owners, poisons: [handler] }
-  - { method: routeByException,        owner: *owners, poisons: [handler] }
-  - { method: routeToRecipients,       owner: *owners, poisons: [handler] }
-  - { method: gateway,                 owner: *owners, poisons: [handler] }
-  - { method: scatterGather,           owner: *owners, poisons: [handler] }
-  - { method: publishSubscribeChannel, owner: *owners, poisons: [handler] }
-  - { method: controlBus,              owner: *owners, poisons: [handler] }
-  - { method: trigger,                 owner: *owners, poisons: [handler] }
+  - { method: route,                   owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: routeByException,        owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: routeToRecipients,       owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: gateway,                 owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: scatterGather,           owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: publishSubscribeChannel, owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: controlBus,              owner: *owners, poisons: [handler], returns_receiver: true }
+  - { method: trigger,                 owner: *owners, poisons: [handler], returns_receiver: true }
   - { method: to,                      owner: *owners, poisons: [handler] }
 
 # An undeclared member of the flow definition — a release adding one, or the

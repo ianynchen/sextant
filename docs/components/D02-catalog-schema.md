@@ -1987,7 +1987,11 @@ results of `url` and `post` dropped, is one chain. A call returning a new value,
 address `c`. The pre-root backward fold reads the flag too, for owner-declared steps only, as
 it does every step: a flagged call on a value the chain passes through, made before the call
 that reads that value, folds after the value's producer, so
-`b = WebClient.builder(); b.baseUrl(x); b.build().get()` carries the base. A terminal takes
+`b = WebClient.builder(); b.baseUrl(x); b.build().get()` carries the base. A value handed on
+to a consumer (`continue: true`) carries what configured it too: a flagged call whose result
+a consumer takes still hands the chain on (`handle(spec.topic("t"))`), and a consumer taking
+the value itself is handed the configuring calls made on it before that consumer
+(`spec.topic("t"); handle(spec)`). A terminal takes
 the word in its mapping form, `{ method: m, returns_receiver: true }`. The default is
 `false`. Anything but a boolean is refused at load. A flag goes on a method only after
 `javap`, or the method's Javadoc, shows it returns `this`, and the catalog quotes that

@@ -226,21 +226,31 @@ matches:
                            method: handle },
         continue: true }
   steps:
-    # The sink's topic (row 7).
+    # The sink's topic (row 7). Each step returns the spec it was called on, so each is
+    # `returns_receiver: true` (ruling 4, spec 2026-10-30): `sink.topic("t");
+    # flow.handle(sink)` reads as the chain. `javap`, spring-integration-kafka 6.2.4:
+    #   public S topic(java.lang.String);
+    #   public <P> S topic(java.util.function.Function<org.springframework.messaging.Message<P>, java.lang.String>);
+    #   public S topicExpression(java.lang.String);
+    #   public S topicExpression(org.springframework.expression.Expression);
+    # `S` is the spec's own type parameter; `topicExpression(Expression)` ends
+    # `invokevirtual _this(); areturn`, the others return `topicExpression(Expression)`
+    # called on `this`, and `IntegrationComponentSpec._this()` (spring-integration-core
+    # 6.2.4) is `aload_0; areturn`.
     - { method: topic,
         owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
                 org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
         descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec;",
-        captures: { channel: arg0 } }
+        captures: { channel: arg0 }, returns_receiver: true }
     - { method: topic,
         owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
                 org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
         descriptor: "(Ljava/util/function/Function;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec;",
-        poisons: [channel] }
+        poisons: [channel], returns_receiver: true }
     - { method: topicExpression,
         owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
                 org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
-        poisons: [channel] }
+        poisons: [channel], returns_receiver: true }
   # `get()` ends a flow, and is a declared word (so the builder's own `get`
   # poisons nothing under the step model's `undeclared_steps`); a continued
   # chain is executable from its consumer on (spec §5: the consumer IS the

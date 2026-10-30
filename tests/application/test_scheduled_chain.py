@@ -472,16 +472,16 @@ _MISFIRE = "withMisfireHandlingInstructionDoNothing"
 
 
 def _configuring_quartz() -> Catalog:
-    """The shipped catalog with its trigger steps declared `returns_receiver: true`, as
-    Quartz's `TriggerBuilder` does (ruling 4, spec 2026-10-30): each returns `this`. One
-    `CronScheduleBuilder` step is declared the same way, with no captures, for the chain
-    reader that reads the schedule (`_schedules`)."""
+    """The shipped catalog, which declares its trigger steps and every schedule builder's own
+    setters `returns_receiver: true`, as Quartz's builders do (ruling 4, spec 2026-10-30):
+    each returns `this`. The `CronScheduleBuilder` step is what the chain reader that reads
+    the schedule (`_schedules`) takes as configuring."""
     catalog = _quartz(_catalogs())
-    steps = [
-        *({**step, "returns_receiver": True} for step in catalog.matches["steps"]),
-        {"owner": "org.quartz.CronScheduleBuilder", "method": _MISFIRE, "returns_receiver": True},
-    ]
-    return replace(catalog, matches={**catalog.matches, "steps": steps})
+    assert any(
+        step["method"] == _MISFIRE and step.get("returns_receiver")
+        for step in catalog.matches["steps"]
+    )
+    return catalog
 
 
 def test_only_the_flagged_overload_is_a_configuring_call():

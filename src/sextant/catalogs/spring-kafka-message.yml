@@ -52,8 +52,15 @@ matches:
   # its genuinely HTTP-shaped queue URL and every `channel`/`channel_arg`
   # destination elsewhere. `channel_of` is the honest reader: a destination
   # is recorded verbatim, `peer` unconditionally NULL, never split.
+  #
+  # `setHeader` RETURNS THE BUILDER IT WAS CALLED ON, so it is `returns_receiver: true`
+  # (ruling 4, spec 2026-10-30): `b.setHeader(TOPIC, t); send(b.build())` is one message.
+  # `javap -c org.springframework.messaging.support.MessageBuilder`, spring-messaging 6.1.6
+  # (the version `fixtures/orders-service` builds against), whose body ends `aload_0; areturn`:
+  #   public org.springframework.messaging.support.MessageBuilder<T> setHeader(java.lang.String, java.lang.Object);
   steps:
-    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { channel: arg1 } }
+    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { channel: arg1 },
+        returns_receiver: true }
   # `build`'s own result reaches `KafkaTemplate#send`'s own argument
   # `source` — the same `terminal_via_argument` join every other
   # builder-shaped catalog in this file uses (`aws-sqs-sdk.yml`,

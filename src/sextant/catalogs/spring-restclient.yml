@@ -39,6 +39,18 @@ matches:
   # request-setter on `RequestBodySpec` and a response-extractor on
   # `ResponseSpec` — indistinguishable by method name alone, so both declare
   # `owner` (D02 §4's amendment).
+  #
+  # `returns_receiver: true` (ruling 4, spec 2026-10-30) on every step that returns the spec
+  # or builder it was called on. `javap` on the interfaces (spring-web 6.1.6 and 7.0.2):
+  #   public abstract S uri(java.net.URI);                    (RestClient$UriSpec, and its four overloads)
+  #   public abstract org.springframework.web.client.RestClient$RequestBodySpec body(java.lang.Object);   (three overloads)
+  #   public abstract org.springframework.web.client.RestClient$Builder baseUrl(java.lang.String);
+  #   public abstract org.springframework.web.client.RestClient$ResponseSpec onStatus(…);   (two overloads)
+  # and every overload's body on the implementations (`javap -c`:
+  # `DefaultRestClient$DefaultRequestBodyUriSpec`, `DefaultRestClientBuilder`,
+  # `DefaultRestClient$DefaultResponseSpec`) ends `aload_0; areturn`, or returns an overload
+  # that does. `ResponseSpec#body` is NOT flagged: `public abstract <T> T body(java.lang.Class<T>);`
+  # returns the response body, read by `readBody`/`executeAndExtract`.
   steps:
     # `baseUrl` sits BEFORE the verb root in a real chain
     # (`RestClient.builder().baseUrl(...).build().get()`), which is why the
@@ -47,10 +59,22 @@ matches:
     # (2F design §4). The `owner` is REQUIRED, not decoration: only an
     # owner-declared step folds backward, because the pre-root prefix is the
     # part of a chain no root has vouched for yet (fix round 1).
-    - { method: baseUrl, owner: org.springframework.web.client.RestClient$Builder, captures: { base: arg0 } }
-    - { method: uri, captures: { url: arg0 } }
-    - { method: body, owner: org.springframework.web.client.RestClient$RequestBodySpec, captures: { body: arg0 } }
+    - { method: baseUrl, owner: org.springframework.web.client.RestClient$Builder, captures: { base: arg0 },
+        returns_receiver: true }
+    - { method: uri, captures: { url: arg0 }, returns_receiver: true }
+    # Both owners a request body is set on: javac names the receiver's STATIC type, and a
+    # spec held in a local is typed as what `post()` returns, `RequestBodyUriSpec`, which
+    # declares no `body` of its own and inherits `RequestBodySpec`'s (`javap`: `interface
+    # RestClient$RequestBodyUriSpec extends RestClient$RequestBodySpec, …`); a chained
+    # `.uri(…).body(…)` is typed by `uri`'s return, `RequestBodySpec`.
+    - { method: body, owner: [org.springframework.web.client.RestClient$RequestBodySpec,
+                              org.springframework.web.client.RestClient$RequestBodyUriSpec],
+        captures: { body: arg0 }, returns_receiver: true }
     - { method: body, owner: org.springframework.web.client.RestClient$ResponseSpec,     captures: { response: arg0 } }
+    # The response spec's error-status handlers capture nothing and return the response
+    # spec they were called on: `spec = …retrieve(); spec.onStatus(…); spec.body(T)` is one
+    # row with its response shape.
+    - { method: onStatus, owner: org.springframework.web.client.RestClient$ResponseSpec, returns_receiver: true }
   # MEASURED (CP-12 Q4). This file previously said "`retrieve` alone is the
   # terminal: no `exchange` on this synchronous surface", and the jar says
   # otherwise: `RestClient$RequestHeadersSpec`'s response-obtaining methods —

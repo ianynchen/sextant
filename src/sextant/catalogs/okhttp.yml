@@ -57,15 +57,35 @@ matches:
   # `body: arg0` would fix that overload and break the other, whose absent
   # argument 0 would read as a capture that was reached and could not be
   # resolved, demoting every plain `.delete()` chain to `unresolved`.
+  #
+  # EVERY STEP RETURNS THE BUILDER IT WAS CALLED ON, so each is `returns_receiver: true`
+  # (ruling 4, spec 2026-10-30): `b.url(u); b.post(x); newCall(b.build())`, each result
+  # dropped, is the chain `b.url(u).post(x).build()`. `javap -c okhttp3.Request$Builder`,
+  # okhttp 4.12.0 (3.14.9 declares the same eleven, in Java, each ending `aload_0; areturn`
+  # or returning one that does):
+  #   public okhttp3.Request$Builder url(okhttp3.HttpUrl);         `aload_0; astore_2; … aload_2; checkcast; areturn`
+  #   public okhttp3.Request$Builder url(java.lang.String);        returns `url(HttpUrl)`
+  #   public okhttp3.Request$Builder url(java.net.URL);            returns `url(HttpUrl)`
+  #   public okhttp3.Request$Builder get();                        returns `method(String, RequestBody)`
+  #   public okhttp3.Request$Builder head();                       returns `method(String, RequestBody)`
+  #   public okhttp3.Request$Builder post(okhttp3.RequestBody);    returns `method(String, RequestBody)`
+  #   public okhttp3.Request$Builder put(okhttp3.RequestBody);     returns `method(String, RequestBody)`
+  #   public okhttp3.Request$Builder patch(okhttp3.RequestBody);   returns `method(String, RequestBody)`
+  #   public okhttp3.Request$Builder delete(okhttp3.RequestBody);  returns `method(String, RequestBody)`
+  #   public final okhttp3.Request$Builder delete();               returns `delete$default`, which returns `delete(RequestBody)`
+  #   public okhttp3.Request$Builder method(java.lang.String, okhttp3.RequestBody);
+  #                                                                `aload_0; astore_3; … checkcast; areturn`
+  # Kotlin's `apply { }`: the builder is stored in a local on entry and that local is what
+  # each body returns.
   steps:
-    - { method: url,    captures: { url: arg0 } }
-    - { method: get,    captures: { http_method: GET } }
-    - { method: head,   captures: { http_method: HEAD } }
-    - { method: post,   captures: { http_method: POST, body: arg0 } }
-    - { method: put,    captures: { http_method: PUT, body: arg0 } }
-    - { method: patch,  captures: { http_method: PATCH, body: arg0 } }
-    - { method: delete, captures: { http_method: DELETE } }
-    - { method: method, captures: { http_method: arg0, body: arg1 } }
+    - { method: url,    captures: { url: arg0 }, returns_receiver: true }
+    - { method: get,    captures: { http_method: GET }, returns_receiver: true }
+    - { method: head,   captures: { http_method: HEAD }, returns_receiver: true }
+    - { method: post,   captures: { http_method: POST, body: arg0 }, returns_receiver: true }
+    - { method: put,    captures: { http_method: PUT, body: arg0 }, returns_receiver: true }
+    - { method: patch,  captures: { http_method: PATCH, body: arg0 }, returns_receiver: true }
+    - { method: delete, captures: { http_method: DELETE }, returns_receiver: true }
+    - { method: method, captures: { http_method: arg0, body: arg1 }, returns_receiver: true }
   # A mapping, not the bare flag: without it, any consumer of `build`'s
   # result (a log statement) would count as executing the request.
   terminal:

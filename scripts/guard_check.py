@@ -6413,6 +6413,36 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-CONFIGURING-call-hands-the-chain-on": Guard(
+        what="a call folded in place because it returns the object it was called on still "
+        "hands the chain on to a consumer that takes its result (ruling 4, spec 2026-10-30; "
+        "spec 2026-09-21 §5)",
+        why="`handle(Amqp.outboundAdapter(t).exchangeName(x).routingKey(k))`: once the spec "
+        "steps are declared `returns_receiver: true` they are folded, never walked, so the "
+        "continuation `_walk` asks for at each site was never asked for them and the sink's "
+        "chain ended with no terminal. The outbound row of every chained sink spec was lost",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                handed_on = _continuations(next_site, captures, context)\n",
+                replace="                handed_on = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-HELD-value-hands-on-what-configured-it": Guard(
+        what="a value handed to a consumer carries the configuring calls made on it before "
+        "the consumer took it (ruling 4, spec 2026-10-30)",
+        why='`spec = Kafka.outboundChannelAdapter(t); spec.topic("orders"); '
+        "flow.handle(spec)`: the continuation was taken from the root with the root's "
+        "captures alone, before `topic` was folded, so the outbound row had no topic",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        _continue(consumer, _configured_for(site, consumer, captures, context), context)\n",
+                replace="        _continue(consumer, captures, context)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-CONFIGURING-call-is-not-an-escape": Guard(
         what="a call the reader declares returns the object it was called on (`configuring`), "
         "made on a value between its producer and its use, is not `escapes`: the chain reader "

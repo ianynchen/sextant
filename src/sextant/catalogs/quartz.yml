@@ -27,18 +27,128 @@ matches:
   # not a root here on purpose.
   roots:
     - { owner: org.quartz.TriggerBuilder, method: newTrigger }
+  #
+  # EVERY BUILDER CALL BELOW RETURNS THE BUILDER IT WAS CALLED ON, and says so with
+  # `returns_receiver: true` (ruling 4, spec 2026-10-30): a trigger, a job or a schedule
+  # held in a local and configured over statements of their own, each result dropped, is
+  # the chain written in one expression. Measured with `javap -c`, quartz 2.5.1: every one
+  # of these bodies ends `aload_0; areturn`, except `JobBuilder.storeDurably()` and
+  # `DailyTimeIntervalScheduleBuilder.onDaysOfTheWeek(Integer...)` (not steps here), which
+  # return an overload that does.
   steps:
     # The trigger's key (ruling 5). `withIdentity(name)`, `withIdentity(name, group)` and
     # `withIdentity(TriggerKey)` all match; the third captures an object, which is no
     # constant, so its name stays NULL. Owner-gated: `JobBuilder` has a `withIdentity` too.
+    #   public org.quartz.TriggerBuilder<T> withIdentity(java.lang.String);
+    #   public org.quartz.TriggerBuilder<T> withIdentity(java.lang.String, java.lang.String);
+    #   public org.quartz.TriggerBuilder<T> withIdentity(org.quartz.TriggerKey);
     - owner: org.quartz.TriggerBuilder
       method: withIdentity
       captures: { name: arg0, group: arg1 }
+      returns_receiver: true
     # The schedule builder is the ARGUMENT of `withSchedule`, a nested chain of its own
-    # (spec §2b), followed from here by the value walk.
+    # (spec §2b), followed from here by the value walk. The type parameter changes and the
+    # object does not: the body is `this.scheduleBuilder = schedBuilder; return
+    # (TriggerBuilder<SBT>) this`, which compiles to `aload_0; areturn`.
+    #   public <SBT extends T> org.quartz.TriggerBuilder<SBT> withSchedule(org.quartz.ScheduleBuilder<SBT>);
     - owner: org.quartz.TriggerBuilder
       method: withSchedule
       captures: { schedule: arg0 }
+      returns_receiver: true
+
+    # THE SCHEDULE BUILDERS' OWN SETTERS (ruling 4). They capture nothing: the schedule is
+    # read BACKWARD from `withSchedule`'s argument, as the builder chain written there
+    # (`_schedules`), and a call on the held builder that the chain reader does not know
+    # configures it is a use of the value it cannot account for, so the schedule loses its
+    # text. Declared here so `cron.withMisfireHandlingInstructionDoNothing();` in a
+    # statement of its own is a link of that chain. Every instance method the four `kinds`
+    # builders declare that returns its own type, one entry per name, owned by each builder
+    # that declares it:
+    #   CronScheduleBuilder              inTimeZone(TimeZone), withMisfireHandlingInstruction
+    #                                    {IgnoreMisfires,DoNothing,FireAndProceed}()
+    #   SimpleScheduleBuilder            withIntervalIn{Milliseconds(long),Seconds,Minutes,Hours}(int),
+    #                                    withRepeatCount(int), repeatForever(),
+    #                                    withMisfireHandlingInstruction{IgnoreMisfires,FireNow,
+    #                                    NextWithExistingCount,NextWithRemainingCount,
+    #                                    NowWithExistingCount,NowWithRemainingCount}()
+    #   CalendarIntervalScheduleBuilder  withInterval(int, IntervalUnit), withIntervalIn{Seconds,
+    #                                    Minutes,Hours,Days,Weeks,Months,Years}(int),
+    #                                    withMisfireHandlingInstruction{IgnoreMisfires,DoNothing,
+    #                                    FireAndProceed}(), inTimeZone(TimeZone),
+    #                                    preserveHourOfDayAcrossDaylightSavings(boolean),
+    #                                    skipDayIfHourDoesNotExist(boolean)
+    #   DailyTimeIntervalScheduleBuilder withInterval(int, IntervalUnit), withIntervalIn{Seconds,
+    #                                    Minutes,Hours}(int), onDaysOfTheWeek(Set),
+    #                                    onDaysOfTheWeek(Integer...), onMondayThroughFriday(),
+    #                                    onSaturdayAndSunday(), onEveryDay(),
+    #                                    startingDailyAt(TimeOfDay), endingDailyAt(TimeOfDay),
+    #                                    endingDailyAfterCount(int), withMisfireHandlingInstruction
+    #                                    {IgnoreMisfires,DoNothing,FireAndProceed}(), withRepeatCount(int)
+    # each `public org.quartz.<Builder> <name>(…);` in `javap`.
+    - { method: inTimeZone, returns_receiver: true,
+        owner: [org.quartz.CronScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder] }
+    - { method: withMisfireHandlingInstructionIgnoreMisfires, returns_receiver: true,
+        owner: [org.quartz.CronScheduleBuilder, org.quartz.SimpleScheduleBuilder,
+                org.quartz.CalendarIntervalScheduleBuilder, org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withMisfireHandlingInstructionDoNothing, returns_receiver: true,
+        owner: [org.quartz.CronScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder,
+                org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withMisfireHandlingInstructionFireAndProceed, returns_receiver: true,
+        owner: [org.quartz.CronScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder,
+                org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withMisfireHandlingInstructionFireNow, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withMisfireHandlingInstructionNextWithExistingCount, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withMisfireHandlingInstructionNextWithRemainingCount, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withMisfireHandlingInstructionNowWithExistingCount, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withMisfireHandlingInstructionNowWithRemainingCount, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withIntervalInMilliseconds, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: withIntervalInSeconds, returns_receiver: true,
+        owner: [org.quartz.SimpleScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder,
+                org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withIntervalInMinutes, returns_receiver: true,
+        owner: [org.quartz.SimpleScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder,
+                org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withIntervalInHours, returns_receiver: true,
+        owner: [org.quartz.SimpleScheduleBuilder, org.quartz.CalendarIntervalScheduleBuilder,
+                org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withIntervalInDays, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: withIntervalInWeeks, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: withIntervalInMonths, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: withIntervalInYears, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: withInterval, returns_receiver: true,
+        owner: [org.quartz.CalendarIntervalScheduleBuilder, org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: withRepeatCount, returns_receiver: true,
+        owner: [org.quartz.SimpleScheduleBuilder, org.quartz.DailyTimeIntervalScheduleBuilder] }
+    - { method: repeatForever, returns_receiver: true,
+        owner: org.quartz.SimpleScheduleBuilder }
+    - { method: preserveHourOfDayAcrossDaylightSavings, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: skipDayIfHourDoesNotExist, returns_receiver: true,
+        owner: org.quartz.CalendarIntervalScheduleBuilder }
+    - { method: onDaysOfTheWeek, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: onMondayThroughFriday, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: onSaturdayAndSunday, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: onEveryDay, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: startingDailyAt, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: endingDailyAt, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
+    - { method: endingDailyAfterCount, returns_receiver: true,
+        owner: org.quartz.DailyTimeIntervalScheduleBuilder }
   terminal: [build]
 
   # THE JOB A TRIGGER RUNS (spec §3c), found from whatever pairs them, as Quartz pairs them.
@@ -48,10 +158,16 @@ matches:
   # own, owner-gated for the same reason, and a key written with no group is in
   # `default_group` as well (`JobKey` is a `Key`).
   job_root: { owner: org.quartz.JobBuilder, method: newJob, class_arg: arg0 }
+  #   public org.quartz.JobBuilder withIdentity(java.lang.String);
+  #   public org.quartz.JobBuilder withIdentity(java.lang.String, java.lang.String);
+  #   public org.quartz.JobBuilder withIdentity(org.quartz.JobKey);
+  # each ending `aload_0; areturn` (`javap -c`, quartz 2.5.1), so the step configures the
+  # builder it is called on (ruling 4).
   job_identity_step:
     owner: org.quartz.JobBuilder
     method: withIdentity
     captures: { name: arg0, group: arg1 }
+    returns_receiver: true
 
   # `TriggerBuilder.forJob`, each overload a step of the trigger chain (by descriptor: the
   # four take different things). Every one sets the trigger's one `jobKey`:
@@ -60,23 +176,33 @@ matches:
   # - a name and a group, or a name alone in `default_group`: the `JobBuilder` chain
   #   anywhere in the module whose key is that key;
   # - a `JobKey`: the key the walk finds that key built from (`job_key` below).
+  # Each overload returns the trigger builder it was called on (ruling 4; `javap -c`,
+  # quartz 2.5.1, each ending `aload_0; areturn`):
+  #   public org.quartz.TriggerBuilder<T> forJob(org.quartz.JobKey);
+  #   public org.quartz.TriggerBuilder<T> forJob(java.lang.String);
+  #   public org.quartz.TriggerBuilder<T> forJob(java.lang.String, java.lang.String);
+  #   public org.quartz.TriggerBuilder<T> forJob(org.quartz.JobDetail);
   for_job:
     - owner: org.quartz.TriggerBuilder
       method: forJob
       descriptor: "(Lorg/quartz/JobDetail;)Lorg/quartz/TriggerBuilder;"
       captures: { job_detail: arg0 }
+      returns_receiver: true
     - owner: org.quartz.TriggerBuilder
       method: forJob
       descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
       captures: { job_name: arg0, job_group: arg1 }
+      returns_receiver: true
     - owner: org.quartz.TriggerBuilder
       method: forJob
       descriptor: "(Ljava/lang/String;)Lorg/quartz/TriggerBuilder;"
       captures: { job_name: arg0 }
+      returns_receiver: true
     - owner: org.quartz.TriggerBuilder
       method: forJob
       descriptor: "(Lorg/quartz/JobKey;)Lorg/quartz/TriggerBuilder;"
       captures: { job_key: arg0 }
+      returns_receiver: true
 
   # The calls a `JobKey` is built by, with the argument each half of the key is.
   job_key:

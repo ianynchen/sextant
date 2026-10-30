@@ -818,7 +818,7 @@ def _walk(
     # configuring call's result on it, or a `build()`.
     consumers = _continuations(site, captures, context)
     for consumer in consumers:
-        _continue(consumer, captures, context)
+        _continue(consumer, _configured_for(site, consumer, captures, context), context)
     chain_key = _chain_key(site)
     # A void ordinary call (`result` null, D00 §5) has nothing a following
     # row's `receiver` could ever really match — `None` is not a value id,
@@ -877,15 +877,56 @@ def _fold_or_fork(
                 _hold_executing_call(next_site, captures, context)
             same_object = _chain_key(next_site)
             if same_object is not None:
+                # The value a configuring call returns may be handed on as it is (spec
+                # 2026-09-21 §5): `handle(spec.topic("t"))`. Folded in place, the call is no
+                # site `_walk` visits, so it is asked here, and a chain handed on ends here
+                # as `_walk`'s does.
+                handed_on = _continuations(next_site, captures, context)
+                for consumer in handed_on:
+                    _continue(
+                        consumer, _configured_for(next_site, consumer, captures, context), context
+                    )
                 on_it = [s for s in context.by_receiver.get(same_object, []) if s is not next_site]
                 forked_on_it, terminal = _fold_or_fork(on_it, captures, terminal, context)
-                forked = forked or forked_on_it
+                forked = forked or forked_on_it or bool(handed_on)
             continue
         forked = True
         next_captures = dict(captures)
         _fold_site(next_site, next_captures, context)
         _walk(next_site, next_captures, terminal, context)
     return forked, terminal
+
+
+def _configured_for(
+    site: dict[str, Any],
+    consumer: dict[str, Any],
+    captures: dict[str, Any],
+    context: _ChainContext,
+) -> dict[str, Any]:
+    """What `site`'s value carries when `consumer` takes it (ruling 4, spec 2026-10-30): a
+    copy of `captures` with each call on that value made before `consumer` that configures
+    it folded in, in ordinal order, with what is called on a configuring call's own result,
+    which is the value again. A call configures the value as `_fold_or_fork` says: it is void,
+    or it returns the object it was called on. So `spec = sink(t); spec.topic("x");
+    handle(spec)` hands `handle` the topic; a call made after `consumer` never reaches it."""
+    handed = dict(captures)
+    visited: set[Any] = set()
+
+    def fold(value: Any) -> None:
+        if value is None or value in visited:
+            return
+        visited.add(value)
+        for call in context.by_receiver.get(value, []):
+            if call is site or call is consumer:
+                continue
+            if int(call["ordinal"]) >= int(consumer["ordinal"]):
+                continue
+            if _chain_key(call) is None or _configures(call, context):
+                _fold_site(call, handed, context)
+                fold(_chain_key(call))
+
+    fold(_chain_key(site))
+    return handed
 
 
 def _hold_executing_call(
