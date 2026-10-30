@@ -36,9 +36,13 @@ from sextant.application.resolve.values import (
     resolve_site,
 )
 from sextant.domain.closed_sets import Resolution
-from sextant.domain.config_keys import normalize_key
+from sextant.domain.config_keys import _PLACEHOLDER, carries_expression, normalize_key
 from sextant.domain.redaction import authority_without_userinfo
 from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
+
+# `carries_expression` is defined in `domain/config_keys.py` (values.py reads it too, and this
+# module imports values); it is re-exported here so its callers keep this import.
+__all__ = ["carries_expression"]
 
 # The scheme is OPTIONAL, which admits RFC 3986 §4.2's scheme-relative reference
 # (`//authority/path`) beside an absolute URL. The walk writes that form when it joined
@@ -849,38 +853,6 @@ class FieldFacts:
 # written without naming it", which is how every `@Value("${…}")`-shaped
 # expression reaches the facts.
 _ANNOTATION_VALUE_ARG = "value"
-
-# D01's own placeholder form — the expression an endpoint row carries until
-# the per-environment join resolves it (`resolved_peers`, whose SQL matches on
-# exactly this delimiter pair). Rungs 1 and 2 return an expression the facts
-# already spell; rung 3 SYNTHESISES one from a prefix and a property name, so
-# it is the one rung that has to write the delimiters itself.
-#
-# Written here rather than read from a `config_model` for the same reason the
-# relaxed-binding rule below is applied unconditionally: `placeholders` and
-# `key_matching` are declared on the framework FAMILY's base catalog, and a
-# client catalog — the only thing this ladder is handed — cannot see them.
-# `resolved_peers`' own SQL already hard-codes this same pair, so one form is
-# assumed in exactly two places rather than one; a non-`${}` ecosystem has to
-# thread the pair onto `field_sources` and into that query together.
-_PLACEHOLDER = ("${", "}")
-
-
-def carries_expression(text: str) -> bool:
-    """Whether an address carries a D01 placeholder — an OPEN delimiter with
-    a matching CLOSE after it, `resolve/config.py`'s own reading (an
-    unterminated `${` is literal text there too).
-
-    What it decides: an address containing one is unsplittable, whatever else
-    it looks like (2F design §4). `https://${billing.host}/orders` matches
-    CP-2's absolute-URL shape perfectly and splitting it would write
-    `${billing.host}` into the `peer` column as if it were an authority —
-    a peer no environment ever named, and one the per-environment join reads
-    only from `path`/`peer` as WHOLE expressions. So the check runs BEFORE the
-    split, never after."""
-    open_, close = _PLACEHOLDER
-    start = text.find(open_)
-    return start != -1 and close in text[start + len(open_) :]
 
 
 @dataclass(frozen=True)

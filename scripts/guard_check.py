@@ -1218,7 +1218,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/values.py",
-                find="            narrowed = any(narrowed for _, _, _, _, narrowed in combination)\n",
+                find="            narrowed = any(narrowed for _, _, _, _, narrowed, _ in combination)\n",
                 replace="            narrowed = False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -2087,6 +2087,40 @@ GUARDS: dict[str, Guard] = {
                 find="            or answer.yields != _AUTHORITY\n        ):\n            return None",
                 replace="            or answer.yields != _AUTHORITY\n        ):\n"
                 "            continue  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-concat-hole-REPLACES-what-it-cannot-fill-never-drops-it": Guard(
+        what="a concatenation hole gives one candidate per calling context its operand "
+        "reached, and the context that read no text keeps the hole's spelling instead of "
+        "vanishing",
+        why="the filter kept only string literals whenever any path read one, so a helper "
+        'called with `"svc-a"` and with a parameter nothing supplies published ONE address '
+        "and a peer for it — a fact the code does not state, found by the same multiplicity "
+        "checks that the `preserves` arm above feeds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                for crossed, answer in reached\n            )\n"
+                "            per_hole.append(settled or",
+                replace="                for crossed, answer in reached\n"
+                "                if answer.kind == LITERAL and answer.literal_kind == STRING\n"
+                "            )\n            per_hole.append(settled or",
+            ),
+        ),
+    ),
+    "values.a-hole-filled-by-a-PLACEHOLDER-expression-is-never-a-literal": Guard(
+        what="a concatenation hole filled with the text of an expression that carries a "
+        "`${key}` makes an `expression`, never a `literal`",
+        why="`${key}` is the deployment's to set, and `channel_of_answer` refuses an "
+        "expression on purpose: a `literal` holding an unresolved placeholder would be read "
+        "as a destination by a messaging catalog",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            whole = all(value is not None for _, value, _, _, _, _ in combination) and not any(\n"
+                "                keyed for _, _, _, _, _, keyed in combination\n            )\n",
+                replace="            whole = all(value is not None for _, value, _, _, _, _ in combination)\n",
             ),
         ),
     ),
