@@ -3644,6 +3644,10 @@ _SPARES = _symbol(_OBJECTS, "spares", "()V")
 _TOUCH = _symbol(_OBJECTS, "touch", _TAKES_SPARE)
 _READ_PROPS = _symbol(_OBJECTS, "reader", _TAKES_PROPS)
 _READ_BOUND = _symbol(_OBJECTS, "boundReader", _TAKES_BOUND_PROPS)
+# `static String cronOf(Row r) { return r.getCron(); }`, called from two methods on two rows.
+_CRON_OF = (_OBJECTS, "cronOf", "(Lcom/acme/orders/values/Row;)Ljava/lang/String;")
+_HELPER_A = _symbol(_OBJECTS, "helperA", "()V")
+_HELPER_B = _symbol(_OBJECTS, "helperB", "()V")
 _SETS = _TAKES_STRING
 _GETS = _MAKES_STRING
 # `make`'s consuming sites.
@@ -3820,7 +3824,38 @@ def _object_facts() -> list[Fact]:
         _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
         _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
     ]
-    return facts + _cycle_facts() + _bound_props_facts()
+    return facts + _cycle_facts() + _bound_props_facts() + _helper_read_facts()
+
+
+def _helper_read_facts() -> list[Fact]:
+    """`helperA() { Row a = new Row(); a.setCron("A"); one(cronOf(a)); }` and `helperB()`,
+    the same with `"B"`: one getter call, inside a helper, read on two objects."""
+    cron_of = _symbol(*_CRON_OF)
+    facts: list[Fact] = [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=cron_of,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _OBJECTS,
+            signature=Signature(
+                parameters=[Parameter(name="r", type=TypeRef(symbol=_ROW))],
+                returns=TypeRef(symbol="java/lang/String#"),
+            ),
+            visibility="public",
+        ),
+        _call(cron_of, 0, (_ROW, "getCron", _GETS), None, receiver_parameter=0, result=1),
+        _returns(*_CRON_OF, 0, CallArgument(kind="unresolved", source=1)),
+    ]
+    for name, method, cron in (("helperA", _HELPER_A, "A"), ("helperB", _HELPER_B, "B")):
+        facts += [
+            _declared(_OBJECTS, name, "()V"),
+            _void(_OBJECTS, name, "()V"),
+            _new(method, 0, _ROW, 1),
+            _call(method, 1, (_ROW, "setCron", _SETS), 1, arguments=_string(cron)),
+            _site(method, 2, _CRON_OF, arguments=_results(1), result=2),
+            _call(method, 3, _ONE_TARGET, None, arguments=_results(2)),
+        ]
+    return facts
 
 
 def _bound_props_facts() -> list[Fact]:
@@ -4032,6 +4067,19 @@ def test_a_receiver_path_from_outside_does_not_unplace_the_constructed_one(objec
         ("/admin-api", "None"),
         ("None", "external"),
     ]
+
+
+@pytest.mark.pins("values.an-object-walk-is-reused-only-for-frames-that-READ-ALIKE")
+def test_one_getter_in_a_helper_reads_each_callers_own_object_on_one_index(objects):
+    """`cronOf(r)` reads `r.getCron()`, and `helperA` and `helperB` call it on two rows. Which
+    row `r` is depends on the call the walk came through, so the object walk kept on the
+    index (`ValueIndex.objects`) may serve the second caller only if its frames read alike:
+    on ONE index, `helperA` reads `A` and `helperB` reads `B`."""
+    index = value_index(objects)
+    first = resolve_site(objects, _at(objects, _HELPER_A, 3), index)
+    second = resolve_site(objects, _at(objects, _HELPER_B, 3), index)
+    assert [binding.slots[0].value for binding in first] == ["A"]
+    assert [binding.slots[0].value for binding in second] == ["B"]
 
 
 def test_a_setter_called_by_a_helper_on_the_object_counts_for_that_object_only(objects):

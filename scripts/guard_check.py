@@ -2495,6 +2495,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.an-object-walk-is-reused-only-for-frames-that-READ-ALIKE": Guard(
+        what="an object walk kept on the index serves another asker only where that asker's "
+        "frames give the same answer at every read the walk made of them",
+        why="fix round 1 of the 2026-10-30 Task 7 review: the memo of `_objects` is keyed on "
+        "the frames a walk read, and a getter inside a helper called on two objects would "
+        "hand the second caller the first caller's object if frames were ignored",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n',
+                replace='    """Whether `frames` read as `held` did, at every read an object walk made of '
+                '`held`."""\n    return True  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
     "values.two-reads-of-one-field-pair-ONE-write": Guard(
         what="two reads of one field on one receiver are on one write step, so a pair of them "
         "never takes two different writes",
