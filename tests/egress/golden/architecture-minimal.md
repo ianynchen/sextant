@@ -42,7 +42,7 @@ Media reads `consumes → produces`; `—` means none recorded.
 
 | Handler | Trigger | Name | Expression | Resolution |
 |---|---|---|---|---|
-| `com/example/golden/Sweeper#sweep().` | cron | not in the code | `${orders.sweep.cron}` | unresolved |
+| `com/example/golden/Sweeper#sweep().` | cron | — | `${orders.sweep.cron}` | unresolved |
 
 ## Error handling
 

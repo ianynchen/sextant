@@ -19,6 +19,10 @@ public class OrderJobRow {
         return cron;
     }
 
+    public void setCron(String cron) {
+        this.cron = cron;
+    }
+
     public boolean isConcurrent() {
         return concurrent;
     }

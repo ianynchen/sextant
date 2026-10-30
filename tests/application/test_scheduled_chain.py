@@ -1511,6 +1511,8 @@ def test_a_pairing_no_path_ties_reads_each_part_alone_at_partial(tmp_path: Path)
     assert [
         (_handler_of(row), row["name"], row["expression"], row["resolution"]) for row in rows
     ] == [("AJob#execute", None, "0 0 * * * ?", "partial")]
+    # The name IS in the code — `n1` and `n2` — so its NULL is marked untied, not absent.
+    assert [row["untied"] for row in rows] == [["name"]]
 
 
 # --- the third fix wave (R20, 2026-10-29): the review's adversarial probes ------------------
@@ -1824,6 +1826,7 @@ def test_a_JobDetail_handed_through_a_helper_keeps_its_callers_cron(tmp_path: Pa
 
 
 @pytest.mark.pins("quartz.an-UNTIED-part-is-kept-only-where-every-path-agrees")
+@pytest.mark.pins("quartz.an-UNTIED-part-is-NAMED")
 def test_an_untied_cron_that_differs_between_paths_is_null(tmp_path: Path):
     """P8: `x()` calls `scheduleJob(id(newJob(AJob).build()), id(trigger("c1")))` and `y()`
     the same with BJob and `"c2"`. No one path holds a pairing (`id` twice), and the cron
@@ -1890,6 +1893,8 @@ def test_an_untied_cron_that_differs_between_paths_is_null(tmp_path: Path):
         ("None", "BJob#execute", "None", "partial"),
     ]
     assert all("Triggers#trigger(" in str(row["expression_source"]) for row in rows), rows
+    # `c1` and `c2` are in the code: the cron is untied, the job each row names is not.
+    assert [row["untied"] for row in rows] == [["expression"], ["expression"]]
 
 
 # --- the fourth fix wave (R21, 2026-10-29): the review's fourth probes ---------------------
@@ -2316,28 +2321,33 @@ def test_probe_q5b_pairing_helper_detail_and_key_mixed(tmp_path):
 
 
 def test_probe_q6_untied_paths_agree_on_cron_disagree_on_job(tmp_path):
-    assert _q_rows(_scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c1")]))) == [
+    rows = _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c1")]))
+    assert _q_rows(rows) == [
         ("None", "AJob#execute", "c1", "partial", "None"),
         ("None", "BJob#execute", "c1", "partial", "None"),
     ]
+    # Every part agrees, and a trigger with no `withIdentity` has no name in the code: nothing
+    # is untied.
+    assert [row["untied"] for row in rows] == [None, None]
 
 
 def test_probe_q6b_untied_job_helper_agree_cron(tmp_path):
-    assert _q_rows(
-        _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c1")], job_helper=True))
-    ) == [("None", "None", "c1", "partial", "None")]
+    rows = _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c1")], job_helper=True))
+    assert _q_rows(rows) == [("None", "None", "c1", "partial", "None")]
+    assert [row["untied"] for row in rows] == [["handler"]]
 
 
+@pytest.mark.pins("quartz.an-UNTIED-part-is-NAMED")
 def test_probe_q6c_untied_job_helper_differ_both(tmp_path):
-    assert _q_rows(
-        _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c2")], job_helper=True))
-    ) == [("None", "None", "None", "partial", "Triggers#trigger")]
+    rows = _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c2")], job_helper=True))
+    assert _q_rows(rows) == [("None", "None", "None", "partial", "Triggers#trigger")]
+    assert [row["untied"] for row in rows] == [["handler", "expression"]]
 
 
 def test_probe_q6d_untied_three_callers_partial_agreement(tmp_path):
-    assert _q_rows(
-        _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c2"), ("CJob", "c1")]))
-    ) == [
+    rows = _scheduled(tmp_path, _q_id_shape([("AJob", "c1"), ("BJob", "c2"), ("CJob", "c1")]))
+    assert [row["untied"] for row in rows] == [["expression"]] * 3
+    assert _q_rows(rows) == [
         ("None", "AJob#execute", "None", "partial", "Triggers#trigger"),
         ("None", "BJob#execute", "None", "partial", "Triggers#trigger"),
         ("None", "CJob#execute", "None", "partial", "Triggers#trigger"),

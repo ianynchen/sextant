@@ -2332,7 +2332,7 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, NULL, 'unresolved', 'compiler', "
-        "'spring-scheduling')",
+        "'spring-scheduling', NULL)",
         [expression],
     )
     workspace._connection.execute(
@@ -2369,7 +2369,7 @@ def test_a_schedule_name_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', ?, '0 0 * * * *', NULL, 'resolved', "
-        "'compiler', 'quartz')",
+        "'compiler', 'quartz', NULL)",
         [name],
     )
     workspace._connection.execute(

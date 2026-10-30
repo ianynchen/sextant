@@ -200,7 +200,7 @@ def test_resolved_schedules_joins_on_name(tmp_path: Path):
         {"application.yml": {"orders.sweep.cron": "0 0 * * * *"}},
     )
     [job] = workspace.query("scheduled_work")
-    assert job["name"] is None
+    assert job["name"] == ""
     workspace.derive("scheduled_work_insert", rows=[{**job, "name": "nightly"}])
     record_resolved_schedules(workspace, _catalogs())
     rows = [
@@ -209,8 +209,8 @@ def test_resolved_schedules_joins_on_name(tmp_path: Path):
     ]
     workspace.close()
     assert rows == [
+        ("", "${orders.sweep.cron}", "default"),
         ("nightly", "${orders.sweep.cron}", "default"),
-        (None, "${orders.sweep.cron}", "default"),
     ]
 
 

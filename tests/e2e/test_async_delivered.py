@@ -1031,6 +1031,19 @@ def _detail_blocks(section: str, handler: str, trigger: str) -> list[str]:
     return found
 
 
+@pytest.mark.pins("values.a-field-read-on-an-UNSEEN-object-borrows-no-other-objects-writes")
+def test_a_cron_set_on_another_row_object_never_reaches_a_trigger(quartz: tuple[str, list]):
+    """OI-222, the DolphinScheduler shape. `RowDefaults.orDefault` builds its own
+    `OrderJobRow` and sets its cron to `0 0 0 * * ?`; the triggers read `row.getCron()` off a
+    row handed in from outside (the jobs table). That row is not the one `orDefault` built,
+    so its cron is never `0 0 0 * * ?`: no entry may carry it, and each row-read entry stays
+    the one `partial` entry naming `getCron`."""
+    section = _scheduled_section(quartz[0])
+    assert "0 0 0 * * ?" not in section, section
+    for handler in ("BaseRowJob#execute", "AuditJob#execute"):
+        assert len(_detail_blocks(section, handler, "cron")) == 1, section
+
+
 def test_quartz_triggers_are_scheduled_work_delivered(quartz: tuple[str, list]):
     """One entry per `newTrigger()` root (ruling 3): the three builder triggers of
     `QuartzConfig` that name a job by key, the one that names it by bean, the jobs-table

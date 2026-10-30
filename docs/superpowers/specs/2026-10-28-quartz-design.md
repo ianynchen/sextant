@@ -16,6 +16,7 @@ Quartz row from `◐ partial, 0/1` to ✅, and takes `quartz` off the ```deliver
 | 5 | Telling two entries on one job apart | **A: by the trigger's own name,** the way Quartz identifies triggers (`TriggerKey`). OI-183 (`@Schedules`) stays open. |
 | 7 | A branch between literals in the value walk (2026-10-29) | **`narrowed`, with its candidates.** Changes the 2026-10-21 merged-values answer for a merge with no common root whose candidates are all literals; every consumer of the walk sees it. |
 | 6 | How it is built | **Holistically.** *"We shouldn't be building these as separate pieces. Call chains are the same, assignments are the same."* Quartz reuses the chain, value and trace machinery every other catalog uses (§3d). |
+| 8 | What an empty Scheduled-work cell says (2026-10-29, after build) | **Each empty cell says why** — see "Empty cells" below. Amends §3e's "a NULL cell is `not in the code`". |
 | 4 | Non-cron schedules | **The builder chain, as written.** No English summary: that needs an LLM (optional in Sextant) or a template per builder method ([one rule, not one parser per method], 2026-10-21). *"We want deterministic logic where applicable."* |
 
 ## 2. Measured first
@@ -248,7 +249,8 @@ skips it).
 **A new column, `name`** (ruling 5): the trigger's key as Quartz builds it from
 `withIdentity(name, group)` or `withIdentity(name)` (group `DEFAULT`, as `TriggerKey`
 defines it), written `group.name`, when the walk resolves both to constants; NULL otherwise
-(RuoYi's runtime `getTriggerKey(jobId, …)`, and every `@Scheduled` row). The boundary
+(RuoYi's runtime `getTriggerKey(jobId, …)`); EMPTY on every `@Scheduled` row (ruling 8,
+"Empty cells" below — NULL until 2026-10-29). The boundary
 vocabulary's `schedule` identity becomes `(handler, trigger, name)`, the `resolved_schedules`
 join gains `name`, and `BOUNDARY_VOCABULARY_VERSION` is bumped. Two rows that still share all
 three are OI-183's case, which stays open.
@@ -436,6 +438,7 @@ The Quartz library's own `examples/` module (optional in §2a) was not measured.
     anywhere, which spec 2026-10-18 states as a known over-report (telling objects apart is its
     unbuilt step 2). So the entry is two rows: the right `partial` row from the getter, and a
     row whose expression is `0 0 0 * * ? *`, a value that never reaches this trigger.
+    **Fixed 2026-10-29** ("OI-222, fixed" below): the entry is the one `partial` row.
 
 ### ruoyi-vue-pro: what the dispatcher's trace reaches
 
@@ -505,8 +508,8 @@ they were not built here, so no analysis reached them.
 
 ### Not done, stated
 
-- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅, with its one known wrong row
-  (OI-222) stated beside the ✅, and five stated boundaries:
+- §4 stands as written. COVERAGE §5.12's Quartz row reads ✅ with five stated boundaries
+  (it carried OI-222's wrong row beside the ✅ until that was fixed, below):
   - `quartz_data.xml` / `quartz.properties`;
   - `JobDetailFactoryBean` / `CronTriggerFactoryBean` / `SimpleTriggerFactoryBean`;
   - Kotlin;
@@ -515,3 +518,61 @@ they were not built here, so no analysis reached them.
     stops there.
 - `quartz` left the delivery register (CI run pending). The Async ```delivery row lists only
   `akka-pekko-actors`.
+
+### Empty cells (ruling 8, 2026-10-29)
+
+Built after the review, on its own branch. §3e printed every NULL as `not in the code`,
+which is true for only some of the reasons a cell is empty:
+
+| Why the cell is empty | Example | Stored | Printed |
+|---|---|---|---|
+| The framework has no such part | an `@Scheduled` job's name | `name = ''` | `—` |
+| The code does not state it | RuoYi's `getTriggerKey(jobId, …)`; a trigger with no `withIdentity`, which Quartz names at random; a cron read off a database row | NULL | `not in the code` |
+| The code states it, and the paths to the trigger disagree on it | `add(Class, String name)` called with `"sweep"` and `"audit"`, the pairing read apart (R20) | NULL, the part named in `untied` | `not tied down` |
+
+`scheduled_work.untied` is a list of column names (`handler`, `name`, `expression`, in that
+order), NULL where no part is untied; only `_apart` sets it. An untied cron's detail line
+reads "the schedule differs between the calls that reach `<expression_source>`", never "is
+read at runtime". `GRAPH_SCHEMA_VERSION` 10. The column is not in the boundary vocabulary,
+as `expression_source` is not: it says how sure the row is, not what the entry is.
+
+**What a branch reads.** In a row read part by part, a job class or a cron that is one of
+several literals on one path (`narrowed`) counts as untied too, because `_apart` compares the
+answers and finds several — `not tied down`, which is true: the values are in the code. A
+NAME that is one of several literals is still NULL and `not in the code`, because the key
+reader takes exact strings only; and an untied cron's detail line says it differs "between
+the calls that reach" the method even where the difference is a branch inside it. No corpus
+has either shape; logged as OI-233 rather than built.
+
+### OI-222, fixed (2026-10-29)
+
+Option C of the two-option write-up the user chose ("Yes, both"): the half of spec
+2026-10-18's step 2 that removes the wrong value, built as a rule of the value walk, not of
+this catalog. Where the walk reads an instance field through a getter on an object every
+answer for which is `external`, it keeps only what the field's own constructors write
+without a parameter (an initialiser every instance holds, marked inexact), and `external`
+beside it where a setter or a constructor argument could change the value. A value set on
+some OTHER object — `CronUtils`'s own `new Schedule()` — is no longer offered.
+
+"From outside" is decided by the producer reader with every library call declared: an
+object only counts when every path to it ends at a parameter nothing here passes, through
+any locals, parameters and fields. One a library call hands back (`List.get`, a mapper) ends
+at that call and is read as before, since this module may have built it and put it there
+(review, Major 1). A field the facts mark `static` is never asked about (review, Major 2),
+and the read must be in the very method the walk descended into, so a read on `this`
+elsewhere is untouched. Not covered: a constructor that chains (`this("UTC")`) writes its
+default as a parameter, which is dropped like a setter's (OI-234, an under-report: `external`
+alone, never a wrong value).
+
+- **Pinned:** `tests/e2e/test_async_delivered.py::test_a_cron_set_on_another_row_object_never_reaches_a_trigger`
+  on `RowDefaults` in `fixtures/orders-quartz` (where the same shape had published the cron
+  `resolved`, twice), and three unit tests in `tests/application/test_values.py`; guard
+  `values.a-field-read-on-an-UNSEEN-object-borrows-no-other-objects-writes`.
+- **What it moved:** the six field pins pass unchanged, and `scripts/measure_value_walk.py`
+  over 44 modules records the same answer at every asked position with the rule on and off.
+  The six Quartz corpora, re-analysed on this branch: dolphinscheduler is now ONE row (handler
+  NULL, cron, expression NULL from `Schedule#getCrontab`, `partial`); the smoke test, RuoYi-Vue,
+  NBlog, aurora and both ruoyi-vue-pro modules give exactly the rows in the table above, and
+  the two `@Scheduled` rows beside the IoT module's Quartz rows now carry the empty name
+  (ruling 8).
+

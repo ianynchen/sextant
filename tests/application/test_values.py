@@ -3242,3 +3242,318 @@ def test_a_narrowed_assembled_address_is_never_resolved():
     one is a branch of several and says `narrowed` (ruling 7)."""
     assert fluent._assembled_text(_EXACT) == (None, "/billing/ledger", "resolved")
     assert fluent._assembled_text(_NARROWED) == (None, "/billing/ledger", "narrowed")
+
+
+# --- OI-222: a field read on an object from outside what was scanned ------------------------
+# `Row` holds `cron` (written only by its setter) and `zone` (written `"UTC"` by its
+# constructor, and by its setter). `Defaults#make` builds its OWN row and sets both;
+# `Reader#read(Row)` reads both off a row nobody in the module hands it.
+_ROW = _PKG + "Row#"
+_DEFAULTS = _PKG + "Defaults#"
+_READER = _PKG + "Reader#"
+_TAKES_ROW = "(Lcom/acme/orders/values/Row;)V"
+_DEFAULT_CRON = "0 0 0 * * ?"
+_LISTED_CRON = "0 * * * * ?"
+_STATIC_ENDPOINT = "http://billing/"
+
+
+def _setter(name: str, field: str) -> list[Fact]:
+    """`void <name>(String v) { this.<field> = v; }` on `Row`."""
+    return [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_ROW, name, _TAKES_STRING),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _ROW,
+            signature=Signature(
+                parameters=[Parameter(name="v", type=TypeRef(symbol="java/lang/String#"))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+        ),
+        _void(_ROW, name, _TAKES_STRING),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_ROW + field + ".",
+            from_parameter=0,
+            written_by=_symbol(_ROW, name, _TAKES_STRING),
+        ),
+    ]
+
+
+def _unseen_facts() -> list[Fact]:
+    init = _symbol(_ROW, "<init>", "()V")
+    make = _symbol(_DEFAULTS, "make", "()V")
+    read = _symbol(_READER, "read", _TAKES_ROW)
+    facts: list[Fact] = [
+        _type(_ROW),
+        _type(_DEFAULTS),
+        _type(_READER),
+        _type(_REGISTRY),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=init,
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=_MODULE + _ROW,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+            visibility="public",
+        ),
+        _void(_ROW, "<init>", "()V"),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_ROW + "zone.",
+            value=CallArgument(kind="string", value="UTC"),
+            written_by=init,
+        ),
+        *_setter("setCron", "cron"),
+        *_setter("setZone", "zone"),
+    ]
+    for getter, field in (("getCron", "cron"), ("getZone", "zone")):
+        facts += [
+            _declared(_ROW, getter, _MAKES_STRING),
+            _returns(
+                _ROW,
+                getter,
+                _MAKES_STRING,
+                0,
+                CallArgument(kind="field", symbol=_ROW + field + "."),
+            ),
+        ]
+    # `Row row = new Row(); row.setCron(DEFAULT); row.setZone("PST"); one(row.getCron());`
+    facts += [
+        _declared(_DEFAULTS, "make", "()V"),
+        _void(_DEFAULTS, "make", "()V"),
+        _site(make, 0, (_ROW, "<init>", "()V"), kind="special", receiver=1),
+        _site(
+            make,
+            1,
+            (_ROW, "setCron", _TAKES_STRING),
+            kind="virtual",
+            receiver=1,
+            arguments=[CallArgument(kind="string", value=_DEFAULT_CRON)],
+        ),
+        _site(
+            make,
+            2,
+            (_ROW, "setZone", _TAKES_STRING),
+            kind="virtual",
+            receiver=1,
+            arguments=[CallArgument(kind="string", value="PST")],
+        ),
+        _site(make, 3, (_ROW, "getCron", _MAKES_STRING), kind="virtual", receiver=1, result=5),
+        _site(
+            make,
+            4,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+    ]
+    # `Row r = new Row(); r.setCron("0 * * * * ?"); one(List.of(r).get(0).getCron());` — the
+    # row passes through a library call this module did not scan (review, Major 1).
+    listed = _symbol(_DEFAULTS, "listed", "()V")
+    facts += [
+        _declared(_DEFAULTS, "listed", "()V"),
+        _void(_DEFAULTS, "listed", "()V"),
+        _site(listed, 0, (_ROW, "<init>", "()V"), kind="special", receiver=1),
+        _site(
+            listed,
+            1,
+            (_ROW, "setCron", _TAKES_STRING),
+            kind="virtual",
+            receiver=1,
+            arguments=[CallArgument(kind="string", value=_LISTED_CRON)],
+        ),
+        _site(
+            listed,
+            2,
+            ("java/util/List#", "of", "(Ljava/lang/Object;)Ljava/util/List;"),
+            arguments=[CallArgument(kind="unresolved", source=1)],
+            result=2,
+        ),
+        _site(
+            listed,
+            3,
+            ("java/util/List#", "get", "(I)Ljava/lang/Object;"),
+            kind="interface",
+            receiver=2,
+            result=3,
+        ),
+        _site(listed, 4, (_ROW, "getCron", _MAKES_STRING), kind="virtual", receiver=3, result=5),
+        _site(
+            listed,
+            5,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+    ]
+    # `static String endpoint;` set by `static void configure(String v)`, which `boot()` calls
+    # with a literal, and read through an instance getter on a row nobody passes in (review,
+    # Major 2): a static field is one value for every reader.
+    configure = _symbol(_ROW, "configure", _TAKES_STRING)
+    boot = _symbol(_DEFAULTS, "boot", "()V")
+    facts += [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _ROW + "endpoint.",
+            construct_kind=ConstructKind.FIELD,
+            enclosing=_MODULE + _ROW,
+            modifiers={"static": True},
+        ),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=configure,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _ROW,
+            signature=Signature(
+                parameters=[Parameter(name="v", type=TypeRef(symbol="java/lang/String#"))],
+                returns=TypeRef(symbol="void#"),
+            ),
+            visibility="public",
+            modifiers={"static": True},
+        ),
+        _void(_ROW, "configure", _TAKES_STRING),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_ROW + "endpoint.",
+            from_parameter=0,
+            written_by=configure,
+        ),
+        _declared(_ROW, "getEndpoint", _MAKES_STRING),
+        _returns(
+            _ROW,
+            "getEndpoint",
+            _MAKES_STRING,
+            0,
+            CallArgument(kind="field", symbol=_ROW + "endpoint."),
+        ),
+        _declared(_DEFAULTS, "boot", "()V"),
+        _void(_DEFAULTS, "boot", "()V"),
+        _site(
+            boot,
+            0,
+            (_ROW, "configure", _TAKES_STRING),
+            arguments=[CallArgument(kind="string", value=_STATIC_ENDPOINT)],
+        ),
+    ]
+    # `void read(Row row) { one(row.getCron()); one(row.getZone()); one(row.getEndpoint()); }`,
+    # called by nobody here.
+    facts += [
+        _declared(_READER, "read", _TAKES_ROW),
+        _void(_READER, "read", _TAKES_ROW),
+        _site(
+            read,
+            0,
+            (_ROW, "getCron", _MAKES_STRING),
+            kind="virtual",
+            receiver_parameter=0,
+            result=5,
+        ),
+        _site(
+            read,
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            read,
+            2,
+            (_ROW, "getZone", _MAKES_STRING),
+            kind="virtual",
+            receiver_parameter=0,
+            result=6,
+        ),
+        _site(
+            read,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=6)],
+        ),
+        _site(
+            read,
+            4,
+            (_ROW, "getEndpoint", _MAKES_STRING),
+            kind="virtual",
+            receiver_parameter=0,
+            result=7,
+        ),
+        _site(
+            read,
+            5,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+    ]
+    return facts
+
+
+@pytest.fixture(scope="module")
+def unseen(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_unseen")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "unseen.jsonl", _document(), _unseen_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _values_and_reasons(workspace: DuckDbWorkspace, method: str, ordinal: int) -> list[tuple]:
+    return sorted(
+        (str(binding.slots[0].value), str(binding.slots[0].reason))
+        for binding in _bindings(workspace, method, ordinal)
+    )
+
+
+@pytest.mark.pins("values.a-field-read-on-an-UNSEEN-object-borrows-no-other-objects-writes")
+def test_a_field_read_on_an_object_from_outside_borrows_no_setters_value(unseen):
+    """OI-222. `read`'s row comes from outside what was scanned, so the cron `make` set on
+    its OWN row is not this row's: the answer is `external`, never `0 0 0 * * ?`."""
+    read = _symbol(_READER, "read", _TAKES_ROW)
+    assert _values_and_reasons(unseen, read, 1) == [("None", "external")]
+
+
+@pytest.mark.pins("values.a-field-read-on-an-UNSEEN-object-borrows-no-other-objects-writes")
+def test_what_the_constructor_writes_every_instance_holds_even_from_outside(unseen):
+    """The constructor's `zone = "UTC"` holds for every `Row`, so it stays; `make`'s `PST`
+    was set on another row and goes; and because a setter can change it, `external` stands
+    beside `UTC` rather than the row reading `UTC` alone."""
+    read = _symbol(_READER, "read", _TAKES_ROW)
+    assert _values_and_reasons(unseen, read, 3) == [("None", "external"), ("UTC", "None")]
+    # A default the row may have overwritten: the kept value is inexact, never `resolved`.
+    [utc] = [
+        binding.slots[0]
+        for binding in _bindings(unseen, read, 3)
+        if binding.slots[0].value == "UTC"
+    ]
+    assert utc.inexact
+
+
+@pytest.mark.pins("values.an-object-a-LIBRARY-call-hands-back-is-not-from-outside")
+def test_an_object_a_library_call_hands_back_is_not_from_outside(unseen):
+    """Review, Major 1: the row `listed` builds passes through `List.of(r).get(0)`, whose
+    body was not scanned. The library call hands it back, so it is not an object from
+    outside, and the setter's value is still found."""
+    listed = _symbol(_DEFAULTS, "listed", "()V")
+    assert (_LISTED_CRON, "None") in _values_and_reasons(unseen, listed, 5)
+
+
+@pytest.mark.pins("values.a-STATIC-field-is-never-read-as-an-unseen-objects")
+def test_a_static_field_is_one_value_for_every_reader(unseen):
+    """Review, Major 2: `endpoint` is static, set by a static method; read through an
+    instance getter on a row from outside, it is still the value `boot` set."""
+    read = _symbol(_READER, "read", _TAKES_ROW)
+    assert (_STATIC_ENDPOINT, "None") in _values_and_reasons(unseen, read, 5)
+
+
+def test_a_field_read_on_an_object_the_module_builds_is_read_as_before(unseen):
+    """The near miss: `make` reads the cron off the row it built itself, which is not an
+    object from outside, so the rule does not apply and the setter's value is found."""
+    make = _symbol(_DEFAULTS, "make", "()V")
+    assert (_DEFAULT_CRON, "None") in _values_and_reasons(unseen, make, 4)

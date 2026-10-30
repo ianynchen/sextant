@@ -125,6 +125,12 @@ SEXTANT_VERSION = version("sextant")
 #             `resolution` may be `partial` or `narrowed` (spec 2026-10-28-quartz §3e).
 #             `resolved_schedules` carries `name`. A workspace of the older vintage has
 #             neither column, so it is refused and re-analysed.
+#     10      `scheduled_work` gains `untied`: the parts of a row that are NULL because the
+#             paths to the trigger disagree on them, not because the code states none. And
+#             an `@Scheduled` row's `name` is EMPTY, not NULL: the framework gives no name,
+#             which is known, where NULL says the code's name is not (spec 2026-10-28-quartz,
+#             "Empty cells", ruled 2026-10-29). A workspace of the older vintage reads every
+#             such NULL as unknown, so it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -142,5 +148,5 @@ SEXTANT_VERSION = version("sextant")
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 9
+GRAPH_SCHEMA_VERSION = 10
 BOUNDARY_VOCABULARY_VERSION = 3

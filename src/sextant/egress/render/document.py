@@ -1736,10 +1736,16 @@ _ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Res
 # which is what a NULL in either table means.
 _NONE_RECORDED = "—"
 # What a `scheduled_work` cell reads where the code does not say: a Quartz trigger the walk
-# found no job for has no handler, a `@Scheduled` has no name, a schedule read at runtime
-# has no expression. In words rather than a dash, because here the absence is itself the
-# finding (`partial`), not an unrecorded value.
+# found no job for has no handler, a schedule read at runtime has no expression. In words
+# rather than a dash, because here the absence is itself the finding (`partial`), not an
+# unrecorded value.
 _NOT_IN_THE_CODE = "not in the code"
+# What it reads where the code DOES say, and differently on each path to the trigger, so no
+# one value is this row's (the row's `untied`): `not in the code` there would send a reader
+# to the code, where they would find the value and stop trusting the table.
+_NOT_TIED_DOWN = "not tied down"
+# An EMPTY cell: the framework has no such part at all (an `@Scheduled` job's name).
+_DOES_NOT_APPLY = "—"
 
 
 def _scheduled_work_sections(
@@ -1774,11 +1780,24 @@ def _scheduled_work_sections(
         return [MachineParagraph(_runs("None found."))]
     table = tuple(
         (
-            _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True),
-            _scheduled_cell(row["trigger"], str, False),
-            _scheduled_cell(row["name"], lambda value: redactor.redact_text(str(value)), False),
             _scheduled_cell(
-                row["expression"], lambda value: redactor.redact_text(str(value)), True
+                row["handler"],
+                lambda value: bare_descriptor(str(value)),
+                True,
+                _untied(row, "handler"),
+            ),
+            _scheduled_cell(row["trigger"], str, False),
+            _scheduled_cell(
+                row["name"],
+                lambda value: redactor.redact_text(str(value)),
+                False,
+                _untied(row, "name"),
+            ),
+            _scheduled_cell(
+                row["expression"],
+                lambda value: redactor.redact_text(str(value)),
+                True,
+                _untied(row, "expression"),
             ),
             _text(str(row["resolution"])),
         )
@@ -1796,10 +1815,16 @@ def _scheduled_work_sections(
             and row["expression"] is None
             and row["expression_source"]
         ):
+            # Where the walk stopped means something different for a cron the paths disagree
+            # on: the method whose callers each hand their own, not a read at runtime.
+            stopped = (
+                "the schedule differs between the calls that reach "
+                if _untied(row, "expression")
+                else "the schedule is read at runtime from "
+            )
             entries = [
                 DetailEntry(
-                    _text("the schedule is read at runtime from ")
-                    + _code(bare_descriptor(str(row["expression_source"]))),
+                    _text(stopped) + _code(bare_descriptor(str(row["expression_source"]))),
                     None,
                     None,
                 )
@@ -1827,9 +1852,11 @@ def _job_header(row: dict[str, object], redactor: Redactor) -> tuple[Run, ...]:
     `@Schedules` one method is several jobs and under Quartz one job has several named
     triggers, so a shorter header would put two jobs' lines under one name. A job with no
     expression ends at what it has, never at a dangling dash."""
-    header = _scheduled_cell(row["handler"], lambda value: bare_descriptor(str(value)), True)
+    header = _scheduled_cell(
+        row["handler"], lambda value: bare_descriptor(str(value)), True, _untied(row, "handler")
+    )
     words = [str(row["trigger"])] if row["trigger"] is not None else []
-    if row["name"] is not None:
+    if row["name"]:
         words.append(redactor.redact_text(str(row["name"])))
     if words:
         header += _text(" — " + " ".join(words) + (" " if row["expression"] is not None else ""))
@@ -1840,12 +1867,23 @@ def _job_header(row: dict[str, object], redactor: Redactor) -> tuple[Run, ...]:
     return header
 
 
-def _scheduled_cell(value: object, show: Callable[[object], str], code: bool) -> tuple[Run, ...]:
-    """One `scheduled_work` cell: `show` of the value, as code where it is code, or
-    `not in the code` for a NULL."""
+def _scheduled_cell(
+    value: object, show: Callable[[object], str], code: bool, untied: bool = False
+) -> tuple[Run, ...]:
+    """One `scheduled_work` cell: `show` of the value, as code where it is code; for a NULL,
+    `not tied down` where the row's `untied` names the part and `not in the code` otherwise;
+    `—` for an empty value, a part the framework does not have."""
     if value is None:
-        return _text(_NOT_IN_THE_CODE)
+        return _text(_NOT_TIED_DOWN if untied else _NOT_IN_THE_CODE)
+    if value == "":
+        return _text(_DOES_NOT_APPLY)
     return _code(show(value)) if code else _text(show(value))
+
+
+def _untied(row: Mapping[str, object], part: str) -> bool:
+    """Whether the row's `untied` names `part`: NULL because the paths disagree on it."""
+    untied = row.get("untied")
+    return isinstance(untied, (list, tuple)) and part in untied
 
 
 def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) -> str:

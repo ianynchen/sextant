@@ -15,6 +15,29 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A field read off an object from outside no longer borrows another object's values**
+  (OI-222, ruled 2026-10-29). Where the value walk reads an instance field through a getter on
+  an object that arrives from no code in the module — every path to it ends at a parameter
+  nothing here passes, not at a library call that hands it back — it keeps only what the
+  field's own constructors write without a parameter, marked inexact, with `external` beside
+  it where a setter or a constructor argument could change it. Static fields are untouched.
+  DolphinScheduler's trigger no longer gains `0 0 0 * * ? *`, the default cron `CronUtils`
+  sets on a `Schedule` it builds for itself; the Quartz fixture's same shape had published it
+  `resolved`. Measured: the six field pins and every answer `measure_value_walk.py` records
+  over 44 modules are unchanged.
+
+### Changed
+
+- **An empty cell in Scheduled work says why it is empty** (ruled 2026-10-29). A Quartz row
+  read part by part names, in a new `scheduled_work.untied` column, each part the code
+  states but no one path ties to the row; the document prints those `not tied down`, and an
+  untied cron's detail line says the schedule differs between the calls that reach the
+  helper, not that it is read at runtime. An `@Scheduled` job's name is empty rather than
+  NULL, printed `—`: the framework gives none. `not in the code` is left for a value the
+  code really does not state. `GRAPH_SCHEMA_VERSION` 10.
+
 ### Added
 
 - **Quartz: each new trigger is a scheduled entry point** (spec 2026-10-28-quartz; probe
@@ -39,11 +62,9 @@ here would restate those documents rather than add anything.
     - The Spring Boot smoke test is 5 rows, all `resolved`.
     - RuoYi-Vue, NBlog, aurora and ruoyi-vue-pro each give their cron row, with the handler
       found.
-    - dolphinscheduler's trigger gives **two rows**, both with no handler (its job and trigger
-      are paired in a Guava `Set`, which is not read). The first is the expected `partial` row.
-      The second is wrong: it carries `0 0 0 * * ? *`, a default cron that an unrelated method
-      sets on its own `new Schedule()`. A value read from a field of an object the module never
-      builds is answered with every value the code writes to that field anywhere (OI-222).
+    - dolphinscheduler's trigger gives its `partial` row with no handler (its job and trigger
+      are paired in a Guava `Set`, which is not read). It gave a second, wrong row until OI-222
+      was fixed (below, under Fixed).
   - **COVERAGE.** §5.12's Quartz row reads ✅, with five stated boundaries:
     `quartz_data.xml` / `quartz.properties`, Spring's trigger factory beans, Kotlin, a job with
     no trigger (run on demand by `triggerJob`), and a job that calls its target by reflection,

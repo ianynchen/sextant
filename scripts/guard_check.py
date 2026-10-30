@@ -314,9 +314,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler)",
+                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
+                "row.untied)",
                 replace="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
-                "id(row))  # guard disabled by scripts/guard_check.py",
+                "row.untied, id(row))  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -401,11 +402,22 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            name=_key(end.captures.get(_NAME), end.captures.get(_GROUP), "
-                "context),",
-                replace="            name=_key_of(resolve_positions(context.workspace, {_NAME: "
-                "positions[_NAME]}, context.index)[0], context) if _NAME in positions else None,"
+                find="            name=names.pop() if len(names) == 1 else None,",
+                replace="            name=next(iter(names), None),"
                 "  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "quartz.an-UNTIED-part-is-NAMED": Guard(
+        what="a part of a row read apart that is NULL because the paths disagree on it is "
+        "named in the row's `untied`",
+        why="without it the NULL reads as `not in the code`, and a reader who looks finds "
+        "the value in the code and stops trusting the table (ruled 2026-10-29)",
+        edits=(
+            Edit(
+                path=_SCHEDULED_CHAIN,
+                find="            untied=tuple(part for part, varies in untied.items() if varies),",
+                replace="            untied=(),  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -2395,8 +2407,49 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        for entry in constants:",
-                replace="        for entry in ():  # guard disabled by scripts/guard_check.py",
+                find="        for _, entry in constants:",
+                replace="        for _, entry in ():  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-field-read-on-an-UNSEEN-object-borrows-no-other-objects-writes": Guard(
+        what="a field read through a getter on an object every answer for which is "
+        "`external` keeps only what the field's own constructors write without a parameter, "
+        "with `external` beside it where anything was dropped",
+        why="OI-222: DolphinScheduler's trigger read `schedule.getCrontab()` off a database "
+        "row and published, as a second schedule, the default cron `CronUtils` set on a "
+        "`Schedule` it built for itself; in the Quartz fixture the same shape published it "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if self._unseen_object(str(symbol), frames, method):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-object-a-LIBRARY-call-hands-back-is-not-from-outside": Guard(
+        what="the unseen-object rule declares every unscanned call to the producer reader, "
+        "so an object a library call hands back ends at that call, not at `external`",
+        why="review of OI-222's fix, Major 1: `List.of(new Row()).get(0).getCron()` lost the "
+        "cron its own code set, because `List.get`'s body was not scanned",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        ends = producers_of(self._index, site, RECEIVER, self._index.unscanned)\n",
+                replace="        ends = producers_of(self._index, site, RECEIVER, frozenset())  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-STATIC-field-is-never-read-as-an-unseen-objects": Guard(
+        what="the unseen-object rule never applies to a field the facts mark `static`",
+        why="review of OI-222's fix, Major 2: a static field set by a static method and read "
+        "through an instance getter lost the value every reader shares",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if not frames or reader is None or symbol in self._index.static_fields:\n",
+                replace="        if not frames or reader is None:  # guard disabled\n",
             ),
         ),
     ),
@@ -3948,8 +4001,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            _scheduled_cell(\n                row["expression"], lambda value: redactor.redact_text(str(value)), True\n            ),\n',
-                replace='            _scheduled_cell(row["expression"], lambda value: str(value), True),  # guard disabled\n',
+                find='                row["expression"],\n                lambda value: redactor.redact_text(str(value)),\n',
+                replace='                row["expression"],\n                str,  # guard disabled\n',
             ),
             Edit(
                 path="sextant/egress/render/document.py",
@@ -3972,13 +4025,31 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path="sextant/egress/render/document.py",
-                find='            _scheduled_cell(row["name"], lambda value: redactor.redact_text(str(value)), False),\n',
-                replace='            _scheduled_cell(row["name"], str, False),  # guard disabled\n',
+                find='                row["name"],\n                lambda value: redactor.redact_text(str(value)),\n',
+                replace='                row["name"],\n                str,  # guard disabled\n',
             ),
             Edit(
                 path="sextant/application/boundary/diff.py",
                 find='            projected["name"] = redactor.redact_text(str(projected["name"]))\n',
                 replace='            projected["name"] = projected["name"]  # guard disabled\n',
+            ),
+        ),
+    ),
+    "schedules.an-EMPTY-cell-says-why-it-is-empty": Guard(
+        what="the document reads an empty `scheduled_work` part as `—` and an untied NULL as "
+        "`not tied down`, never `not in the code`",
+        why="`not in the code` is false for a name the framework never gives and for a value "
+        "the code states but no path ties to the row (ruled 2026-10-29)",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find="    return isinstance(untied, (list, tuple)) and part in untied\n",
+                replace="    return False  # guard disabled\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='    if value == "":\n        return _text(_DOES_NOT_APPLY)\n',
+                replace="    # guard disabled\n",
             ),
         ),
     ),
