@@ -283,6 +283,27 @@ A declared constructor starts a whole chain, and a rootless end needs only `chai
 catalog root (a WebClient `get()`'s client is never traced). `scheduled_chain` reads walked-back
 ends on their own path. Fixture rows cover an SQS helper and an OkHttp helper.
 
+**What ruling 5 cost, measured in the final review.** `chain_ends` was timed per catalog (best
+of three) on the 45 built corpora (33 fixtures, the `examples/` scans, mall, apollo) at
+`0da30d65` (before ruling 5) and at `93203fe7`, on the same facts. The walks back themselves
+were cheap: 133 started on the whole estate, all in four fixtures (87 on
+`spring-integration-probe`, 20 on `orders-service`, 18 on `orders-quartz`, 8 on
+`orders-heldbuilders`), under 1 ms per module. What cost was around them: every call of every
+caller was tested as a possible rootless terminal, even in a module calling no root of the
+catalog (1,883 `<init>` calls per Spring Integration catalog on `mall-admin`, each prepared
+for a walk that started nothing), and every caller's context was kept alive for the walk.
+`chain_ends` grew 30-40% on the large modules: `mall-admin` 798 ms to 1,026 ms, `mall-mbg`
+739 to 974, `apollo-portal` 185 to 262. Narrowed with answers unchanged (the chain ends of all
+675 catalog runs hash identically before and after): a module calling no owner a root names
+tests no terminal; once the walk back finds no call matching a root it stops looking; a
+caller's context is built only when the caller has a root or a candidate terminal, and kept
+only for callers a walk back reaches. After: `mall-admin` 164 ms, `mall-mbg` 146,
+`apollo-portal` 81 — below the pre-ruling-5 cost on every corpus, because before ruling 5 a
+context was also built for every caller. The value walk's concatenation product (one
+combination per hole candidate, no cap), measured over a full resolve with the shadow pass on
+the same corpora: 58 combinations at most, on one `apollo-portal` template of two holes (1 x
+58); every other corpus stays at 5 or fewer, so no cap is needed yet.
+
 **Ruling 3 (`3d95581f..034e666a`; probe CP-57).** Each prefix key names its dispatcher and each
 inbound catalog names the one that serves it, declared in the server model, not an engine enum.
 CP-57 (Boot 3.5.14) measured: MVC, functional and actuator under `/c/m`; `@WebServlet` under `/c`;

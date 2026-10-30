@@ -3003,10 +3003,53 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="            if _site_key(site) in reached or not _reaches_terminal(site, "
-                "context):\n",
-                replace="            if not _reaches_terminal(site, context):  "
+                find='            if str(site["name"]) not in ends_a_chain or _site_key(site) in reached:\n',
+                replace='            if str(site["name"]) not in ends_a_chain:  '
                 "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-module-calling-no-ROOT-OWNER-walks-nothing-back": Guard(
+        what="the walk back from a rootless terminal tests no terminal in a module that calls "
+        "no owner any root of the catalog names (final review of spec 2026-10-30, Important 1)",
+        why="a chain the walk back finds starts at a root, so such a module has none; testing "
+        "every call of every caller there cost a third of `chain_ends` on `mall-admin` and "
+        "`apollo-portal`, for walks that cost under a millisecond on the whole estate",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    walks_back = any(\n",
+                replace="    walks_back = True or any(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-module-with-no-ROOT-CALL-stops-looking-back": Guard(
+        what="once the walk back finds no call of the module matching a root, it tests no "
+        "further terminal (final review of spec 2026-10-30, Important 1)",
+        why="`spring-integration-amqp` and `-pubsub` end a chain at `<init>`, so every "
+        "constructor call of a module calling a root owner but no root was tested and handed "
+        "to a walk that started nothing: 1,883 of them per catalog on `mall-admin`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                if not walks_back:\n                    break\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-flagged-terminal-is-matched-on-its-OWNER": Guard(
+        what="a terminal declared `returns_receiver: true` configures only calls matching its "
+        "own `owner` and `descriptor`, as a step does (final review of spec 2026-10-30, "
+        "Minor 4)",
+        why="matched by name alone, a flag meant for one type's `send` folded every same-named "
+        "call on any type into the chain in place, so configuration made after it reached a "
+        "row it does not belong to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if _matching_step(site, context.receiver_terminals) is not None:\n",
+                replace='    if str(site["name"]) in {str(t["method"]) for t in '
+                "context.receiver_terminals}:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
