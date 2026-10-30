@@ -7,6 +7,7 @@ where a prefix must NOT be applied, and those are where this pass could publish 
 no environment serves — so they are unit-tested here against the rules themselves.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -427,7 +428,13 @@ def _module_workspace(tmp_path: Path, coordinates: list[str]) -> DuckDbWorkspace
     return workspace
 
 
-def _served(workspace: DuckDbWorkspace, config: dict[str, str], dispatcher: str | None) -> str:
+def _served(
+    workspace: DuckDbWorkspace,
+    config: dict[str, str],
+    dispatcher: str | None,
+    *,
+    keep_open: bool = False,
+) -> str:
     """The path one inbound `GET /x` row is published at, after the shipped server model has
     been applied under `config`, the row derived by a catalog declaring `dispatcher`."""
     workspace._connection.execute(
@@ -457,7 +464,8 @@ def _served(workspace: DuckDbWorkspace, config: dict[str, str], dispatcher: str 
     )
     apply_path_prefixes(workspace, [catalog])
     (path,) = workspace._connection.execute("SELECT path FROM endpoints").fetchone()
-    workspace.close()
+    if not keep_open:
+        workspace.close()
     return str(path)
 
 
@@ -486,3 +494,41 @@ def test_a_catalog_without_a_dispatcher_takes_no_configured_prefix(tmp_path):
     workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
 
     assert _served(workspace, {"server.servlet.context-path": "/shop"}, None) == "/x"
+
+
+def test_a_module_listing_only_the_starter_takes_the_servlet_prefixes(tmp_path):
+    """A dependency set read off the build file (`dependency_source: declared`) names the
+    starter the module asked for and none of its transitives, so `spring-webmvc` is absent
+    though the module runs on it. The server model's `stacks` list the starters beside the
+    framework artifacts, so the stack is still found. Measured before: `/x`, the module read
+    as running no web stack."""
+    workspace = _module_workspace(tmp_path, ["org.springframework.boot:spring-boot-starter-web"])
+    config = {"server.servlet.context-path": "/shop", "spring.mvc.servlet.path": "/api"}
+
+    assert _served(workspace, config, "spring") == "/shop/api/x"
+
+
+def test_a_module_whose_stack_is_unread_files_a_question_and_takes_no_prefix(tmp_path):
+    """A module that configures a prefix, has rows a dispatcher serves, and carries none of
+    the coordinates any stack is read off. Which keys reach its rows depends on the stack —
+    a leftover context path does nothing on a reactive app (CP-57) — so no prefix is applied,
+    and the keys that were not are named in one `web_stack` question rather than dropped
+    silently."""
+    workspace = _module_workspace(tmp_path, ["com.acme:unrelated"])
+    path = _served(
+        workspace,
+        {"server.servlet.context-path": "/shop", "spring.mvc.servlet.path": "/api"},
+        "spring",
+        keep_open=True,
+    )
+    questions = [dict(row) for row in workspace.query("open_questions")]
+    workspace.close()
+
+    assert path == "/x"
+    assert [(q["protocol"], q["method"], q["path"], q["question"]) for q in questions] == [
+        ("http", None, None, "web_stack")
+    ]
+    candidates = json.loads(str(questions[0]["candidates"]))
+    assert {c["stack"]: c["keys"] for c in candidates} == {
+        "servlet": ["server.servlet.context-path", "spring.mvc.servlet.path"],
+    }

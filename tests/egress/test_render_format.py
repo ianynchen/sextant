@@ -875,6 +875,35 @@ def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee()
     ) in text
 
 
+def test_a_web_stack_question_names_each_stack_and_the_keys_it_would_apply():
+    """Ruling 3's arm, for the reason every arm here has a test. Candidate shape (`stack`,
+    `keys`) matches what `path_prefix._ask_web_stack` writes; both identity halves are NULL
+    because the question is the module's, not one row's."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": None,
+            "question": "web_stack",
+            "candidates": json.dumps(
+                [
+                    {
+                        "stack": "servlet",
+                        "keys": ["server.servlet.context-path", "spring.mvc.servlet.path"],
+                    }
+                ]
+            ),
+            "evidence": "resolved_config",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `(unresolved) (unresolved)` — web_stack: on the servlet stack, "
+        "`server.servlet.context-path`, `spring.mvc.servlet.path` would prefix the rows"
+    ) in text
+
+
 def test_a_routing_conflict_question_renders_both_handlers():
     """W28's arm, for the reason `test_a_service_identity_question_renders_the_flagged_
     class_and_reason` exists: a missing `_candidate_line` arm was a live render-time

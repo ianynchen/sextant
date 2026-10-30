@@ -1292,6 +1292,14 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['caller']} was not followed; its first unread callee is "
             f"{candidate['callee']}"
         )
+    if question == "web_stack":
+        # Ruling 3 of the 2026-10-30 object-identity design: one stack the module might run
+        # on and the configured prefix keys its entries would have applied, filed by
+        # `resolve/path_prefix.py::_ask_web_stack` and verified against that writer's own
+        # `candidates` line. The keys are the part a reader acts on — they are what the
+        # published paths are missing if the answer is this stack.
+        keys = ", ".join(f"`{key}`" for key in cast(list[str], candidate["keys"]))
+        return f"on the {candidate['stack']} stack, {keys} would prefix the rows"
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

@@ -31,15 +31,30 @@ dispatchers: [spring, servlet, jaxrs]
 # whose coordinates it carries. It is Spring Boot's own `WebApplicationType
 # .deduceFromClasspath`, which answers SERVLET where `DispatcherServlet` or Jersey's
 # `ServletContainer` is on the classpath and REACTIVE where only `DispatcherHandler` is —
-# so a servlet app that also carries WebFlux for its `WebClient` is a servlet app. A module
-# carrying none of these runs no web stack, and no `prefixes` entry applies to it.
+# so a servlet app that also carries WebFlux for its `WebClient` is a servlet app.
+#
+# **The STARTERS are listed beside the artifacts that carry those classes**, because a
+# dependency set read off the build file (`dependency_source: declared`) names what the module
+# asked for and none of its transitives: `spring-boot-starter-web` without `spring-webmvc`.
+# Boot 4 renamed that starter `spring-boot-starter-webmvc` (the note at the top of this file),
+# so both spellings are here. The order still decides: a module carrying a servlet starter and
+# the WebFlux starter is a servlet app.
+#
+# A module carrying none of these runs no web stack that this file can name, and no
+# `prefixes` entry applies to it. Where it configures a prefix and has rows a dispatcher
+# serves, the keys that were not applied are named in a `web_stack` open question.
 stacks:
   - stack: servlet
     coordinates:
       - org.springframework:spring-webmvc
       - org.glassfish.jersey.containers:jersey-container-servlet-core
+      - org.springframework.boot:spring-boot-starter-web
+      - org.springframework.boot:spring-boot-starter-webmvc
+      - org.springframework.boot:spring-boot-starter-jersey
   - stack: reactive
-    coordinates: [org.springframework:spring-webflux]
+    coordinates:
+      - org.springframework:spring-webflux
+      - org.springframework.boot:spring-boot-starter-webflux
 
 prefixes:
   # **MEASURED, from the framework's own bytes** — `scripts/probes/cp38_boot_prefix_keys.md`

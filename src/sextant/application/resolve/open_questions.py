@@ -115,6 +115,13 @@ QUESTIONS = (
     # may be on any route or none — so one run files ONE row and every chain is a
     # candidate of it (the `service_identity._merged` shape).
     "routing_depth",
+    # Ruling 3 of the 2026-10-30 object-identity design. A module that configures a path
+    # prefix and has rows a dispatcher serves, where none of the server model's `stacks`
+    # coordinates is among its dependencies — a build-file parse that lists neither a web
+    # artifact nor a known starter. Which configured keys reach a row depends on the stack,
+    # so none is applied. Candidates: one per stack, with the configured keys its entries
+    # would have applied. Identity NULL on method and path: the question is the module's.
+    "web_stack",
 )
 
 

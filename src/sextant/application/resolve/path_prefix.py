@@ -36,6 +36,7 @@ already ships for `spring.data.rest.base-path`, and it is unexercised: no corpus
 divergent prefix (CP-38's own scope note, and §5 of the spec measured all six pins).
 """
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -44,6 +45,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.values import (
     LITERAL,
     STRING,
@@ -133,14 +135,15 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 # concatenated. The shipped servlet pair are alternatives by version, and
                 # where a module records none both admit it and the first is read.
                 prefixes.setdefault((dispatcher, protocol), prefix)
+    # Which dispatcher serves each catalog's rows; a catalog naming none takes no configured
+    # prefix, because Spring Boot's keys do not configure what serves it.
+    dispatchers = {catalog.id: catalog.dispatcher for catalog in catalogs}
+    if config and stack is None:
+        _ask_web_stack(workspace, model, config, versions, dispatchers)
     if not prefixes and not installed:
         return
     # Read once, and only where an installed prefix exists to ask about it.
     annotated = _annotated_types(workspace) if installed else {}
-
-    # Which dispatcher serves each catalog's rows; a catalog naming none takes no configured
-    # prefix, because Spring Boot's keys do not configure what serves it.
-    dispatchers = {catalog.id: catalog.dispatcher for catalog in catalogs}
 
     rows: list[dict[str, Any]] = []
     for endpoint in workspace.query("endpoints"):
@@ -733,8 +736,6 @@ def _web_stack(workspace: Workspace, model: list[dict[str, Any]]) -> str | None:
     the model's ORDER is the framework's: the shipped one tests the servlet stack first,
     so a servlet app that also carries the reactive stack's coordinates is a servlet app.
     """
-    import json
-
     coordinates: set[str] = set()
     for row in workspace.query("module_dependencies"):
         recorded = row.get("dependency_coordinates")
@@ -749,6 +750,73 @@ def _web_stack(workspace: Workspace, model: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _ask_web_stack(
+    workspace: Workspace,
+    model: list[dict[str, Any]],
+    config: dict[str, dict[str, str | None]],
+    versions: dict[str, str],
+    dispatchers: dict[str, str | None],
+) -> None:
+    """Files ONE `web_stack` question per protocol where the module configures a prefix,
+    has inbound rows a dispatcher serves, and carries none of the coordinates any of the
+    model's `stacks` is read off.
+
+    No prefix is applied there, because which keys reach a row depends on the stack: CP-57
+    measured a leftover servlet context path doing nothing on a reactive app, so applying
+    the servlet entry would be a guess. Dropping the keys silently would be the other
+    failure, so they are named. A candidate is a STACK the module might run on, with the
+    configured keys that stack's entries would have applied — the question is which stack,
+    and each answer says what follows from it. Method and path are NULL because the
+    question is the module's, not one row's (the `routing_depth` shape), and the candidates
+    are sorted so two runs write the same bytes (NFR-1).
+    """
+    protocols = sorted(
+        {
+            str(endpoint.get("protocol"))
+            for endpoint in workspace.query("endpoints")
+            if str(endpoint.get("direction")) == "inbound"
+            and dispatchers.get(str(endpoint.get("catalog_id")))
+            and isinstance(endpoint.get("path"), str)
+            and str(endpoint.get("path")).startswith("/")
+        }
+    )
+    if not protocols:
+        return
+    unapplied: dict[tuple[str, str], list[str]] = {}
+    for entry in model:
+        if "keys" not in entry or not _version_admits(entry, versions):
+            continue
+        for key in entry["keys"]:
+            value = _agreed(config, key["key"])
+            if value is None or not value.strip().strip("/"):
+                continue
+            for protocol in entry["protocols"]:
+                named = unapplied.setdefault((protocol, entry["stack"]), [])
+                if key["key"] not in named:
+                    named.append(key["key"])
+    rows = []
+    for protocol in protocols:
+        candidates = [
+            {"stack": stack, "keys": keys}
+            for (on, stack), keys in sorted(unapplied.items())
+            if on == protocol
+        ]
+        if not candidates:
+            continue
+        rows.append(
+            {
+                "protocol": protocol,
+                "method": None,
+                "path": None,
+                "question": "web_stack",
+                "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+                "evidence": "resolved_config; module_dependencies.dependency_coordinates "
+                "against the server model's stacks",
+            }
+        )
+    record_open_questions(workspace, rows)
+
+
 def _framework_versions(workspace: Workspace) -> dict[str, str]:
     """`coordinate -> version` from the module fact, which records it already (F1).
 
@@ -756,8 +824,6 @@ def _framework_versions(workspace: Workspace) -> dict[str, str]:
     different answer from a dependency with no version — so the absence travels to
     `_version_admits` as unanswerable rather than as a refusal.
     """
-    import json
-
     versions: dict[str, str] = {}
     for row in workspace.query("module_dependencies"):
         recorded = row.get("dependency_versions")

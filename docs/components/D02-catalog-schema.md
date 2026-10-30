@@ -725,8 +725,13 @@ stacks:                                  # IN ORDER; the first whose coordinates
     coordinates:                         # stack and no configured prefix at all
       - org.springframework:spring-webmvc
       - org.glassfish.jersey.containers:jersey-container-servlet-core
+      - org.springframework.boot:spring-boot-starter-web
+      - org.springframework.boot:spring-boot-starter-webmvc
+      - org.springframework.boot:spring-boot-starter-jersey
   - stack: reactive
-    coordinates: [org.springframework:spring-webflux]
+    coordinates:
+      - org.springframework:spring-webflux
+      - org.springframework.boot:spring-boot-starter-webflux
 
 prefixes:
   - framework: org.springframework.boot
@@ -743,7 +748,7 @@ prefixes:
 | Field | Meaning |
 |---|---|
 | `dispatchers` | The closed set of dispatcher words. A key's `applies_to` and a catalog's `dispatcher` must be among them; the catalog loader accepts the words some key applies to |
-| `stacks[].stack`, `stacks[].coordinates` | Which web stack the module runs on, read off its `module_dependencies` coordinates in the listed order — Spring Boot's own `WebApplicationType.deduceFromClasspath` order, so a servlet app carrying WebFlux for its `WebClient` stays a servlet app |
+| `stacks[].stack`, `stacks[].coordinates` | Which web stack the module runs on, read off its `module_dependencies` coordinates in the listed order — Spring Boot's own `WebApplicationType.deduceFromClasspath` order, so a servlet app carrying WebFlux for its `WebClient` stays a servlet app. The STARTERS are listed beside the artifacts (`spring-boot-starter-web`/`-webmvc`/`-jersey` for servlet, `spring-boot-starter-webflux` for reactive), because a dependency set read off the build file names the starter and none of its transitives. A module matching no stack takes no configured prefix; where it configures one and has rows a dispatcher serves, the unapplied keys are named in one `web_stack` open question per protocol ([D01](D01-graph-schema.md)) |
 | `prefixes[].stack` | The stack this entry applies to. Only the module's own stack's entries apply: CP-57 measured a leftover `server.servlet.context-path` doing nothing on a reactive app |
 | `prefixes[].keys[].key` | A configuration key whose agreed value is a prefix segment |
 | `prefixes[].keys[].applies_to` | The dispatchers that key reaches. A pairing is declared only once a probe has measured it |
