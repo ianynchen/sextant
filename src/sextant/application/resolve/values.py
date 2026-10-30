@@ -134,6 +134,7 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
     method_name,
@@ -1072,6 +1073,14 @@ def _used_at(origin: _Position) -> int | None:
     return origin[2] if origin[0] == _SLOT else None
 
 
+def _fills(answer: Answer) -> bool:
+    """Whether a concatenation hole takes this answer's text: a string literal, or an
+    expression that carries a `${…}` placeholder (a nested concat built one)."""
+    if answer.kind == LITERAL:
+        return answer.literal_kind == STRING
+    return answer.kind == EXPRESSION and carries_expression(str(answer.value))
+
+
 class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
@@ -1666,10 +1675,24 @@ class _Walk:
             # was sent (what the call on the root did to it) was not read. A NARROWED literal
             # fills its hole the same way and marks the result `narrowed` (ruling 7): one
             # template per candidate, of which one is sent.
+            #
+            # **A path this hole cannot fill is REPLACED, never dropped** (ruling 6, the
+            # rule `_value` applies to `preserves`). Every path the operand reached is one
+            # calling context of this helper, and each gives its own template: the text
+            # where it read one (a string literal, or an expression that already carries
+            # a `${…}`), the hole's spelling where it read none. Dropping the unreadable
+            # ones whenever another path read text published ONE address for a helper
+            # that is called with two — and a consumer asking "who is called" then saw a
+            # single answer where the code gives two.
             settled = tuple(
-                (crossed, str(answer.value), answer.yields, answer.inexact, answer.narrowed)
+                (
+                    crossed,
+                    str(answer.value) if _fills(answer) else None,
+                    answer.yields,
+                    answer.inexact,
+                    answer.narrowed,
+                )
                 for crossed, answer in reached
-                if answer.kind == LITERAL and answer.literal_kind == STRING
             )
             per_hole.append(settled or ((trail, None, _ADDRESS, False, False),))
         self._holes = tuple(unfilled)

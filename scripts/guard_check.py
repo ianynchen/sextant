@@ -2090,6 +2090,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-concat-hole-REPLACES-what-it-cannot-fill-never-drops-it": Guard(
+        what="a concatenation hole gives one candidate per calling context its operand "
+        "reached, and the context that read no text keeps the hole's spelling instead of "
+        "vanishing",
+        why="the filter kept only string literals whenever any path read one, so a helper "
+        'called with `"svc-a"` and with a parameter nothing supplies published ONE address '
+        "and a peer for it — a fact the code does not state, found by the same multiplicity "
+        "checks that the `preserves` arm above feeds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                for crossed, answer in reached\n            )\n"
+                "            per_hole.append(settled or",
+                replace="                for crossed, answer in reached\n"
+                "                if answer.kind == LITERAL and answer.literal_kind == STRING\n"
+                "            )\n            per_hole.append(settled or",
+            ),
+        ),
+    ),
     "values.a-path-a-RENDERING-cannot-carry-is-replaced-never-dropped": Guard(
         what="an identity a `preserves` entry cannot carry becomes an UNRESOLVED answer on "
         "its own path, so a reader of the result still sees that the code had two paths",
