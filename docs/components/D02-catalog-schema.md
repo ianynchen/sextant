@@ -752,7 +752,7 @@ prefixes:
 | `prefixes[].stack` | The stack this entry applies to. Only the module's own stack's entries apply: CP-57 measured a leftover `server.servlet.context-path` doing nothing on a reactive app |
 | `prefixes[].keys[].key` | A configuration key whose agreed value is a prefix segment |
 | `prefixes[].keys[].applies_to` | The dispatchers that key reaches. A pairing is declared only once a probe has measured it |
-| `prefixes[].framework`, `versions`, `measured`, `protocols` | As before: the entry applies where the module's framework version is in `versions` (an unrecorded version admits it), `measured` names the versions whose metadata was read, and `protocols` the wires it prefixes |
+| `prefixes[].framework`, `versions`, `measured`, `protocols` | As before: the entry applies where the module's framework version is in `versions` (an unrecorded version admits it), `measured` names the versions whose metadata was read, and `protocols` the wires it prefixes. A configured key the model declares for the module's stack only under ranges that do not admit the module is not applied, and is named in a `prefix_not_measured` open question ([D01](D01-graph-schema.md)) where the module has rows a dispatcher the key applies to serves — on Boot 4, `spring.jersey.application-path` and `spring.webflux.base-path` |
 
 **How a row's prefix is found.** For each entry on the module's stack whose version range
 admits it, each dispatcher's prefix is the agreed values of the keys that apply to it,

@@ -140,6 +140,8 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
     dispatchers = {catalog.id: catalog.dispatcher for catalog in catalogs}
     if config and stack is None:
         _ask_web_stack(workspace, model, config, versions, dispatchers)
+    elif config:
+        _ask_prefix_not_measured(workspace, model, config, versions, stack, dispatchers)
     if not prefixes and not installed:
         return
     # Read once, and only where an installed prefix exists to ask about it.
@@ -814,6 +816,97 @@ def _ask_web_stack(
                 "against the server model's stacks",
             }
         )
+    record_open_questions(workspace, rows)
+
+
+def _ask_prefix_not_measured(
+    workspace: Workspace,
+    model: list[dict[str, Any]],
+    config: dict[str, dict[str, str | None]],
+    versions: dict[str, str],
+    stack: str | None,
+    dispatchers: dict[str, str | None],
+) -> None:
+    """Files ONE `prefix_not_measured` question per protocol, naming each configured key the
+    server model declares for the module's stack under SOME version range, and under none
+    that admits the module — so no entry applied it.
+
+    The version bound is what drops it: the key is declared where it was measured, and the
+    module runs a version outside that. Applying it anyway would be a prefix nobody measured
+    for that version; dropping it silently would publish the row at `resolved` without it and
+    nothing saying why. Only keys with an agreed non-empty value count, and only where the
+    module has inbound rows a dispatcher the key applies to serves — a key reaching no row
+    of the module changes no address. Keys of ANOTHER stack are not asked about: CP-57
+    measured them doing nothing there, which is an answer, not a gap. Method and path are
+    NULL (the question is the module's), and candidates are sorted (NFR-1).
+    """
+    applied: set[str] = set()
+    declared: dict[str, dict[str, Any]] = {}
+    for entry in model:
+        if "keys" not in entry or entry["stack"] != stack:
+            continue
+        admitted = _version_admits(entry, versions)
+        for key in entry["keys"]:
+            if admitted:
+                applied.add(key["key"])
+                continue
+            value = _agreed(config, key["key"])
+            if value is None or not value.strip().strip("/"):
+                continue
+            found = declared.setdefault(
+                key["key"],
+                {"entry": entry, "ranges": set(), "dispatchers": set(), "protocols": set()},
+            )
+            found["ranges"].add(str(entry["versions"]))
+            found["dispatchers"].update(key["applies_to"])
+            found["protocols"].update(entry["protocols"])
+    missing = {key: found for key, found in declared.items() if key not in applied}
+    if not missing:
+        return
+    served: dict[str, set[str]] = {}
+    for endpoint in workspace.query("endpoints"):
+        dispatcher = dispatchers.get(str(endpoint.get("catalog_id")))
+        path = endpoint.get("path")
+        if (
+            dispatcher
+            and str(endpoint.get("direction")) == "inbound"
+            and isinstance(path, str)
+            and path.startswith("/")
+        ):
+            served.setdefault(str(endpoint.get("protocol")), set()).add(dispatcher)
+    rows = []
+    for protocol in sorted(served):
+        candidates = []
+        for key, found in sorted(missing.items()):
+            if protocol not in found["protocols"] or not found["dispatchers"] & served[protocol]:
+                continue
+            framework = str(found["entry"]["framework"])
+            candidates.append(
+                {
+                    "key": key,
+                    "framework": framework,
+                    "module_versions": sorted(
+                        {
+                            version
+                            for coordinate, version in versions.items()
+                            if coordinate.startswith(framework + ":")
+                        }
+                    ),
+                    "declared_for": sorted(found["ranges"]),
+                }
+            )
+        if candidates:
+            rows.append(
+                {
+                    "protocol": protocol,
+                    "method": None,
+                    "path": None,
+                    "question": "prefix_not_measured",
+                    "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+                    "evidence": "resolved_config; module_dependencies.dependency_versions "
+                    "against the server model's version ranges",
+                }
+            )
     record_open_questions(workspace, rows)
 
 

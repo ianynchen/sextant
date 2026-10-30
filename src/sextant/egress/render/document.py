@@ -1300,6 +1300,17 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # published paths are missing if the answer is this stack.
         keys = ", ".join(f"`{key}`" for key in cast(list[str], candidate["keys"]))
         return f"on the {candidate['stack']} stack, {keys} would prefix the rows"
+    if question == "prefix_not_measured":
+        # Ruling 3: a configured prefix key the server model declares only for versions the
+        # module does not run, filed by `resolve/path_prefix.py::_ask_prefix_not_measured`
+        # and verified against that writer's own `candidates` line. The sentence states both
+        # versions because the gap between them is the whole question.
+        running = ", ".join(cast(list[str], candidate["module_versions"])) or "an unread version"
+        ranges = " or ".join(cast(list[str], candidate["declared_for"]))
+        return (
+            f"`{candidate['key']}` is configured but not applied: it is declared for "
+            f"{candidate['framework']} {ranges}, and the module runs {running}"
+        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

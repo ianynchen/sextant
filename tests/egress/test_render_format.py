@@ -904,6 +904,37 @@ def test_a_web_stack_question_names_each_stack_and_the_keys_it_would_apply():
     ) in text
 
 
+def test_a_prefix_not_measured_question_names_the_key_and_both_versions():
+    """Ruling 3's version-bound arm. Candidate shape (`key`, `framework`,
+    `module_versions`, `declared_for`) matches `path_prefix._ask_prefix_not_measured`."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": None,
+            "question": "prefix_not_measured",
+            "candidates": json.dumps(
+                [
+                    {
+                        "key": "spring.jersey.application-path",
+                        "framework": "org.springframework.boot",
+                        "module_versions": ["4.1.1"],
+                        "declared_for": [">=2.0 <4.0"],
+                    }
+                ]
+            ),
+            "evidence": "resolved_config",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `(unresolved) (unresolved)` — prefix_not_measured: `spring.jersey.application-path` "
+        "is configured but not applied: it is declared for org.springframework.boot "
+        ">=2.0 <4.0, and the module runs 4.1.1"
+    ) in text
+
+
 def test_a_routing_conflict_question_renders_both_handlers():
     """W28's arm, for the reason `test_a_service_identity_question_renders_the_flagged_
     class_and_reason` exists: a missing `_candidate_line` arm was a live render-time

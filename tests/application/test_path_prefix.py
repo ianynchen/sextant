@@ -391,7 +391,9 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
     assert metadata == [("/shop/x", endpoint_id)]
 
 
-def _module_workspace(tmp_path: Path, coordinates: list[str]) -> DuckDbWorkspace:
+def _module_workspace(
+    tmp_path: Path, coordinates: list[str], versions: dict[str, str] | None = None
+) -> DuckDbWorkspace:
     """A workspace holding one module fact with these dependency coordinates — the facts
     `_web_stack` reads the module's stack off — and nothing else yet."""
     document = Document(
@@ -419,7 +421,7 @@ def _module_workspace(tmp_path: Path, coordinates: list[str]) -> DuckDbWorkspace
                 source_roots=["src/main/java"],
                 output_dirs=["target/classes"],
                 dependency_coordinates=coordinates,
-                dependency_versions={},
+                dependency_versions=versions or {},
             )
         ],
     )
@@ -532,3 +534,51 @@ def test_a_module_whose_stack_is_unread_files_a_question_and_takes_no_prefix(tmp
     assert {c["stack"]: c["keys"] for c in candidates} == {
         "servlet": ["server.servlet.context-path", "spring.mvc.servlet.path"],
     }
+
+
+# A Boot 4 servlet module: the Jersey key is declared only for `>=2.0 <4.0`.
+BOOT_4 = {"org.springframework.boot:spring-boot-starter-webmvc": "4.1.1"}
+
+
+def test_a_configured_key_no_entry_for_the_modules_version_declares_is_asked(tmp_path):
+    """Ruling 3, the version bound's half of "every lost prefix is named". On Boot 4 the
+    server model declares no `spring.jersey.application-path` — Jersey left the jar CP-38
+    read — so a Jersey row takes the context path and nothing else. Boot 4 very likely still
+    serves under the configured application path, and guessing it would be a prefix nobody
+    measured; dropping it silently would publish `/c/x` at `resolved` with nothing saying
+    why. So the key is named in one `prefix_not_measured` question, with the version the
+    module runs and the range the key is declared for."""
+    workspace = _module_workspace(
+        tmp_path, ["org.springframework.boot:spring-boot-starter-webmvc"], BOOT_4
+    )
+    config = {"server.servlet.context-path": "/c", "spring.jersey.application-path": "/j"}
+    path = _served(workspace, config, "jaxrs", keep_open=True)
+    questions = [dict(row) for row in workspace.query("open_questions")]
+    workspace.close()
+
+    assert path == "/c/x"
+    assert [(q["protocol"], q["method"], q["path"], q["question"]) for q in questions] == [
+        ("http", None, None, "prefix_not_measured")
+    ]
+    assert json.loads(str(questions[0]["candidates"])) == [
+        {
+            "key": "spring.jersey.application-path",
+            "framework": "org.springframework.boot",
+            "module_versions": ["4.1.1"],
+            "declared_for": [">=2.0 <4.0"],
+        }
+    ]
+
+
+def test_a_module_whose_configured_keys_were_all_applied_is_asked_nothing(tmp_path):
+    """The other side: every configured key reached its rows, so there is nothing to ask."""
+    workspace = _module_workspace(
+        tmp_path, ["org.springframework.boot:spring-boot-starter-webmvc"], BOOT_4
+    )
+    config = {"server.servlet.context-path": "/c", "spring.mvc.servlet.path": "/m"}
+    path = _served(workspace, config, "spring", keep_open=True)
+    questions = [dict(row) for row in workspace.query("open_questions")]
+    workspace.close()
+
+    assert path == "/c/m/x"
+    assert questions == []

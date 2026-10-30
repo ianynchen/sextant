@@ -924,10 +924,10 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed THIRTEEN-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed FOURTEEN-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
 `unselected_binding`, `handler_protocol`, `registration_activation`, `self_exchange`,
-`routing_conflict`, `routing_depth` and `web_stack`** — checked by the single owning module before any row is inserted,
+`routing_conflict`, `routing_depth`, `web_stack` and `prefix_not_measured`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -942,8 +942,8 @@ rather than an afterthought.* *And then it said NINE while the module enforced t
 `self_exchange` (F5 §6.1, W27) and `routing_conflict` (W28) were added to the module without
 this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
 in the change that closed that spec's register items, the fourth drift of this one count.*
-*`web_stack` (ruling 3 of the 2026-10-30 object-identity design) is the thirteenth, added
-here in the same change as the module.* *This paragraph said "two-value set" and named the first two
+*`web_stack` and `prefix_not_measured` (ruling 3 of the 2026-10-30 object-identity design)
+are the thirteenth and fourteenth, added here in the same change as the module.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -965,7 +965,11 @@ unread (spec 2026-09-19 §4a); a `web_stack` candidate holds `stack` and `keys` 
 module might run on and the configured prefix keys that stack's server-model entries would
 have applied — on ONE row per protocol, `method` and `path` NULL because the question is the
 module's, filed where a module configures a prefix, has rows a dispatcher serves, and carries
-none of the server model's `stacks` coordinates (D02 §1h). Each array is sorted by the pass that writes it, so two runs produce the
+none of the server model's `stacks` coordinates (D02 §1h); a `prefix_not_measured` candidate
+holds `key`, `framework`, `module_versions` and `declared_for` — a configured prefix key the
+server model declares for the module's stack only under version ranges that do not admit the
+module, so no entry applied it — on ONE row per protocol, `method` and `path` NULL, filed only
+where the module has inbound rows a dispatcher the key applies to serves. Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.
 
 `evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence
