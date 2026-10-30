@@ -3597,6 +3597,82 @@ def _fetch_facts() -> list[Fact]:
             kind="virtual",
             arguments=[CallArgument(kind="concat", value="http://{}/x", source=60)],
         ),
+        # `void keyed(String p) { one("${base.url}/" + p + "/y"); }` — the inner concat is
+        # an expression carrying a placeholder, the outer one fills its hole with it.
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_FETCHER, "keyed", _TAKES_STRING),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _FETCHER,
+            signature=Signature(
+                parameters=[Parameter(name="p", type=TypeRef(symbol="java/lang/String#"))],
+                returns=TypeRef(symbol="void#"),
+            ),
+        ),
+        _void(_FETCHER, "keyed", _TAKES_STRING),
+        _site(
+            _symbol(_FETCHER, "keyed", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=70,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_FETCHER, "keyed", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            result=71,
+            arguments=[CallArgument(kind="concat", value="${base.url}/{}", source=70)],
+        ),
+        _site(
+            _symbol(_FETCHER, "keyed", _TAKES_STRING),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/y", source=71)],
+        ),
+        # `void lead(String host) { one(host + "/z"); }`, called with a literal and with a
+        # parameter nothing supplies: a LEADING hole.
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_FETCHER, "lead", _TAKES_STRING),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _FETCHER,
+            signature=Signature(
+                parameters=[Parameter(name="host", type=TypeRef(symbol="java/lang/String#"))],
+                returns=TypeRef(symbol="void#"),
+            ),
+        ),
+        _void(_FETCHER, "lead", _TAKES_STRING),
+        _site(
+            _symbol(_FETCHER, "lead", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            result=72,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_FETCHER, "lead", _TAKES_STRING),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", value="{}/z", source=72)],
+        ),
+        _site(
+            _symbol(_FETCH_CALLERS, "a", "()V"),
+            1,
+            (_FETCHER, "lead", _TAKES_STRING),
+            arguments=[CallArgument(kind="string", value="svc-a")],
+        ),
+        _site(
+            _symbol(_FETCH_CALLERS, "b", _TAKES_STRING),
+            1,
+            (_FETCHER, "lead", _TAKES_STRING),
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
         _declared(_FETCH_CALLERS, "a", "()V"),
         _void(_FETCH_CALLERS, "a", "()V"),
         _site(
@@ -3638,4 +3714,24 @@ def test_a_concat_hole_keeps_a_calling_context_it_cannot_fill(fetched):
     assert sorted((b.slots[0].kind, b.slots[0].value) for b in _bindings(fetched, fetch, 1)) == [
         ("expression", "http://{host}/x"),
         ("literal", "http://svc-a/x"),
+    ]
+
+
+@pytest.mark.pins("values.a-hole-filled-by-a-PLACEHOLDER-expression-is-never-a-literal")
+def test_a_hole_filled_by_a_placeholder_expression_answers_an_expression(fetched):
+    """The concat's hole is filled by a nested concat that is an EXPRESSION carrying
+    `${base.url}`. Its text is printed into the hole, but the result is never `literal`:
+    a `${key}` is the deployment's to set, and `channel_of_answer` refuses an expression
+    so no catalog can read this as a destination."""
+    keyed = _symbol(_FETCHER, "keyed", _TAKES_STRING)
+    assert [(b.slots[0].kind, b.slots[0].value) for b in _bindings(fetched, keyed, 2)] == [
+        ("expression", "${base.url}/{p}/y")
+    ]
+
+
+def test_a_leading_hole_reached_from_two_contexts_keeps_both(fetched):
+    lead = _symbol(_FETCHER, "lead", _TAKES_STRING)
+    assert sorted((b.slots[0].kind, b.slots[0].value) for b in _bindings(fetched, lead, 1)) == [
+        ("expression", "{}/z"),
+        ("literal", "svc-a/z"),
     ]

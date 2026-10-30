@@ -1248,9 +1248,9 @@ class _Walk:
             # arguments, reached exactly as `domain/facts.py` says: "What FILLS the hole is
             # the concat site's own call-site fact, reached by `source` -> `result`."
             #
-            # §8.2 is untouched: a `${...}` operand answers `expression`, not `literal`, so
-            # it fails the all-literals test by construction and no deployment hole is ever
-            # filled in.
+            # §8.2 is untouched: a `${...}` operand answers `expression`, not `literal`.
+            # `_joined` may print its text into a hole, and then marks the result
+            # `expression` (never `literal`), so no deployment hole is ever filled in.
             template = argument.get("value")
             if not isinstance(template, str):
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -1644,7 +1644,7 @@ class _Walk:
         # the hole itself where it reached none** (spec 2026-10-18 §3, §4). The second half
         # is what makes a partly-known address possible — an unresolvable hole no longer
         # discards the holes beside it that ARE known.
-        per_hole: list[tuple[tuple[_Trail, str | None, str, bool, bool], ...]] = []
+        per_hole: list[tuple[tuple[_Trail, str | None, str, bool, bool, bool], ...]] = []
         # **A hole nobody filled is NAMED after the value that fills it at runtime**, where
         # the facts name that value (ruled by the user 2026-10-18, one position over from
         # `<host>`). `"/owners/" + ownerId + "/pets"` is the most ordinary outbound address
@@ -1691,10 +1691,11 @@ class _Walk:
                     answer.yields,
                     answer.inexact,
                     answer.narrowed,
+                    answer.kind == EXPRESSION,
                 )
                 for crossed, answer in reached
             )
-            per_hole.append(settled or ((trail, None, _ADDRESS, False, False),))
+            per_hole.append(settled or ((trail, None, _ADDRESS, False, False, False),))
         self._holes = tuple(unfilled)
 
         # Nothing anywhere: the caller carries the template unchanged, which is what it
@@ -1706,7 +1707,7 @@ class _Walk:
         # hole takes a name, the answer is strictly better than the fact —
         # `/owners/{ownerId}/pets` against `/owners/{}/pets` — and the caller must be given
         # it even though no hole was FILLED. That is why this is two tests rather than one.
-        filled = any(value is not None for hole in per_hole for _, value, _, _, _ in hole)
+        filled = any(value is not None for hole in per_hole for _, value, _, _, _, _ in hole)
         if not filled and all(hole == _HOLE for hole in unfilled):
             return None
 
@@ -1718,7 +1719,7 @@ class _Walk:
             # was never assembled by any single run.
             merged: _Trail = trail
             coherent = True
-            for crossed, _, _, _, _ in combination:
+            for crossed, _, _, _, _, _ in combination:
                 joined = _combine(merged, crossed)
                 if joined is None:
                     coherent = False
@@ -1728,13 +1729,17 @@ class _Walk:
                 continue
             text = pieces[0] + "".join(
                 (value if value is not None else hole) + piece
-                for (_, value, _, _, _), hole, piece in zip(
+                for (_, value, _, _, _, _), hole, piece in zip(
                     combination, self._holes, pieces[1:], strict=True
                 )
             )
-            whole = all(value is not None for _, value, _, _, _ in combination)
-            inexact = any(inexact for _, _, _, inexact, _ in combination)
-            narrowed = any(narrowed for _, _, _, _, narrowed in combination)
+            # A hole a placeholder EXPRESSION filled is read text, but not a value the code
+            # states: `${key}` is a deployment's to set, so the result is never `literal`.
+            whole = all(value is not None for _, value, _, _, _, _ in combination) and not any(
+                keyed for _, _, _, _, _, keyed in combination
+            )
+            inexact = any(inexact for _, _, _, inexact, _, _ in combination)
+            narrowed = any(narrowed for _, _, _, _, narrowed, _ in combination)
             # **An AUTHORITY joined to a path is written scheme-relative** (`OI-142`,
             # ruling 2). `//customers-service/owners` is RFC 3986 §4.2's scheme-relative
             # reference — a real URI form, not an invention — and the `//` says exactly
@@ -1742,9 +1747,10 @@ class _Walk:
             # second shape for any consumer to learn. Only where the result carries no
             # scheme of its own: `"http://" + host + "/x"` already says where the
             # authority starts and prefixing that would be wrong.
-            if any(kind == _AUTHORITY for _, _, kind, _, _ in combination) and "://" not in text:
+            if any(kind == _AUTHORITY for _, _, kind, _, _, _ in combination) and "://" not in text:
                 text = f"//{text}"
-            # **`literal` only when EVERY hole was read; otherwise `expression`**, and that
+            # **`literal` only when EVERY hole was read from a string literal; otherwise
+            # `expression`** (a hole a `${key}` expression filled counts as not read), and that
             # is the whole safety of a partial fill (§3). A half-filled template is not a
             # value the code states, it is a statement about part of one — and
             # `channel_of_answer` refuses an expression, so no messaging catalog can read
