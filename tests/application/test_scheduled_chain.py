@@ -1539,6 +1539,102 @@ def test_a_helpers_name_stays_with_the_schedule_its_caller_handed_it(tmp_path: P
     ]
 
 
+@pytest.mark.pins("quartz.a-walked-back-trigger-reads-on-its-own-path")
+def test_a_trigger_started_in_a_helper_keeps_each_callers_name(tmp_path: Path):
+    """`base(String n){ return newTrigger().withIdentity(n); }`, and `first()` and `second()`
+    each do `scheduleJob(newJob(AJob.class).build(), base("a" / "b").withSchedule(
+    cronSchedule(c)).build())`. The root is in the helper and the `build()` in each caller,
+    so the chain is walked back across the return (ruling 5). The name is read on the path
+    that walk took into the helper: `a` for `first`, `b` for `second`, never both."""
+    builder = "Lorg/quartz/TriggerBuilder;"
+    base_jvm = f"(Ljava/lang/String;){builder}"
+    helper = _MODULE + method_descriptor(_TRIGGERS, "base", base_jvm)
+    sites = [
+        _site(helper, 0, TRIGGER_BUILDER, "newTrigger", f"(){builder}", result=1),
+        _site(
+            helper,
+            1,
+            TRIGGER_BUILDER,
+            "withIdentity",
+            f"(Ljava/lang/String;){builder}",
+            receiver=1,
+            result=2,
+            arguments=(CallArgument(kind="parameter", value=0),),
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+    ]
+
+    def caller(name: str, key: str) -> list:
+        symbol = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        return [
+            _method_symbol(name, "()V"),
+            *_job_chain(symbol, "AJob"),
+            _site(
+                symbol,
+                3,
+                _TRIGGERS,
+                "base",
+                base_jvm,
+                result=4,
+                arguments=(CallArgument(kind="string", value=key),),
+            ),
+            _site(
+                symbol,
+                4,
+                CRON_BUILDER,
+                "cronSchedule",
+                "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;",
+                result=5,
+                arguments=(CallArgument(kind="string", value="0 0 * * * ?"),),
+            ),
+            _site(
+                symbol,
+                5,
+                TRIGGER_BUILDER,
+                "withSchedule",
+                f"(Lorg/quartz/ScheduleBuilder;){builder}",
+                receiver=4,
+                result=6,
+                arguments=(CallArgument(kind="unresolved", source=5),),
+            ),
+            _site(
+                symbol, 6, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=6, result=7
+            ),
+            _site(
+                symbol,
+                7,
+                "org/quartz/Scheduler#",
+                "scheduleJob",
+                _SCHEDULE_JVM,
+                receiver=20,
+                result=8,
+                arguments=(
+                    CallArgument(kind="unresolved", source=3),
+                    CallArgument(kind="unresolved", source=7),
+                ),
+            ),
+        ]
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        _method_symbol("base", base_jvm),
+        *sites,
+        *caller("first", "a"),
+        *caller("second", "b"),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert sorted((row["name"], row["resolution"]) for row in rows) == [
+        ("DEFAULT.a", "resolved"),
+        ("DEFAULT.b", "resolved"),
+    ], rows
+
+
 @pytest.mark.pins("quartz.an-UNTIED-name-is-NULL")
 def test_a_pairing_no_path_ties_reads_each_part_alone_at_partial(tmp_path: Path):
     """`first()` and `second()` each call `scheduleJob(id(newJob(AJob.class).build()),
