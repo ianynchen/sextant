@@ -6396,6 +6396,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-call-returning-its-RECEIVER-configures-it": Guard(
+        what="a call declared `returns_receiver: true` folds into the chain in place, as a "
+        "void setter does, with what is called on its result, instead of forking a walk of "
+        "its own (ruling 4, spec 2026-10-30)",
+        why="a builder configured over several statements, `b.url(u); b.post(x); "
+        "newCall(b.build())`, drops the results of `url` and `post`. Walked as forks each "
+        "saw only itself, and the `build()` beside them read a builder with no address and "
+        "the root's default verb: a row with no destination, for a request the module does "
+        "send to a known address",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if _chain_key(next_site) is None or _configures(next_site, context):\n",
+                replace="        if _chain_key(next_site) is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "arguments.a-lifted-parameter-is-typed-by-its-own-signature": Guard(
         what="a payload read from a parameter is typed by the signature of the method the "
         "argument was lifted from, not the chain's enclosing method",

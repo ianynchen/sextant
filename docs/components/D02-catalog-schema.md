@@ -1976,6 +1976,23 @@ the backward prefix walk still follows each producer's own `receiver`, so it sto
 extension call as at any static call. `receiver_arg` is a non-negative integer and a step's
 word; anything else, and the word on a root, is refused at load.
 
+**A step or a terminal may declare `returns_receiver: true`** (ruling 4, spec 2026-10-30):
+the call returns the object it was called on, so it configures that object the way a void
+setter does. The walk folds it into the chain in place instead of forking a walk of its own,
+and folds what is called on its result there too, in ordinal order, before the next call on
+the object. So `b.url(u); b.post(x); client.newCall(b.build())`, four statements with the
+results of `url` and `post` dropped, is one chain. A call returning a new value, such as
+`build()`, still forks, with the captures as they stand when it is reached: in
+`b.url(a); r1 = b.build(); b.url(c); r2 = b.build()`, r1 has the address `a` and r2 the
+address `c`. The pre-root backward fold reads the flag too, for owner-declared steps only, as
+it does every step: a flagged call on a value the chain passes through, made before the call
+that reads that value, folds after the value's producer, so
+`b = WebClient.builder(); b.baseUrl(x); b.build().get()` carries the base. A terminal takes
+the word in its mapping form, `{ method: m, returns_receiver: true }`. The default is
+`false`. Anything but a boolean is refused at load. A flag goes on a method only after
+`javap`, or the method's Javadoc, shows it returns `this`, and the catalog quotes that
+evidence in a comment beside it.
+
 **`client_base`** (spec 2026-10-26 §3c, §3g items 1-3) says the library joins a relative
 address onto a base the executing CLIENT holds, and declares where that base is set. Every
 part but `client_arg` belongs to the client and is declared once in a `client_model` (§1g),
