@@ -359,7 +359,7 @@ def spring7_questions(spring7) -> list[dict]:
 
 
 @pytest.fixture(scope="module")
-def context_path_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+def context_path_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """`fixtures/orders-contextpath`, analysed once. Its own module because a context path
     moves EVERY inbound path in the module that sets it, so the key cannot live in a fixture
     whose figures anything else pins."""
@@ -369,9 +369,32 @@ def context_path_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         cli, ["module", "analyze", str(CONTEXT_PATH), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    return workspace_dir / "workspace.duckdb"
+
+
+@pytest.fixture(scope="module")
+def context_path_rows(context_path_workspace: Path) -> list[dict]:
+    """The `endpoints` rows of the one `orders-contextpath` analysis."""
+    workspace = DuckDbWorkspace(context_path_workspace)
     try:
         return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+@pytest.fixture(scope="module")
+def context_path_requirements(context_path_workspace: Path) -> set[tuple]:
+    """Every inbound `endpoint_metadata` row of the same analysis, as `_requirements`
+    spells them."""
+    workspace = DuckDbWorkspace(context_path_workspace)
+    try:
+        return _requirements(
+            [
+                dict(row)
+                for row in workspace.query("endpoint_metadata")
+                if row["direction"] == "inbound"
+            ]
+        )
     finally:
         workspace.close()
 
@@ -496,12 +519,80 @@ def test_a_configured_context_path_and_servlet_path_reach_the_published_rows(con
     assert served == {
         ("GET", "/shop/api/orders/{id}"),
         ("POST", "/shop/api/orders"),
+        # `RouterConfig`'s functional route: the prefix covers every row the server
+        # dispatches, the functional ones included.
+        ("GET", "/shop/api/versioned"),
     }
     # And the rows stay resolved: a prefix every environment agrees on is an answer, not a
     # reason to doubt the address (spec §1's second outcome).
     assert {row["resolution"] for row in context_path_rows if row["direction"] == "inbound"} == {
         "resolved"
     }
+
+
+def test_a_prefixed_functional_route_keeps_its_header(context_path_rows, context_path_requirements):
+    """Ruling 7 of the 2026-10-30 review (follow the object). `RouterConfig` guards
+    `GET /versioned` with `RequestPredicates.param("X-Ver", "2")`: the combinator records that
+    requirement while it mints the route, at `/versioned`, and the prefix then moves the row to
+    `/shop/api/versioned`. The requirement belongs to the ROW, not to the address it had when
+    it was written, so it is still on the row after the move.
+
+    Measured before the fix: the requirement was joined back to its row by path, after the
+    prefix had changed that path, found nothing and was dropped — the route published with no
+    requirement at all.
+
+    The test's name says header because the ruling's case is a header; Spring MVC's functional
+    predicates can only name a request parameter (`RouterConfig` says why), and the row's
+    requirement is the same row either way."""
+    handler = next(
+        str(r["handler"])
+        for r in context_path_rows
+        if r["path"] == "/shop/api/versioned" and r["method"] == "GET"
+    )
+    assert {r for r in context_path_requirements if r[1] == "/shop/api/versioned"} == {
+        ("GET", "/shop/api/versioned", handler, "param", "X-Ver", "2", "required", "resolved"),
+    }
+
+
+def test_no_attached_row_is_left_naming_a_path_no_endpoint_has(context_path_workspace):
+    """Ruling 7, stated for every table at once: a row that names an endpoint by its address
+    must name an address some endpoint row still has once the whole pipeline has run — the
+    prefix included, which is the pass that moves addresses on this fixture.
+
+    The tables are found, not listed: every table or view other than `endpoints` that carries
+    the wire identity's three columns `protocol`, `method` and `path`. A table added later with
+    the same three columns is checked without anyone remembering to add it here. A row whose
+    three are all NULL names no endpoint (a scheduled root, a question about configuration) and
+    is not a claim this test can check."""
+    workspace = DuckDbWorkspace(context_path_workspace)
+    try:
+        connection = workspace._connection
+        tables = [
+            str(name)
+            for (name,) in connection.execute(
+                "SELECT table_name FROM information_schema.columns "
+                "WHERE column_name IN ('protocol', 'method', 'path') AND table_name <> 'endpoints' "
+                "GROUP BY table_name HAVING count(DISTINCT column_name) = 3 ORDER BY table_name"
+            ).fetchall()
+        ]
+        orphans = {
+            table: connection.execute(
+                f"SELECT DISTINCT t.protocol, t.method, t.path FROM {table} t "
+                "WHERE NOT (t.protocol IS NULL AND t.method IS NULL AND t.path IS NULL) "
+                "AND NOT EXISTS (SELECT 1 FROM endpoints e "
+                "WHERE e.protocol IS NOT DISTINCT FROM t.protocol "
+                "AND e.method IS NOT DISTINCT FROM t.method "
+                "AND e.path IS NOT DISTINCT FROM t.path) "
+                "ORDER BY ALL"
+            ).fetchall()
+            for table in tables
+        }
+    finally:
+        workspace.close()
+
+    # The set the search found, so a search that found nothing cannot pass by vacuity.
+    assert "endpoint_metadata" in tables, tables
+    assert {table: rows for table, rows in orphans.items() if rows} == {}
 
 
 def test_class_level_produces_reaches_every_handler_that_declares_none(spring7):

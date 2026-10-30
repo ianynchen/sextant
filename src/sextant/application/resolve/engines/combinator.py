@@ -322,9 +322,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     )
     # The requirements each emitted row carries (spec 2026-09-19 §4d), stashed under the
     # SAME `method`/`path` strings the row was just inserted with — after `_path_of`, after
-    # the fan-out, after the union — because the requirements pass joins them back on
-    # exactly those columns once every row's protocol is final (`request_requirements.
-    # _from_stash`). Written after the rows, for the reason the questions are.
+    # the fan-out, after the union — because the stash binds each to its row's `row_id` by
+    # exactly those columns as it is written (`insert_route_requirements.sql`), before any
+    # pass has moved the row. Written after the rows, for that reason and the questions'.
     stash = _stash_rows(emitted, catalog)
     if stash:
         workspace.derive("route_requirements_insert", rows=stash)
@@ -2145,7 +2145,7 @@ def _fanned(route: _Route, context: _TreeContext) -> list[_Route]:
 def _stash_rows(emitted: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any]]:
     """One `route_requirements` row per (emitted row × requirement it carries), keyed by
     the columns the row was minted with — `caller`, `handler`, `method`, `path`,
-    `catalog_id` — which is the join the requirements pass makes."""
+    `catalog_id` — which is the join the stash's insert makes to bind the row's `row_id`."""
     return [
         {
             "caller": row["caller"],

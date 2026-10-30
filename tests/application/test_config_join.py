@@ -997,29 +997,19 @@ def _stamp_format(
 ) -> None:
     """One row's format pair, applied through the shipped `stamp_format` derive rather
     than a hand-written UPDATE — the columns below have to arrive the way the format pass
-    actually writes them.
+    actually writes them, by the row's `row_id`.
 
-    `media` is passed through because `stamp_format.sql` matches on `consumes`/`produces`
-    as well as on the wire identity: a row carrying a stamped media type is not the row a
-    format stamp naming NULL media would find."""
+    The row is the one with this direction, caller and media: a row carrying a stamped
+    media type is not the row a format stamp naming NULL media was decided for."""
+    (row_id,) = workspace._connection.execute(
+        "SELECT row_id FROM endpoints WHERE protocol = 'kafka' AND path = 'shared' "
+        "AND direction = ? AND caller IS NOT DISTINCT FROM ? "
+        "AND consumes IS NOT DISTINCT FROM ? AND produces IS NOT DISTINCT FROM ?",
+        [direction, caller, media[0], media[1]],
+    ).fetchone()
     workspace.derive(
         "stamp_format",
-        rows=[
-            {
-                "protocol": "kafka",
-                "direction": direction,
-                "method": None,
-                "path": "shared",
-                "handler": None,
-                "caller": caller,
-                "consumes": media[0],
-                "produces": media[1],
-                "request_shape": None,
-                "response_shape": None,
-                "format": answer[0],
-                "format_resolution": answer[1],
-            }
-        ],
+        rows=[{"row_id": row_id, "format": answer[0], "format_resolution": answer[1]}],
     )
 
 

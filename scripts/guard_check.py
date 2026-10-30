@@ -3278,6 +3278,63 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "endpoints.a-rewrite-matches-a-row-by-its-ROW-ID": Guard(
+        what="a pass that rewrites an `endpoints` row after it was minted finds that row by its "
+        "`row_id`, never by its address (follow-the-object, ruling 7)",
+        why="`(protocol, direction, method, path)` is not unique and the address is what the "
+        "rewrites change. Matched by path, the configured prefix moves every row at the chosen "
+        "row's address — a call the module makes to `/x` on another service is published at "
+        "`/shop/x`, an address that service does not serve",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/prefix_endpoint_paths.sql",
+                find="WHERE e.row_id = h.row_id;",
+                replace="WHERE e.path IS NOT DISTINCT FROM "
+                "(SELECT x.path FROM endpoints x WHERE x.row_id = h.row_id);  -- guard disabled",
+            ),
+        ),
+    ),
+    "endpoints.a-stashed-requirement-is-joined-by-ROW-ID": Guard(
+        what="the requirements pass joins the combinator's stash to its rows by the `row_id` the "
+        "stash bound when it was written, never by the columns the route was minted with",
+        why="the requirements pass runs after the configured path prefix, which rewrites `path`. "
+        "Joined on the minted path, every requirement of a prefixed route finds no row and is "
+        "dropped: in any module with a context path, every functional route published with no "
+        "requirements at all (measured on `orders-contextpath` before ruling 7)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/request_requirements.py",
+                find='    by_row = {e["row_id"]: e for e in endpoints}',
+                replace="    by_row = {  # guard disabled by scripts/guard_check.py\n"
+                '        (e["caller"], e["handler"], e["method"], e["path"], e["catalog_id"]): e\n'
+                "        for e in endpoints\n"
+                "    }",
+            ),
+            Edit(
+                path="sextant/application/resolve/request_requirements.py",
+                find='        e = by_row.get(r["row_id"])',
+                replace='        e = by_row.get((r["caller"], r["handler"], r["method"], r["path"], '
+                'r["catalog_id"]))',
+            ),
+        ),
+    ),
+    "endpoints.an-attached-entry-follows-its-row-by-ROW-ID": Guard(
+        what="an `endpoint_metadata` entry follows the row it was bound to, by `row_id`, when a "
+        "pass moves that row",
+        why="`fluent` and `single_call` write an entry in the pass that mints its row, before the "
+        "path prefix runs. Matched to its row by address, the entry stays at `/x` while the row "
+        "moves to `/shop/x`: the bundle publishes a header for an address nothing serves, and a "
+        "reader joining the two tables on the address loses it (review focus 4 of the "
+        "2026-10-30 plan)",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/follow_endpoint_rows.sql",
+                find="WHERE m.row_id = e.row_id\n  AND (",
+                replace="WHERE m.row_id = e.row_id AND m.path IS NOT DISTINCT FROM e.path  "
+                "-- guard disabled\n  AND (",
+            ),
+        ),
+    ),
     "endpoints.superseded-catalog-does-not-run": Guard(
         what="a catalog declaring `detect.superseded_by` is SKIPPED, not merely deprioritised, "
         "on a module whose recorded build declares one of those coordinates",

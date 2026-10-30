@@ -55,10 +55,9 @@ from sextant.application.resolve.values import (
 from sextant.domain.paths import canonical_http_path, is_path_shaped
 from sextant.domain.symbols import bare_descriptor, dotted_package, names_a_type, owner_of
 
-# The identity columns a row is matched on, as `protocol_hint.py` matches them and for the
-# same reason: `(protocol, direction, method, path)` is not unique — two listeners on one
-# destination, several NULL-path call sites — and `handler`/`caller` are what separate them.
-_MATCH_COLUMNS = ("protocol", "direction", "method", "path", "handler", "caller")
+# What a row is matched on: its `row_id`, the one column that names exactly the row read
+# (follow-the-object, Ruling 7). `prefix_endpoint_paths.sql` says why not its address.
+_MATCH_COLUMNS = ("row_id",)
 
 # The argument-grammar kind a lambda is spelled with (D00 §5), and the two labels §4 resolves
 # its pair of values under.
@@ -78,7 +77,8 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
 
     Reads the server model (hoisted onto every catalog, so the first non-empty one is the
     whole table), `resolved_config` and the module fact's `dependency_versions` for §2, and
-    the call sites for §4; writes one column, on rows that already existed.
+    the call sites for §4; writes one column, on rows that already existed, and the
+    `endpoint_metadata` entries bound to those rows follow them (ruling 7).
 
     **Cost (§8.7).** §2 is one fold of `resolved_config` — 100 rows on
     `spring-petclinic-rest` — and then one string join per inbound HTTP row. §4 adds ONE
@@ -146,6 +146,8 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
         )
     if rows:
         workspace.derive("prefix_endpoint_paths", rows=rows)
+        # The entries bound to a moved row move with it (Ruling 7).
+        workspace.derive("endpoint_rows_follow")
 
 
 # ---------------------------------------------------------------------------

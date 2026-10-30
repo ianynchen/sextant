@@ -12,7 +12,8 @@ outbound entries W29 records — three mechanisms, one writer.
    `effective_call_sites`.
 
 Runs AFTER `apply_protocol_hints`: an entry names its row by the row's identity columns,
-and `protocol` is final only there. `requirement` states what the framework enforces and
+and `protocol` is final only there. The stash is joined to its rows by `row_id`, never by
+those columns, which the path prefix has rewritten by then (ruling 7). `requirement` states what the framework enforces and
 NULL where the code states nothing (A3).
 
 Cost per resolve (GUIDELINES §8.7): one read of `endpoints`, one of the stash, one pass
@@ -125,16 +126,16 @@ def _entry(
 
 
 def _from_stash(workspace: Workspace, endpoints: list[dict[str, object]]) -> list[dict[str, Any]]:
-    """The combinator's stash joined to its rows on (caller, handler, method, path,
-    catalog_id) — the columns the engine minted the route with. A stash row naming no
-    live endpoint — the engine refused the route, or another catalog's row won its
-    address — is dropped: an entry against a row that does not exist names nothing."""
-    by_key = {
-        (e["caller"], e["handler"], e["method"], e["path"], e["catalog_id"]): e for e in endpoints
-    }
+    """The combinator's stash joined to its rows on `row_id`, which the stash bound when it
+    was written, by the columns the engine minted the route with (ruling 7). Not on those
+    columns here: the path prefix has run by now and moved every prefixed row's `path`. A
+    stash row naming no live endpoint — the engine refused the route, or another catalog's
+    row won its address — is dropped: an entry against a row that does not exist names
+    nothing."""
+    by_row = {e["row_id"]: e for e in endpoints}
     out = []
     for r in workspace.query("route_requirements"):
-        e = by_key.get((r["caller"], r["handler"], r["method"], r["path"], r["catalog_id"]))
+        e = by_row.get(r["row_id"])
         if e is not None:
             out.append(
                 _entry(

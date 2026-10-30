@@ -7,8 +7,11 @@ where a prefix must NOT be applied, and those are where this pass could publish 
 no environment serves — so they are unit-tested here against the rules themselves.
 """
 
+from pathlib import Path
+
 import pytest
 
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.path_prefix import (
     _agreed,
     _ant_matches,
@@ -18,8 +21,10 @@ from sextant.application.resolve.path_prefix import (
     _Installed,
     _matches_a_package,
     _version_admits,
+    apply_path_prefixes,
 )
 from sextant.application.resolve.values import ValueIndex
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 
 def test_a_key_every_environment_agrees_on_is_the_prefix():
@@ -313,3 +318,74 @@ def _index(sites, producers) -> ValueIndex:
         returned_values={},
         reached=frozenset(),
     )
+
+
+@pytest.mark.pins("endpoints.an-attached-entry-follows-its-row-by-ROW-ID")
+def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_path):
+    """Review Focus 4 of the 2026-10-30 plan (ruling 7). `fluent` and `single_call` write an
+    `endpoint_metadata` row in the same pass that mints its endpoint, so the entry is written
+    against `GET /x` before the configured prefix has run. The prefix then moves the row to
+    `/shop/x`, and the entry moves with it: it is bound to the row's `row_id` when written, and
+    the prefix rewrites both by that id. Left at `/x`, it would name an address nothing serves,
+    and a reader joining the two tables on the address would lose it."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    handler = "sextant-jvm maven com.acme/shop 1.0.0 com/acme/Shop#x(sig_00000001)."
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id) "
+        "VALUES (1, 'http', 'inbound', 'GET', '/x', ?, 'invented')",
+        [handler],
+    )
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/x",
+                "caller": handler,
+                "kind": "header",
+                "name": "X-Ver",
+                "value": "2",
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "requirement": None,
+            }
+        ],
+    )
+    workspace._connection.execute(
+        "INSERT INTO resolved_config (key, value, source, environment) "
+        "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
+    )
+    catalog = Catalog(
+        id="invented",
+        style="annotation",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={},
+        source=Path("tests/invented.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+        server_model=[
+            {
+                "framework": "org.springframework.boot",
+                "versions": ">=2.0",
+                "keys": ["server.servlet.context-path"],
+                "protocols": ["http"],
+            }
+        ],
+    )
+    apply_path_prefixes(workspace, [catalog])
+    (endpoint_id,) = workspace._connection.execute(
+        "SELECT row_id FROM endpoints WHERE path = '/shop/x'"
+    ).fetchone()
+    metadata = workspace._connection.execute(
+        "SELECT path, row_id FROM endpoint_metadata"
+    ).fetchall()
+    workspace.close()
+
+    assert metadata == [("/shop/x", endpoint_id)]

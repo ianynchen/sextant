@@ -30,11 +30,13 @@ answer pinned once in `test_pipeline.py` against real bytecode.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.request_requirements import (
     _expression,
     _fallback,
@@ -227,6 +229,67 @@ def test_a_stashed_value_whose_name_could_not_be_read_is_masked_whole(tmp_path: 
 
     assert [(e["name"], e["value"], e["resolution"]) for e in entries] == [
         (None, REDACTED, "unresolved")
+    ]
+
+
+@pytest.mark.pins("endpoints.a-rewrite-matches-a-row-by-its-ROW-ID")
+@pytest.mark.pins("endpoints.a-stashed-requirement-is-joined-by-ROW-ID")
+def test_a_prefixed_route_keeps_its_header_requirement(tmp_path: Path):
+    """Ruling 7 of the 2026-10-30 review (follow the object). The combinator stashes a
+    requirement against the route as it minted it, `GET /x`; the configured prefix then moves
+    that row to `/shop/x`; this pass runs after both. The requirement belongs to the row, so it
+    is written against the row where the row now is.
+
+    Joined by the path it was stashed under, it found no row after the move and was dropped:
+    every combinator route in a module with a context path published with no requirements.
+
+    The module also CALLS `/x` on another service, an outbound row at the same address. The
+    prefix moves the row it chose, by that row's id, and nothing else: matched by address, the
+    call moved too and published an address on a peer that the peer does not serve."""
+    workspace = _workspace(tmp_path, ("http", "GET", "/x", HANDLER, ROUTES))
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, caller, peer, "
+        "catalog_id) VALUES (2, 'http', 'outbound', 'GET', '/x', ?, 'billing', 'invented-client')",
+        [ROUTES],
+    )
+    _stash(workspace, HANDLER, "X-Ver", "required", value="2", path="/x")
+    workspace._connection.execute(
+        "INSERT INTO resolved_config (key, value, source, environment) "
+        "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
+    )
+    prefixed = replace(
+        _catalog(),
+        server_model=[
+            {
+                "framework": "org.springframework.boot",
+                "versions": ">=2.0",
+                "keys": ["server.servlet.context-path"],
+                "protocols": ["http"],
+            }
+        ],
+    )
+    apply_path_prefixes(workspace, [prefixed])
+    record_request_requirements(workspace, [prefixed])
+    entries = _entries(workspace)
+    paths = {(str(row["direction"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {("inbound", "/shop/x"), ("outbound", "/x")}
+
+    assert entries == [
+        {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/shop/x",
+            "caller": HANDLER,
+            "kind": "header",
+            "name": "X-Ver",
+            "value": "2",
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "requirement": "required",
+        }
     ]
 
 

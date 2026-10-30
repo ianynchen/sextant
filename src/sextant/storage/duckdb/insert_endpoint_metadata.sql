@@ -22,11 +22,21 @@
 -- rows into one `$rows` list, so the two catalogs describing one handler meet here, not
 -- across statements. Row-level DISTINCT treats NULLs as equal, as the guard does; the
 -- table is a SET (D01 §3) and this is what makes the statement one.
+--
+-- EVERY ENTRY IS BOUND TO ITS ROW'S `row_id` HERE (follow-the-object, Ruling 7), by joining
+-- `endpoints` on the entry's identity columns. Here is the one moment those columns are
+-- certain to equal the row's: `fluent` and `single_call` write in the pass that mints the
+-- row, before the path prefix or a protocol reclassification has moved it. The entry's
+-- `caller` is the row's `handler` on an inbound row and its `caller` on an outbound one
+-- (the column's own comment in `schema.sql`). Where several rows match — two outbound rows
+-- of one caller to one path differing only in `peer` — the entry is one row per match, each
+-- following its own; where none matches, `row_id` is NULL and the entry is written as before.
+-- The guard compares `row_id` too, so the same entry against two rows is two entries.
 INSERT INTO endpoint_metadata (
-    protocol, direction, method, path, caller, kind, name, value, resolution, evidence,
+    row_id, protocol, direction, method, path, caller, kind, name, value, resolution, evidence,
     requirement
 )
-SELECT DISTINCT r.protocol, r.direction, r.method, r.path, r.caller,
+SELECT DISTINCT e.row_id, r.protocol, r.direction, r.method, r.path, r.caller,
        r.kind, r.name, r.value, r.resolution, r.evidence, r.requirement
 FROM (SELECT UNNEST(
     $rows::STRUCT(
@@ -35,17 +45,25 @@ FROM (SELECT UNNEST(
         requirement VARCHAR
     )[]
 ) AS r)
+LEFT JOIN endpoints e
+  ON e.protocol  IS NOT DISTINCT FROM r.protocol
+ AND e.direction IS NOT DISTINCT FROM r.direction
+ AND e.method    IS NOT DISTINCT FROM r.method
+ AND e.path      IS NOT DISTINCT FROM r.path
+ AND r.caller    IS NOT DISTINCT FROM
+         CASE WHEN e.direction = 'outbound' THEN e.caller ELSE e.handler END
 WHERE NOT EXISTS (
-    SELECT 1 FROM endpoint_metadata e
-    WHERE e.protocol IS NOT DISTINCT FROM r.protocol
-      AND e.direction IS NOT DISTINCT FROM r.direction
-      AND e.method IS NOT DISTINCT FROM r.method
-      AND e.path IS NOT DISTINCT FROM r.path
-      AND e.caller IS NOT DISTINCT FROM r.caller
-      AND e.kind IS NOT DISTINCT FROM r.kind
-      AND e.name IS NOT DISTINCT FROM r.name
-      AND e.value IS NOT DISTINCT FROM r.value
-      AND e.resolution IS NOT DISTINCT FROM r.resolution
-      AND e.evidence IS NOT DISTINCT FROM r.evidence
-      AND e.requirement IS NOT DISTINCT FROM r.requirement
+    SELECT 1 FROM endpoint_metadata m
+    WHERE m.row_id IS NOT DISTINCT FROM e.row_id
+      AND m.protocol IS NOT DISTINCT FROM r.protocol
+      AND m.direction IS NOT DISTINCT FROM r.direction
+      AND m.method IS NOT DISTINCT FROM r.method
+      AND m.path IS NOT DISTINCT FROM r.path
+      AND m.caller IS NOT DISTINCT FROM r.caller
+      AND m.kind IS NOT DISTINCT FROM r.kind
+      AND m.name IS NOT DISTINCT FROM r.name
+      AND m.value IS NOT DISTINCT FROM r.value
+      AND m.resolution IS NOT DISTINCT FROM r.resolution
+      AND m.evidence IS NOT DISTINCT FROM r.evidence
+      AND m.requirement IS NOT DISTINCT FROM r.requirement
 );

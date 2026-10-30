@@ -11,44 +11,20 @@
 -- carrying NULL and `unresolved`, which is an answer — so there is no
 -- earlier writer to protect and no column left untouched.
 --
--- **Rows are matched on identity plus every column the decision read**, not
--- on wire identity alone. `(protocol, direction, method, path)` is not unique
--- in this table — two listeners on one topic, two unresolved call sites with
--- NULL paths — and `handler`/`caller` are what separate them (the same
--- tie-break the "endpoints" named query orders by).
---
--- The four carried columns ride along because they are INPUTS to the answer:
--- `consumes`/`produces` are what rung 2 reads and `request_shape`/
--- `response_shape` are what rungs 4 and 5 read. Two rows agreeing on all
--- eight were therefore handed the same answer, so a duplicate match is
--- idempotent rather than ambiguous — which is the property that lets this
--- statement have no unique key at all. Every column uses IS NOT DISTINCT
--- FROM: a messaging row whose destination could not be read carries NULLs in
--- most of them, and SQL equality would silently match none of them.
+-- **Rows are matched on `row_id`** (follow-the-object, Ruling 7), which names
+-- exactly the row the answer was read off. Until then the match was the six
+-- identity columns plus the four the decision read — `(protocol, direction,
+-- method, path)` is not unique in this table, and only the inputs made a
+-- duplicate match idempotent rather than ambiguous. The id makes the match
+-- exact, so the inputs no longer ride along.
 --
 -- Parameters:
---   $rows -- {protocol, direction, method, path, handler, caller, consumes,
---             produces, request_shape, response_shape, format,
---             format_resolution}, one per row of `endpoints`, in the table's
---             own query order
+--   $rows -- {row_id, format, format_resolution}, one per row of `endpoints`,
+--             in the table's own query order
 UPDATE endpoints e
 SET format = f.format,
     format_resolution = f.format_resolution
 FROM (SELECT UNNEST(
-    $rows::STRUCT(
-        protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
-        handler VARCHAR, caller VARCHAR, consumes VARCHAR, produces VARCHAR,
-        request_shape VARCHAR, response_shape VARCHAR, format VARCHAR,
-        format_resolution VARCHAR
-    )[]
+    $rows::STRUCT(row_id BIGINT, format VARCHAR, format_resolution VARCHAR)[]
 ) AS f)
-WHERE e.protocol       IS NOT DISTINCT FROM f.protocol
-  AND e.direction      IS NOT DISTINCT FROM f.direction
-  AND e.method         IS NOT DISTINCT FROM f.method
-  AND e.path           IS NOT DISTINCT FROM f.path
-  AND e.handler        IS NOT DISTINCT FROM f.handler
-  AND e.caller         IS NOT DISTINCT FROM f.caller
-  AND e.consumes       IS NOT DISTINCT FROM f.consumes
-  AND e.produces       IS NOT DISTINCT FROM f.produces
-  AND e.request_shape  IS NOT DISTINCT FROM f.request_shape
-  AND e.response_shape IS NOT DISTINCT FROM f.response_shape;
+WHERE e.row_id = f.row_id;

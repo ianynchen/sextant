@@ -895,7 +895,8 @@ def test_route_requirements_is_a_temp_stash_outside_the_schema(tmp_path: Path):
     workspace.derive("route_requirements_insert", rows=[{**stashed, "name": "X-Later"}, stashed])
     rows = workspace.query("route_requirements")
     assert [row["name"] for row in rows] == ["X-Api-Version", "X-Later"]
-    assert dict(rows[0]) == stashed
+    # No `endpoints` row matches, so the stash binds none: `row_id` NULL (ruling 7).
+    assert dict(rows[0]) == {"row_id": None, **stashed}
     assert "route_requirements" not in workspace.schema_objects()
     # The reset replaces the stash whole: a second resolve starts from nothing.
     workspace.derive("route_requirements_reset")

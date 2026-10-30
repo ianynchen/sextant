@@ -634,9 +634,18 @@ CREATE TABLE IF NOT EXISTS interface_beans (
 );
 
 CREATE TABLE IF NOT EXISTS endpoint_metadata (
+    -- The `endpoints` row this entry belongs to, for this resolve (follow-the-object,
+    -- Ruling 7). Bound when the entry is WRITTEN, by joining `endpoints` on the identity
+    -- columns below as the row was minted — no pass has rewritten them yet — and matched on
+    -- from then on: a pass that moves the row (the path prefix, a protocol reclassification)
+    -- moves the entry by this id, not by the address it had. NULL where no row matched when
+    -- it was written; where several did, one entry per row. It names nothing outside the run,
+    -- so the export leaves it out (`workspace.py`'s named query lists the other columns).
+    row_id     BIGINT,
     -- The endpoint this belongs to, by the columns that identify one (D01 §3). Carried
-    -- rather than joined on a surrogate key, the `open_questions` reasoning: a foreign
-    -- key into a table rebuilt every resolve names nothing outside this run.
+    -- beside `row_id` rather than replaced by it: the id lives one resolve and the bundle
+    -- leaves it out, so these columns are what a reader outside the run joins on — the
+    -- `open_questions` reasoning. Kept equal to the row's own by the passes that rewrite it.
     protocol   TEXT,
     direction  TEXT,
     method     TEXT,

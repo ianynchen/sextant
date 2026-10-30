@@ -286,6 +286,17 @@ entry needs its own trust pair: a header whose value could not be read is visibl
 unresolved, and *sends a header we could not read* is a different claim from *sends no
 header*.
 
+**An entry names its endpoint twice: by the row's identity columns, and by `row_id`**
+(spec 2026-10-30-object-identity, ruling 7). The identity columns are what a reader outside
+the run joins on, which is why they are carried rather than replaced by a key: `row_id`
+numbers a row for one resolve, names nothing outside it, and the export leaves it out. Inside
+the run the id is what holds an entry to its row. It is bound when the entry is written, by
+the row's identity as minted, before any pass has moved the row; the path prefix and a
+protocol reclassification then move the row by its id, and the entry's identity columns are
+copied from the row again (`follow_endpoint_rows.sql`). An entry whose row the self-call pass
+removes is removed with it. Matched by address instead, an entry written as its row was
+minted stayed at the address the prefix had just moved the row away from.
+
 **The same table holds what an inbound endpoint's framework DEMANDS of a request** (spec
 2026-09-19 §5a). An inbound row's entries are the headers, query parameters and cookies the
 framework's binder or routing tree enforces — `direction = inbound`, `caller` the handler
@@ -1385,6 +1396,7 @@ own cadence.
 | 8 | `rpc_hops`, a new derived table: where a gRPC client stub's call to an RPC this module serves lands, its handler named (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d); `call_edges` is untouched | refused by its stamp exactly as at 5 to 7, so a workspace without the table is re-analysed rather than read as one whose self-calls stop at the gRPC library |
 | 9 | `scheduled_work` gains `name` and `expression_source`; `handler`, `trigger` and `expression` may be NULL; `resolution` may be `partial` or `narrowed`; `resolved_schedules` gains `name` (spec `2026-10-28-quartz-design.md` §3e) | refused by its stamp exactly as at 5 to 8, so a workspace without the columns is re-analysed rather than read as one whose schedules have no names |
 | 10 | `scheduled_work` gains `untied`; an `@Scheduled` row's `name` is EMPTY rather than NULL (spec `2026-10-28-quartz-design.md`, "Empty cells", ruled 2026-10-29) | refused by its stamp exactly as at 5 to 9, so every NULL of the older vintage — which could mean any of the three — is re-derived rather than printed as `not in the code` |
+| 11 | `endpoints` and `endpoint_metadata` gain `row_id`: an endpoint row is numbered when it is written, and an entry attached to it is bound to that number when it is written and follows the row through the path prefix and a protocol reclassification (spec `2026-10-30-object-identity-design.md`, ruling 7). The export leaves the id out, so no bundle column changes | refused by its stamp exactly as at 5 to 10, so rows with no id — which no pass could find again — are re-derived rather than read beside numbered ones |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

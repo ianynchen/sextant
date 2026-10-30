@@ -27,6 +27,15 @@ here would restate those documents rather than add anything.
   sets on a `Schedule` it builds for itself; the Quartz fixture's same shape had published it
   `resolved`. Measured: the six field pins and every answer `measure_value_walk.py` records
   over 44 modules are unchanged.
+- **A requirement on a route survives the module's context path** (ruling 7 of the
+  2026-10-30 review). A functional route's request requirement — Spring's
+  `RequestPredicates.param("X-Ver", "2")`, say — was recorded against the route as minted and
+  then looked up by that path after the context path had moved the route, so it was dropped:
+  every such route in a module with `server.servlet.context-path` published with no
+  requirements. Every endpoint row now carries a number for the length of one resolve, data
+  attached to a row is bound to that number when it is written, and every later pass finds
+  the row by it. A header written as the row is minted follows the row through the prefix
+  and a protocol change too, and is removed with a row the self-call pass removes.
 
 ### Changed
 
@@ -37,6 +46,9 @@ here would restate those documents rather than add anything.
   helper, not that it is read at runtime. An `@Scheduled` job's name is empty rather than
   NULL, printed `—`: the framework gives none. `not in the code` is left for a value the
   code really does not state. `GRAPH_SCHEMA_VERSION` 10.
+- **`GRAPH_SCHEMA_VERSION` 11**: `endpoints` and `endpoint_metadata` gain `row_id`, a row's
+  number for one resolve (ruling 7). The export leaves it out, so no bundle column changes; a
+  workspace of the older vintage is refused and re-analysed.
 
 ### Added
 

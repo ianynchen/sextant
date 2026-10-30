@@ -1009,8 +1009,11 @@ _NAMED_QUERIES = {
         WHERE s.name = '<init>' AND e.callee IS NOT NULL
         ORDER BY e.caller, e.callee
     """,
+    # DISTINCT because `row_id` is left out: one entry bound to two rows that share an
+    # identity (two outbound rows differing only in `peer`) is two rows in the table, one
+    # per row it follows, and one entry to a reader who joins on the identity columns.
     "endpoint_metadata": """
-        SELECT protocol, direction, method, path, caller, kind, name, value,
+        SELECT DISTINCT protocol, direction, method, path, caller, kind, name, value,
                resolution, evidence, requirement
         FROM endpoint_metadata
         ORDER BY protocol, direction, method, path, caller, kind, name, value,
@@ -1023,7 +1026,7 @@ _NAMED_QUERIES = {
     "route_requirements": """
         SELECT * FROM route_requirements
         ORDER BY caller, handler, method, path, catalog_id, kind, name, value, requirement,
-                 resolution, evidence
+                 resolution, evidence, row_id
     """,
     # Spec 2026-09-21 §3b. The channel edge — `fed_by`/`read_by`/`sends_to` rows several
     # engines write — read once per resolve by the join pass and once by `config_join.gaps`.
@@ -1811,6 +1814,9 @@ _NAMED_DERIVATIONS = {
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
     "prefix_endpoint_paths": "prefix_endpoint_paths.sql",
+    # Follow-the-object, Ruling 7: the entries bound to a row's `row_id` brought back into
+    # line with the row, after each pass that moves or removes rows (the file says which).
+    "endpoint_rows_follow": "follow_endpoint_rows.sql",
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
     "shapes_reset": "reset_shapes.sql",

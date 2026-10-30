@@ -15,7 +15,9 @@
 -- parameters only on the LAST statement of a multi-statement execute, so the
 -- two UPDATEs cannot share one file while both read `$rows`. They are one
 -- family regardless: the same parameter, the same call site, run back to back
--- in `resolve/protocol_hint.py`.
+-- in `resolve/protocol_hint.py` — this one FIRST, because the question is
+-- found by the row's identity as it stands before the reclassification, read
+-- off the row `row_id` names.
 --
 -- **The match is WIDER here, and that is a stated limitation rather than an
 -- oversight.** The ledger carries three of the six identity columns — no
@@ -28,17 +30,14 @@
 -- future ledger that carried the handler could tighten this.
 --
 -- Parameters:
---   $rows -- the same struct `reclassify_protocol.sql` is handed. `direction`,
---            `handler` and `caller` ride along unread; a struct per call site,
---            not a struct per statement.
+--   $rows -- the same struct `reclassify_protocol.sql` is handed, {row_id,
+--            reclassified}; a struct per call site, not a struct per statement.
 UPDATE open_questions q
 SET protocol = h.reclassified
 FROM (SELECT UNNEST(
-    $rows::STRUCT(
-        protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
-        handler VARCHAR, caller VARCHAR, reclassified VARCHAR
-    )[]
+    $rows::STRUCT(row_id BIGINT, reclassified VARCHAR)[]
 ) AS h)
-WHERE q.protocol IS NOT DISTINCT FROM h.protocol
-  AND q.method   IS NOT DISTINCT FROM h.method
-  AND q.path     IS NOT DISTINCT FROM h.path;
+JOIN endpoints e ON e.row_id = h.row_id
+WHERE q.protocol IS NOT DISTINCT FROM e.protocol
+  AND q.method   IS NOT DISTINCT FROM e.method
+  AND q.path     IS NOT DISTINCT FROM e.path;

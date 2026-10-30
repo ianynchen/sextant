@@ -131,6 +131,15 @@ SEXTANT_VERSION = version("sextant")
 #             which is known, where NULL says the code's name is not (spec 2026-10-28-quartz,
 #             "Empty cells", ruled 2026-10-29). A workspace of the older vintage reads every
 #             such NULL as unknown, so it is refused and re-analysed.
+#     11      `endpoints` gains `row_id` and `endpoint_metadata` gains `row_id`: every
+#             endpoint row is numbered when it is written, and an entry attached to a row
+#             is bound to that number when IT is written, then follows the row through
+#             every pass that moves it — the path prefix, a protocol reclassification —
+#             where it used to be matched by an address the prefix had already changed
+#             (spec 2026-10-30-object-identity, ruling 7). The id names nothing outside
+#             one resolve and the export leaves it out, so the bundle's columns are
+#             unchanged; a workspace of the older vintage has rows with no id, which no
+#             pass could find again, so it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -148,5 +157,5 @@ SEXTANT_VERSION = version("sextant")
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 10
+GRAPH_SCHEMA_VERSION = 11
 BOUNDARY_VOCABULARY_VERSION = 3
