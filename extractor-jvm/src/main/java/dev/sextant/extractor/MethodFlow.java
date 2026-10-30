@@ -384,8 +384,32 @@ public final class MethodFlow {
                 // carries — `unresolved` with the call's `source` — so the walk resolves it in
                 // the WRITER's frame exactly as it would that argument. Only an invoke with a
                 // result qualifies: an `<init>` returns nothing (the value a `NEW` built is
-                // the `NEW`'s, and stays unreported), and an `invokedynamic` is either a
+                // the `NEW`'s, and is reported just below), and an `invokedynamic` is either a
                 // concatenation — computed — or a lambda, which names a body and not a value.
+                //
+                // **A value built with `new X(…)` is the `NEW`'s** (ruling 1 of
+                // 2026-10-30-object-identity-design.md): `aload_0; new X; dup; <args>;
+                // invokespecial <init>; putfield`. The `<init>` right below the write is
+                // void, so the value is found through the frame — the top of the stack at the
+                // write has the `NEW` as its one source, the DUP minting no value of its own —
+                // and reported as the `instance` entry a `new` argument carries, whose
+                // `source` is the `NEW`'s index in the FULL instruction list, the id the
+                // constructor call site's `receiver` carries. The `NEW` must sit in the
+                // write's own basic block, the rule every other shape keeps.
+                if (endsInConstructorCall(real, p)) {
+                    if (!analysed) {
+                        frames = analyze(methodSymbol, method);
+                        analysed = true;
+                    }
+                    TypeInsnNode built = newBefore(frames, method.instructions, put);
+                    if (built != null && block[real.indexOf(built)] == block[p]
+                            && (!onThis || writesThis(frames, method.instructions, put))) {
+                        lines.add(fieldWriteJson(documentId, methodSymbol, put, -1,
+                            producerJson(built, Type.getType(put.desc), method.instructions,
+                                         parameterSlots, null, -1)));
+                        continue;
+                    }
+                }
                 MethodInsnNode call = callBefore(real, block, p);
                 if (call == null) continue;
                 if (onThis) {
@@ -419,6 +443,24 @@ public final class MethodFlow {
         if (at < 0 || block[at] != block[p]) return null;
         if (!(real.get(at) instanceof MethodInsnNode call)) return null;
         return Type.getReturnType(call.desc).getSort() == Type.VOID ? null : call;
+    }
+
+    /** Whether the instruction right below the write at {@code p} is a constructor call,
+     *  the cheap test that keeps the dataflow pass off every method with no {@code new}
+     *  stored into a field. */
+    private static boolean endsInConstructorCall(List<AbstractInsnNode> real, int p) {
+        return p > 0 && real.get(p - 1) instanceof MethodInsnNode call
+            && call.getOpcode() == Opcodes.INVOKESPECIAL && "<init>".equals(call.name);
+    }
+
+    /** The {@code NEW} that built the value a write stores, read off the frame, or null. */
+    private static TypeInsnNode newBefore(Frame<SourceValue>[] frames, InsnList instructions,
+                                          FieldInsnNode put) {
+        if (frames == null) return null;
+        Frame<SourceValue> frame = frames[instructions.indexOf(put)];
+        if (frame == null || frame.getStackSize() < 1) return null;
+        return singleSource(frame.getStack(frame.getStackSize() - 1))
+            instanceof TypeInsnNode created && created.getOpcode() == Opcodes.NEW ? created : null;
     }
 
     /** Whether the object a {@code PUTFIELD} writes into is {@code this} — read off the
