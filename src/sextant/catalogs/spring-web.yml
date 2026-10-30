@@ -3,6 +3,9 @@ displayName: Spring Web
 style: annotation_driven
 protocol: http
 direction: inbound
+# Served by Spring's own dispatcher on either stack (ruling 3): the configured prefix is
+# the DispatcherServlet's or the DispatcherHandler's, whichever the module runs (CP-57).
+dispatcher: spring
 
 detect:
   coordinates: ["org.springframework:spring-web"]

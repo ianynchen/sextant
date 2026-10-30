@@ -6,6 +6,9 @@ style: config_join
 # `config_join` carries `direction` per rule: the `peer` rule below declares its own.
 protocol: http
 direction: inbound
+# Served by the DispatcherHandler on the reactive stack (ruling 3), as `spring-cloud-gateway`
+# (CP-57).
+dispatcher: spring
 
 # The same coordinates the DSL pair declares (`spring-cloud-gateway.yml`,
 # `spring-cloud-gateway-outbound.yml`): a `config_join` catalog is dependency-gated

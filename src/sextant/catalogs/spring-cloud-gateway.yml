@@ -3,6 +3,9 @@ displayName: Spring Cloud Gateway (route DSL, inbound)
 style: combinator
 protocol: http
 direction: inbound
+# Served by the DispatcherHandler on the reactive stack (ruling 3): CP-57's Gateway route
+# answered under `spring.webflux.base-path`, its predicate matched after the base path.
+dispatcher: spring
 
 detect:
 # `spring-cloud-starter-gateway-server-webflux` is the 5.0.0 STARTER and is the name a

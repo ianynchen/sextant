@@ -7,6 +7,8 @@ displayName: Spring `@Controller`
 style: annotation_driven
 protocol: http
 direction: inbound
+# Served by Spring's own dispatcher on either stack (ruling 3), as `spring-web` (CP-57).
+dispatcher: spring
 
 detect:
   # BOTH web stacks, because both serve this annotation. Each ships a

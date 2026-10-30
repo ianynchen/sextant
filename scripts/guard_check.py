@@ -2243,6 +2243,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "path_prefix.a-prefix-applies-to-ITS-OWN-dispatchers-rows": Guard(
+        what="a configured prefix reaches only the rows its catalog's dispatcher serves: the "
+        "context path and `spring.mvc.servlet.path` for the DispatcherServlet, the context path "
+        "alone for a container-registered `@WebServlet`, the context path and the Jersey "
+        "application path for Jersey (ruling 3, CP-57)",
+        why="keyed by protocol alone, every inbound row took the DispatcherServlet's prefix, so "
+        'a `@WebServlet("/legacy")` in a module setting `spring.mvc.servlet.path=/api` '
+        "published at `/shop/api/legacy` — an address the container never serves, at "
+        "`resolved`. The edit reads every row's prefix as the `spring` dispatcher's, which is "
+        "that old lookup exactly",
+        edits=(
+            Edit(
+                path=_PATH_PREFIX,
+                find='        served_under = prefixes.get((dispatcher, protocol), "")\n',
+                replace='        served_under = prefixes.get(("spring", protocol), "")\n',
+            ),
+        ),
+    ),
     "path_prefix.a-prefix-pairs-with-the-pattern-on-ITS-OWN-path": Guard(
         what="an installed prefix and the package pattern it applies to are resolved "
         "TOGETHER, so a pair that chose differently on the way out is refused",
@@ -6711,6 +6729,10 @@ def copy_tree(destination: Path) -> Path:
         # methods — a cron read off a getter in the caller, a builder through a helper — and
         # only the value walk over real facts crosses them.
         "orders-quartz",
+        # A context path, a DispatcherServlet path and a `@WebServlet` in one module (ruling
+        # 3): which dispatcher serves a row is read off the catalog that derived it, so the
+        # guard that keeps the servlet path off a plain servlet is pinned on real facts.
+        "orders-contextpath",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
