@@ -66,7 +66,7 @@ OUT = Path("/tmp/a1-proof")
 # fact, per kind, and `captures` from a `lambda` entry of the argument grammar wherever the
 # grammar recurs — and nowhere else.
 FACT_KEYS = {
-    "call_site": frozenset({"receiver_parameter", "receiver_field"}),
+    "call_site": frozenset({"receiver_parameter", "receiver_field", "receiver_field_kind"}),
     "field_write": frozenset({"written_by", "value"}),
 }
 LAMBDA_KEYS = frozenset({"captures"})

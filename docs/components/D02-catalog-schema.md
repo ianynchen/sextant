@@ -2295,7 +2295,7 @@ factory rather than by a block — `WebClient.create(vertx, options)`:
 client_base:
   client_arg: receiver            # the client is the receiver of the chain's root call
   ladder:  [{ owner, method, options_arg, descriptor? }]   # the factory, the options argument
-  setters: [{ owner, method, part: host | port | ssl | uri, value_arg, descriptor? }]
+  setters: [{ owner, method, part: host | port | uri, value_arg, descriptor? }]
   configures: [{ owner, returns: [types] }]   # optional: calls handing back the same object
   join: fill_authority
 ```

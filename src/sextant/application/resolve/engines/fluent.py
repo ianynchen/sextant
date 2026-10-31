@@ -1644,8 +1644,8 @@ def _with_client_defaults(
     not name — the `fill_authority` join, Vert.x's (CP-56 row group (e)): `x(uri)` takes both,
     `x(host, uri)` the port only, `x(port, host, uri)` neither, and a `host(…)` or `port(…)`
     step is the request's own and wins. An absolute address (`xAbs`, its authority read by the
-    url reader) takes neither, and neither does an address whose path was not read, since
-    nothing then says it was not absolute.
+    url reader) takes neither, and neither does an address whose path was not read and which
+    names no host of its own, since nothing then says it was not absolute.
 
     The defaults are the client's options object's (`client_defaults`). A default that was set
     and not read, or that no setter reached, fills nothing: the row keeps its path and its
@@ -1653,7 +1653,11 @@ def _with_client_defaults(
     (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed into one
     peer by `_with_stated_authority`, as a request's own parts are."""
     peer, path, _ = address
-    if peer is not None or path is None or context.workspace is None:
+    if peer is not None or context.workspace is None:
+        return captures
+    # An unread path may have been absolute, unless the request names its own host: the
+    # `x(host, uri)` form is never absolute, so its port is still the default.
+    if path is None and "host" not in captures:
         return captures
     missing = [part for part in ("host", "port") if part not in captures]
     client = _client_of(captures, context) if missing else None
@@ -1675,7 +1679,8 @@ def _with_request_options(captures: dict[str, Any], context: _DeriveContext) -> 
     (a step on the request runs later, so it wins). The object is read by the catalog's
     `client_base` setters, the reader of a client's own options. A part set to a value not read
     here is captured unread, so the row says who is called went unread. A read uri makes the
-    chain a row (`serves`), where the root alone named no address."""
+    chain a row (`serves`), where the root alone named no address, and so does a uri set and
+    not read: the row then carries the address reader's word for it."""
     if context.workspace is None or context.client_base is None:
         return captures
     parts = options_parts(
@@ -1687,7 +1692,9 @@ def _with_request_options(captures: dict[str, Any], context: _DeriveContext) -> 
             continue
         text = parts[part]
         filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
-        if field == "url" and text is not None:
+        if field == "url":
+            # The object names an address whether or not it was read here: an unread one is a
+            # row the address reader marks, never a request dropped.
             filled[_SERVES] = True
     return filled
 

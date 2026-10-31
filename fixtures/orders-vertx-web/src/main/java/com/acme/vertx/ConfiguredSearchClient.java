@@ -29,4 +29,9 @@ public class ConfiguredSearchClient {
     public Future<HttpResponse<Buffer>> suggest() {
         return client.get("/suggest").send();
     }
+
+    /** Names its own host, so only the default port is the client's. */
+    public Future<HttpResponse<Buffer>> alternate() {
+        return client.get("search-alt", "/alt").send();
+    }
 }

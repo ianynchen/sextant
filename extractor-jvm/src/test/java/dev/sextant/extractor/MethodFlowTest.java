@@ -658,6 +658,7 @@ class MethodFlowTest {
         String line = callSites("staticFieldReceiver").get(0);
         assertTrue(line.contains("\"name\":\"third\""), line);
         assertTrue(line.contains("\"receiver_field\":\"dev/sextant/extractor/CallSample#shared.\""), line);
+        assertFalse(line.contains("receiver_field_kind"), line);
         assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
     }
 
@@ -669,6 +670,7 @@ class MethodFlowTest {
         String line = callSites("thisFieldReceiver").get(0);
         assertTrue(line.contains("\"name\":\"third\""), line);
         assertTrue(line.contains("\"receiver_field\":\"dev/sextant/extractor/CallSample#held.\""), line);
+        assertTrue(line.contains("\"receiver_field_kind\":\"instance\""), line);
         assertTrue(Integer.parseInt(field(line, "receiver")) >= 0, line);
     }
 

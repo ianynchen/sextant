@@ -143,9 +143,14 @@ public final class MethodFlow {
                 ? receiverFieldOf(frame.getStack(base - 1), instructions, frames,
                                   (method.access & Opcodes.ACC_STATIC) != 0)
                 : null;
+            // Which of the two reads named it: a field of `this` says so, because the symbol
+            // alone reads the same as a static field's (`Owner#name.`), and a reader writing
+            // the call as source would otherwise write `Owner.name.call()` for `this.name`.
+            boolean receiverOnThis = receiverField != null
+                && singleSource(frame.getStack(base - 1)).getOpcode() == Opcodes.GETFIELD;
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
             lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver,
-                                   receiverParameter, receiverField, result,
+                                   receiverParameter, receiverField, receiverOnThis, result,
                                    implementationOf(insns[i]), arguments));
         }
         return lines;
@@ -1388,7 +1393,8 @@ public final class MethodFlow {
 
     private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
                                        int ordinal, Integer receiver, Integer receiverParameter,
-                                       String receiverField, Integer result, String implementation,
+                                       String receiverField, boolean receiverOnThis,
+                                       Integer result, String implementation,
                                        List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
@@ -1422,6 +1428,8 @@ public final class MethodFlow {
         // Absent on every site whose receiver is not a GETSTATIC or a GETFIELD on `this`, by
         // the same rule.
         if (receiverField != null) fact.put("receiver_field", JsonOut.string(receiverField));
+        // Written only for a field of `this`; absent, a named receiver field is a static one.
+        if (receiverOnThis) fact.put("receiver_field_kind", JsonOut.string("instance"));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
         return JsonOut.object(fact);

@@ -79,7 +79,8 @@ _KEYS = {"client_arg", "ladder", "setter", "join", "may_set_base"}
 _OPTIONS_KEYS = {"client_arg", "ladder", "setters", "join"}
 _OPTIONS_RUNG_KEYS = {"owner", "method", "options_arg", "descriptor"}
 _OPTIONS_SETTER_KEYS = {"owner", "method", "descriptor", "part", "value_arg"}
-_PARTS = ("host", "port", "ssl", "uri")
+# `ssl` is not a part: a peer carries no scheme, so a read of it would change nothing.
+_PARTS = ("host", "port", "uri")
 # Optional beside the setters: which calls on an options object CONFIGURE it — hand back that
 # same object — named by the object's type and the declared return types that mean "this
 # object" (an inherited setter is declared to return a supertype, CP-56 row 112). The window
@@ -666,7 +667,7 @@ def _has_host(address: str) -> bool:
     return bool(split.scheme) and bool(split.hostname)
 
 
-# What an options object sets, part by part (`host`, `port`, `ssl`, `uri`): the text a setter
+# What an options object sets, part by part (`host`, `port`, `uri`): the text a setter
 # was handed, or `None` where a setter for that part was called with a value not read here. A
 # part no setter reached is absent — not "unset", which cannot be proven (spec §2a).
 Parts = Mapping[str, str | None]

@@ -846,3 +846,87 @@ def test_a_socket_address_request_joins_no_default(tmp_path: Path):
     )
 
     assert _calls(_rows(tmp_path, body)) == [("GET", None, "/x", "resolved")]
+
+
+@pytest.mark.pins("fluent.a-request-options-uri-set-and-unread-is-still-a-row")
+def test_a_request_options_uri_set_and_not_read_is_still_a_row(tmp_path: Path):
+    """`request(GET, new RequestOptions().setURI(path))` with `path` nothing here reads: the
+    request and the fact that it names an address are both seen, so it is a row with the
+    address reader's word for the unread uri — never dropped (Task 13 review, item 1)."""
+    body = _Client()
+    client = _search_client(body)
+    verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
+    made = body.options(
+        (
+            "setURI",
+            "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;",
+            CallArgument(kind="unresolved"),
+        ),
+        owner=REQUEST_OPTIONS,
+    )
+    body.on(
+        client,
+        ("request", _OPTIONS, [verb, CallArgument(kind="unresolved", source=made)]),
+        _send(),
+    )
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", None, None, "unresolved")]
+
+
+@pytest.mark.pins("client_base.paths-must-agree-on-a-default")
+def test_two_factories_reaching_one_client_fill_only_the_defaults_they_agree_on(
+    tmp_path: Path,
+):
+    """`this.client` written by two methods, each building it from options naming another
+    default host and the same default port: which client a request goes out on is not known,
+    so the host is not filled — `get("/a")` has no peer — while the port both agree on is:
+    `get("h", "/b")` goes to `h:9200`."""
+    owner = "com/acme/vertx/Search#"
+    first = _MODULE + method_descriptor(owner, "first", "()V")
+    second = _MODULE + method_descriptor(owner, "second", "()V")
+    query = _MODULE + method_descriptor(owner, "query", "()V")
+    facts: list = []
+    for method, host in ((first, "one"), (second, "two")):
+        building = _Client(method)
+        made = building.options(
+            ("setDefaultHost", _SET_HOST, _string(host)),
+            ("setDefaultPort", _SET_PORT, _int(9200)),
+        )
+        client = building.create(CallArgument(kind="unresolved", source=made))
+        facts += [
+            *building.sites,
+            FieldWriteFact(
+                document_id="doc_1",
+                field=owner + "client.",
+                value=CallArgument(kind="unresolved", source=client),
+                written_by=method,
+            ),
+        ]
+    sending = _Client(query)
+    for root in (("get", _URI, [_string("/a")]), ("get", _HOST_URI, [_string("h"), _string("/b")])):
+        request = sending.call(CLIENT, root[0], root[1], 3, root[2])
+        sending.sites[-1] = sending.sites[-1].model_copy(
+            update={"receiver_field": owner + "client.", "receiver_field_kind": "instance"}
+        )
+        sending.call(REQUEST, "send", _SEND, request, [])
+    workspace = _resolve_fluent_walked(tmp_path, [*facts, *sending.sites], _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert _calls(rows) == [
+        ("GET", "h:9200", "/b", "resolved"),
+        ("GET", None, "/a", "resolved"),
+    ]
+
+
+@pytest.mark.pins("fluent.a-request-naming-its-host-takes-the-default-port-unread-path-or-not")
+def test_a_request_naming_its_host_takes_the_default_port_though_its_uri_is_unread(
+    tmp_path: Path,
+):
+    """`client.get("h", path)` with `path` unread: a request naming its own host is never
+    absolute, so the default port is filled — `h:9200` — and the path stays unread."""
+    body = _Client()
+    client = _search_client(body)
+    body.on(client, ("get", _HOST_URI, [_string("h"), CallArgument(kind="unresolved")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", "h:9200", None, "unresolved")]

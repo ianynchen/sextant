@@ -371,7 +371,7 @@ _ASKS_PER_CATALOG = {
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
     "vertx-web": (35, 38),
-    "vertx-webclient": (123, 183),
+    "vertx-webclient": (120, 180),
     "vertx-eventbus-mutiny": (8, 14),
 }
 
@@ -408,8 +408,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+18 on 2026-10-31** (Task 13): the `vertx-web` client model merged into
     # `vertx-webclient`, its seven factory rungs' `options_arg` and ten setters' `value_arg`,
     # and `request(RequestOptions)`, whose root now reads `options: arg0`; the other two
-    # `RequestOptions` roots gain a slot each, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1053
+    # `RequestOptions` roots gain a slot each, same comment. **-3 on 2026-10-31** (Task 13
+    # review): the three `setSsl` setters, no longer read since a peer carries no scheme.
+    assert sum(asks for asks, _ in counted.values()) == 1050
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

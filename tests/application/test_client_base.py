@@ -26,7 +26,7 @@ from test_call_engines import (
 )
 from test_ktor_client import _inlined_call
 
-from sextant.application.ports.catalogs import CatalogError
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.return_flow import record_return_flows
@@ -265,6 +265,44 @@ def test_a_malformed_options_rung_is_refused_at_load(tmp_path: Path, broken, nam
 def test_a_well_formed_options_rung_loads(tmp_path: Path):
     catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": _OPTIONS_LADDER})
     _resolve_fluent(tmp_path, [], catalog)
+
+
+@pytest.mark.parametrize(
+    ("declared", "named"),
+    [
+        (
+            {"client_arg": 0, **{k: v for k, v in _OPTIONS_LADDER.items() if k != "client_arg"}},
+            "only the `fluent`",
+        ),
+        (_OPTIONS_LADDER, "only the `fluent`"),
+        # A block ladder takes an argument index only (`client_base_of`'s own refusal).
+        ({**_LADDER, "client_arg": "receiver"}, "client_arg"),
+    ],
+)
+@pytest.mark.pins("single_call.an-options-rung-is-refused")
+def test_single_call_refuses_an_options_rung_or_a_receiver_client(tmp_path: Path, declared, named):
+    """`single_call` reads a block ladder's base at an argument index: an options-object
+    `client_base` (whatever its `client_arg`), or a client at a chain root's receiver, is
+    refused at load, naming the file."""
+    catalog = next(
+        c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "ktor-websocket-client"
+    )
+    broken = Catalog(
+        id=catalog.id,
+        style=catalog.style,
+        protocol=catalog.protocol,
+        direction=catalog.direction,
+        requires=catalog.requires,
+        matches={**catalog.matches, "client_base": declared},
+        source=catalog.source,
+        value_model=catalog.value_model,
+    )
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match=rf"ktor-websocket-client\.yml.*{named}"):
+        derive_endpoints(workspace, [broken], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
 
 
 def test_ktor_block_rungs_are_unchanged():

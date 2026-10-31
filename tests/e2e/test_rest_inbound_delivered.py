@@ -2525,13 +2525,18 @@ def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
 
 def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
     """Hono's shape: the options are configured statement by statement from a config object's
-    getters (`config.getHost()`), beside calls that set no address, and the config object is
-    handed in by a framework, so where its host comes from is outside the module. The options
-    are read (the other calls configure them, not escape them), and the host is unread: the
-    row keeps its path, `GET /suggest`, with no peer — never a default Vert.x would fill
-    (coordinator ruling 2026-10-31, Q2 option B: no configuration-read table exists, so a
-    `Properties.getProperty` host is not read either)."""
-    assert _vertx_calls(vertx_outbound, "ConfiguredSearchClient") == {("GET", "/suggest", None)}
+    getters (`config.getHost()`, `config.getPort()`), beside calls that set no address, and
+    the config object is handed in by a framework, so where its host comes from is outside the
+    module. The host is unread: `GET /suggest` keeps its path with no peer — never a default
+    Vert.x would fill (coordinator ruling 2026-10-31, Q2 option B: no configuration-read table
+    exists, so a `Properties.getProperty` host is not read either). The port getter returns a
+    constant, and `get("search-alt", "/alt")` goes to `search-alt:9200`: the 9200 is on the
+    options object alone, so the reader did follow the factory to it, past the configuring
+    calls, and through the getter."""
+    assert _vertx_calls(vertx_outbound, "ConfiguredSearchClient") == {
+        ("GET", "/suggest", None),
+        ("GET", "/alt", "search-alt:9200"),
+    }
 
 
 # Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------

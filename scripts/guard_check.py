@@ -7661,10 +7661,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if peer is not None or path is None or context.workspace is None:\n"
-                "        return captures\n    missing",
-                replace="    if path is None or context.workspace is None:  # guard disabled\n"
-                "        return captures\n    missing",
+                find="    if peer is not None or context.workspace is None:\n        return captures\n",
+                replace="    if context.workspace is None:  # guard disabled by scripts/guard_check.py\n"
+                "        return captures\n",
             ),
         ),
     ),
@@ -7703,6 +7702,69 @@ GUARDS: dict[str, Guard] = {
                 path=_VERTX_WEBCLIENT_CATALOG,
                 find="captures: { http_method: arg0, options: arg1, serves: false } }",
                 replace="captures: { http_method: arg0, serves: false } }",
+            ),
+        ),
+    ),
+    "chain_text.a-field-of-this-is-no-constant": Guard(
+        what="a nested call on a field of `this` (`receiver_field_kind: instance`) is not "
+        "written as a static constant (Task 13 review, item 2)",
+        why="`this.unit.toMillis(5)` would be written `TimeUnit.unit.toMillis(5)`, a static "
+        "read nobody wrote, in a published schedule",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    if field is not None and site.get("receiver_field_kind") is None:\n',
+                replace="    if field is not None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-options-uri-set-and-unread-is-still-a-row": Guard(
+        what="a `RequestOptions` uri set and not read still makes the request a row",
+        why="the request and the fact that it names an address are both read; dropping the "
+        "row is a silent loss (Task 13 review, item 1)",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        if field == "url":\n',
+                replace='        if field == "url" and text is not None:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "client_base.paths-must-agree-on-a-default": Guard(
+        what="a client default is filled only where every path to the client agrees on it",
+        why="a client one of two factories built has no one default host; filling either "
+        "publishes a peer the module may not call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        if all(part in other and other[part] == value for other in rest)\n",
+                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-naming-its-host-takes-the-default-port-unread-path-or-not": Guard(
+        what="`x(host, uri)` with an unread uri still takes the default port (Task 13 review, "
+        "item 6)",
+        why="a request naming its own host is never absolute, so the default port applies "
+        "whether or not its path was read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if path is None and "host" not in captures:\n',
+                replace="    if path is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.an-options-rung-is-refused": Guard(
+        what="`single_call` refuses an options-object `client_base` at load",
+        why="its reader assumes a block ladder's `setter` and `may_set_base` and would fail "
+        "with a KeyError, naming no file",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find='    if "setters" in declared:\n        raise CatalogError(\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        raise CatalogError(\n",
             ),
         ),
     ),

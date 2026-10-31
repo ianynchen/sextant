@@ -1240,8 +1240,10 @@ SELECT document_id,
        -- `->>` on an absent key is SQL NULL, which is today's meaning for every site
        -- that carries no such parameter.
        (payload ->> 'receiver_parameter')::INTEGER AS receiver_parameter,
-       -- D00 §5: the static field a `getstatic` receiver was read from; NULL elsewhere.
+       -- D00 §5: the field a `getstatic` receiver, or a `getfield` on `this`, was read
+       -- from; NULL elsewhere. `receiver_field_kind` is `instance` for the second.
        payload ->> 'receiver_field'            AS receiver_field,
+       payload ->> 'receiver_field_kind'       AS receiver_field_kind,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site'

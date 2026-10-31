@@ -1,10 +1,14 @@
 package com.acme.vertx;
 
-/** A configuration object a framework fills from its own sources, as Hono's are. */
+/**
+ * A configuration object a framework fills from its own sources, as Hono's are; its port is
+ * a fixed constant, as Hono's `DEFAULT_*` values are.
+ */
 public class SearchConfig {
 
+    public static final int DEFAULT_PORT = 9200;
+
     private String host;
-    private int port;
     private int connectTimeout;
     private boolean tlsEnabled;
 
@@ -17,11 +21,7 @@ public class SearchConfig {
     }
 
     public int getPort() {
-        return port;
-    }
-
-    public void setPort(int port) {
-        this.port = port;
+        return DEFAULT_PORT;
     }
 
     public int getConnectTimeout() {

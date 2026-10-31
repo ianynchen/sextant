@@ -1018,7 +1018,10 @@ follows to the constructor's write (object-identity ruling 1 reads a field per o
 `this` is the one object whose field writes are facts). A `getfield` on any other object
 (`box.link`, or slot 0 of a static method, which is its first parameter) gets no key: naming
 it would join that object's field to whoever wrote `this`'s. Absent everywhere else, and
-strictly additive in the same way (`scripts/probes/fact_additivity/run.py`).
+strictly additive in the same way (`scripts/probes/fact_additivity/run.py`). **`receiver_field_kind`**
+is `instance` on such a site, written only there: the symbol `owner#name.` reads the same for a
+static field and a field of `this`, and a reader writing the call as source (`chain_text`) must
+not write `Owner.name.call()` for `this.name`. Absent, a named receiver field is a static one.
 
 **`arguments`** carries one entry per argument slot, resolved by walking the frame back to
 each slot's source instruction. Without it, every endpoint path is unresolved — this is why
