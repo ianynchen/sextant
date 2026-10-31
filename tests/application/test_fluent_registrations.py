@@ -3587,3 +3587,16 @@ def test_a_path_whose_first_piece_is_unread_is_not_refused(tmp_path: Path):
     # Today's behaviour, unchanged: the row derives (the canonicaliser roots the unread piece).
     assert [row["path"] for row in rows] == ["/<host>/x"]
     assert questions == []
+
+
+@pytest.mark.pins("fluent.a-path-whose-first-piece-is-unread-is-not-refused")
+@pytest.mark.parametrize("template", ["#{prefix}{}", "${prefix}{}"], ids=["spel", "placeholder"])
+def test_a_path_starting_with_an_expression_is_not_refused(tmp_path: Path, template: str):
+    """`#{…}` and `${…}` are unread pieces like `<host>`: the expression may be the `/`."""
+    workspace = _run(
+        tmp_path, _assembled_route(template), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert questions == []

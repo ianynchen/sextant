@@ -54,6 +54,9 @@ _SCHEME = "://"
 # as long as no framework spells a SERVED path with either sequence — a
 # framework that did would have its literal address left uncanonicalized here.
 _EXPRESSION_OPENS = ("${", "#{")
+# Exported for the one caller that asks whether a path STARTS with one (`inbound_routes`),
+# so it keeps no spelling of its own.
+EXPRESSION_OPENS = _EXPRESSION_OPENS
 
 
 def serves_urls(protocol: str, direction: str) -> bool:

@@ -12,6 +12,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from sextant.application.resolve.shapes.arguments import HOLE, UNREADABLE_HOST
+from sextant.domain.paths import EXPRESSION_OPENS
+
 # The one `path_join` a catalog may declare, beside "absent" (verbatim). Named once so the
 # engine that validates the catalog and the engine that applies it read the same word.
 LEADING_SLASH = "leading_slash"
@@ -84,11 +87,11 @@ REFUSED_REGISTRATION = "refused_registration"
 UNROOTED_PATH = "unrooted_path"
 
 
-# What an unread piece of a partly read path starts with: `<host>` (the address reader's
-# marker for an unread authority), `{}` / `{name}` (a hole the walk printed) and `${…}` (a
-# configuration placeholder). A path starting with one of these has an unknown first
-# character.
-_UNKNOWN_START = ("<", "{", "$")
+# What an unread piece of a partly read path starts with, each spelled by the layer that
+# owns it: the address reader's `<host>`, the walk's `{}` hole, and the `${…}` / `#{…}`
+# notations `canonical_http_path` already refuses to treat as a path half. A path starting
+# with one of these has an unknown first character.
+_UNKNOWN_START = (UNREADABLE_HOST, HOLE, *EXPRESSION_OPENS)
 
 
 def is_unrooted(path: str, read_whole: bool) -> bool:
