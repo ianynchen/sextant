@@ -2062,7 +2062,14 @@ VERTX_WEB = FIXTURES / "orders-vertx-web"
 def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
     """One `module analyze` of the Vert.x fixture — inbound, outbound and the handler-read
     rows all read it. The base jar it depends on is installed by `fixture_stub`."""
-    return _analyzed_tables(VERTX_WEB, tmp_path_factory.mktemp("vertx"))
+    workspace_dir = tmp_path_factory.mktemp("vertx")
+    tables = _analyzed_tables(VERTX_WEB, workspace_dir)
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        tables["open_questions"] = [dict(row) for row in workspace.query("open_questions")]
+    finally:
+        workspace.close()
+    return tables
 
 
 @pytest.fixture(scope="module")
@@ -2093,6 +2100,19 @@ def _is_pattern(row: dict) -> bool:
     """A path that is a regular expression, not an address (spec §3a). Task 3 decides where
     the path kind lives; this body is the one place the tests name it."""
     return row.get("path_kind") == "pattern"
+
+
+def _reason_of(row: dict, tables: dict[str, list[dict]]) -> str:
+    """Why a `partial` row is partial, in words. `endpoints.evidence` is a provenance enum
+    (`compiler`, ...) and carries no reason, and no endpoint column does today. The likeliest
+    carrier is the open question keyed by the row's wire identity, whose `evidence` is prose,
+    so that is what this reads. Task 10 decides where the reason lives and adjusts this body
+    and nothing else."""
+    return " ".join(
+        f"{q['question']} {q['evidence']}"
+        for q in tables["open_questions"]
+        if (q["protocol"], q["method"], q["path"]) == (row["protocol"], row["method"], row["path"])
+    )
 
 
 def _vertx_handler(row: dict) -> str:
@@ -2256,7 +2276,7 @@ def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
 
 
 @pytest.mark.xfail(strict=True, reason="Task 10")
-def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound):
+def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vertx_tables):
     """`check` hands `ctx` to the base jar's `HttpUtils.nextRoute`, whose body is outside the
     module: the handler's identity is read, its outcome is not, so the row is `check`,
     `partial`, and the reason names the helper. `route(p).handler(baseFactory())`, an
@@ -2272,7 +2292,7 @@ def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound):
     assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in check] == [
         ("PUT", "PassThroughRoutes#check", "partial")
     ]
-    assert "nextRoute" in str(check[0]["evidence"]), check[0]
+    assert "nextRoute" in _reason_of(check[0], vertx_tables), check[0]
     plain = [r for r in rows if r["path"] == "/plain"]
     assert [r["resolution"] for r in plain] == ["partial"], plain
     assert not [r for r in rows if r["path"] == "/cors"]
@@ -2354,7 +2374,10 @@ def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
     assert len(stock) == 1, calls
     (_, path, peer) = next(iter(stock))
     assert peer == "inventory:8080"
-    assert path.startswith("/stock/"), path
+    # The unread tail is a hole, spelled `{}` as every concatenation template is
+    # (`tests/application/test_values.py`: `/orders/{}`); Task 12 corrects this if the
+    # published spelling differs.
+    assert path == "/stock/{}", path
 
 
 @pytest.mark.xfail(strict=True, reason="Task 12")
