@@ -23,6 +23,7 @@ from test_values import (
     _symbol,
     _type,
     _void,
+    _writes,
 )
 
 from sextant.application.ports.catalogs import CatalogError
@@ -60,6 +61,8 @@ _FAIL = (_CONTEXT, "fail", "(I)V")
 _PUT = (_CONTEXT, "put", "(Ljava/lang/String;Ljava/lang/Object;)V")
 _END = ("java/lang/Object#", "end", "(Ljava/lang/String;)V")
 _FORWARD = (_LIB, "forward", _TAKES)
+_WRAPPER = _PKG + "Wrapper#"
+_WRAPS = (_WRAPPER, "<init>", _TAKES)
 _MAKER = ("java/lang/invoke/LambdaMetafactory#", "handle", _MAKES_OBJECT)
 _PASSES_ON = frozenset({(_CONTEXT, "next")})
 _PARAMETER_0 = CallArgument(kind="parameter", value=0)
@@ -176,6 +179,13 @@ def _facts() -> list:
         _site(_handler("replies"), 0, (_ROUTES, "replyTo", _TAKES), arguments=[_PARAMETER_0]),
         *_method("replyTo"),
         _site(_handler("replyTo"), 0, _RESPONSE, kind="interface", receiver_parameter=0, result=2),
+        # `stores(ctx) { this.held = ctx; }`: read back by a `getfield` no fact names.
+        *_writes(_ROUTES, "stores", _TAKES, "held"),
+        # `wraps(ctx) { new Wrapper(ctx); }`: the object keeps it, as a capture field does.
+        *_method("wraps"),
+        _site(_handler("wraps"), 0, _WRAPS, kind="special", arguments=[_PARAMETER_0]),
+        _declared(_WRAPPER, "<init>", _TAKES),
+        _void(_WRAPPER, "<init>", _TAKES),
         _site(
             _handler("replyTo"),
             1,
@@ -188,6 +198,8 @@ def _facts() -> list:
 
 
 _HANDLERS = (
+    "stores",
+    "wraps",
     "direct",
     "viaHelper",
     "inLambda",
@@ -248,7 +260,7 @@ def outcomes(walked) -> tuple[dict, dict]:
 
 def _reader(walked) -> HandlerReader:
     rule = PassThroughRule(_PASSES_ON, ("io.vertx.ext.web.handler",), frozenset({"handle"}))
-    return HandlerReader(value_index(walked), rule, _method_symbols(walked))
+    return HandlerReader(value_index(walked), rule, _method_symbols(walked), {}, dict)
 
 
 @pytest.mark.pins("pass_through.a-bridge-hands-the-context-to-the-method-the-row-names")
@@ -320,6 +332,24 @@ def test_a_context_handed_to_another_handler_passes_on_with_it(outcomes):
     through the hand-off."""
     found, _ = outcomes
     assert (found[_handler("first")], found[_handler("second")]) == (PASSES_ON, PASSES_ON)
+
+
+@pytest.mark.pins("pass_through.a-context-written-to-a-field-is-unreadable")
+def test_a_context_written_to_a_field_is_not_readable_here(outcomes):
+    """`this.held = ctx`: a `next()` on the field later is on a `getfield` no fact names, so
+    the walk cannot tell — never an answering row (ruling 2026-10-31)."""
+    found, unread = outcomes
+    assert found[_handler("stores")] == UNREADABLE
+    assert unread[_handler("stores")] == (_ROUTES + "held.",)
+
+
+@pytest.mark.pins("pass_through.a-context-handed-to-a-constructor-is-unreadable")
+def test_a_context_handed_to_a_constructor_is_not_readable_here(outcomes):
+    """`new Wrapper(ctx)`: the object keeps the context, however empty the constructor's
+    body reads here."""
+    found, unread = outcomes
+    assert found[_handler("wraps")] == UNREADABLE
+    assert unread[_handler("wraps")] == (method_descriptor(_WRAPPER, "<init>", _TAKES),)
 
 
 def test_a_handler_that_replies_through_a_module_helper_answers(outcomes):

@@ -933,8 +933,9 @@ def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code()
     text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
     assert (
         "- `PUT /u2/:id` — handler_pass_through: com/acme/Routes#check(). (registered by "
-        "com/acme/Routes#wire().) hands the request to com/acme/base/HttpUtils#nextRoute()., "
-        "whose body is not read here, so whether it passes the request on is not known; "
+        "com/acme/Routes#wire().) hands the request's context to "
+        "com/acme/base/HttpUtils#nextRoute()., where it is not followed here, so whether it "
+        "passes the request on is not known; "
         "a handler object (registered by com/acme/Routes#wire().) is built where no body is "
         "read here, so whether it passes the request on is not known"
     ) in text

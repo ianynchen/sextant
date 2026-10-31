@@ -259,9 +259,10 @@ matches:
 #     context to a method of another jar (Hono's `HttpUtils.nextRoute`), or is an object
 #     another jar builds, gives its row at `partial`, with a `handler_pass_through` question
 #     naming that method. A handler that calls `next()` on one branch is middleware.
-#   * A CONTEXT CAPTURED BY AN ANONYMOUS CLASS. javac stores it in a synthetic field the
-#     class's constructor writes, and `next()` is then called on a `getfield` of it, which the
-#     facts do not name: such a `next()` is not followed back to the handler.
+#   * A CONTEXT STORED WHERE THE WALK CANNOT FOLLOW IT: written to a field, or handed to a
+#     constructor (an anonymous class's synthetic capture field). A `next()` on it later is on
+#     a `getfield` the facts do not name, so the handler is not readable here: `partial`, with
+#     the field or constructor named in its `handler_pass_through` question.
 #   * SUB-ROUTERS. A route registered on a router mounted under a prefix is published
 #     without the prefix until mounts are joined.
 #   * THE RXJAVA 3 AND MUTINY WRAPPERS (`io.vertx.rxjava3.ext.web.*`,

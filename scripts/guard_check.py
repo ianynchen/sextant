@@ -1588,6 +1588,50 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "pass_through.a-context-written-to-a-field-is-unreadable": Guard(
+        what="a handler whose received context is written into a field is not readable here: "
+        "a `next()` on it later is on a `getfield` no fact names (Vert.x plan, Task 10, "
+        "ruling 2026-10-31)",
+        why="without it such a handler reads as answering and its row is published "
+        "`resolved`, though it may pass the request on",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        outside.extend(stored.get((method, parameter), ()))\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-to-a-constructor-is-unreadable": Guard(
+        what="a handler that hands its received context to a constructor is not readable "
+        "here: the object keeps it, as javac's synthetic capture field does (Vert.x plan, "
+        "Task 10, ruling 2026-10-31)",
+        why="without it an anonymous callback calling `next()` on a captured context leaves "
+        "its handler answering, an invented `resolved` row",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                if site["name"] == "<init>" or (not targets and key not '
+                "in index.reached):\n",
+                replace="                if not targets and key not in index.reached:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-is-identified-by-its-declared-type": Guard(
+        what="a handler object the producer walk pins to no call is identified by the "
+        "declared static type of the parameter, field or factory return it came from "
+        "(Vert.x plan, Task 10, ruling 2026-10-31)",
+        why="without it a framework handler configured after it is built, or handed in as a "
+        "`Handler` parameter, is not readable here, and its middleware chain suppresses the "
+        "answering route (Hono `http-base`: every row's handler NULL)",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            declared = self._declared_type(site[0], argument, set())\n",
+                replace="            declared: list[Handler] = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "pass_through.a-malformed-word-is-refused": Guard(
         what="a malformed `passes_on`, `framework_handlers` or `handler_methods`, or either of "
         "the last two without `passes_on`, is refused at load (Vert.x plan, Task 10)",

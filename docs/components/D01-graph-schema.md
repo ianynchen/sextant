@@ -972,9 +972,11 @@ leading `/`, where the catalog declares `refuses_unrooted_path`) — on ONE row 
 `(protocol, method, path)`, the path as written, since no endpoint row carries it; a
 `handler_pass_through` candidate holds `handler`, `caller` and `unread` — an inbound row whose
 handler is not readable here (Vert.x spec §3b: it hands the request's context to a method
-whose body is in another jar, or is an object another jar builds and not one of the
-framework's own handlers), the row's handler (NULL for such an object), the method that
-registered it and the unread code it depends on (empty where no call names it) — on ONE row
+whose body is in another jar, or stores it in a field or hands it to a constructor, where the
+walk cannot follow it, or is an object another jar builds whose declared type is not one of
+the framework's own handlers), the row's handler (NULL for such an object), the method that
+registered it and where the context went unfollowed — the method, field or constructor —
+(empty where nothing names it) — on ONE row
 per `(protocol, method, path)` of the `partial` rows it explains, which is that row's reason,
 since no endpoint column carries one; a `prefix_not_measured` candidate
 holds `key`, `framework`, `module_versions` and `declared_for` — a configured prefix key the

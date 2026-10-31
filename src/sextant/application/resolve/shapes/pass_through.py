@@ -12,7 +12,9 @@ statement about one handler:
   which by contract carry the request on or fail it;
 - **answers** — the handler's body is in the module and nothing above is reached;
 - **not readable here** — the context is handed to a method whose body this analysis does not
-  read, or the handler object is produced there and is not the framework's.
+  read, or stored where the walk cannot follow it (a field, a constructor: a later `next()`
+  on it is on a `getfield` no fact names), or the handler object is produced outside the
+  module and its declared static type is not the framework's (ruling 2026-10-31).
 
 **Computed backwards, once per run.** Each `passes_on` call site's receiver is walked back to
 where it came from (`values.producers_of`), stopping at a handler's parameters
@@ -27,7 +29,7 @@ on a handler object are the catalog's (`pass_through_of`).
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -110,15 +112,29 @@ class HandlerReader:
     runs the method, a lambda its synthetic body, `new X(…)` (an `instance`) X's handler
     method, and anything else the object its producer builds, read with the producer reader.
 
+    Where the producer walk reaches no call that made the object (an `escapes`, a parameter
+    nothing binds), the object is identified by what it IS: the declared static type of the
+    parameter, field or factory return it came from (`_declared`), read off the facts the run
+    already holds.
+
     Built once per run: the module's handler methods by type and the producer reader's stops
-    are each one pass, over the method symbols and over the index's library calls."""
+    are each one pass, over the method symbols and over the index's library calls.
+    `parameters` is `declared_parameters_of`; `field_types` reads each field's declared type,
+    asked only where a handler comes from a field."""
 
     def __init__(
-        self, index: ValueIndex, rule: PassThroughRule, method_symbols: Mapping[str, str]
+        self,
+        index: ValueIndex,
+        rule: PassThroughRule,
+        method_symbols: Mapping[str, str],
+        parameters: Mapping[str, Sequence[Mapping[str, Any]]],
+        field_types: Callable[[], Mapping[str, str]],
     ) -> None:
         self._index = index
         self._rule = rule
         self._method_symbols = method_symbols
+        self._parameters = parameters
+        self._field_types = field_types
         self._by_type: dict[str, list[str]] = {}
         for bare, symbol in method_symbols.items():
             owner = owner_of(bare)
@@ -142,22 +158,82 @@ class HandlerReader:
         if at is None or site is None:
             return Handler(outcome=UNREADABLE)
         handlers = []
+        unmade = False
         for end in producers_of(self._index, at, site[2], self._declared):
             made = self._index.sites.get((str(end.caller), int(end.ordinal or 0)))
             if end.identity is None or made is None:
-                handlers.append(Handler(outcome=UNREADABLE))
+                unmade = True
                 continue
             owner, name = end.identity
             descriptor = str(made["descriptor"])
             built = owner if name == "<init>" else returned_type(descriptor)
             handlers.append(self._object(built, method_descriptor(owner, name, descriptor)))
+        if unmade or not handlers:
+            arguments = at.get("arguments") or ()
+            argument = arguments[site[2]] if site[2] < len(arguments) else None
+            declared = self._declared_type(site[0], argument, set())
+            handlers.extend(declared or [Handler(outcome=UNREADABLE)])
         return _either(handlers)
+
+    def _declared_type(
+        self, method: str, argument: Any, seen: set[tuple[str, int]]
+    ) -> list[Handler]:
+        """The handler `argument` is by its DECLARED STATIC TYPE, in `method`'s frame: a
+        parameter's declared type, and where that says nothing (`Handler`), the static type of
+        what each caller hands it; a factory call's declared return; a field's declared type.
+        Each is a descriptor the facts already carry. An argument with none of these (a
+        `null`) contributes nothing."""
+        if not isinstance(argument, dict):
+            return []
+        kind = argument.get("kind")
+        if kind in ("lambda", "instance"):
+            return [self.of(argument, None)]
+        if kind == "parameter":
+            position = int(argument.get("value") or 0)
+            if (method, position) in seen:
+                return []
+            seen.add((method, position))
+            declared = self._parameters.get(method, ())
+            typed = declared[position].get("erased_symbol") if position < len(declared) else None
+            found = self._typed(None if typed is None else str(typed))
+            if found is not None:
+                return [found]
+            handed: list[Handler] = []
+            for caller, ordinal in self._index.callers.get((method, position), ()):
+                bound = (self._index.sites.get((caller, ordinal)) or {}).get("arguments") or ()
+                if position < len(bound):
+                    handed.extend(self._declared_type(caller, bound[position], seen))
+            return handed or [
+                Handler(outcome=UNREADABLE, unread=None if typed is None else str(typed))
+            ]
+        if kind == "field" and argument.get("symbol") is not None:
+            field = str(argument["symbol"])
+            typed = self._field_types().get(field)
+            found = None if typed is None else self._typed(typed)
+            return [found or Handler(outcome=UNREADABLE, unread=field)]
+        if argument.get("source") is not None:
+            handlers = []
+            for ordinal in self._index.producers.get((method, int(argument["source"])), ()):
+                made = self._index.sites.get((method, ordinal))
+                if made is None:
+                    continue
+                descriptor = str(made["descriptor"])
+                maker = method_descriptor(str(made.get("owner")), str(made["name"]), descriptor)
+                found = self._typed(returned_type(descriptor))
+                handlers.append(found or Handler(outcome=UNREADABLE, unread=maker))
+            return handlers
+        return []
 
     def _object(self, built: str | None, maker: str | None) -> Handler:
         """A handler object of type `built` (made by `maker`, where a call made it): the
         framework's own passes on; a type of this module, or one it extends, runs its handler
         method; any other was produced where this analysis does not read."""
-        made, seen = built, set[str]()
+        return self._typed(built) or Handler(outcome=UNREADABLE, unread=maker or built)
+
+    def _typed(self, built: str | None) -> Handler | None:
+        """What a type says on its own: a type of a `framework_handlers` package passes on; a
+        type of this module, or one it extends, runs its handler method; None for any other."""
+        seen: set[str] = set()
         while built is not None and built not in seen:
             seen.add(built)
             package = dotted_package(built)
@@ -177,7 +253,7 @@ class HandlerReader:
                 ]
                 return Handler((*stands_for, *(m for m in methods if m not in stands_for)))
             built = self._index.superclasses.get(built)
-        return Handler(outcome=UNREADABLE, unread=maker or made)
+        return None
 
 
 def _either(handlers: list[Handler]) -> Handler:
@@ -220,10 +296,16 @@ def handler_outcomes(
     for parameter, binders in index.callers.items():
         for binder in binders:
             handed.setdefault(binder, []).append(parameter)
+    # A parameter written into a field (`written_by`): a context stored there is read back by
+    # a `getfield` no fact names, so the walk cannot follow it to a `next()`.
+    stored: dict[tuple[str, int], list[str]] = {}
+    for field, writers in index.writers.items():
+        for writer in writers:
+            stored.setdefault(writer, []).append(field)
     outcomes: dict[str, Outcome] = {}
     unread: dict[str, tuple[str, ...]] = {}
     for symbol, context in handlers.items():
-        reached, outside = _handed_on(index, by_method, handed, (symbol, context))
+        reached, outside = _handed_on(index, by_method, handed, stored, (symbol, context))
         if reached & ended:
             outcomes[symbol] = PASSES_ON
         elif outside:
@@ -238,16 +320,20 @@ def _handed_on(
     index: ValueIndex,
     by_method: Mapping[str, list[Mapping[str, Any]]],
     handed: Mapping[tuple[str, int], list[tuple[str, int]]],
+    stored: Mapping[tuple[str, int], list[str]],
     start: tuple[str, int],
 ) -> tuple[set[tuple[str, int]], tuple[str, ...]]:
     """Every `(method, parameter)` the context at `start` is handed to as an argument, `start`
-    included, and the methods outside the module it is handed to. A call ON the context is
-    not a hand-off: the receiver is not an argument."""
+    included, and where it goes that the walk cannot follow: a method whose body is not read,
+    a field it is written to, a constructor it is handed to (which keeps it in the object,
+    as javac's synthetic capture field does). A call ON the context is not a hand-off: the
+    receiver is not an argument."""
     reached = {start}
     stack = [start]
     outside: list[str] = []
     while stack:
         method, parameter = stack.pop()
+        outside.extend(stored.get((method, parameter), ()))
         for site in by_method.get(method, ()):
             key = (method, int(site["ordinal"]))
             for slot, argument in enumerate(site.get("arguments") or ()):
@@ -262,7 +348,7 @@ def _handed_on(
                     if target not in reached:
                         reached.add(target)
                         stack.append(target)
-                if not targets and key not in index.reached:
+                if site["name"] == "<init>" or (not targets and key not in index.reached):
                     outside.append(
                         method_descriptor(
                             str(site.get("owner")), str(site["name"]), str(site["descriptor"])
@@ -326,8 +412,8 @@ def _unread_sentence(candidate: Mapping[str, Any]) -> str:
     handler = candidate["handler"] or "a handler object"
     if candidate["unread"]:
         return (
-            f"{handler}, registered by {candidate['caller']}, depends on "
-            f"{', '.join(candidate['unread'])}, whose body this analysis does not read"
+            f"{handler}, registered by {candidate['caller']}, hands its context to "
+            f"{', '.join(candidate['unread'])}, where this analysis does not follow it"
         )
     return (
         f"{handler}, registered by {candidate['caller']}, is produced where this analysis "

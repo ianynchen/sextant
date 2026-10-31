@@ -2090,12 +2090,15 @@ chain's handlers run in order and the row names the FIRST that does not pass on:
 passes on where a declared call is reached on the context it received (in its own body, in a
 module method it hands the context to, or in a lambda that captured it), answers where its body
 is in the module and none is, and is not readable here where it hands the context to a method
-whose body is not read — its row is then `partial`, with a `handler_pass_through` open question
-(D01) naming that method. A chain whose every handler passes on derives no row. Beside it,
+whose body is not read, or stores it in a field or hands it to a constructor — its row is then
+`partial`, with a `handler_pass_through` open question (D01) naming that method, field or
+constructor. A chain whose every handler passes on derives no row. Beside it,
 **`framework_handlers: [<package>, …]`** names the packages (and their subpackages) whose
 handler OBJECTS pass on by the framework's contract, and **`handler_methods: [<name>, …]`** the
-method the framework calls on a handler object (`handle`), so `new X(…)` runs `X.handle`; an
-object of any other type built where nothing is read is not readable here. Routes on one verb
+method the framework calls on a handler object (`handle`), so `new X(…)` runs `X.handle`. A
+handler object the producer walk pins to no call is identified by the declared static type of
+the parameter (and, where that says only `Handler`, of what each caller hands it), field or
+factory return it came from; an object of any other type is not readable here. Routes on one verb
 and path are then ordered as the framework tries them: within one method by their root calls'
 order, by literal **`order: argN`** captures, after every other for **`order: last`**; candidates
 in no known order are each a row, `narrowed`. Absent, every handler answers and a chain's row

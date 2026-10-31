@@ -1340,12 +1340,13 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
         # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
-        # own `candidates` line. The sentence names the handler and the unread code, which
-        # are what a reader opens; an object built where nothing is read names no call.
+        # own `candidates` line. The sentence names the handler and where its context went
+        # that the analysis does not follow — a body not read, a field, a constructor — which
+        # is what a reader opens; an object built where nothing is read names no call.
         handler = candidate["handler"] or "a handler object"
         unread = cast(list[str], candidate["unread"])
         where = (
-            f"hands the request to {', '.join(unread)}, whose body is not read here"
+            f"hands the request's context to {', '.join(unread)}, where it is not followed here"
             if unread
             else "is built where no body is read here"
         )

@@ -2325,21 +2325,37 @@ def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):
     assert rows[0]["handler"].rsplit("(", 1)[1] == after["handler"].rsplit("(", 1)[1], rows[0]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a context captured by an anonymous class is held in a synthetic field, and "
-    "`next()` is called on a `getfield` of it, which no fact names: the receiver walk "
-    "answers `not_readable` (Vert.x Task 10 report)",
-)
-def test_vertx_a_context_captured_by_an_anonymous_callback_passes_on(vertx_inbound):
-    """`onSuccess(new Handler<String>() { … ctx.next(); })` inside a handler passes the
-    request on, so `/anon-next` is answered by the handler after it."""
+@pytest.mark.pins("fluent.an-unreadable-handler-gives-a-partial-row")
+def test_vertx_a_context_captured_by_an_anonymous_callback_is_partial(vertx_inbound, vertx_tables):
+    """`onSuccess(new Handler<String>() { … ctx.next(); })` inside a handler: javac keeps
+    `ctx` in a synthetic field the anonymous class's constructor writes, and the `next()` is on
+    a `getfield` of it, which no fact names. Whether the handler passes on is not readable
+    here, so the row is `viaAnonymous` at `partial` with its reason — never an answering row
+    (ruling 2026-10-31)."""
+    rows = [r for r in vertx_inbound if r["path"] == "/anon-next"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in rows] == [
+        ("GET", "AnonymousRoutes#viaAnonymous", "partial")
+    ], rows
+    assert "AnonymousRoutes$2#<init>" in _reason_of(rows[0], vertx_tables), rows[0]
+
+
+@pytest.mark.pins("pass_through.a-handler-is-identified-by-its-declared-type")
+def test_vertx_a_framework_handler_is_identified_by_its_declared_type(vertx_inbound):
+    """Hono's shapes: a `BodyHandler` configured after it is built and handed in as a
+    `Handler<RoutingContext>` parameter, one returned by a factory, and a `CorsHandler` field
+    set from a constructor nothing calls. The producer walk reaches no construction for any of
+    them (`escapes`, `external`), so each is read by its declared static type — the caller's
+    `BodyHandler.create()`, the factory's return, the field's type — and passes on. The
+    answering chain names the row."""
     rows = {
-        (r["method"], _vertx_handler(r), r["resolution"])
+        (r["method"], r["path"], _vertx_handler(r), r["resolution"])
         for r in vertx_inbound
-        if r["path"] == "/anon-next"
+        if r["path"] in ("/typed", "/typed-field")
     }
-    assert rows == {("GET", "AnonymousRoutes#after", "resolved")}, rows
+    assert rows == {
+        ("POST", "/typed", "StaticTypeRoutes#accept", "resolved"),
+        ("GET", "/typed-field", "StaticTypeRoutes#accept", "resolved"),
+    }, rows
 
 
 # Task 11: mounts -------------------------------------------------------------------------

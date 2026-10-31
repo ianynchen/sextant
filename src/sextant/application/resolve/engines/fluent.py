@@ -103,6 +103,7 @@ from sextant.application.resolve.values import (
 from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.symbols import bare_descriptor
 
 # D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_argument`
 # treats it as the catalog's own declared position rather than as a hop - see there.
@@ -250,7 +251,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     unread: dict[tuple[str, str | None, str], dict[str, Any]] = {}
     if pass_through is not None:
         read_whole = list(ends)
-        judged = _judge(read_whole, pass_through, walk_index, method_symbols)
+        judged = _judge(read_whole, pass_through, walk_index, method_symbols, workspace)
         ends = read_whole
         candidates = []
     context: _DeriveContext | None = None
@@ -885,10 +886,12 @@ def _judge(
     rule: PassThroughRule,
     index: ValueIndex,
     method_symbols: dict[str, str],
+    workspace: Workspace,
 ) -> dict[Any, _Judged]:
     """Every handler argument the chains name, judged once (Vert.x spec §3b): what it runs
-    (`HandlerReader`, one producer read per argument that is not a lambda) and then whether
-    that passes the request on (`handler_outcomes`, one backward walk per `passes_on` call)."""
+    (`HandlerReader`, one producer read per argument that is not a lambda, and its declared
+    static type where that read reaches no construction) and then whether that passes the
+    request on (`handler_outcomes`, one backward walk per `passes_on` call)."""
     arguments: dict[Any, dict[str, Any]] = {}
     for end in ends:
         captured = end.captures.get("handler")
@@ -898,7 +901,13 @@ def _judge(
     # A module with the framework on its classpath and no route reads nothing more.
     if not arguments:
         return {}
-    reader = HandlerReader(index, rule, method_symbols)
+    reader = HandlerReader(
+        index,
+        rule,
+        method_symbols,
+        workspace.once(declared_parameters_of),
+        lambda: workspace.once(_field_types),
+    )
     read = {
         key: reader.of(argument, argument.get(_CAPTURED_AT)) for key, argument in arguments.items()
     }
@@ -918,6 +927,18 @@ def _judge(
             tuple(sorted({name for symbol in handler.symbols for name in unread.get(symbol, ())})),
         )
     return judged
+
+
+def _field_types(workspace: Workspace) -> dict[str, str]:
+    """Each field's declared type, by bare field descriptor — the `Workspace.once` builder the
+    pass-through reader asks only where a handler comes from a field."""
+    found: dict[str, str] = {}
+    for row in workspace.query("fields"):
+        returns = row.get("returns")
+        declared = json.loads(returns) if isinstance(returns, str) else returns
+        if isinstance(declared, dict) and declared.get("symbol"):
+            found[bare_descriptor(str(row["symbol"]))] = str(declared["symbol"])
+    return found
 
 
 def _handler_key(argument: dict[str, Any]) -> tuple[Any, ...]:
