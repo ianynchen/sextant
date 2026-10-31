@@ -31,6 +31,7 @@ from test_config_join import _module_document
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import fluent
+from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -3108,3 +3109,222 @@ def test_an_outbound_chain_keeps_its_media_columns_null(tmp_path: Path):
     workspace.close()
 
     assert (row["consumes"], row["produces"]) == (None, None)
+
+
+# --- accumulating captures (Vert.x spec §3g item 1) --------------------------
+
+_REPEATING_MATCHES = {
+    **_ADAPTER_MATCHES,
+    "steps": [
+        {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": ["http_method"]},
+        {"method": "onMessage", "captures": {"handler": "arg0"}, "repeats": ["handler"]},
+        {"method": "produces", "captures": {"produces": "arg0"}, "repeats": ["produces"]},
+    ],
+}
+
+
+def _captures_of(tmp_path: Path, facts: list, matches: dict) -> dict:
+    catalog = _catalog(matches)
+    workspace = _run(tmp_path, facts, catalog)
+    [end] = list(chain_ends(workspace, catalog))
+    workspace.close()
+    return dict(end.captures)
+
+
+def _strings(captured: Any) -> list[str]:
+    return [argument["value"] for argument in captured]
+
+
+def _verb(name: str) -> tuple[str, list[CallArgument]]:
+    return ("verb", [CallArgument(kind="string", value=name)])
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_a_repeated_verb_step_keeps_every_verb_in_order(tmp_path: Path):
+    """A step declaring `repeats: [http_method]` accumulates: `method(GET)` then
+    `method(DELETE)` is two verbs, oldest first, where last-wins would keep one and say
+    the route serves nothing else."""
+    captures = _captures_of(
+        tmp_path, _adapter(_verb("GET"), _verb("DELETE"), _verb("PUT")), _REPEATING_MATCHES
+    )
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE", "PUT"]
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_a_repeated_handler_terminal_keeps_every_handler_in_order(tmp_path: Path):
+    """The terminal-named step `onMessage` repeats too: three handlers on one chain are
+    three captures, in the order they were registered."""
+    first, second, third = (
+        CallArgument(kind="lambda", source=9, symbol=f"com/acme/streams/Wiring#h{n}()V.")
+        for n in (1, 2, 3)
+    )
+    captures = _captures_of(
+        tmp_path,
+        _adapter(("onMessage", [first]), ("onMessage", [second]), ("onMessage", [third])),
+        _REPEATING_MATCHES,
+    )
+
+    assert [handler["symbol"] for handler in captures["handler"]] == [
+        f"com/acme/streams/Wiring#h{n}()V." for n in (1, 2, 3)
+    ]
+
+
+def test_a_non_repeating_capture_stays_last_wins(tmp_path: Path):
+    """No `repeats`, no change: the same two calls on a step declaring none leave the
+    last value alone, as every shipped catalog reads them."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "steps": [{"method": "verb", "captures": {"http_method": "arg0"}}],
+    }
+    captures = _captures_of(tmp_path, _adapter(_verb("GET"), _verb("DELETE")), matches)
+
+    assert captures["http_method"]["value"] == "DELETE"
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_statement_style_calls_on_one_receiver_accumulate_through_the_fold(tmp_path: Path):
+    """`r.method(GET); r.method(DELETE); r.handler(h)` as separate statements on a local:
+    each call returns its receiver (`returns_receiver`) and drops the result, so the walk
+    folds them in place, and the accumulation crosses that fold."""
+    matches = {
+        **_REPEATING_MATCHES,
+        "steps": [{**step, "returns_receiver": True} for step in _REPEATING_MATCHES["steps"]],
+    }
+    facts = [
+        _call(CALLER, ADAPTER, "<init>", 0, receiver=5, result=None, invoke_kind="special"),
+        _call(CALLER, ADAPTER, "verb", 1, receiver=5, result=20, arguments=_verb("GET")[1]),
+        _call(CALLER, ADAPTER, "verb", 2, receiver=5, result=21, arguments=_verb("DELETE")[1]),
+        _call(CALLER, ADAPTER, "onMessage", 3, receiver=5, result=22, arguments=[_lambda()]),
+    ]
+    captures = _captures_of(tmp_path, facts, matches)
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE"]
+    assert len(captures["handler"]) == 1
+
+
+@pytest.mark.pins("chains.the-walk-back-accumulates-a-repeats-capture")
+def test_calls_before_the_root_accumulate_too(tmp_path: Path):
+    """The same two `verb` calls made on the object a root is then called on
+    (`Adapter.begin().verb(GET).verb(DELETE).route(..)`): the backward walk to the root
+    folds them in chain order and keeps both."""
+    registry = "com/acme/streams/Registry#"
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.streams.Registry",
+                "method": "route",
+                "captures": {"channel": "arg0"},
+            }
+        ],
+        "steps": [{**step, "owner": ADAPTER_TYPE} for step in _REPEATING_MATCHES["steps"]],
+        "terminal": ["route"],
+    }
+    facts = [
+        _call(CALLER, ADAPTER, "begin", 0, receiver=None, result=10),
+        _call(CALLER, ADAPTER, "verb", 1, receiver=10, result=11, arguments=_verb("GET")[1]),
+        _call(CALLER, ADAPTER, "verb", 2, receiver=11, result=12, arguments=_verb("DELETE")[1]),
+        _call(
+            CALLER,
+            registry,
+            "route",
+            3,
+            receiver=12,
+            result=13,
+            arguments=[CallArgument(kind="string", value=SUBSCRIPTION)],
+        ),
+    ]
+    captures = _captures_of(tmp_path, facts, matches)
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE"]
+
+
+def test_an_unreadable_verb_stays_in_the_list_as_unreadable(tmp_path: Path):
+    """`method(verbFromAConfig)` is a verb the route serves that nobody can read: it keeps
+    its place as an unresolved entry, so the list does not claim to be complete."""
+    unreadable = ("verb", [CallArgument(kind="unresolved")])
+    captures = _captures_of(tmp_path, _adapter(_verb("GET"), unreadable), _REPEATING_MATCHES)
+
+    assert [argument["kind"] for argument in captures["http_method"]] == ["string", "unresolved"]
+
+
+def test_several_accumulated_verbs_read_as_an_unresolved_verb_not_the_first(tmp_path: Path):
+    """One row per verb is a later step's job. Until then the row says it cannot name the
+    verb, rather than naming the first and silently dropping the rest."""
+    workspace = _run(
+        tmp_path, _adapter(_verb("GET"), _verb("DELETE")), _catalog(_REPEATING_MATCHES)
+    )
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["resolution"]) == (None, "unresolved")
+
+
+def test_a_catalog_poison_outlasts_a_repeating_capture(tmp_path: Path):
+    """`reroute` poisons `handler` to the chain's end; a handler registered after it
+    does not become the route's handler, accumulating or not."""
+    matches = {
+        **_REPEATING_MATCHES,
+        "steps": [*_REPEATING_MATCHES["steps"], {"method": "reroute", "poisons": ["handler"]}],
+    }
+    captures = _captures_of(
+        tmp_path,
+        _adapter(("reroute", []), ("onMessage", [_lambda()])),
+        matches,
+    )
+
+    assert captures["handler"]["reason"] == "poisoned"
+
+
+@pytest.mark.parametrize(
+    ("step", "fragment"),
+    [
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": "http_method"},
+            "invented-adapters.*verb.*repeats.*list",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": ["path"]},
+            "invented-adapters.*verb.*repeats.*path.*captures",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "GET"}, "repeats": ["http_method"]},
+            "invented-adapters.*verb.*repeats.*http_method.*argument",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": [3]},
+            "invented-adapters.*verb.*repeats",
+        ),
+    ],
+    ids=["not-a-list", "names-no-capture", "names-a-literal", "not-a-name"],
+)
+def test_a_malformed_repeats_is_refused_naming_the_file(tmp_path: Path, step: dict, fragment: str):
+    _refused(tmp_path, {**_ADAPTER_MATCHES, "steps": [step]}, fragment)
+
+
+def test_repeats_on_a_root_is_refused(tmp_path: Path):
+    """A root starts the chain with nothing yet captured to add to, so the word would
+    load and do nothing."""
+    root = {**_ADAPTER_MATCHES["roots"][0], "repeats": ["channel"]}
+    _refused(tmp_path, {**_ADAPTER_MATCHES, "roots": [root]}, "invented-adapters.*roots.*repeats")
+
+
+# --- the readers of an accumulated capture ----------------------------------
+
+
+@pytest.mark.pins("fluent.a-handler-tuple-answers-with-its-first")
+def test_an_inbound_row_takes_the_first_handler_of_several(tmp_path: Path):
+    """Which handler of a route's several answers is decided later; until then the row
+    carries the first one registered, and a chain with one handler is unchanged."""
+    second_body = "com/acme/streams/Wiring#lambda$inbound$1(Lcom/acme/streams/Message;)V."
+    second = CallArgument(kind="lambda", source=10, symbol=second_body)
+    facts = [
+        *_adapter(("onMessage", [_lambda()]), ("onMessage", [second])),
+        _body_symbol(),
+        _body_symbol(second_body),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_REPEATING_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["handler"] == _MODULE + BODY

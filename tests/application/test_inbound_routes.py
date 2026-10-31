@@ -38,6 +38,21 @@ def test_a_value_nobody_can_read_contributes_nothing():
     assert media_columns({"produces": {"kind": "unknown"}}) == (None, None)
 
 
+@pytest.mark.pins("inbound_routes.media-reads-an-accumulated-capture")
+def test_an_accumulated_capture_is_read_element_by_element():
+    """`produces("a")` then `produces("b/c", "a")`: the capture holds one argument per
+    call, oldest first, and the column is every media type among them, sorted and
+    distinct, as for a single vararg."""
+    captures = {
+        "produces": (
+            _string("text/xml"),
+            {"kind": "array", "elements": [_string("application/json"), _string("text/xml")]},
+        ),
+        "consumes": (_string("a/b"),),
+    }
+    assert media_columns(captures) == ('["a/b"]', '["application/json","text/xml"]')
+
+
 def test_the_leading_slash_rule_adds_one_slash_and_leaves_three_cases_alone():
     assert join_prefix(None, "orders", "leading_slash") == "/orders"
     assert join_prefix(None, "/orders", "leading_slash") == "/orders"

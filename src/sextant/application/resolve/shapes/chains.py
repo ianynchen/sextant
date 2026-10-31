@@ -473,6 +473,9 @@ def _declared_entries(
             # the chain through its own `receiver`.
             "receiver_arg": _validated_receiver_arg(step, catalog),
             "captures": _merged_captures(step),
+            # Vert.x spec §3g item 1: the captured fields this step ACCUMULATES instead of
+            # overwriting (`_fold`). Carried explicitly for the reason `collects` is below.
+            "repeats": _validated_repeats(step, catalog),
             # F5 §6.2 (W29): the repeatable half. A step declaring `collects` accumulates
             # an entry per visit instead of overwriting, because a request may carry any
             # number of headers and last-wins would keep the final one and claim it was
@@ -550,6 +553,14 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
             f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
             f"declares `poisons` — a poison is a step's own effect on the chain it sits "
             f"in, and a root has no chain before it (spec 2026-09-21 §4)"
+        )
+    # `repeats:` adds to what earlier steps captured, and a root starts the chain with
+    # nothing before it: the same reason again.
+    if "repeats" in root:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
+            f"declares `repeats` — it makes a step add to what the chain already captured, "
+            f"and a root starts the chain (spec 2026-10-30 §3g item 1)"
         )
     # `receiver_arg` is how a step JOINS a chain, and a root starts one: the word would
     # load and do nothing, the `poisons` reason above.
@@ -794,10 +805,10 @@ def _prefix_captures(
             else:
                 step = _matching_step(producer, owned)
                 if step is not None:
-                    captures.update(_step_captures(step, producer))
+                    _accumulate(captures, _step_captures(step, producer), step["repeats"])
         if configuring:
             for step, site in _configured_before(receiver, reader, configuring, context):
-                captures.update(_step_captures(step, site))
+                _accumulate(captures, _step_captures(step, site), step["repeats"])
     return captures
 
 
@@ -1235,7 +1246,7 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
             captures.pop(_LINK_SENDER, None)
     elif "handler" in folded and "channel_link" in captures:
         captures[_READS_LINK] = captures["channel_link"]
-    _fold(captures, folded)
+    _fold(captures, folded, step["repeats"])
     if step["continue_via"] is not None:
         captures[_CONTINUE] = step["continue_via"]
     # F5 §6.2 (W29): a `collects` step ACCUMULATES instead, because the thing it
@@ -1261,15 +1272,35 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
     _fold_bean_captures(captures, context)
 
 
-def _fold(captures: dict[str, Any], folded: dict[str, Any]) -> None:
+def _fold(captures: dict[str, Any], folded: dict[str, Any], repeats: Sequence[str] = ()) -> None:
     """Last wins (D02 §4), except for a field a catalog poison already holds:
     `_POISONED` stays to the chain's end, so the `handle` after a `divert`
     never becomes the row's handler (spec 2026-09-21 §5, §0b A5). A guard's
     own `_UNRESOLVED_ARGUMENT` is not a poison and is overwritten as it always
-    was."""
+    was. A field the step `repeats` is added to instead (`_appended`)."""
     for field, value in folded.items():
-        if captures.get(field) is not _POISONED:
-            captures[field] = value
+        if captures.get(field) is _POISONED:
+            continue
+        captures[field] = _appended(captures.get(field), value) if field in repeats else value
+
+
+def _accumulate(captures: dict[str, Any], folded: dict[str, Any], repeats: Sequence[str]) -> None:
+    """`captures.update(folded)` for the walk back across a producer chain, with the fields
+    the step `repeats` added to instead of overwritten."""
+    for field, value in folded.items():
+        captures[field] = _appended(captures.get(field), value) if field in repeats else value
+
+
+def _appended(earlier: Any, value: Any) -> Any:
+    """What a repeating field holds after one more call (spec 2026-10-30 §3g item 1): a
+    tuple, oldest first, so each branch of a fork keeps its own by copy, as `_COLLECTED`
+    does. A catalog poison is the value itself, not an entry to add to, so it replaces the
+    tuple and stays (`_fold`)."""
+    if value is _POISONED:
+        return value
+    if earlier is None:
+        return (value,)
+    return (*earlier, value) if isinstance(earlier, tuple) else (earlier, value)
 
 
 def _matching_root(site: dict[str, Any], roots: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1321,6 +1352,38 @@ def _validated_descriptor(entry: dict[str, Any], catalog: Catalog, where: str) -
             f"(spec 2026-09-21 §5)"
         )
     return declared
+
+
+def _validated_repeats(step: dict[str, Any], catalog: Catalog) -> tuple[str, ...]:
+    """A step's optional `repeats`, the captured fields it accumulates (spec 2026-10-30 §3g
+    item 1): a list of names, each a capture the same step declares and each read off an
+    argument position. A name the step does not capture would accumulate nothing, and a
+    literal capture has no call to add up, so either would load and do nothing, silently."""
+    declared = step.get("repeats")
+    if declared is None:
+        return ()
+    captures = _merged_captures(step)
+    if not isinstance(declared, list) or not all(isinstance(name, str) for name in declared):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: step `{step.get('method')}` declares "
+            f"`repeats: {declared!r}`, which is not a list of captured field names "
+            f"(spec 2026-10-30 §3g item 1)"
+        )
+    for name in declared:
+        if name not in captures:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: step `{step.get('method')}` declares "
+                f"`repeats: [{name}]` but captures no `{name}` — it can only accumulate a "
+                f"field its own `captures` reads (spec 2026-10-30 §3g item 1)"
+            )
+        if not _ARG_REFERENCE.match(str(captures[name])):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: step `{step.get('method')}` declares "
+                f"`repeats: [{name}]` but captures `{name}: {captures[name]!r}`, which does "
+                f"not read an argument — only an `argN` read has one value per call to add "
+                f"up (spec 2026-10-30 §3g item 1)"
+            )
+    return tuple(declared)
 
 
 def _validated_receiver_arg(step: dict[str, Any], catalog: Catalog) -> int | None:

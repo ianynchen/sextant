@@ -360,9 +360,13 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # string, and None where nothing could read it — the honest gap, not the
     # root's default.
     declared_verb = captures.get("http_method")
+    # Several verbs accumulated on one chain (`repeats`) are not one verb: no row is
+    # written for the first and the rest dropped, the verb reads as unresolved.
     verb = (
         declared_verb
         if isinstance(declared_verb, str)
+        else None
+        if isinstance(declared_verb, tuple)
         else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)
     )
     # A chain whose root (and every step it folded through) never captured
@@ -1082,6 +1086,10 @@ def _handler_symbol(argument: Any, method_symbols: dict[str, str]) -> str | None
     follow is no handler. `combinator._handler_of`, restated for a capture
     rather than a position. Everything else reads None and moves nothing (the
     `_derive` docstring)."""
+    if isinstance(argument, tuple):
+        # An accumulated capture (`repeats`): until the route's answering handler is
+        # chosen, the row carries the first one registered.
+        argument = argument[0] if argument else None
     if not isinstance(argument, dict) or argument.get("kind") != "lambda":
         return None
     symbol = argument.get("symbol")

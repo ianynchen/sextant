@@ -41,6 +41,9 @@ def media_columns(captures: Mapping[str, Any]) -> tuple[str | None, str | None]:
 
 
 def _media_strings(argument: Any) -> list[str]:
+    if isinstance(argument, tuple):
+        # An accumulated capture (`repeats`): one argument per call, oldest first.
+        return [value for element in argument for value in _media_strings(element)]
     if not isinstance(argument, dict):
         return []
     if argument.get("kind") == "array":

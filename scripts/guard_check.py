@@ -1349,6 +1349,64 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-repeats-capture-keeps-every-value-in-call-order": Guard(
+        what="a capture a step declares `repeats` reaches the chain's end as a tuple of every "
+        "value, oldest first, instead of the last one (Vert.x spec 2026-10-30 §3g item 1)",
+        why="a Vert.x route may call `method(…)` for several verbs and `handler(…)` for "
+        "several handlers; last-wins kept one of each and the route looked as though it "
+        "served a single verb through a single handler",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            continue\n"
+                "        captures[field] = _appended(captures.get(field), value) if field in repeats else value\n",
+                replace="            continue\n"
+                "        captures[field] = value  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.the-walk-back-accumulates-a-repeats-capture": Guard(
+        what="the calls made before a root (the backward walk) add to a `repeats` capture "
+        "as the forward walk does",
+        why="the two walks fold the same steps; if the backward one overwrote, a route "
+        "configured on the object its root is then called on would keep only its last verb "
+        "while the same calls written after the root kept them all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for field, value in folded.items():\n"
+                "        captures[field] = _appended(captures.get(field), value) if field in repeats else value\n",
+                replace="    for field, value in folded.items():\n"
+                "        captures[field] = value  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-handler-tuple-answers-with-its-first": Guard(
+        what="an inbound `fluent` row whose chain accumulated several handlers carries the "
+        "first one registered (Vert.x plan, Task 5, until the answering handler is chosen)",
+        why="without it a route with two handlers read no handler at all, and a route "
+        "nothing could be followed from looked like a route with no consumer",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        argument = argument[0] if argument else None\n",
+                replace="        argument = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.media-reads-an-accumulated-capture": Guard(
+        what="the media columns read a `produces`/`consumes` capture accumulated over several "
+        "calls, element by element",
+        why="Vert.x calls `produces(…)` once per media type; reading only a single value or "
+        "a varargs array published NULL for a route that names its media",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/inbound_routes.py",
+                find="    if isinstance(argument, tuple):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "inbound_routes.fluent-fills-the-media-columns": Guard(
         what="an inbound `fluent` row carries the media its chain captured in `consumes` and "
         "`produces`, read by the same function `combinator` calls",
