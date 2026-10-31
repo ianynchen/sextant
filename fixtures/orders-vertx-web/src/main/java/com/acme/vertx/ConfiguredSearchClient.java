@@ -7,27 +7,23 @@ import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Properties;
-
-/** The same, with the host from a config getter backed by `application.properties`. */
+/**
+ * Hono's shape (`AbstractProtocolAdapterApplication.prometheusResourceLimitChecks`): the
+ * options are configured statement by statement from a config object's getters, beside
+ * calls that set no address, and the config object is handed in by the framework, so where
+ * its host comes from is outside this module.
+ */
 public class ConfiguredSearchClient {
 
     private final WebClient client;
 
-    public ConfiguredSearchClient(Vertx vertx) {
-        this.client = WebClient.create(vertx, new WebClientOptions().setDefaultHost(getHost()));
-    }
-
-    String getHost() {
-        Properties properties = new Properties();
-        try (InputStream in = ConfiguredSearchClient.class.getResourceAsStream("/application.properties")) {
-            properties.load(in);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-        return properties.getProperty("search.host");
+    public ConfiguredSearchClient(Vertx vertx, SearchConfig config) {
+        WebClientOptions options = new WebClientOptions();
+        options.setConnectTimeout(config.getConnectTimeout());
+        options.setDefaultHost(config.getHost());
+        options.setDefaultPort(config.getPort());
+        options.setSsl(config.isTlsEnabled());
+        this.client = WebClient.create(vertx, options);
     }
 
     public Future<HttpResponse<Buffer>> suggest() {

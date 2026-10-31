@@ -93,7 +93,7 @@ from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter
 # `host` and `port` (Vert.x spec 2026-10-30 §3d) are the authority's two parts where a call
 # names them apart from its path (`client.get(8080, "inventory", "/stock")`), composed with
 # `url` at derive time into one peer, `host` or `host:port`.
-_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", "port")
+_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", "port", "options")
 
 # Every other capture field a catalog may spell EITHER as its own literal or
 # as an `argN` reference, and the value itself says which (`_reads_an_argument`).

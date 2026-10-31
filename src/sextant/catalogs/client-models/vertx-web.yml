@@ -1,0 +1,89 @@
+id: vertx-web
+displayName: Vert.x WebClient's defaults (the `client_base` options rung, setters and join)
+
+# WHAT THIS FILE IS, and why it is not a catalog: `ktor.yml` beside it says so. A Vert.x
+# `WebClient` holds a default host and port, set on the OPTIONS OBJECT its factory is handed
+# (`WebClient.create(vertx, options)`), and fills them into a request that names none. Where
+# they are set is a property of the client, so it is declared once here and
+# `vertx-webclient.yml` names it with `client_model: vertx-web`, stating only where its client
+# sits (`client_arg: receiver`, the root call `client.get(…)` is made on).
+measured:
+  - { artifact: io.vertx:vertx-web-client, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+
+# Where the defaults apply, CP-56 row group (e) (rows 123-132): only `WebClientBase` reads them,
+# when it builds the request (`fill_authority`, `shapes/client_base.py`):
+#   x(uri), request(m, uri)       the default host and the default port
+#   x(host, uri)                  the default port only
+#   x(port, host, uri)            neither
+#   request(m, RequestOptions)    a null host and a null port, each on its own (row 126)
+#   xAbs(url)                     neither: host and port are parsed from the URL
+# and at send time a request's own `host(…)`/`port(…)` wins (row 130). A request sent to a
+# `SocketAddress` goes to that address (rows 325-326) and joins no default.
+#
+# Unset defaults are `localhost` and 80 (row 132) and are never published: that a client sets
+# none cannot be proven from the bytecode (spec §2a), as for Ktor.
+#
+# The client's construction is found by the value walk's producer reader (a client in a field
+# of `this` through the field's write, D00 §5's `receiver_field`; one handed in through its
+# callers), and the options object by the chain reader, every configuring call on it gathered
+# by ruling 4 (`values.producers_of(…, configuring=)`). Each setter's value is traced by the
+# value walk: a literal, or a configuration key.
+client_base:
+  # The factories handed an options object (row 42), and `wrap`, which builds the same
+  # `WebClientBase` over a core client (row 43). 5.2.1 adds `WebClientConfig`, a second
+  # options type for the same rung (rows 42, 85-89).
+  ladder:
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/http/PoolOptions;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/ext/web/client/WebClient;" }
+    - { owner: io.vertx.ext.web.client.WebClient, method: wrap, options_arg: 1,
+        descriptor: "(Lio/vertx/core/http/HttpClient;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/ext/web/client/WebClient;" }
+  # The calls that set an address part (rows 80-82, 85-87 for the client's options; 90-92 and
+  # 94 for a request's `RequestOptions`, which `request(m, options)` is made from).
+  setters:
+    - { owner: io.vertx.ext.web.client.WebClientOptions, method: setDefaultHost, part: host, value_arg: 0,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/WebClientOptions;" }
+    - { owner: io.vertx.ext.web.client.WebClientOptions, method: setDefaultPort, part: port, value_arg: 0,
+        descriptor: "(I)Lio/vertx/ext/web/client/WebClientOptions;" }
+    - { owner: io.vertx.ext.web.client.WebClientOptions, method: setSsl, part: ssl, value_arg: 0,
+        descriptor: "(Z)Lio/vertx/ext/web/client/WebClientOptions;" }
+    - { owner: io.vertx.ext.web.client.WebClientConfig, method: setDefaultHost, part: host, value_arg: 0,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/WebClientConfig;" }
+    - { owner: io.vertx.ext.web.client.WebClientConfig, method: setDefaultPort, part: port, value_arg: 0,
+        descriptor: "(I)Lio/vertx/ext/web/client/WebClientConfig;" }
+    - { owner: io.vertx.ext.web.client.WebClientConfig, method: setSsl, part: ssl, value_arg: 0,
+        descriptor: "(Z)Lio/vertx/ext/web/client/WebClientConfig;" }
+    - { owner: io.vertx.core.http.RequestOptions, method: setHost, part: host, value_arg: 0,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;" }
+    - { owner: io.vertx.core.http.RequestOptions, method: setPort, part: port, value_arg: 0,
+        descriptor: "(Ljava/lang/Integer;)Lio/vertx/core/http/RequestOptions;" }
+    - { owner: io.vertx.core.http.RequestOptions, method: setURI, part: uri, value_arg: 0,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;" }
+    - { owner: io.vertx.core.http.RequestOptions, method: setSsl, part: ssl, value_arg: 0,
+        descriptor: "(Ljava/lang/Boolean;)Lio/vertx/core/http/RequestOptions;" }
+  # Every call on an options object that returns that same object configures it (rows 103-105:
+  # 88 / 64 / 64 `WebClientOptions` methods, 25 `WebClientConfig`, 23-26 `RequestOptions`, each
+  # answering its receiver), including the setters `WebClientOptions` inherits without
+  # overriding, declared to return a supertype (row 112). So `o.setConnectTimeout(…)` between
+  # `new WebClientOptions()` and `create(vertx, o)` is the object configured, not escaping.
+  configures:
+    - { owner: io.vertx.ext.web.client.WebClientOptions,
+        returns: [io.vertx.ext.web.client.WebClientOptions, io.vertx.core.http.HttpClientOptions,
+                  io.vertx.core.net.ClientOptionsBase, io.vertx.core.net.TCPSSLOptions,
+                  io.vertx.core.net.NetworkOptions] }
+    - { owner: io.vertx.ext.web.client.WebClientConfig,
+        returns: [io.vertx.ext.web.client.WebClientConfig] }
+    - { owner: io.vertx.core.http.RequestOptions, returns: [io.vertx.core.http.RequestOptions] }
+  join: fill_authority

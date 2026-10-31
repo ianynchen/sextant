@@ -1827,7 +1827,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_CHAINS,
                 find='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", '
-                '"port")\n',
+                '"port", "options")\n',
                 replace='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")  '
                 "# guard disabled by scripts/guard_check.py\n",
             ),
@@ -4044,8 +4044,8 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.a-STATIC-FIELD-receiver-is-followed-to-its-writer": Guard(
-        what="a call receiver read by `getstatic` is resolved as the field D00 §5's "
-        "`receiver_field` names",
+        what="a call receiver read by `getstatic`, or by `getfield` on `this` (2026-10-31), is "
+        "resolved as the field D00 §5's `receiver_field` names",
         why="the receiver's own value id is the `getstatic` instruction, which no other fact "
         "names, so `val derived = client.config { }` at file level reaches no parent: the "
         "derived client's relative call loses the base Ktor sends it to (CP-54 row 80)",
@@ -4438,9 +4438,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        _derive(end, context if end.path is None else "
-                "replace(context, path=end.path))\n",
-                replace="        _derive(end, context)  # guard disabled by scripts/guard_check.py\n",
+                find="        if end.path is not None:\n            held = replace(held, path=end.path)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            held = replace(held, path=end.path)\n",
             ),
         ),
     ),
@@ -7587,6 +7587,122 @@ GUARDS: dict[str, Guard] = {
                 find="    if scheme is not None:\n        return None\n",
                 replace="    if scheme is not None:  # guard disabled by scripts/guard_check.py\n"
                 "        return relative\n",
+            ),
+        ),
+    ),
+    "client_base.the-options-rung-reads-the-factorys-options": Guard(
+        what="an options-object rung reads the options argument of the factory that built the "
+        "client (Vert.x Task 13, spec §3d)",
+        why="without it a Vert.x client built by `WebClient.create(vertx, options)` has no "
+        'defaults, and `client.get("/q")` publishes no peer where Vert.x sends to '
+        "`search:9200` (CP-56 row 124)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='            each.append(self.parts_of(built, int(rung["options_arg"])))\n',
+                replace="            each.append({})  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "client_base.every-call-returning-the-options-configures-them": Guard(
+        what="a call on an options type returning a type `configures` names hands back the same "
+        "object, so it configures it (CP-56 rows 103-105, 112)",
+        why="Hono's options are configured statement by statement beside `setConnectTimeout` "
+        "and `setTrustOptions`; read as the object escaping, the host it sets is lost",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='                or returned_type(str(site["descriptor"])) in returns.get(str(site["owner"]), ())\n',
+                replace="                or False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "client_base.one-ladder-is-one-shape": Guard(
+        what="a `client_base` ladder mixing options rungs and block rungs is refused at load",
+        why="neither reader follows the other's rungs, so a mixed ladder would load and read a "
+        "base from half of it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if not isinstance(rung, dict) or "options_arg" not in rung:\n',
+                replace="        if not isinstance(rung, dict):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-client-at-the-roots-receiver-is-read-there": Guard(
+        what="`client_arg: receiver` reads the client off the receiver of the chain's root call",
+        why="a Vert.x request is made ON its client (`client.get(…)`); without it no client is "
+        "found and no default is filled",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        return {"captured_at": (root["caller"], root["ordinal"], RECEIVER)}\n',
+                replace="        return None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-default-fills-only-what-the-request-does-not-name": Guard(
+        what="a client default fills only the host or port the request names none of (CP-56 "
+        "row group (e))",
+        why='`get("other", "/a")` sends to `other`, with the default port; filling every '
+        "part would publish the client's default host over the one the request names",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    missing = [part for part in ("host", "port") if part not in captures]\n',
+                replace='    missing = ["host", "port"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "fluent.an-absolute-request-takes-no-default": Guard(
+        what="an absolute request (`xAbs`) takes neither default (CP-56 row 124)",
+        why='`putAbs("http://billing/c")` goes to `billing`; filled with the client\'s port it '
+        "would publish `billing:9200`, an address nobody calls",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if peer is not None or path is None or context.workspace is None:\n"
+                "        return captures\n    missing",
+                replace="    if path is None or context.workspace is None:  # guard disabled\n"
+                "        return captures\n    missing",
+            ),
+        ),
+    ),
+    "fluent.an-unread-default-leaves-the-resolution-alone": Guard(
+        what="a client default that was set and not read fills nothing (Q4 ruling 2026-10-31)",
+        why="Vert.x never rewrites the path, so an unread default host leaves only the peer "
+        "unread; filled as an unread part it would mark a fully read path `partial`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if text is not None:\n            filled[part] = _part_argument(text)\n",
+                replace="        filled[part] = _UNRESOLVED_ARGUMENT if text is None else "
+                "_part_argument(text)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-options-object-is-read-by-the-options-reader": Guard(
+        what="an `options` capture is read by the client model's setters into the request's "
+        "own parts (Vert.x spec §3d)",
+        why='`request(GET, new RequestOptions().setURI("/x"))` names its address on the '
+        "object; unread, the request derives no row",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if _OPTIONS in captures:\n        captures = _with_request_options(captures, context)\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-request-options-form-reads-its-options": Guard(
+        what="`request(HttpMethod, RequestOptions)` captures its options object",
+        why="without the capture the form reads no address and a request built from a "
+        "`RequestOptions` derives no row",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="captures: { http_method: arg0, options: arg1, serves: false } }",
+                replace="captures: { http_method: arg0, serves: false } }",
             ),
         ),
     ),

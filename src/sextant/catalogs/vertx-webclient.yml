@@ -32,7 +32,14 @@ measured:
 
 requires: [call_site, string_constants, chain_reconstruction]
 
+# The client's default host and port, set on the options object handed to `WebClient.create`
+# (spec §3d): declared once in `client-models/vertx-web.yml`. The client is the receiver of the
+# root call (`client.get(…)`).
+client_model: vertx-web
+
 matches:
+  client_base: { client_arg: receiver }
+
   # The verb a `getstatic HttpMethod.X` names (row 133), the table `vertx-web.yml` declares,
   # spelled again because a `fluent` catalog keeps it here. `request(HttpMethod, …)` and the
   # `method(HttpMethod)` step read it.
@@ -78,8 +85,9 @@ matches:
   #   * `x(host, uri)` → `host` and `url`, the port left to the client's default;
   #   * `x(port, host, uri)` → `port`, `host` and `url`;
   #   * `xAbs(url)` → the whole address, split by CP-2.
-  # The defaults themselves (`localhost` and `80` when nobody set them, rows 131-132) are never
-  # published: that a client sets none cannot be proven from the bytecode (spec §2a).
+  # The defaults are the client's (`client_model: vertx-web`): read off its options object, they
+  # fill the parts a request names none of; unset (`localhost` and `80`, rows 131-132) they are
+  # never published, since that a client sets none cannot be proven from the bytecode (§2a).
   #
   # A `UriTemplate` form reads its template off `UriTemplate.of(String)`, the one factory the
   # type declares (`url_via`; measured with `javap -s` on vertx-uri-template 4.5.10, 5.0.0 and
@@ -87,9 +95,10 @@ matches:
   # `(Ljava/lang/String;)Lio/vertx/uritemplate/UriTemplate;`). Its `{var}` holes stay holes;
   # `setTemplateParam` fills them per request, which is not read (spec §4).
   #
-  # A `RequestOptions` form names no address read here: the chain derives nothing (`serves:
-  # false`) unless a later `uri(…)` names one (spec §3d). A `SocketAddress` form reads its uri
-  # string as the path, with no peer (rows 325-326).
+  # A `RequestOptions` form reads its options object (`options: argN`) with the client model's
+  # setters: `setURI` the address, `setHost`/`setPort` the request's own parts. It derives
+  # nothing (`serves: false`) unless that uri, or a later `uri(…)`, names one (spec §3d). A
+  # `SocketAddress` form reads its uri string as the path, with no peer (rows 325-326).
   roots:
     - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
         captures: { http_method: GET, url: arg0 } }
@@ -211,15 +220,15 @@ matches:
         captures: { http_method: arg0, url: arg1 } }
     - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
         captures: { http_method: arg0, url: arg1 }, url_via: *template }
-    # The forms naming a `RequestOptions`: no address read, no row unless a later `uri(…)` names
-    # one. `request(RequestOptions)` (5.2.1) names no verb either. The `serves` capture means
-    # "this chain derives a row", in either direction.
+    # The forms naming a `RequestOptions`: its object read for the address (`options`), no row
+    # unless its `setURI` or a later `uri(…)` names one. `request(RequestOptions)` (5.2.1) names
+    # no verb either. The `serves` capture means "this chain derives a row", in either direction.
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, serves: false } }
+        captures: { http_method: arg0, options: arg1, serves: false } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { serves: false } }
+        captures: { options: arg0, serves: false } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, serves: false, destination: unread } }
+        captures: { http_method: arg0, options: arg2, serves: false, destination: unread } }
     # The forms naming a `SocketAddress` (row 56): the request is SENT to that address, which
     # is not read here. At send time the request hands it to `RequestOptions.setServer` (row
     # 325), and the core client builds the address from the request's host and port only when
@@ -320,12 +329,11 @@ wrappers:
 shape_model: json
 
 # BOUNDARIES, stated rather than discovered:
-#   * THE CLIENT'S DEFAULT HOST AND PORT. A request naming no host (`x(uri)`) or no port
-#     (`x(host, uri)`) takes the client's defaults, set on the options object handed to
-#     `WebClient.create`; that options object is not read here, so such a row's peer is
-#     the host it names, or NULL.
-#   * A REQUEST BUILT FROM A `RequestOptions`: no address read. A request sent to a
-#     `SocketAddress`: the address is not read, so the row has no peer.
+#   * THE CLIENT'S DEFAULT HOST AND PORT where its options object is not reached (a client
+#     built in another jar, an options object handed to code whose body is not read): the
+#     row keeps its path with no peer. A `Properties.getProperty("key")` host is not read as
+#     a configuration key (no configuration-read table exists).
+#   * A request sent to a `SocketAddress`: the address is not read, so the row has no peer.
 #   * `setTemplateParam`: a template hole filled per request stays a hole.
 #   * A CALL TO THE MODULE'S OWN SERVER (`localhost` in the module that serves it) is an
 #     outbound row: the self-call rule covers gRPC only (OI-198).

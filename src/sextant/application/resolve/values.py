@@ -1358,8 +1358,8 @@ class _Walk:
     ) -> tuple[_Reached, ...]:
         method, ordinal = str(site["caller"]), int(str(site["ordinal"]))
         if slot == RECEIVER:
-            # A receiver read from a static field is that field (D00 §5's
-            # `receiver_field`), resolved as the same field read as an ARGUMENT is: the
+            # A receiver read from a static field, or from a field of `this`, is that field
+            # (D00 §5's `receiver_field`), resolved as the same field read as an ARGUMENT is: the
             # read's own value id names nothing any other fact joins to.
             field = site.get("receiver_field")
             if field is not None:

@@ -31,6 +31,7 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.client_base import (
+    FILL_AUTHORITY,
     REPLACE_LAST_SEGMENT,
     client_base,
     client_base_of,
@@ -219,6 +220,63 @@ def test_a_well_formed_client_base_loads(tmp_path: Path):
     """The positive half of the refusals above: the same key, well formed, loads."""
     catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": _LADDER})
     _resolve_fluent(tmp_path, [], catalog)
+
+
+_OPTIONS_LADDER = {
+    "client_arg": "receiver",
+    "ladder": [{"owner": "com.acme.Client", "method": "create", "options_arg": 1}],
+    "setters": [
+        {"owner": "com.acme.Options", "method": "setHost", "part": "host", "value_arg": 0},
+    ],
+    "join": FILL_AUTHORITY,
+}
+
+
+@pytest.mark.parametrize(
+    ("broken", "named"),
+    [
+        # One ladder is one shape: an options rung beside a block rung is refused.
+        (
+            {**_OPTIONS_LADDER, "ladder": [*_OPTIONS_LADDER["ladder"], *_LADDER["ladder"]]},
+            "one ladder is one shape",
+        ),
+        ({key: v for key, v in _OPTIONS_LADDER.items() if key != "setters"}, "setters"),
+        ({**_OPTIONS_LADDER, "join": REPLACE_LAST_SEGMENT}, "fill_authority"),
+        ({**_LADDER, "join": FILL_AUTHORITY}, "replace_last_segment"),
+        ({**_OPTIONS_LADDER, "setter": _LADDER["setter"]}, "setter"),
+        (
+            {**_OPTIONS_LADDER, "setters": [{**_OPTIONS_LADDER["setters"][0], "part": "path"}]},
+            "part",
+        ),
+        ({**_OPTIONS_LADDER, "setters": [{"owner": "com.acme.Options", "part": "host"}]}, "method"),
+        ({**_OPTIONS_LADDER, "client_arg": "argument"}, "client_arg"),
+        ({**_OPTIONS_LADDER, "configures": [{"owner": "com.acme.Options"}]}, "returns"),
+    ],
+)
+@pytest.mark.pins("client_base.one-ladder-is-one-shape")
+def test_a_malformed_options_rung_is_refused_at_load(tmp_path: Path, broken, named):
+    """The options-object rung (Vert.x spec §3d) is checked as the block rung is: its setters,
+    its join, and a ladder that mixes the two shapes, which no reader could follow."""
+    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": broken})
+    with pytest.raises(CatalogError, match=named):
+        _resolve_fluent(tmp_path, [], catalog)
+
+
+def test_a_well_formed_options_rung_loads(tmp_path: Path):
+    catalog = _fluent_catalog({**_EXTENSION_MATCHES, "client_base": _OPTIONS_LADDER})
+    _resolve_fluent(tmp_path, [], catalog)
+
+
+def test_ktor_block_rungs_are_unchanged():
+    """Ktor's three catalogs still take the block model: every rung a block rung, the
+    `url` setter, Ktor's join, and no options-rung word anywhere in what they load."""
+    for catalog_id in ("ktor-client", "ktor-websocket-client", "ktor-sse-client"):
+        catalog = next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+        declared = client_base_of(catalog.matches, catalog.source)
+        assert declared is not None
+        assert all("block_arg" in rung and "options_arg" not in rung for rung in declared["ladder"])
+        assert declared["join"] == REPLACE_LAST_SEGMENT
+        assert "setters" not in declared and declared["setter"]["method"] == "url"
 
 
 def test_the_shared_reader_refuses_the_retired_word_for_every_style():

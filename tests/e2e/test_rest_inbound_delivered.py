@@ -2513,24 +2513,25 @@ def test_vertx_a_request_built_in_a_helper_and_sent_by_its_caller_is_one_row(ver
 # Task 13: the client's base address ----------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Task 13")
+@pytest.mark.pins("client_base.the-options-rung-reads-the-factorys-options")
 def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
     """`WebClient.create(vertx, new WebClientOptions().setDefaultHost("search")
     .setDefaultPort(9200))` then `client.get("/q").send()`: `GET /q`, peer `search:9200` —
     the options object is followed from the factory, and the setters made on that same
-    object are read (spec §3d)."""
+    object are read (spec §3d). The client is held in `this.client` and called on through
+    it, which the walk reads off the receiver's field (D00 §5, 2026-10-31)."""
     assert _vertx_calls(vertx_outbound, "SearchClient") == {("GET", "/q", "search:9200")}
 
 
-@pytest.mark.xfail(strict=True, reason="Task 13")
-def test_vertx_a_configured_base_is_the_configured_value_or_its_key(vertx_outbound):
-    """The same, with the host from a getter backed by `application.properties`: the traced
-    value is the configured one, or the config key where the chain leaves the code."""
-    calls = _vertx_calls(vertx_outbound, "ConfiguredSearchClient")
-    assert len(calls) == 1, calls
-    (method, path, peer) = next(iter(calls))
-    assert (method, path) == ("GET", "/suggest")
-    assert peer is not None and ("search-configured" in peer or "search.host" in peer), peer
+def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
+    """Hono's shape: the options are configured statement by statement from a config object's
+    getters (`config.getHost()`), beside calls that set no address, and the config object is
+    handed in by a framework, so where its host comes from is outside the module. The options
+    are read (the other calls configure them, not escape them), and the host is unread: the
+    row keeps its path, `GET /suggest`, with no peer — never a default Vert.x would fill
+    (coordinator ruling 2026-10-31, Q2 option B: no configuration-read table exists, so a
+    `Properties.getProperty` host is not read either)."""
+    assert _vertx_calls(vertx_outbound, "ConfiguredSearchClient") == {("GET", "/suggest", None)}
 
 
 # Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------

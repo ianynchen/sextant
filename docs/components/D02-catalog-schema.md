@@ -2287,6 +2287,43 @@ a position that is not a non-negative integer, an empty ladder, a call naming no
 that is not a list of well-formed entries. The interim word `relative_to_client_base` is folded into this
 key and refused at load.
 
+**The options-object rung** (Vert.x spec 2026-10-30 §3d, §3g item 7; `client-models/vertx-web.yml`)
+is the second shape a ladder may take, for a client configured by an OBJECT handed to its
+factory rather than by a block — `WebClient.create(vertx, options)`:
+
+```yaml
+client_base:
+  client_arg: receiver            # the client is the receiver of the chain's root call
+  ladder:  [{ owner, method, options_arg, descriptor? }]   # the factory, the options argument
+  setters: [{ owner, method, part: host | port | ssl | uri, value_arg, descriptor? }]
+  configures: [{ owner, returns: [types] }]   # optional: calls handing back the same object
+  join: fill_authority
+```
+
+One ladder is one shape: a ladder holding any `options_arg` rung is an options ladder, every
+rung must be one, it declares `setters` (never `setter` or `may_set_base`) and the join
+`fill_authority`; a block ladder's join is `replace_last_segment`. `client_arg` may be
+`receiver` here, the root call's receiver (`client.get(…)`), beside an index of the executing
+call. The client is found by the producer reader with every rung a stop, asking which object
+it is (`which_object`: the requests sent on it do not make it another client); the rung's
+options argument by the chain reader, every call `configures` names — a call on an options type
+declared to return one of `returns` (an inherited setter returns a supertype) — gathered as the
+object configured rather than escaping (ruling 4). Each setter's value is traced by the value
+walk: a string or integer literal, or a configuration expression; any other answer leaves that
+part set and unread. Every path must agree on a part, and a part one path does not reach is
+absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
+and the port a request names none of, each on its own, and the request's own parts — root
+arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address was not
+read, takes neither. The filled parts compose one peer as stated ones do. A default set and not
+read, or never reached, fills nothing: the row keeps its path and resolution with `peer` NULL,
+since the framework never rewrites the path and an unset default cannot be proven.
+
+**An `options: argN` capture** reads an options object a REQUEST is made from (Vert.x's
+`request(m, RequestOptions)`) with the same `setters`: its `uri` part is the `url`, its `host`
+and `port` the request's own, each only where the chain captured none of that field itself (a
+later step wins), and a read uri sets `serves: true`. Refused at load in a catalog whose
+`client_base` declares no `setters`.
+
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is
 LAST-WINS — a repeated step overwrites its own earlier value — which is right for a url and

@@ -17,6 +17,7 @@ from sextant.domain.facts import (
     CallArgument,
     CallSiteFact,
     CallTarget,
+    FieldWriteFact,
     MethodReturnFact,
     SymbolFact,
 )
@@ -306,8 +307,8 @@ def test_a_destination_word_other_than_unread_is_refused(tmp_path: Path):
 
 @pytest.mark.pins("vertx-webclient.a-uri-step-names-an-address")
 def test_a_request_options_form_derives_nothing_until_a_uri_names_an_address(tmp_path: Path):
-    """`client.request(GET, options).send()` names an address this catalog does not read (the
-    options object is Task 13's), so it is no row; a later `uri("/y")` names one (spec §3d)."""
+    """`client.request(GET, options).send()` with an options object nothing here reads names no
+    address, so it is no row; a later `uri("/y")` names one (spec §3d)."""
     body = _Body()
     verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
     options = CallArgument(kind="unresolved")
@@ -587,3 +588,261 @@ def test_the_catalog_flags_every_self_returning_request_method_and_nothing_else(
     assert {s["owner"] for s in steps} == {"io.vertx.ext.web.client.HttpRequest"}
     # CP-56 rows 304-323 print some owners with a stray `;`; none is copied here.
     assert all(not str(step["owner"]).endswith(";") for step in steps)
+
+
+# The client's defaults: an options object handed to the factory (Task 13, spec §3d) -------
+
+OPTIONS = "io/vertx/ext/web/client/WebClientOptions#"
+REQUEST_OPTIONS = "io/vertx/core/http/RequestOptions#"
+_CREATE = (
+    "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)"
+    "Lio/vertx/ext/web/client/WebClient;"
+)
+_SET_HOST = "(Ljava/lang/String;)Lio/vertx/ext/web/client/WebClientOptions;"
+_SET_PORT = "(I)Lio/vertx/ext/web/client/WebClientOptions;"
+_SET_TIMEOUT = "(I)Lio/vertx/ext/web/client/WebClientOptions;"
+
+
+class _Client(_Body):
+    """A body that builds its client from an options object before sending: `<init>` on a
+    fresh object (no result, row 323), each setter on the value the last one returned, and
+    the factory handed the last result."""
+
+    def new(self, owner: str) -> int:
+        """`new T()`: the object is the constructor's receiver, the call has no result."""
+        self._next_value += 1
+        made = self._next_value
+        self.sites.append(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=self.caller,
+                target=CallTarget(owner=owner, name="<init>", descriptor="()V"),
+                invoke_kind="special",
+                ordinal=len(self.sites),
+                receiver=made,
+                result=None,
+                arguments=[],
+            )
+        )
+        return made
+
+    def options(self, *setters: tuple[str, str, CallArgument], owner: str = OPTIONS) -> int:
+        """`new WebClientOptions().setX(…).setY(…)`, chained (CP-56 row 323)."""
+        value = self.new(owner)
+        for name, descriptor, argument in setters:
+            value = self.call(owner, name, descriptor, value, [argument], invoke_kind="virtual")
+        return value
+
+    def create(self, options: CallArgument) -> int:
+        return self.call(
+            CLIENT,
+            "create",
+            _CREATE,
+            None,
+            [CallArgument(kind="parameter", value=0), options],
+            invoke_kind="static",
+        )
+
+    def on(self, client: int, root: tuple[str, str, list[CallArgument]], *steps: tuple) -> int:
+        """`client.<root>(…).<step>(…)…` on the client this body built."""
+        value = self.call(CLIENT, root[0], root[1], client, root[2])
+        for name, descriptor, arguments in steps:
+            value = self.call(REQUEST, name, descriptor, value, arguments)
+        return value
+
+
+def _search_client(body: _Client) -> int:
+    """`WebClient.create(vertx, new WebClientOptions().setDefaultHost("search")
+    .setDefaultPort(9200))`, the fixture's `SearchClient`."""
+    made = body.options(
+        ("setDefaultHost", _SET_HOST, _string("search")),
+        ("setDefaultPort", _SET_PORT, _int(9200)),
+    )
+    return body.create(CallArgument(kind="unresolved", source=made))
+
+
+@pytest.mark.pins(
+    "client_base.the-options-rung-reads-the-factorys-options",
+    "fluent.a-client-at-the-roots-receiver-is-read-there",
+)
+def test_the_options_handed_to_the_factory_fill_a_request_naming_no_address(tmp_path: Path):
+    """`client.get("/q")` on a client built from options setting the default host and port:
+    Vert.x fills both into a request that names neither (CP-56 row 124), so the peer is
+    `search:9200`, one peer as for the parts form."""
+    body = _Client()
+    client = _search_client(body)
+    body.on(client, ("get", _URI, [_string("/q")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", "search:9200", "/q", "resolved")]
+
+
+@pytest.mark.pins(
+    "fluent.a-default-fills-only-what-the-request-does-not-name",
+    "fluent.an-absolute-request-takes-no-default",
+)
+def test_a_request_naming_its_own_host_keeps_it(tmp_path: Path):
+    """The join is Vert.x's (CP-56 (e)): `get(host, uri)` takes the default port only;
+    `get(port, host, uri)` takes neither; `getAbs(url)` reads neither; a `host(…)` step on
+    `get(uri)` wins over the default host at send time and keeps the default port."""
+    body = _Client()
+    client = _search_client(body)
+    body.on(client, ("get", _HOST_URI, [_string("other"), _string("/a")]), _send())
+    body.on(
+        client,
+        ("post", _PORT_HOST_URI, [_int(8080), _string("inventory"), _string("/b")]),
+        _send(),
+    )
+    body.on(client, ("putAbs", _URI, [_string("http://billing/c")]), _send())
+    body.on(client, ("delete", _URI, [_string("/d")]), ("host", _URI, [_string("h")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [
+        ("DELETE", "h:9200", "/d", "resolved"),
+        ("GET", "other:9200", "/a", "resolved"),
+        ("POST", "inventory:8080", "/b", "resolved"),
+        ("PUT", "billing", "/c", "resolved"),
+    ]
+
+
+@pytest.mark.pins("values.a-STATIC-FIELD-receiver-is-followed-to-its-writer")
+def test_an_options_object_held_in_a_constructor_written_field_is_read(tmp_path: Path):
+    """D00 §5: the constructor stores the options in `this.options`, `start()` builds the
+    client from that field into `this.client`, and `query()` calls `this.client.get("/q")` —
+    the receiver read off `this`'s field (`receiver_field`). The client is followed through
+    its field to the factory, and the options through theirs to the setters."""
+    owner = "com/acme/vertx/Search#"
+    init = _MODULE + method_descriptor(owner, "<init>", "()V")
+    start = _MODULE + method_descriptor(owner, "start", "()V")
+    query = _MODULE + method_descriptor(owner, "query", "()V")
+    building = _Client(init)
+    made = building.options(
+        ("setDefaultHost", _SET_HOST, _string("search")),
+        ("setDefaultPort", _SET_PORT, _int(9200)),
+    )
+    starting = _Client(start)
+    client = starting.create(CallArgument(kind="field", symbol=owner + "options."))
+    sending = _Client(query)
+    get = sending.call(CLIENT, "get", _URI, None, [_string("/q")])
+    sending.call(REQUEST, "send", _SEND, get, [])
+    sending.sites[0] = sending.sites[0].model_copy(
+        update={"receiver_field": owner + "client.", "receiver": 3}
+    )
+    facts = [
+        *building.sites,
+        *starting.sites,
+        *sending.sites,
+        FieldWriteFact(
+            document_id="doc_1",
+            field=owner + "options.",
+            value=CallArgument(kind="unresolved", source=made),
+            written_by=init,
+        ),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=owner + "client.",
+            value=CallArgument(kind="unresolved", source=client),
+            written_by=start,
+        ),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert _calls(rows) == [("GET", "search:9200", "/q", "resolved")]
+
+
+@pytest.mark.pins("client_base.every-call-returning-the-options-configures-them")
+def test_options_configured_statement_by_statement_beside_other_settings_are_read(
+    tmp_path: Path,
+):
+    """Hono's shape: `o = new WebClientOptions(); o.setConnectTimeout(5);
+    o.setDefaultHost("search"); WebClient.create(vertx, o)`, each result dropped. A call on
+    the options that returns them configures them (CP-56 rows 103, 112), so the timeout is
+    not read as the object escaping, and the host is read."""
+    body = _Client()
+    made = body.new(OPTIONS)
+    body.call(OPTIONS, "setConnectTimeout", _SET_TIMEOUT, made, [_int(5)], invoke_kind="virtual")
+    body.call(OPTIONS, "setDefaultHost", _SET_HOST, made, [_string("search")], "virtual")
+    client = body.create(CallArgument(kind="unresolved", source=made))
+    body.on(client, ("get", _URI, [_string("/q")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", "search", "/q", "resolved")]
+
+
+@pytest.mark.pins("fluent.an-unread-default-leaves-the-resolution-alone")
+def test_an_unset_or_unread_default_keeps_the_path_with_no_peer(tmp_path: Path):
+    """Options setting no default host (only a port), or a host nothing here reads: Vert.x
+    would send to `localhost`, which cannot be proven, and the host it reads is unknown, so the
+    peer is NULL. The path is Vert.x's as written, so the row keeps it at its own resolution."""
+    body = _Client()
+    port_only = body.create(
+        CallArgument(
+            kind="unresolved", source=body.options(("setDefaultPort", _SET_PORT, _int(9200)))
+        )
+    )
+    unread = body.create(
+        CallArgument(
+            kind="unresolved",
+            source=body.options(("setDefaultHost", _SET_HOST, CallArgument(kind="unresolved"))),
+        )
+    )
+    body.on(port_only, ("get", _URI, [_string("/a")]), _send())
+    body.on(unread, ("post", _URI, [_string("/b")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", None, "/a", "resolved"),
+        ("POST", None, "/b", "resolved"),
+    ]
+
+
+@pytest.mark.pins(
+    "fluent.a-request-options-object-is-read-by-the-options-reader",
+    "vertx-webclient.a-request-options-form-reads-its-options",
+)
+def test_a_request_options_object_names_its_address(tmp_path: Path):
+    """`client.request(GET, new RequestOptions().setHost("h").setPort(81).setURI("/x"))`:
+    the options object is read as the client's is, `setURI` the path and `setHost`/`setPort`
+    the request's own parts. One naming only its uri takes the client's default host and port
+    (CP-56 row 126: each null part filled separately). One naming no uri is still no row."""
+    body = _Client()
+    client = _search_client(body)
+    verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
+    full = body.options(
+        ("setHost", "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;", _string("h")),
+        ("setPort", "(Ljava/lang/Integer;)Lio/vertx/core/http/RequestOptions;", _int(81)),
+        ("setURI", "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;", _string("/x")),
+        owner=REQUEST_OPTIONS,
+    )
+    uri_only = body.options(
+        ("setURI", "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;", _string("/y")),
+        owner=REQUEST_OPTIONS,
+    )
+    no_uri = body.options(
+        ("setHost", "(Ljava/lang/String;)Lio/vertx/core/http/RequestOptions;", _string("z")),
+        owner=REQUEST_OPTIONS,
+    )
+    for made in (full, uri_only, no_uri):
+        body.on(
+            client,
+            ("request", _OPTIONS, [verb, CallArgument(kind="unresolved", source=made)]),
+            _send(),
+        )
+
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", "h:81", "/x", "resolved"),
+        ("GET", "search:9200", "/y", "resolved"),
+    ]
+
+
+def test_a_socket_address_request_joins_no_default(tmp_path: Path):
+    """`client.request(GET, address, "/x")` on a client with defaults: the request goes to
+    the `SocketAddress` (Task 12's `destination: unread`), so no default is joined."""
+    body = _Client()
+    client = _search_client(body)
+    verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
+    body.on(
+        client,
+        ("request", _SOCKET_URI, [verb, CallArgument(kind="unresolved"), _string("/x")]),
+        _send(),
+    )
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", None, "/x", "resolved")]

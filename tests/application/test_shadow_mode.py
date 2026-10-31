@@ -371,7 +371,7 @@ _ASKS_PER_CATALOG = {
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
     "vertx-web": (35, 38),
-    "vertx-webclient": (105, 163),
+    "vertx-webclient": (123, 183),
     "vertx-eventbus-mutiny": (8, 14),
 }
 
@@ -405,7 +405,11 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # comment. **+101 on 2026-10-31**: the new `vertx-webclient` catalog, its roots' `url`,
     # `host` and `port` positions and its steps', same comment. **+4 on 2026-10-31**: its
     # `SocketAddress` forms' uri positions, read since the coordinator's ruling, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1035
+    # **+18 on 2026-10-31** (Task 13): the `vertx-web` client model merged into
+    # `vertx-webclient`, its seven factory rungs' `options_arg` and ten setters' `value_arg`,
+    # and `request(RequestOptions)`, whose root now reads `options: arg0`; the other two
+    # `RequestOptions` roots gain a slot each, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1053
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

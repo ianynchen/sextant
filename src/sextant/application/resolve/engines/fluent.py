@@ -71,7 +71,14 @@ from sextant.application.resolve.shapes.chains import (
     chain_ends,
     configuring_calls,
 )
-from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
+from sextant.application.resolve.shapes.client_base import (
+    CLIENT_IS_RECEIVER,
+    FILL_AUTHORITY,
+    against_client_base,
+    client_base_of,
+    client_defaults,
+    options_parts,
+)
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
     UNROOTED_PATH,
@@ -117,6 +124,7 @@ from sextant.application.resolve.values import (
     EXPRESSION,
     INT,
     LITERAL,
+    RECEIVER,
     STRING,
     Answer,
     Path,
@@ -160,7 +168,14 @@ _REDACTOR = Redactor.from_rules()
 # The captures that are parts of one address (2F design §4's base
 # composition; `host` and `port`, Vert.x spec §3d) — `channel`'s alternative, and what
 # `_validate_url_channel_exclusivity` weighs against it as a group.
-_ADDRESS_FIELDS = ("base", "url", "host", "port")
+_ADDRESS_FIELDS = ("base", "url", "host", "port", "options")
+# The capture naming an options object a request is made FROM (Vert.x's `request(m,
+# RequestOptions)`, spec §3d): read by the catalog's `client_base` setters, as the client's
+# own options are, into the request's own parts.
+_OPTIONS = "options"
+# The parts of an options object that name a request's address, and the capture each fills
+# where the chain captured none of its own.
+_OPTION_CAPTURES = {"uri": "url", "host": "host", "port": "port"}
 
 # A root's literal word saying where its chain is sent is not read here (`destination: unread`):
 # the framework sends the request to an address the code hands it apart from the URL, so the
@@ -251,6 +266,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     referenced: list[str] = []
     walk_index = cached_value_index(workspace)
     client_base = client_base_of(matches, catalog.source)
+    _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -357,8 +373,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 )
             if "handler" not in end.captures:
                 continue
-        # A chain walked back across methods is read on the path it took (ruling 5).
-        _derive(end, context if end.path is None else replace(context, path=end.path))
+        # A chain walked back across methods is read on the path it took (ruling 5), and a
+        # client sitting at the root's receiver is read off that root.
+        held = context
+        if end.path is not None:
+            held = replace(held, path=end.path)
+        if client_base is not None and client_base["client_arg"] == CLIENT_IS_RECEIVER:
+            held = replace(held, root=end.root)
+        _derive(end, held)
 
     if candidates is not None:
         _settle(candidates, rows, metadata, unread)
@@ -472,6 +494,9 @@ class _DeriveContext:
     # mount, whose routes serve at their root as read.
     mounts: MountReader | None = None
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
+    # is that call's receiver (`client_arg: receiver`, Vert.x spec §3d). None otherwise.
+    root: Mapping[str, Any] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -498,6 +523,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     if _COMPOSE in captures:
         composed_field, halves, join = captures[_COMPOSE]
         captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
+    if _OPTIONS in captures:
+        captures = _with_request_options(captures, context)
     # The consumer the chain captured, whatever the direction (read on the row
     # for an inbound one alone, below); and — fix round 1, finding 4 — a
     # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
@@ -1488,6 +1515,10 @@ def _composed_address(
         # step says, and no client base is joined to it. The path is the address's own.
         if captures.get(_DESTINATION) == _UNREAD_DESTINATION:
             return None, read[1], read[2]
+        if context.client_base is not None and context.client_base["join"] == FILL_AUTHORITY:
+            return _with_stated_authority(
+                read, _with_client_defaults(read, captures, context), context
+            )
         return _against_client_base(
             _with_stated_authority(read, captures, context), captures, context
         )
@@ -1604,6 +1635,71 @@ def _authority_parts(peer: str | None) -> tuple[str | None, str | None]:
     return peer, None
 
 
+def _with_client_defaults(
+    address: tuple[str | None, str | None, str],
+    captures: dict[str, Any],
+    context: _DeriveContext,
+) -> dict[str, Any]:
+    """`captures` with the client's default host and port filling the parts the request does
+    not name — the `fill_authority` join, Vert.x's (CP-56 row group (e)): `x(uri)` takes both,
+    `x(host, uri)` the port only, `x(port, host, uri)` neither, and a `host(…)` or `port(…)`
+    step is the request's own and wins. An absolute address (`xAbs`, its authority read by the
+    url reader) takes neither, and neither does an address whose path was not read, since
+    nothing then says it was not absolute.
+
+    The defaults are the client's options object's (`client_defaults`). A default that was set
+    and not read, or that no setter reached, fills nothing: the row keeps its path and its
+    resolution with no peer, because Vert.x never rewrites the path and an unset default
+    (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed into one
+    peer by `_with_stated_authority`, as a request's own parts are."""
+    peer, path, _ = address
+    if peer is not None or path is None or context.workspace is None:
+        return captures
+    missing = [part for part in ("host", "port") if part not in captures]
+    client = _client_of(captures, context) if missing else None
+    if client is None:
+        return captures
+    defaults = client_defaults(context.workspace, context.values, client, context.client_base or {})
+    filled = dict(captures)
+    for part in missing:
+        text = defaults.get(part)
+        if text is not None:
+            filled[part] = _part_argument(text)
+    return filled
+
+
+def _with_request_options(captures: dict[str, Any], context: _DeriveContext) -> dict[str, Any]:
+    """`captures` with the options object a request is made from read into the request's own
+    parts (Vert.x's `request(m, RequestOptions)`, spec §3d): its `uri` the address, its `host`
+    and `port` the request's own, each only where no step after the root captured that part
+    (a step on the request runs later, so it wins). The object is read by the catalog's
+    `client_base` setters, the reader of a client's own options. A part set to a value not read
+    here is captured unread, so the row says who is called went unread. A read uri makes the
+    chain a row (`serves`), where the root alone named no address."""
+    if context.workspace is None or context.client_base is None:
+        return captures
+    parts = options_parts(
+        context.workspace, context.values, captures[_OPTIONS], context.client_base
+    )
+    filled = dict(captures)
+    for part, field in _OPTION_CAPTURES.items():
+        if part not in parts or field in captures:
+            continue
+        text = parts[part]
+        filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
+        if field == "url" and text is not None:
+            filled[_SERVES] = True
+    return filled
+
+
+def _part_argument(text: str) -> dict[str, Any]:
+    """A part read off an options object as the argument a capture would hold: a port's
+    digits as an `int`, everything else a string — what `_stated_part` and `url_of` read."""
+    if text.isdigit():
+        return {"kind": "int", "value": int(text)}
+    return {"kind": "string", "value": text}
+
+
 def _against_client_base(
     address: tuple[str | None, str | None, str],
     captures: dict[str, Any],
@@ -1657,8 +1753,16 @@ def _client_of(captures: dict[str, Any], context: _DeriveContext) -> dict[str, A
     for a chain the walk held no executing call for (`chains._hold_executing_call`: it
     reached its terminal through no argument join, or through one with two executing
     calls, whose clients would be two)."""
+    if context.client_base is None:
+        return None
+    if context.client_base["client_arg"] == CLIENT_IS_RECEIVER:
+        # The client the root call is made ON (`client.get(…)`), read where the root reads it.
+        root = context.root
+        if root is None:
+            return None
+        return {"captured_at": (root["caller"], root["ordinal"], RECEIVER)}
     executing = captures.get(_EXECUTED_BY)
-    if context.client_base is None or executing is None:
+    if executing is None:
         return None
     slot = int(context.client_base["client_arg"])
     return _captured_at(_arg_at(executing["arguments"], slot), executing, slot)
@@ -1999,4 +2103,20 @@ def _validate_route_captures(entries: list[dict[str, Any]], catalog: Catalog) ->
                 f"loading catalog {catalog.source}: `{entry['method']}` captures "
                 f"`serves: {captures[_SERVES]!r}`, which is true or false (D02 §2's `fluent` "
                 f"style)"
+            )
+
+
+def _validate_options_capture(
+    entries: list[dict[str, Any]], client_base: Mapping[str, Any] | None, catalog: Catalog
+) -> None:
+    """Refuses an `options` capture in a catalog whose `client_base` declares no `setters`:
+    the options object is read by them, and with none it would load and read nothing."""
+    if client_base is not None and "setters" in client_base:
+        return
+    for entry in entries:
+        if _OPTIONS in entry["captures"]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures `options`, "
+                f"which is read by the `setters` of an options-object `client_base` this "
+                f"catalog does not declare (D02 §2's `fluent` style)"
             )
