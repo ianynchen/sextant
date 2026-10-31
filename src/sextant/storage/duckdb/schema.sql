@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- `binder_protocol`, `unselected_binding`, `handler_protocol`,
     -- `registration_activation`, `self_exchange`, `routing_conflict`,
     -- `routing_depth`, `web_stack`, `prefix_not_measured`,
-    -- `refused_registration` and `handler_pass_through` - checked in
+    -- `refused_registration`, `handler_pass_through` and `mount_prefix` - checked in
     -- `resolve/open_questions.py`, which
     -- owns the set (its `QUESTIONS`, with each kind's reason) and refuses
     -- anything outside it. This list is kept equal to that tuple.

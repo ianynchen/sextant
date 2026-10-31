@@ -155,6 +155,17 @@ QUESTIONS = (
     # reason (`evidence` is a provenance tier), and a partial address explains itself in its
     # path while a partial dispatch outcome has nothing on the row to say it.
     "handler_pass_through",
+    # Vert.x spec §3c. An inbound row served under a sub-router mount whose path was not read
+    # whole (Mesh's `forEach` over prefixes another module builds): the route's own path is
+    # read, the prefix in front of it is not, so the row's path holds the named hole
+    # `<prefix>` at `partial` and this question names what was not read. Candidates: one per
+    # mount the row is served under, the mount call (`mount`, `mount_ordinal`), the argument
+    # its prefix is read at (`argument` of the call at `at`, `at_ordinal`), what was read there
+    # (`read`) and the method that registered the route (`caller`).
+    #
+    # The row's own reason, for `handler_pass_through`'s reason: the hole says WHAT is
+    # missing, and only this says where to look for it.
+    "mount_prefix",
 )
 
 

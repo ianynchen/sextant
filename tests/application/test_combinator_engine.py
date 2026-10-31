@@ -3712,6 +3712,7 @@ def test_an_origin_naming_no_owner_or_no_method_is_refused(tmp_path: Path):
             _resolve(tmp_path, [], _catalog(matches))
 
 
+@pytest.mark.pins("inbound_routes.a-path-join-other-than-leading-slash-is-refused")
 def test_a_path_join_that_is_not_the_one_declared_value_is_refused(tmp_path: Path):
     """`path_join` is `leading_slash` or absent. A misspelling read as absent would fall
     back to verbatim concatenation and publish the glued address the word exists to

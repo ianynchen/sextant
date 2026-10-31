@@ -937,6 +937,42 @@ def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str,
     ) in text
 
 
+def test_a_mount_prefix_question_names_the_mount_and_the_unread_argument():
+    """Vert.x spec §3c's arm. Candidate shape matches what `mounts.file_unread_prefix`
+    writes: the mount call, the argument its prefix is read at, what it read, and the method
+    that registered the route."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "<prefix>/edge",
+            "question": "mount_prefix",
+            "candidates": json.dumps(
+                [
+                    {
+                        "argument": 0,
+                        "at": "com/acme/Routes#lambda$each$0().",
+                        "at_ordinal": 1,
+                        "caller": "com/acme/Routes#each().",
+                        "mount": "com/acme/Routes#lambda$each$0().",
+                        "mount_ordinal": 2,
+                        "read": "`{}*`",
+                    }
+                ]
+            ),
+            "evidence": "com/acme/Routes#lambda$each$0().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `GET <prefix>/edge` — mount_prefix: registered by com/acme/Routes#each().; the mount "
+        "at com/acme/Routes#lambda$each$0(). (call 2) reads its prefix from argument 0 of "
+        "call 1 in com/acme/Routes#lambda$each$0()., which reads as `{}*`, so the prefix is "
+        "not known"
+    ) in text
+
+
 def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
     """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
     and `name`) matches what `pass_through.file_unread` writes: a context handed to an

@@ -87,8 +87,10 @@ from sextant.application.resolve.shapes.mounts import (
     MountReader,
     MountRules,
     Prefix,
+    file_unread_prefix,
     mount_rules_of,
     router_producers,
+    unread_prefix_rows,
     weaker,
 )
 from sextant.application.resolve.shapes.pass_through import (
@@ -275,6 +277,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         candidates = []
     mounts: MountReader | None = None
     mounted: dict[tuple[str, int], Mount] = {}
+    # Why a row's path holds `<prefix>` (`mount_prefix`), filed once the rows are settled.
+    unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] = {}
     if mount_rules is not None:
         mounts, mounted = _mounts(read_whole, mount_rules, walk_index, workspace, refuses_unrooted)
     context: _DeriveContext | None = None
@@ -316,6 +320,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 candidates=candidates,
                 unread=unread,
                 mounts=mounts,
+                unread_prefixes=unread_prefixes,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -365,7 +370,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
     # The ledger's reset is the pipeline's, for the `open_questions` reason above.
-    record_open_questions(workspace, [*refusal_rows(refusals), *unread_rows(unread)])
+    record_open_questions(
+        workspace,
+        [
+            *refusal_rows(refusals),
+            *unread_rows(unread),
+            *unread_prefix_rows(unread_prefixes, rows),
+        ],
+    )
 
 
 @dataclass(frozen=True)
@@ -440,6 +452,7 @@ class _DeriveContext:
     # served under (`shapes.mounts`). None for every other catalog, and for a module with no
     # mount, whose routes serve at their root as read.
     mounts: MountReader | None = None
+    unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -714,6 +727,17 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         if context.mounts is not None and path is not None:
             path = context.mounts.joined(prefix, path, path_kind == PATH_KIND_PATTERN)
             url_resolution = weaker(url_resolution, prefix.resolution)
+            # A prefix not read whole says where it was not read (`mount_prefix`), filed for
+            # the rows the run keeps.
+            if prefix.unread and context.unread_prefixes is not None:
+                file_unread_prefix(
+                    context.unread_prefixes,
+                    protocol=context.catalog.protocol,
+                    method=verb,
+                    path=path,
+                    prefix=prefix,
+                    caller=context.caller,
+                )
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of

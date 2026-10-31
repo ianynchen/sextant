@@ -2122,7 +2122,9 @@ declared `terminal`), or the string argument `prefix_arg` — less a trailing `w
 Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
 and a router no mount received serves at its root, as read. A mount path not read whole gives
 the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by
-path. `refuses` lists what the framework throws on — `exact` (a path with no trailing
+path, with a `mount_prefix` open question (D01) naming the mount call and the argument its
+prefix was read at. A route reached only through a refused mount derives no row; a router
+reached on one path through a mount and on another through none serves under both. `refuses` lists what the framework throws on — `exact` (a path with no trailing
 `wildcard`), `pattern` (a pattern path), `wildcard` (a mount point ending in it) — and such a
 mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
 entry, either key without the other, or a `prefix_from` mount that is not a terminal, is

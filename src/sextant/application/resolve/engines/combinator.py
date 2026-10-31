@@ -193,10 +193,10 @@ from sextant.application.resolve.shapes.arguments import (
     _expanded_arguments,
 )
 from sextant.application.resolve.shapes.inbound_routes import (
-    LEADING_SLASH,
     MEDIA_FIELDS,
     join_prefix,
     media_json,
+    validated_path_join,
 )
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -2539,12 +2539,7 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"that carries a chain declares a route of its own (D02 §2's `combinator` "
                 f"style)"
             )
-    if catalog.matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `path_join: "
-            f"{catalog.matches.get('path_join')!r}` — the only value is `{LEADING_SLASH}`; "
-            f"leave it out for verbatim concatenation (D02 §2's `combinator` style)"
-        )
+    validated_path_join(catalog.matches, catalog.source, "combinator")
     # Spec 2026-09-19 §4c: `all_methods` is the framework's own default-methods list, as
     # the annotation style already spells it — a non-empty list of upper-case tokens.
     all_methods = catalog.matches.get("all_methods")

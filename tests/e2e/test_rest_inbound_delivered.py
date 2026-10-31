@@ -2426,6 +2426,24 @@ def test_vertx_a_mount_with_an_unread_prefix_names_the_hole(vertx_inbound):
     assert by_path["/provided"]["resolution"] == "resolved"
 
 
+@pytest.mark.pins("mounts.an-unread-prefix-files-its-reason")
+def test_vertx_an_unread_prefix_names_the_mount_and_the_argument_not_read(vertx_tables):
+    """The `<prefix>/edge` row's reason (`mount_prefix`): the mount call in the `forEach`
+    lambda, and argument 0 of the `route(p + "*")` call it reads its prefix from, which reads
+    as the template with its hole unfilled (coordinator ruling 2)."""
+    questions = [
+        q
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "mount_prefix" and q["path"] == "<prefix>/edge"
+    ]
+    assert len(questions) == 1, vertx_tables["open_questions"]
+    [candidate] = json.loads(questions[0]["candidates"])
+    assert "ApiRoutes#lambda$mountEach$0" in candidate["mount"]
+    assert (candidate["mount_ordinal"], candidate["at_ordinal"], candidate["argument"]) == (2, 1, 0)
+    assert candidate["read"] == "`{}*`"
+    assert "ApiRoutes#mountEach" in candidate["caller"]
+
+
 def test_vertx_a_router_built_in_a_base_class_takes_the_prefix_a_third_method_mounts(
     vertx_inbound,
 ):

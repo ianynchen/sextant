@@ -1029,6 +1029,14 @@ class Path:
         merged = _combine(self.trail, other.trail)
         return None if merged is None else Path(merged, self.entered | other.entered)
 
+    def entering(self, callee: str, caller: str, ordinal: int) -> "Path | None":
+        """This path with one more choice made: that `callee` was run by the call at
+        `(caller, ordinal)` — the step a descent into that call's return writes (`_entered`).
+        None where the path already chose another call of `callee`."""
+        step = _Step((_CALLER_OF, callee), f"{caller}@{ordinal}")
+        merged = _combine(self.trail, (step,))
+        return None if merged is None else Path(merged, self.entered | {step})
+
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
         handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
@@ -1071,11 +1079,13 @@ def producer_paths(
     records which steps were written for an entry (`Path.entered`), so a reader can tell
     that bound from two paths through different callers (`Path.two_calls_of_one_helper`).
 
-    **`which_object` asks which OBJECT the value is** (Vert.x spec 2026-10-30 §3c), the
-    object reader's own switch (`_Walk._objects`): no call made on an object changes which
-    producer made it, so the `escapes` window does not apply. A router given its routes and
-    then mounted is the router its producer made, routes and all. Off, the default, every
-    reader keeps the window it had."""
+    **`which_object` is for a reader asking "which object is this"** (Vert.x spec 2026-10-30
+    §3c), the object reader's own switch (`_Walk._objects`): a call made ON the value does not
+    make it another object, so the `escapes` window does not apply — a router given its
+    routes and then mounted is the router its producer made, routes and all. It ignores no
+    call that hands back a DIFFERENT object: that object is the call's result, and a walk
+    from it ends at that call, so the identity ends there. Off, the default, every reader
+    keeps the window it had."""
     walk = _Walk(
         index,
         declared=declared,

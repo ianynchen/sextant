@@ -326,11 +326,15 @@ def test_nested_mounts_compose_their_prefixes(tmp_path: Path):
     assert rows == {("/api/v1/orders", "list", "resolved")}
 
 
-@pytest.mark.pins("mounts.a-refused-mount-adds-no-prefix", "mounts.a-refused-mount-is-recorded")
-def test_a_mount_vertx_refuses_is_recorded_and_adds_no_prefix(tmp_path: Path):
+@pytest.mark.pins(
+    "mounts.a-refused-mount-serves-nothing",
+    "mounts.a-refused-mount-is-recorded",
+)
+def test_a_route_reached_only_through_mounts_vertx_refuses_is_no_row(tmp_path: Path):
     """`subRouter` on an exact path, on a regex path, and 4.5's `mountSubRouter` given a
     trailing `*` each throw in Vert.x (CP-56 rows 119-120): each is recorded under its own
-    reason, and the router it named is mounted by none of them."""
+    reason, and the router they named is served through none of them — nor at its root,
+    since Vert.x threw at the mount (coordinator ruling 4)."""
     module = _Module()
     wire = module.method(APP, "wire", f"({VERTX}Lio/vertx/ext/web/Router;)V")
     sub = module.router(wire)
@@ -348,7 +352,7 @@ def test_a_mount_vertx_refuses_is_recorded_and_adds_no_prefix(tmp_path: Path):
 
     rows, questions = _rows(tmp_path, module)
 
-    assert rows == {("/orders", "list", "resolved")}
+    assert rows == set()
     refused = {
         (q["path"], candidate)
         for q in questions
@@ -360,6 +364,53 @@ def test_a_mount_vertx_refuses_is_recorded_and_adds_no_prefix(tmp_path: Path):
         ("/r/.*", PATTERN_MOUNT_PATH),
         ("/star*", WILDCARD_MOUNT_POINT),
     }
+
+
+@pytest.mark.pins("mounts.a-refused-mount-adds-no-prefix")
+def test_a_route_also_mounted_where_vertx_accepts_keeps_that_row(tmp_path: Path):
+    """The same router mounted on an exact path (refused) and at `/api/*`: the route serves
+    under `/api` only — the refused mount adds nothing and takes nothing away."""
+    module = _Module()
+    wire = module.method(APP, "wire", f"({VERTX}Lio/vertx/ext/web/Router;)V")
+    sub = module.router(wire)
+    module.route(wire, "/orders", "list", receiver=sub)
+    module.sub_router(wire, "/exact", _value(sub), receiver_parameter=1)
+    module.sub_router(wire, "/api/*", _value(sub), receiver_parameter=1)
+
+    rows, questions = _rows(tmp_path, module)
+
+    assert rows == {("/api/orders", "list", "resolved")}
+    assert [q["path"] for q in questions] == ["/exact"]
+
+
+@pytest.mark.pins("mounts.an-execution-that-reaches-no-mount-serves-at-the-root")
+def test_a_helpers_router_mounted_by_one_caller_and_not_another_serves_both_ways(
+    tmp_path: Path,
+):
+    """`build(vertx)` makes a router and gives it a route; `mounted` mounts what it returns
+    at `/api/*` and `served` does not. Enumerable is exact: the route serves under `/api`
+    for the first caller and at its root for the second (coordinator ruling 3)."""
+    module = _Module()
+    builds = _MODULE + method_descriptor(APP, "build", _MAKES)
+    made = module.router(builds)
+    module.route(builds, "/orders", "list", receiver=made)
+    module.method(APP, "build", _MAKES, returns=made)
+    mounted = module.method(APP, "mounted", f"({VERTX}Lio/vertx/ext/web/Router;)V")
+    built = module.call(mounted, APP, "build", _MAKES, [_parameter(0)], kind="virtual")
+    module.sub_router(mounted, "/api/*", _value(built), receiver_parameter=1)
+    served = module.method(APP, "served", f"({VERTX})V")
+    alone = module.call(served, APP, "build", _MAKES, [_parameter(0)], kind="virtual")
+    module.call(
+        served,
+        "io/vertx/core/http/HttpServer#",
+        "requestHandler",
+        "(Lio/vertx/core/Handler;)Lio/vertx/core/http/HttpServer;",
+        [_value(alone)],
+    )
+
+    rows, _ = _rows(tmp_path, module)
+
+    assert rows == {("/api/orders", "list", "resolved"), ("/orders", "list", "resolved")}
 
 
 @pytest.mark.pins("mounts.a-module-method-returning-a-router-is-walked-into")
@@ -418,6 +469,29 @@ def test_router_producers_are_derived_by_type(tmp_path: Path):
         (
             {
                 "router_type": ["a.Router"],
+                "path_join": "leading-slash",
+                "mount": [{"owner": "a.Router", "method": "m", "router_arg": 0, "prefix_arg": 1}],
+            },
+            "path_join",
+        ),
+        (
+            {
+                "router_type": ["a.Router"],
+                "mount": [
+                    {
+                        "owner": "a.Router",
+                        "method": "m",
+                        "descriptor": 3,
+                        "router_arg": 0,
+                        "prefix_arg": 1,
+                    }
+                ],
+            },
+            "descriptor",
+        ),
+        (
+            {
+                "router_type": ["a.Router"],
                 "mount": [
                     {
                         "owner": "a.Router",
@@ -432,6 +506,7 @@ def test_router_producers_are_derived_by_type(tmp_path: Path):
         ),
     ],
 )
+@pytest.mark.pins("inbound_routes.a-path-join-other-than-leading-slash-is-refused")
 def test_a_malformed_mount_word_is_refused_naming_the_file(matches: dict, message: str):
     with pytest.raises(CatalogError, match=f"mounts.yml.*{message}"):
         mount_rules_of({"terminal": ["m"], **matches}, "mounts.yml")

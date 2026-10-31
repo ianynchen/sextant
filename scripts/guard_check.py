@@ -1588,6 +1588,56 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "mounts.a-refused-mount-serves-nothing": Guard(
+        what="an execution that reaches a router only through a mount the framework refuses "
+        "serves nothing, not even at the root (Vert.x plan, Task 11; coordinator ruling 4)",
+        why="without it a route on a router whose only mount Vert.x throws on is published at "
+        "the root, an address the application never serves",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                reached.append(joined)\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-execution-that-reaches-no-mount-serves-at-the-root": Guard(
+        what="a helper's router served unmounted by one caller and mounted by another serves "
+        "at its root too (Vert.x plan, Task 11; coordinator ruling 3)",
+        why="without it the unmounted caller's route is lost, and enumerable is exact",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="            if chosen is not None and self._unmounted(chosen, caller, "
+                "agreeing, entered | {method}):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-unread-prefix-files-its-reason": Guard(
+        what="a row whose path holds `<prefix>` files a `mount_prefix` question naming the "
+        "mount and the argument not read (Vert.x plan, Task 11; coordinator ruling 2)",
+        why="without it the hole says what is missing and nothing says where to look",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if prefix.unread and context.unread_prefixes is not None:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.a-path-join-other-than-leading-slash-is-refused": Guard(
+        what="`path_join` is `leading_slash` or absent, refused otherwise, for every engine "
+        "that reads it (Vert.x plan, Task 11; coordinator ruling 6)",
+        why="without it a misspelt rule reads as verbatim and publishes glued addresses",
+        edits=(
+            Edit(
+                path=_INBOUND_ROUTES,
+                find='    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "mounts.a-refused-mount-is-recorded": Guard(
         what="a mount the framework refuses is filed as a `refused_registration` question with "
         "its reason (Vert.x plan, Task 11; spec §3c, DR-6)",
@@ -1609,8 +1659,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="        if text is None:\n            return Prefix(UNREAD_PREFIX, "
-                "str(Resolution.PARTIAL))\n",
+                find="        if text is None:\n            return self._hole(mount, "
+                "_read_as(answer))\n",
                 replace="        if text is None:  # guard disabled by scripts/guard_check.py\n"
                 "            return None\n",
             ),

@@ -16,22 +16,29 @@ gives each caller's routes that caller's prefix, never the other's.
 - under every mount that received it on the route's path, one prefix each, `resolved`
   (enumerable is exact); each prefix behind the prefixes of the router it was mounted on
   (nested mounts compose);
-- at its root, as read, where no mount received it — built here and never mounted, or
-  produced outside the module (a path that ends at no call this module made);
+- at its root, as read, on every execution that reaches no mount — built here and never
+  mounted, a helper's router on the caller's path that does not mount it, or produced outside
+  the module (a path that ends at no call this module made);
 - behind a named hole, `<prefix>`, at `partial`, where a mount received it and the mount path
-  was not read whole: a placeholder that says what is missing, never a complete-looking path.
+  was not read whole: a placeholder that says what is missing, never a complete-looking path,
+  with a `mount_prefix` question naming the mount call and the argument not read.
 
-**A mount the framework refuses** (`refuses`) adds no prefix and is recorded (DR-6): a mount
-path with no trailing wildcard (`exact`), a pattern path (`pattern`), a mount point given the
-wildcard (`wildcard`), and an unrooted mount path where the catalog refuses one.
+**A mount the framework refuses** (`refuses`) is recorded and serves nothing (DR-6): the
+framework throws at the mount call, so a route reached only through it derives no row, and
+one reached through another serving path keeps that row. The refusals are a mount path with
+no trailing wildcard (`exact`), a pattern path (`pattern`), a mount point given the wildcard
+(`wildcard`), and an unrooted mount path where the catalog refuses one.
 
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
 the mount path per (mount, path) pair actually joined, cached; one read of each mount path on
 every path, for its refusals. Nested mounts recurse once per level. A module with no mount
-reads nothing: every route serves at its root.
+reads nothing: every route serves at its root. Which executions reach no mount is decided
+from the mount paths already read and the callers that take a helper's router back
+(`ValueIndex.returns`, turned round once per reader): no read of its own.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -40,15 +47,16 @@ from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.inbound_routes import (
     EXACT_MOUNT_PATH,
-    LEADING_SLASH,
     PATTERN_MOUNT_PATH,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
     is_unrooted,
     join_prefix,
+    validated_path_join,
 )
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
+    EXPRESSION,
     LITERAL,
     RECEIVER,
     STRING,
@@ -77,6 +85,9 @@ _REFUSES = {
 # grammar, so a path holding it is never linked by path (the `<host>` refusal applied to a
 # path segment).
 UNREAD_PREFIX = "<prefix>"
+# The `open_questions` kind that says why a row's path holds it (`resolve/open_questions.py`
+# owns the closed set).
+MOUNT_PREFIX = "mount_prefix"
 
 _STRENGTH = (
     str(Resolution.RESOLVED),
@@ -143,11 +154,26 @@ class Mount:
 
 
 @dataclass(frozen=True)
+class UnreadPrefix:
+    """Why a prefix is the named hole: the mount call, the argument its prefix is read at, and
+    what that argument read as (`mount_prefix`, D01)."""
+
+    mount: str
+    mount_ordinal: int
+    at: str
+    at_ordinal: int
+    argument: int
+    read: str
+
+
+@dataclass(frozen=True)
 class Prefix:
-    """A prefix a route serves under, or None for the router's root, with its own word."""
+    """A prefix a route serves under, or None for the router's root, with its own word, and
+    the mounts whose prefix in it was not read."""
 
     text: str | None
     resolution: str
+    unread: tuple[UnreadPrefix, ...] = ()
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -169,12 +195,7 @@ def mount_rules_of(matches: Mapping[str, Any], source: object) -> MountRules | N
         entry if isinstance(entry, str) else entry.get("method")
         for entry in matches.get("terminal", [])
     }
-    path_join = matches.get("path_join")
-    if path_join not in (None, LEADING_SLASH):
-        raise CatalogError(
-            f"loading catalog {source}: `path_join: {path_join!r}` — the only value is "
-            f"`{LEADING_SLASH}`; leave it out for verbatim concatenation"
-        )
+    path_join = validated_path_join(matches, source, "fluent")
     return MountRules(
         router_types, tuple(_rule(entry, terminals, source) for entry in declared), path_join
     )
@@ -214,6 +235,8 @@ def _rule(entry: Any, terminals: set[Any], source: object) -> MountRule:
             f"`exact` and `wildcard` beside a `wildcard`"
         )
     descriptor = entry.get("descriptor")
+    if descriptor is not None and not isinstance(descriptor, str):
+        raise CatalogError(f"{where} `{entry['method']}` `descriptor` must be a string")
     return MountRule(
         owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
         method=entry["method"],
@@ -292,17 +315,22 @@ class MountReader:
         self._refuses_unrooted = refuses_unrooted
         self._producers: dict[tuple[str, int, int | str], tuple[tuple[Producer, Path], ...]] = {}
         self._read: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...]] = {}
+        self._called_by: dict[str, tuple[tuple[str, int], ...]] | None = None
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
         receiver followed to the router's producer, on every path the walk takes (and within
-        `within`, the path the chain walk took to the root, where it took one)."""
+        `within`, the path the chain walk took to the root, where it took one). Empty where
+        every way the router is reached runs through a mount the framework refuses: nothing
+        serves the route. The root alone where the walk reaches no end at all."""
         found: list[Prefix] = []
+        ended = False
         for producer, path in self._producers_of(root, RECEIVER):
             joined = path if within is None else path.joined(within)
             if joined is not None:
+                ended = True
                 found.extend(self._served(producer, joined, frozenset()))
-        return tuple(dict.fromkeys(found)) or (ROOT,)
+        return tuple(dict.fromkeys(found)) if ended else (ROOT,)
 
     def refusals(self, mount: Mount) -> list[tuple[str, str]]:
         """`(mount path, reason)` for every way the framework refuses `mount`, its path read
@@ -321,12 +349,15 @@ class MountReader:
     def _served(self, producer: Producer, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
         """The prefixes of the router `producer` made, as reached on `path`: one per mount
         that received the same router on a path agreeing with it, behind that mount's own
-        router's prefixes; the root where none did. `mounting` holds the mounts this read is
-        inside, so a router mounted into itself ends rather than recurses."""
+        router's prefixes; and the root wherever an execution `path` allows reaches no mount
+        (`_unmounted`). A mount the framework refuses gives no prefix, and the executions it
+        covers serve nothing. `mounting` holds the mounts this read is inside, so a router
+        mounted into itself ends rather than recurses."""
         if producer.caller is None or producer.ordinal is None:
             return [ROOT]
         made = (producer.caller, producer.ordinal)
         found: list[Prefix] = []
+        reached: list[Path] = []
         for mount in self._mounts:
             if mount.key in mounting:
                 continue
@@ -338,21 +369,62 @@ class MountReader:
                     joined = joined.joined(mount.within)
                 if joined is None:
                     continue
+                reached.append(joined)
                 for own in self._prefixes(mount, joined):
                     for parent in self._parents(mount, joined, mounting | {mount.key}):
                         found.append(self._behind(parent, own))
-        return found or [ROOT]
+        if self._unmounted(path, producer.caller, reached, frozenset()):
+            found.append(ROOT)
+        return found
+
+    def _unmounted(
+        self, path: Path, method: str, reached: list[Path], entered: frozenset[str]
+    ) -> bool:
+        """Whether some execution `path` allows reaches none of the mounts in `reached` — the
+        router served as read, at its root (enumerable is exact: a helper's router mounted on
+        one caller's path and served unmounted on another's is served both ways).
+
+        A path no mount path agrees with reaches none. Otherwise each caller that can run
+        `method` (the method holding the producer, then each caller in turn, as the router
+        is handed back out) is a choice of its own, and a choice no mount path agrees with
+        is such an execution. A method nothing in the module calls ends the search."""
+        agreeing = [mounted for mounted in reached if path.joined(mounted) is not None]
+        if not agreeing:
+            return True
+        if method in entered:
+            return False
+        for caller, ordinal in self._callers(method):
+            chosen = path.entering(method, caller, ordinal)
+            if chosen is not None and self._unmounted(chosen, caller, agreeing, entered | {method}):
+                return True
+        return False
+
+    def _callers(self, method: str) -> tuple[tuple[str, int], ...]:
+        """The calls that run `method` and take what it hands back (`ValueIndex.returns`,
+        turned round once per reader)."""
+        if self._called_by is None:
+            called_by: dict[str, list[tuple[str, int]]] = {}
+            for (caller, _), returned in self._index.returns.items():
+                for ordinal, callee in returned:
+                    called_by.setdefault(callee, []).append((caller, ordinal))
+            self._called_by = {
+                callee: tuple(dict.fromkeys(sites)) for callee, sites in called_by.items()
+            }
+        return self._called_by.get(method, ())
 
     def _parents(self, mount: Mount, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
-        """The prefixes of the router `mount` mounts ON, read on `path`."""
+        """The prefixes of the router `mount` mounts ON, read on `path`; the root where the
+        walk reaches no end."""
         if mount.parent is None:
             return [ROOT]
         found: list[Prefix] = []
+        ended = False
         for producer, parent_path in self._producers_of(mount.parent, RECEIVER):
             joined = path.joined(parent_path)
             if joined is not None:
+                ended = True
                 found.extend(self._served(producer, joined, mounting))
-        return found or [ROOT]
+        return found if ended else [ROOT]
 
     def _prefixes(self, mount: Mount, path: Path) -> tuple[Prefix, ...]:
         """`mount`'s own prefixes read within `path`: the mount path with its trailing
@@ -365,7 +437,7 @@ class MountReader:
         if mount.pattern and "pattern" in mount.rule.refuses:
             pass
         elif mount.unread:
-            found.append(Prefix(UNREAD_PREFIX, str(Resolution.PARTIAL)))
+            found.append(self._hole(mount, "a value the walk captured at no position"))
         elif mount.prefix is None:
             found.append(Prefix("", str(Resolution.RESOLVED)))
         else:
@@ -377,14 +449,32 @@ class MountReader:
                 if prefix is not None:
                     found.append(prefix)
             if not read:
-                found.append(Prefix(UNREAD_PREFIX, str(Resolution.PARTIAL)))
+                found.append(self._hole(mount, "nothing on this path"))
         self._read[key] = tuple(dict.fromkeys(found))
         return self._read[key]
+
+    def _hole(self, mount: Mount, read: str) -> Prefix:
+        """The named hole for `mount`'s prefix, saying where it was read and what it read."""
+        at, argument = mount.prefix if mount.prefix is not None else (mount.site, -1)
+        return Prefix(
+            UNREAD_PREFIX,
+            str(Resolution.PARTIAL),
+            (
+                UnreadPrefix(
+                    mount=str(mount.site["caller"]),
+                    mount_ordinal=int(str(mount.site["ordinal"])),
+                    at=str(at["caller"]),
+                    at_ordinal=int(str(at["ordinal"])),
+                    argument=argument,
+                    read=read,
+                ),
+            ),
+        )
 
     def _prefix_of(self, mount: Mount, answer: Answer) -> Prefix | None:
         text = _literal(answer)
         if text is None:
-            return Prefix(UNREAD_PREFIX, str(Resolution.PARTIAL))
+            return self._hole(mount, _read_as(answer))
         if self._refusal(mount, text) is not None:
             return None
         wildcard = mount.rule.wildcard
@@ -417,7 +507,9 @@ class MountReader:
             if parent.text is None or own.text is None
             else join_prefix(parent.text, own.text, self._rules.path_join)
         )
-        return Prefix(text, weaker(parent.resolution, own.resolution))
+        return Prefix(
+            text, weaker(parent.resolution, own.resolution), (*parent.unread, *own.unread)
+        )
 
     def joined(self, prefix: Prefix, path: str, pattern: bool) -> str:
         """A route's own `path` behind `prefix` (`path_join`); a pattern verbatim, since the
@@ -440,6 +532,67 @@ class MountReader:
 def weaker(one: str, other: str) -> str:
     """The weaker of two resolution words."""
     return max(one, other, key=_STRENGTH.index)
+
+
+def _read_as(answer: Answer) -> str:
+    """What an argument not read whole read as, in words: its text with the holes unfilled,
+    or why the walk gave no value."""
+    if answer.kind == EXPRESSION or answer.inexact:
+        return f"`{answer.value}`"
+    if answer.kind == LITERAL:
+        return f"`{answer.value}`, not a string"
+    return f"no value ({answer.reason or answer.kind})"
+
+
+def file_unread_prefix(
+    unread: dict[tuple[str, str | None, str], dict[str, Any]],
+    *,
+    protocol: str,
+    method: str | None,
+    path: str,
+    prefix: Prefix,
+    caller: str,
+) -> None:
+    """Notes why a row's path holds `<prefix>` (`mount_prefix`, D01), one candidate per
+    unread mount, against the row's identity; written by `unread_prefix_rows`."""
+    row = unread.setdefault((protocol, method, path), {"candidates": []})
+    for entry in prefix.unread:
+        candidate = {
+            "mount": entry.mount,
+            "mount_ordinal": entry.mount_ordinal,
+            "at": entry.at,
+            "at_ordinal": entry.at_ordinal,
+            "argument": entry.argument,
+            "read": entry.read,
+            "caller": caller,
+        }
+        if candidate not in row["candidates"]:
+            row["candidates"].append(candidate)
+
+
+def unread_prefix_rows(
+    unread: Mapping[tuple[str, str | None, str], dict[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """The `open_questions` rows of the unread prefixes, for the rows the run kept, in a
+    stable order."""
+    kept = {(row["protocol"], row["method"], row["path"]) for row in rows}
+    found = []
+    for key in sorted(unread, key=lambda k: (k[0], k[1] or "", k[2])):
+        if key not in kept:
+            continue
+        candidates = sorted(unread[key]["candidates"], key=lambda c: json.dumps(c, sort_keys=True))
+        found.append(
+            {
+                "protocol": key[0],
+                "method": key[1],
+                "path": key[2],
+                "question": MOUNT_PREFIX,
+                "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+                "evidence": "; and ".join(sorted({str(c["mount"]) for c in candidates})),
+            }
+        )
+    return found
 
 
 def _literal(answer: Answer) -> str | None:

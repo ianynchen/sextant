@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.shapes.arguments import HOLE, UNREADABLE_HOST
 from sextant.domain.paths import EXPRESSION_OPENS
 
@@ -57,6 +58,19 @@ def _media_strings(argument: Any) -> list[str]:
     if argument.get("kind") == "string" and isinstance(argument.get("value"), str):
         return [str(argument["value"])]
     return []
+
+
+def validated_path_join(matches: Mapping[str, Any], source: object, style: str) -> str | None:
+    """`matches.path_join`, checked at load so a typo is refused rather than read as
+    verbatim, which would publish the glued address the word exists to prevent: absent, or
+    `leading_slash`, the one rule. `style` names the D02 style the refusal cites."""
+    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:
+        raise CatalogError(
+            f"loading catalog {source}: `path_join: "
+            f"{matches.get('path_join')!r}` — the only value is `{LEADING_SLASH}`; "
+            f"leave it out for verbatim concatenation (D02 §2's `{style}` style)"
+        )
+    return matches.get("path_join")
 
 
 def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:

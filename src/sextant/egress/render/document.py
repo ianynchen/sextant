@@ -1373,6 +1373,17 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{handler} (registered by {candidate['caller']}) {reasons}, so whether it "
             f"passes the request on is not known"
         )
+    if question == "mount_prefix":
+        # Vert.x spec §3c: a row served under a mount whose path was not read whole, filed by
+        # `resolve/shapes/mounts.py::file_unread_prefix` and verified against that writer's
+        # own `candidates` line: the mount call, the argument its prefix is read at, and
+        # what that argument read as.
+        return (
+            f"registered by {candidate['caller']}; the mount at {candidate['mount']} (call "
+            f"{candidate['mount_ordinal']}) reads its prefix from argument "
+            f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
+            f"which reads as {candidate['read']}, so the prefix is not known"
+        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent
