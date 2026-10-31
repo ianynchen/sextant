@@ -592,16 +592,26 @@ def test_a_malformed_route_capture_is_refused_naming_the_file(
 
 
 def test_the_catalog_names_no_unmeasured_row():
-    """Every `Route` step is one CP-56 row 110 lists, so `returns_receiver` is measured."""
+    """Every `Route` step is one CP-56 row 110 lists, so `returns_receiver` is measured; every
+    `Router` step is one `javap` shows `RouterImpl` answering with `this` at 4.5.10, 5.0.0 and
+    5.2.1 (Task 11 review fix 2; CP-56 lists `Route`'s methods, not `Router`'s)."""
     measured = {
         "blockingHandler", "consumes", "disable", "enable", "failureHandler", "handler",
         "last", "method", "order", "path", "pathRegex", "produces", "putMetadata", "remove",
         "setName", "setRegexGroupsNames", "subRouter", "useNormalizedPath", "virtualHost",
         "respond", "useNormalisedPath",
     }  # fmt: skip
+    router_measured = {
+        "putMetadata", "clear", "errorHandler", "uncaughtErrorHandler", "modifiedHandler",
+        "allowForward",
+    }  # fmt: skip
     steps = _vertx_web().matches["steps"]
 
-    assert {step["method"] for step in steps} == measured
+    assert {s["method"] for s in steps if s["owner"] == "io.vertx.ext.web.Route"} == measured
+    assert {
+        s["method"] for s in steps if s["owner"] == "io.vertx.ext.web.Router"
+    } == router_measured
+    assert {s["owner"] for s in steps} == {"io.vertx.ext.web.Route", "io.vertx.ext.web.Router"}
     assert all(step["returns_receiver"] is True for step in steps)
     # CP-56 rows 304-323 print some owners with a stray `;`; none is copied here.
     assert all(not str(step["owner"]).endswith(";") for step in steps)

@@ -1514,7 +1514,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="                if (mounted.caller, mounted.ordinal) != made:\n",
+                find="                if _identity(mounted) != made:\n",
                 replace="                if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1527,9 +1527,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find='                self._workspace, {"prefix": mount.prefix}, self._index, '
+                find='                self._workspace, {"prefix": at.prefix}, self._index, '
                 "within=path\n",
-                replace='                self._workspace, {"prefix": mount.prefix}, self._index, '
+                replace='                self._workspace, {"prefix": at.prefix}, self._index, '
                 "within=None\n",
             ),
         ),
@@ -1568,7 +1568,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="        if mount.parent is None:\n            return [ROOT]\n",
+                find="        if at.parent is None:\n            return [ROOT]\n",
                 replace="        if True:  # guard disabled by scripts/guard_check.py\n"
                 "            return [ROOT]\n",
             ),
@@ -1582,7 +1582,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="        if self._refusal(mount, text) is not None:\n            return None\n",
+                find="        if text is not None and self._refusal(mount, at, *text) is not None:\n"
+                "            return None\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n"
                 "            return None\n",
             ),
@@ -1638,6 +1639,90 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "mounts.every-chain-end-of-a-mount-call-is-a-way-to-it": Guard(
+        what="a mount call walked back to several callers' routes is reached by each, each read "
+        "on its own path (Vert.x plan, Task 11 review fix 1)",
+        why="without it only the first caller's route is a mount path, and the others' routers "
+        "are published at the root: `/y` for `/b/y`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                for way, at in enumerate(mount.paths):\n",
+                replace="                for way, at in enumerate(mount.paths[:1]):  # guard "
+                "disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-refusal-is-read-for-every-way-to-the-mount": Guard(
+        what="a mount call reached by several callers' routes reads each way's path for its "
+        "refusals (Vert.x plan, Task 11 review fix 1)",
+        why="without it a refusal on the second caller's exact path is lost",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        found: list[tuple[int, str, str]] = []\n"
+                "        for way, at in enumerate(mount.paths):\n",
+                replace="        found: list[tuple[int, str, str]] = []\n"
+                "        for way, at in enumerate(mount.paths[:1]):  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-self-returning-router-call-is-the-same-router": Guard(
+        what="a call returning its own receiver is no router producer (Vert.x plan, Task 11 "
+        "review fix 2)",
+        why="without it `sub.errorHandler(500, h)` is a router of its own and `sub`'s routes "
+        "take no prefix from the mount that received it",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if call in found or not descriptor or (*call, str(descriptor)) in "
+                "configuring:\n",
+                replace="        if call in found or not descriptor:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-object-reader-goes-through-a-self-returning-call": Guard(
+        what="`which_object` walks a value a configuring call produced on through that call's "
+        "receiver (Vert.x plan, Task 11 review fix 2)",
+        why="without it `sub.errorHandler(500, h)` reaches no producer, and the mount it is "
+        "handed to receives no router this module builds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._which_object and row is not None and _call_of(row) in "
+                "self._configuring:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-router-handed-in-is-the-parameter-it-arrived-at": Guard(
+        what="two producer-reader ends at one module parameter nothing calls, on agreeing "
+        "paths, are one router (Vert.x plan, Task 11 review fix 3)",
+        why="without it a router handed in and mounted inside the module serves only at its root",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="    if producer.parameter is not None and producer.reason == EXTERNAL:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-path-read-in-part-is-refused-where-the-part-read-decides": Guard(
+        what="a mount path whose last piece is read is checked for the wildcard as a literal is "
+        "(Vert.x plan, Task 11 review fix 4)",
+        why='without it `route(p + "/v1").subRouter(sub)`, which Vert.x refuses, is served '
+        "under `<prefix>`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if wildcard is None or not (whole or not _UNREAD_END.search(text)):\n",
+                replace="        if wildcard is None or not whole:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "mounts.a-refused-mount-is-recorded": Guard(
         what="a mount the framework refuses is filed as a `refused_registration` question with "
         "its reason (Vert.x plan, Task 11; spec §3c, DR-6)",
@@ -1645,9 +1730,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="            if text is not None and (reason := self._refusal(mount, text)) "
-                "is not None:\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+                find="                reason = self._refusal(mount, at, *text)\n",
+                replace="                reason = None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1659,10 +1743,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="        if text is None:\n            return self._hole(mount, "
-                "_read_as(answer))\n",
-                replace="        if text is None:  # guard disabled by scripts/guard_check.py\n"
-                "            return None\n",
+                find="        if text is None or not text[1]:\n            return self._hole(mount, "
+                "at, _read_as(answer))\n",
+                replace="        if text is None or not text[1]:  # guard disabled by "
+                "scripts/guard_check.py\n            return None\n",
             ),
         ),
     ),

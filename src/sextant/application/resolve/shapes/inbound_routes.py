@@ -74,13 +74,17 @@ def validated_path_join(matches: Mapping[str, Any], source: object, style: str) 
 
 
 def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
-    """One path segment as the framework will join it behind `prefix` — the catalog's
-    `path_join` applied, or the segment untouched when none is declared. `leading_slash` is
-    the framework's own three exceptions, verbatim: a segment that already starts with `/`,
-    the empty segment, and the bare `*` stay as written; every other segment gains a leading
-    `/`. Two spellings of one registration must be one row, and the join is what makes `api`
-    and `/api` the same address here as they are in the framework. The prefix is already an
-    address and is written as it is."""
+    """One literal path segment as the framework will join it behind `prefix` — the
+    catalog's `path_join` applied, or the literal untouched when none is declared. Every
+    literal an engine reads for a path position passes through here, so a join declared once
+    holds for prefixes, verbs and (when they are read) array elements alike; a rule's own
+    `path: ""` does not, since the empty segment is exactly one the join leaves alone.
+    `leading_slash` is the framework's own three exceptions, verbatim: a segment that
+    already starts with `/`, the empty segment, and the bare `*` stay as written; every
+    other segment gains a leading `/`. Two spellings of one registration must be one row,
+    and the join is what makes `path("api", …)` and `path("/api", …)` the same address here
+    as they are in the framework. The prefix is already an address and is written as it
+    is."""
     segment = path
     if rule == LEADING_SLASH and path not in ("", "*") and not path.startswith("/"):
         segment = "/" + path

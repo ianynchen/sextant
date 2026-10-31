@@ -219,6 +219,18 @@ matches:
     - { owner: io.vertx.ext.web.Route, method: useNormalisedPath, descriptor: "(Z)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: putMetadata, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: setRegexGroupsNames, descriptor: "(Ljava/util/List;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    # The `Router` methods that return the router they are called on: no route chain passes
+    # through them, and they are steps only so the mount join below reads `router.errorHandler(
+    # 500, h)` as that same router, never as a router of its own. Measured with `javap` on
+    # vertx-web 4.5.10, 5.0.0 and 5.2.1 (CP-56 lists `Route`'s, not `Router`'s): every
+    # `RouterImpl` body of these ends `aload_0; areturn`. `uncaughtErrorHandler` is 5.2.1's
+    # (absent at 4.5.10 and 5.0.0).
+    - { owner: io.vertx.ext.web.Router, method: putMetadata, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/ext/web/Router;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Router, method: clear, descriptor: "()Lio/vertx/ext/web/Router;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Router, method: errorHandler, descriptor: "(ILio/vertx/core/Handler;)Lio/vertx/ext/web/Router;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Router, method: uncaughtErrorHandler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Router;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Router, method: modifiedHandler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Router;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Router, method: allowForward, descriptor: "(Lio/vertx/ext/web/AllowForwardHeaders;)Lio/vertx/ext/web/Router;", returns_receiver: true }
   # A route given no handler serves nothing and derives nothing: a route built and configured
   # but never handed one. `subRouter` ends a chain too, so the mount below reads the path of
   # the route it is called on; a mount's chain derives no row of its own.
@@ -236,10 +248,13 @@ matches:
   # `/api*` and `"/" + name + "*"` mount at `/api` or `/<name>`. Every path Vert.x accepts
   # starts with `/` (row 118), so the join is `leading_slash`, as Ktor's and Javalin's.
   #
-  # A MOUNT VERT.X REFUSES adds no prefix and is recorded (rows 119-120): `subRouter` on a
-  # route whose path is exact (no trailing `*`) or a regular expression throws
+  # A MOUNT VERT.X REFUSES serves nothing through it, not even at the root, and is recorded
+  # (rows 119-120): `subRouter` on a route whose path is exact (no trailing `*`, including a
+  # path whose last piece is read and is not `*`) or a regular expression throws
   # `IllegalStateException`; 4.5's `mountSubRouter` given a mount point ending in `*` throws
-  # `IllegalArgumentException`. `route().subRouter(sub)`, with no path, mounts at the root.
+  # `IllegalArgumentException`. Vert.x throws at the mount call, so a route reached only
+  # through such a mount has no row; one also served another way keeps that row.
+  # `route().subRouter(sub)`, with no path, mounts at the root.
   router_type: [io.vertx.ext.web.Router]
   mount:
     - { owner: io.vertx.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;",

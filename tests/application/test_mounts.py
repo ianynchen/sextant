@@ -7,6 +7,7 @@ records javac's output: `Router.router(vertx)` a static call, every route and mo
 `invokeinterface` on `Router` or `Route`, a router handed between methods as an argument.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -413,6 +414,149 @@ def test_a_helpers_router_mounted_by_one_caller_and_not_another_serves_both_ways
     assert rows == {("/api/orders", "list", "resolved"), ("/orders", "list", "resolved")}
 
 
+def _mount_under(second: str) -> _Module:
+    """`mountUnder(Route route, Router sub) { route.subRouter(sub); }`, called for
+    `root.route("/a/*")` with a router serving `/x`, and for `root.route(second)` with one
+    serving `/y`: the mount call is one site, walked back to each caller's route."""
+    module = _Module()
+    jvm = "(Lio/vertx/ext/web/Route;Lio/vertx/ext/web/Router;)V"
+    helper = module.method(APP, "mountUnder", jvm)
+    module.call(helper, ROUTE, "subRouter", _SUB_ROUTER, [_parameter(1)], receiver_parameter=0)
+    start = module.method(APP, "start", f"({VERTX}Lio/vertx/ext/web/Router;)V")
+    a = module.router(start)
+    module.route(start, "/x", "ax", receiver=a)
+    ra = module.call(start, ROUTER, "route", _PATH, [_string("/a/*")], receiver_parameter=1)
+    module.call(start, APP, "mountUnder", jvm, [_value(ra), _value(a)], kind="virtual")
+    b = module.router(start)
+    module.route(start, "/y", "by", receiver=b)
+    rb = module.call(start, ROUTER, "route", _PATH, [_string(second)], receiver_parameter=1)
+    module.call(start, APP, "mountUnder", jvm, [_value(rb), _value(b)], kind="virtual")
+    return module
+
+
+@pytest.mark.pins("mounts.every-chain-end-of-a-mount-call-is-a-way-to-it")
+def test_a_mount_call_in_a_helper_reads_each_callers_route(tmp_path: Path):
+    """Review fix 1. Each caller's route is that caller's mount path: `/a/x` and `/b/y`,
+    never `/y` at the root because only the first chain end was kept."""
+    rows, questions = _rows(tmp_path, _mount_under("/b/*"))
+
+    assert {row[0] for row in rows} == {"/a/x", "/b/y"}
+    assert questions == []
+
+
+@pytest.mark.pins("mounts.a-refusal-is-read-for-every-way-to-the-mount")
+def test_a_helpers_mount_on_an_exact_path_is_refused_on_that_callers_way(tmp_path: Path):
+    """Review fix 1. The second caller mounts on the exact path `/b`, which Vert.x refuses:
+    the refusal is filed, and the second router serves nothing; the first is unaffected."""
+    rows, questions = _rows(tmp_path, _mount_under("/b"))
+
+    assert {row[0] for row in rows} == {"/a/x"}
+    assert [(q["path"], q["question"]) for q in questions] == [("/b", "refused_registration")]
+
+
+@pytest.mark.pins(
+    "mounts.a-self-returning-router-call-is-the-same-router",
+    "values.an-object-reader-goes-through-a-self-returning-call",
+)
+def test_a_self_returning_router_call_is_the_same_router(tmp_path: Path):
+    """Review fix 2. `root.route("/api/*").subRouter(sub.errorHandler(500, h))`:
+    `errorHandler` returns the router it was called on, so the mount receives `sub`."""
+    module = _Module()
+    wire = module.method(APP, "wire", f"({VERTX}Lio/vertx/ext/web/Router;)V")
+    sub = module.router(wire)
+    module.route(wire, "/x", "list", receiver=sub)
+    same = module.call(
+        wire,
+        ROUTER,
+        "errorHandler",
+        "(ILio/vertx/core/Handler;)Lio/vertx/ext/web/Router;",
+        [CallArgument(kind="int", value=500), _parameter(0)],
+        receiver=sub,
+    )
+    module.sub_router(wire, "/api/*", _value(same), receiver_parameter=1)
+
+    rows, _ = _rows(tmp_path, module)
+
+    assert rows == {("/api/x", "list", "resolved")}
+
+
+@pytest.mark.pins("mounts.a-router-handed-in-is-the-parameter-it-arrived-at")
+def test_a_router_handed_in_and_mounted_here_takes_the_prefix(tmp_path: Path):
+    """Review fix 3. `wire(vertx, root, sub)` gives `sub` a route and mounts it at `/api/*`:
+    two ends at one parameter on agreeing paths are one object, served under the mount only."""
+    module = _Module()
+    wire = module.method(
+        APP, "wire", f"({VERTX}Lio/vertx/ext/web/Router;Lio/vertx/ext/web/Router;)V"
+    )
+    module.route(wire, "/x", "list", receiver_parameter=2)
+    module.sub_router(wire, "/api/*", _parameter(2), receiver_parameter=1)
+
+    rows, _ = _rows(tmp_path, module)
+
+    assert rows == {("/api/x", "list", "resolved")}
+
+
+def _mounted_on_a_template(template: str, root: str = "route") -> _Module:
+    """`wire(vertx, root, p)` mounts a router serving `/orders` at a path built from `p`, a
+    parameter nothing here binds, by `template`."""
+    module = _Module()
+    wire = module.method(APP, "wire", f"({VERTX}Lio/vertx/ext/web/Router;Ljava/lang/String;)V")
+    sub = module.router(wire)
+    module.route(wire, "/orders", "list", receiver=sub)
+    joined = module.call(
+        wire,
+        "java/lang/invoke/StringConcatFactory#",
+        "makeConcatWithConstants",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        [_parameter(2)],
+        kind="dynamic",
+    )
+    route = module.call(
+        wire,
+        ROUTER,
+        root,
+        _PATH,
+        [CallArgument(kind="concat", source=joined, value=template)],
+        receiver_parameter=1,
+    )
+    module.call(wire, ROUTE, "subRouter", _SUB_ROUTER, [_value(sub)], receiver=route)
+    return module
+
+
+@pytest.mark.pins("mounts.a-path-read-in-part-is-refused-where-the-part-read-decides")
+def test_a_mount_path_whose_last_piece_is_read_without_the_wildcard_is_refused(tmp_path: Path):
+    """Review fix 4. `root.route(p + "/v1").subRouter(sub)`: whatever `p` is, the path ends
+    in `/v1`, so it is exact and Vert.x refuses it. Recorded as a literal would be; the
+    router serves nothing."""
+    rows, questions = _rows(tmp_path, _mounted_on_a_template("{}/v1"))
+
+    assert rows == set()
+    assert [(q["path"], json.loads(q["candidates"])[0]["reason"]) for q in questions] == [
+        ("{}/v1", EXACT_MOUNT_PATH)
+    ]
+
+
+@pytest.mark.pins("mounts.a-refused-mount-is-recorded")
+def test_a_regex_mount_path_read_in_part_is_refused_and_recorded(tmp_path: Path):
+    """Review fix 4. `root.routeWithRegex(p + ".*").subRouter(sub)`: a regex mount path is
+    refused whatever it reads, and the refusal is filed, not only the router left unserved."""
+    rows, questions = _rows(tmp_path, _mounted_on_a_template("{}.*", root="routeWithRegex"))
+
+    assert rows == set()
+    assert [(q["path"], json.loads(q["candidates"])[0]["reason"]) for q in questions] == [
+        ("{}.*", PATTERN_MOUNT_PATH)
+    ]
+
+
+def test_a_mount_point_whose_last_piece_is_unread_is_not_refused(tmp_path: Path):
+    """The undecided half of fix 4: `root.route("/" + p).subRouter(sub)` ends in what `p`
+    is, which may be `*`, so it is not refused: the route serves under the named hole."""
+    rows, questions = _rows(tmp_path, _mounted_on_a_template("/{}"))
+
+    assert rows == {("<prefix>/orders", "list", "partial")}
+    assert [q["question"] for q in questions] == ["mount_prefix"]
+
+
 @pytest.mark.pins("mounts.a-module-method-returning-a-router-is-walked-into")
 def test_router_producers_are_derived_by_type(tmp_path: Path):
     """The producer reader's stops are derived from the facts by type (spec §3c): a library
@@ -465,6 +609,50 @@ def test_router_producers_are_derived_by_type(tmp_path: Path):
                 ],
             },
             "exactly one",
+        ),
+        (
+            {
+                "router_type": ["a.Router"],
+                "mount": [
+                    {
+                        "owner": "a.Router",
+                        "method": "n",
+                        "router_arg": 0,
+                        "prefix_from": "receiver_path",
+                    }
+                ],
+            },
+            "terminal",
+        ),
+        (
+            {
+                "router_type": ["a.Router"],
+                "mount": [
+                    {
+                        "owner": "a.Router",
+                        "method": "m",
+                        "router_arg": 0,
+                        "prefix_arg": 1,
+                        "wildcard": 7,
+                    }
+                ],
+            },
+            "wildcard",
+        ),
+        (
+            {
+                "router_type": ["a.Router"],
+                "mount": [
+                    {
+                        "owner": "a.Router",
+                        "method": "m",
+                        "router_arg": 0,
+                        "prefix_arg": 1,
+                        "wildcard": "",
+                    }
+                ],
+            },
+            "wildcard",
         ),
         (
             {

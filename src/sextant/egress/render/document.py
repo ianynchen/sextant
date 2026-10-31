@@ -1174,9 +1174,8 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
     return _runs(f"{what}, so nothing above accounts for it: library `{coordinate}`{tail}.")
 
 
-# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
-# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
-# Why the framework refuses a registration, one phrase per `inbound_routes` reason word.
+# Why the framework refuses a registration (`refused_registration`), one phrase per
+# `inbound_routes` reason word, read by `_candidate_line`.
 _REFUSAL_PHRASES = {
     "unrooted_path": "refuses a path that is empty or lacks a leading `/`",
     "exact_mount_path": "refuses to mount a router on a path with no trailing wildcard",
@@ -1184,6 +1183,8 @@ _REFUSAL_PHRASES = {
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
 }
 
+# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
+# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
 _PASS_THROUGH_PHRASES = {
     "handed_to": "hands the request's context to {}, where it is not followed here",
     "stored_in": "stores the request's context in {}, where it is not followed here",

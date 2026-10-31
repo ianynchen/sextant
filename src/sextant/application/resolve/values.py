@@ -2272,6 +2272,13 @@ class _Walk:
                 return _only(trail, _unresolved(NOT_READABLE))
             return self._resolve((_SLOT, method, constructed, slot), trail, frames)
         site = (method, min(producers))
+        # **A call that returns its own receiver hands back that same object** (ruling 4,
+        # spec 2026-10-30), for the reader asking which object a value is (`which_object`):
+        # `router.errorHandler(500, h)` IS `router`, so the walk goes on through its receiver.
+        # The value walk declares no such call and never reaches this.
+        row = self._index.sites.get(site)
+        if self._which_object and row is not None and _call_of(row) in self._configuring:
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).
         # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object

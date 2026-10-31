@@ -66,6 +66,7 @@ from sextant.application.resolve.shapes.chains import (
     _resolves_beans,
     _site_key,
     chain_ends,
+    configuring_calls,
 )
 from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -84,7 +85,9 @@ from sextant.application.resolve.shapes.member_values import (
 from sextant.application.resolve.shapes.mounts import (
     ROOT,
     Mount,
+    MountPath,
     MountReader,
+    MountRule,
     MountRules,
     Prefix,
     file_unread_prefix,
@@ -277,10 +280,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         candidates = []
     mounts: MountReader | None = None
     mounted: dict[tuple[str, int], Mount] = {}
+    ways: dict[int, int] = {}
     # Why a row's path holds `<prefix>` (`mount_prefix`), filed once the rows are settled.
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] = {}
     if mount_rules is not None:
-        mounts, mounted = _mounts(read_whole, mount_rules, walk_index, workspace, refuses_unrooted)
+        mounts, mounted, ways = _mounts(
+            read_whole, mount_rules, walk_index, workspace, refuses_unrooted, catalog
+        )
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -326,7 +332,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # and it derives a row only where it was given a handler as well.
         mount = mounted.get(_site_key(end.terminal)) if end.terminal is not None else None
         if mount is not None and mounts is not None:
-            for path, reason in mounts.refusals(mount):
+            # This end's own way to the mount call: a refusal is filed for the way it was read
+            # on, under that way's root verb.
+            for way, path, reason in mounts.refusals(mount):
+                if way != ways.get(id(end)):
+                    continue
                 file_refusal(
                     refusals,
                     protocol=catalog.protocol,
@@ -349,7 +359,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for mount in mounted.values():
             if mount.rule.prefix_arg is None:
                 continue
-            for path, reason in mounts.refusals(mount):
+            for _, path, reason in mounts.refusals(mount):
                 file_refusal(
                     refusals,
                     protocol=catalog.protocol,
@@ -1042,14 +1052,21 @@ def _mounts(
     index: ValueIndex,
     workspace: Workspace,
     refuses_unrooted: bool,
-) -> tuple[MountReader | None, dict[tuple[str, int], Mount]]:
-    """The module's mounts (Vert.x spec §3c), by the mount call's site, and the reader of the
-    prefixes they give; None and nothing where the module mounts nothing, so its routes read
-    nothing more. A `prefix_from: receiver_path` mount is a chain end whose terminal is the
-    mount call: its path is the route's own `url` capture, read at the position the capture
-    carries, and the router it mounts on is its root's receiver. A `prefix_arg` mount is a
-    call of its own, found in one pass over the sites."""
-    found: dict[tuple[str, int], Mount] = {}
+    catalog: Catalog,
+) -> tuple[MountReader | None, dict[tuple[str, int], Mount], dict[int, int]]:
+    """The module's mounts (Vert.x spec §3c), by the mount call's site, the reader of the
+    prefixes they give, and which way to its mount each mount chain end is (by `id`, for
+    filing its refusals); None and nothing where the module mounts nothing, so its routes
+    read nothing more.
+
+    A `prefix_from: receiver_path` mount is a chain end whose terminal is the mount call: its
+    path is the route's own `url` capture, read at the position the capture carries, and the
+    router it mounts on is its root's receiver. A mount call in a helper walked back to each
+    caller's route is one chain end per caller, and each is a way of its own (`MountPath`),
+    read on its own path. A `prefix_arg` mount is a call of its own, found in one pass over
+    the sites."""
+    found: dict[tuple[str, int], tuple[MountRule, Mapping[str, Any], list[MountPath]]] = {}
+    ways: dict[int, int] = {}
     for end in ends:
         terminal = end.terminal
         rule = next(
@@ -1065,27 +1082,34 @@ def _mounts(
         url = end.captures.get("url")
         at = url.get(_CAPTURED_AT) if isinstance(url, dict) else None
         read = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
-        found.setdefault(
-            _site_key(terminal),
-            Mount(
-                rule,
-                terminal,
-                end.root or None,
-                None if read is None or at is None else (read, int(at[2])),
-                pattern=_URL_IS.get(str(end.captures.get("url_is"))) == PATH_KIND_PATTERN,
-                within=end.path,
-                unread="url" in end.captures and read is None,
-            ),
+        way = MountPath(
+            end.root or None,
+            None if read is None or at is None else (read, int(at[2])),
+            pattern=_URL_IS.get(str(end.captures.get("url_is"))) == PATH_KIND_PATTERN,
+            within=end.path,
+            unread="url" in end.captures and read is None,
         )
+        paths = found.setdefault(_site_key(terminal), (rule, terminal, []))[2]
+        if way not in paths:
+            paths.append(way)
+        ways[id(end)] = paths.index(way)
     for site in index.sites.values():
         for rule in rules.mounts:
             if rule.prefix_arg is not None and rule.matches(site):
-                found.setdefault(_site_key(site), Mount(rule, site, site, (site, rule.prefix_arg)))
+                found.setdefault(
+                    _site_key(site), (rule, site, [MountPath(site, (site, rule.prefix_arg))])
+                )
     if not found:
-        return None, {}
-    declared = router_producers(index, rules.router_types, workspace.once(dispatch_of).ancestors)
-    reader = MountReader(workspace, index, rules, declared, list(found.values()), refuses_unrooted)
-    return reader, found
+        return None, {}, {}
+    mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
+    configuring = configuring_calls(catalog, index.sites.values())
+    declared = router_producers(
+        index, rules.router_types, workspace.once(dispatch_of).ancestors, configuring
+    )
+    reader = MountReader(
+        workspace, index, rules, declared, list(mounts.values()), refuses_unrooted, configuring
+    )
+    return reader, mounts, ways
 
 
 def _judged_of(
