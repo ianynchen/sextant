@@ -6813,6 +6813,9 @@ def copy_tree(destination: Path) -> Path:
     shutil.copy2(REPO / "fixtures" / "pom.xml", destination / "fixtures" / "pom.xml")
     for named in (
         "orders-soap-client",
+        # The second library `fixture_stub.LIBRARIES` installs: the session fixture builds
+        # every listed library, so a copy without this one fails before any test runs.
+        "orders-vertx-web-base",
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",

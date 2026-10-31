@@ -79,6 +79,8 @@ PRIMED_FIXTURES = (
     "orders-servlet",
     "temporal-probe",
     "orders-eventbus",
+    # Depends on `orders-vertx-web-base`, installed by `fixture_stub.py` before this list.
+    "orders-vertx-web",
     # The two REACTOR fixtures the stitcher is measured on. Named by their ROOT, which is
     # what `mvn compile` there builds every module of — including `reactor-gateway/edge`,
     # whose only content is gateway configuration: it carries no Java, and `analyze` still
@@ -126,6 +128,17 @@ def fingerprint(root: Path) -> str:
     stat = jar.stat() if jar.is_file() else None
     size, mtime = (stat.st_size, stat.st_mtime) if stat else ("", "")
     digest.update(f"stub:{jar}:{size}:{mtime}".encode())
+    # The other library jars (`fixture_stub.LIBRARIES`), but only those this root's POM
+    # names: a root that never declares one compiles the same whatever that jar holds, so
+    # hashing it would recompile every fixture whenever a library fixture changes.
+    pom = root / "pom.xml"
+    declared = pom.read_text(encoding="utf-8") if pom.is_file() else ""
+    for library in fixture_stub.LIBRARIES[1:]:
+        if f"<artifactId>{library.artifact}</artifactId>" in declared:
+            jar = fixture_stub.local_repository_jar(library)
+            stat = jar.stat() if jar.is_file() else None
+            size, mtime = (stat.st_size, stat.st_mtime) if stat else ("", "")
+            digest.update(f"library:{jar}:{size}:{mtime}".encode())
     return digest.hexdigest()
 
 

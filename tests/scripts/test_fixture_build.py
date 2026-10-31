@@ -203,3 +203,35 @@ def test_what_a_compile_writes_and_the_suite_scribbles_are_not_inputs(
     (root / ".tradewind" / "sessions.sqlite").write_bytes(b"")
 
     assert fixture_build.fingerprint(root) == before
+
+
+def test_a_library_jar_moves_the_stamp_of_the_roots_that_declare_it(
+    tmp_path: Path, stub_jar: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`orders-vertx-web` depends on `orders-vertx-web-base`, installed by `fixture_stub`:
+    rebuilding that jar must recompile the root that names it, and only that root."""
+    library = fixture_stub.LIBRARIES[1]
+    jar = tmp_path / "m2" / f"{library.artifact}.jar"
+    jar.parent.mkdir(exist_ok=True)
+    jar.write_bytes(b"PK")
+    monkeypatch.setattr(
+        fixture_stub,
+        "local_repository_jar",
+        lambda lib=fixture_stub.LIBRARIES[0]: jar if lib is library else stub_jar,
+    )
+    declaring = _module(tmp_path / "declaring")
+    declaring_pom = declaring / "pom.xml"
+    declaring_pom.write_text(
+        declaring_pom.read_text(encoding="utf-8").replace(
+            "</project>",
+            f"<dependencies><dependency><artifactId>{library.artifact}</artifactId>"
+            "</dependency></dependencies></project>",
+        ),
+        encoding="utf-8",
+    )
+    other = _module(tmp_path / "other")
+    before = (fixture_build.fingerprint(declaring), fixture_build.fingerprint(other))
+    jar.write_bytes(b"PK rebuilt")
+    after = (fixture_build.fingerprint(declaring), fixture_build.fingerprint(other))
+    assert after[0] != before[0]
+    assert after[1] == before[1]

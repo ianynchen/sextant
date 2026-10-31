@@ -2046,3 +2046,380 @@ def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
     assert ("GET", "/orders/list", "property") in conditioned
     assert ("POST", "/orders", "property") in conditioned
     assert {path for _, path, _ in conditioned if path.startswith("/products")} == set()
+
+
+# ---------------------------------------------------------------------------------------
+# Vert.x Web and WebClient (spec 2026-10-30 §3f, plan 2026-10-31). Every test below is the
+# failing intention test of one task: `xfail(strict=True)` names the task that turns it
+# green, and that task removes the mark. Tests are grouped by that task, so one task flips
+# whole tests, never half of one.
+# ---------------------------------------------------------------------------------------
+
+VERTX_WEB = FIXTURES / "orders-vertx-web"
+
+
+@pytest.fixture(scope="module")
+def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    """One `module analyze` of the Vert.x fixture — inbound, outbound and the handler-read
+    rows all read it. The base jar it depends on is installed by `fixture_stub`."""
+    return _analyzed_tables(VERTX_WEB, tmp_path_factory.mktemp("vertx"))
+
+
+@pytest.fixture(scope="module")
+def vertx_inbound(vertx_tables: dict[str, list[dict]]) -> list[dict]:
+    return [
+        r
+        for r in vertx_tables["endpoints"]
+        if r["direction"] == "inbound" and r["protocol"] == "http"
+    ]
+
+
+@pytest.fixture(scope="module")
+def vertx_outbound(vertx_tables: dict[str, list[dict]]) -> list[dict]:
+    return [
+        r
+        for r in vertx_tables["endpoints"]
+        if r["direction"] == "outbound" and r["protocol"] == "http"
+    ]
+
+
+def _serves_any_method(row: dict) -> bool:
+    """The any-method marker (spec §3a). Task 3 creates it and decides where it lives; this
+    is the one place the tests name that, so Task 3 adjusts this body and nothing else."""
+    return row["method"] is None and bool(row.get("any_method"))
+
+
+def _is_pattern(row: dict) -> bool:
+    """A path that is a regular expression, not an address (spec §3a). Task 3 decides where
+    the path kind lives; this body is the one place the tests name it."""
+    return row.get("path_kind") == "pattern"
+
+
+def _vertx_handler(row: dict) -> str:
+    """`Class#method` out of the handler symbol."""
+    return str(row["handler"]).rsplit("/", 1)[1].partition("(")[0]
+
+
+def _served(rows: list[dict], handler_class: str) -> set[tuple]:
+    """`(method, path, handler, resolution)` of every row a handler class answers."""
+    return {
+        (r["method"], r["path"], _vertx_handler(r), r["resolution"])
+        for r in rows
+        if r["handler"] is not None and _vertx_handler(r).startswith(handler_class + "#")
+    }
+
+
+# Task 8: single-handler routes ---------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
+    """Verb methods, `route(HttpMethod, path)`, accumulated `method(…)` calls, the same route
+    as separate statements on a `Route` local with self-returning calls between, a regex
+    route, a path from a constant and a path from `String.format`, and a `virtualHost`
+    route. Each shape is on its own path, so the set below is the whole class: a row it does
+    not list is a wrong row."""
+    expected = {
+        ("GET", "/orders", "OrderRoutes#list", "resolved"),
+        ("POST", "/orders", "OrderRoutes#create", "resolved"),
+        ("PUT", "/orders/:id", "OrderRoutes#update", "resolved"),
+        ("GET", "/orders/:id", "OrderRoutes#find", "resolved"),
+        ("DELETE", "/orders/:id", "OrderRoutes#find", "resolved"),
+        ("GET", "/statement/:id", "OrderRoutes#statement", "resolved"),
+        ("DELETE", "/statement/:id", "OrderRoutes#statement", "resolved"),
+        (None, "/any", "OrderRoutes#any", "resolved"),
+        ("GET", "\\/files\\/.+", "OrderRoutes#file", "resolved"),
+        ("GET", "/v", "OrderRoutes#virtualHost", "resolved"),
+        ("GET", "/items", "OrderRoutes#items", "resolved"),
+        ("GET", "/a/:id", "OrderRoutes#formatted", "resolved"),
+        ("GET", "/search", "OrderRoutes#search", "resolved"),
+    }
+    # The `/health` lambda has its own test below; its synthetic name is javac's.
+    served = {r for r in _served(vertx_inbound, "OrderRoutes") if "#lambda$" not in r[2]}
+    assert served == expected, sorted(served, key=str)
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
+    """`route("/any").handler(…)` serves every verb: ONE row, method NULL, carrying the
+    any-method marker — never six rows, and never a bare NULL that reads as "nobody read
+    the verb" (spec §3a)."""
+    rows = [r for r in vertx_inbound if r["path"] == "/any"]
+    assert len(rows) == 1, rows
+    assert _serves_any_method(rows[0]), rows[0]
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_a_route_with_no_path_serves_every_path(vertx_inbound):
+    """The official hello world's only route, `router.route().handler(rc -> …)`: one row,
+    path `/*`, method NULL, answering. `router.route().handler(BodyHandler.create())`
+    beside it in `PassThroughRoutes` passes on and is no row."""
+    rows = [r for r in vertx_inbound if "/HelloServer#" in str(r["handler"])]
+    assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [(None, "/*", "resolved")]
+    assert _serves_any_method(rows[0]), rows[0]
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_respond_is_a_terminal(vertx_inbound):
+    """`router.get("/health").respond(ctx -> Future.succeededFuture(…))`: one row. The
+    handler is the lambda, a body of `OrderRoutes`."""
+    rows = [r for r in vertx_inbound if r["path"] == "/health"]
+    assert [(r["method"], r["resolution"]) for r in rows] == [("GET", "resolved")]
+    assert _vertx_handler(rows[0]).startswith("OrderRoutes#lambda$"), rows[0]["handler"]
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound):
+    """`.disable()` ends a chain with no row: Vert.x serves nothing for it. A path with no
+    leading `/` is refused by Vert.x, so it is no row and is NOT repaired to `/bad` (DR-6).
+    The refused declaration is recorded; Task 8 adds the assertion on where."""
+    paths = {r["path"] for r in vertx_inbound}
+    assert "/gone" not in paths
+    assert "bad" not in paths and "/bad" not in paths
+    # Control: the routes beside them derive, so the absence above is the rule's doing.
+    assert "/orders" in paths
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_a_regex_route_is_a_verbatim_pattern_row(vertx_inbound):
+    """`router.getWithRegex("\\/files\\/.+")`: the path is the regex verbatim, `resolved`,
+    marked a pattern, and not canonicalised (no `/` put in front of its leading `\\`)."""
+    regex = "\\/files\\/.+"
+    rows = [r for r in vertx_inbound if r["path"] == regex]
+    assert len(rows) == 1, sorted(str(r["path"]) for r in vertx_inbound)
+    assert (rows[0]["method"], rows[0]["resolution"]) == ("GET", "resolved")
+    assert _is_pattern(rows[0]), rows[0]
+
+
+@pytest.mark.xfail(strict=True, reason="Task 8")
+def test_vertx_handler_reads_and_a_virtual_host_reach_endpoint_metadata(vertx_tables):
+    """`ctx.queryParam("q")` and `ctx.request().getHeader("X-T")` are requirements of the
+    `/search` row (the mechanism `javalin.yml` ships), and `virtualHost("api.example.com")`
+    is a host requirement on `/v`, because it restricts which `Host` the route serves."""
+    requirements = _requirements(vertx_tables["endpoint_metadata"])
+    search = {(r[3], r[4]) for r in requirements if r[1] == "/search"}
+    assert search == {("query", "q"), ("header", "X-T")}, sorted(requirements, key=str)
+    host = {(r[3], r[4], r[5]) for r in requirements if r[1] == "/v"}
+    assert any(
+        kind == "host" and "api.example.com" in (name, value) for kind, name, value in host
+    ), host
+
+
+# Task 10: which handler answers ------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Task 10")
+def test_vertx_the_first_answering_handler_names_the_row(vertx_inbound):
+    """Vert.x runs a chain's handlers in order and stops at the first that does not pass on
+    (spec §3b). `.handler(this::a).handler(this::b)` with both answering is handler `a`.
+    The Hono pair — `post(EVENTS).handler(auth).handler(BodyHandler.create())` then
+    `post(EVENTS).handler(this::ingest)` in one method — is ONE row, handler `ingest`,
+    `resolved`: the first chain only passes on."""
+    rows = _served(vertx_inbound, "PassThroughRoutes")
+    assert ("GET", "/two", "PassThroughRoutes#a", "resolved") in rows
+    assert not any(r[2] == "PassThroughRoutes#b" for r in rows)
+    events = {r for r in rows if r[1] == "/events"}
+    assert events == {("POST", "/events", "PassThroughRoutes#ingest", "resolved")}, events
+
+
+@pytest.mark.xfail(strict=True, reason="Task 10")
+def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inbound):
+    """The same `(verb, path)` registered in two methods, both answering: the order is not
+    in the code, so each is a row and each is `narrowed` (one of them answers)."""
+    telemetry = {r for r in _served(vertx_inbound, "PassThroughRoutes") if r[1] == "/telemetry"}
+    assert telemetry == {
+        ("POST", "/telemetry", "PassThroughRoutes#acceptFirst", "narrowed"),
+        ("POST", "/telemetry", "PassThroughRoutes#acceptSecond", "narrowed"),
+    }, telemetry
+
+
+@pytest.mark.xfail(strict=True, reason="Task 10")
+def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
+    """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
+    So is a `next()` inside a lambda that captured the context (`onSuccess(u ->
+    ctx.next())`), and so is `route().handler(BodyHandler.create())`."""
+    paths = {r["path"] for r in vertx_inbound}
+    assert "/t/*" not in paths
+    assert "/lambda" not in paths
+    # Control: an answering route of the same class derives, so the absences are the rule's.
+    assert "/reply" in paths
+
+
+@pytest.mark.xfail(strict=True, reason="Task 10")
+def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
+    """`extractJson` hands `ctx` to an in-module helper that calls `ctx.next()`: it passes
+    on, so the row is `updateU`, `resolved`. An answering handler that hands `ctx` to an
+    in-module helper that replies is its own row, `resolved`."""
+    rows = _served(vertx_inbound, "PassThroughRoutes")
+    assert ("PUT", "/u/:id", "PassThroughRoutes#updateU", "resolved") in rows
+    assert ("GET", "/reply", "PassThroughRoutes#viaHelper", "resolved") in rows
+
+
+@pytest.mark.xfail(strict=True, reason="Task 10")
+def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound):
+    """`check` hands `ctx` to the base jar's `HttpUtils.nextRoute`, whose body is outside the
+    module: the handler's identity is read, its outcome is not, so the row is `check`,
+    `partial`, and the reason names the helper. `route(p).handler(baseFactory())`, an
+    inherited base-jar factory returning a handler that is not the framework's, is `partial`
+    too. `route(p).handler(createCorsHandler(…))` returns the library's `CorsHandler`, a
+    framework handler that passes on: no row."""
+    rows = [
+        r
+        for r in vertx_inbound
+        if "PassThroughRoutes#" in str(r["handler"]) or r["path"] in ("/plain", "/cors")
+    ]
+    check = [r for r in rows if r["path"] == "/u2/:id"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in check] == [
+        ("PUT", "PassThroughRoutes#check", "partial")
+    ]
+    assert "nextRoute" in str(check[0]["evidence"]), check[0]
+    plain = [r for r in rows if r["path"] == "/plain"]
+    assert [r["resolution"] for r in plain] == ["partial"], plain
+    assert not [r for r in rows if r["path"] == "/cors"]
+
+
+# Task 11: mounts -------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Task 11")
+def test_vertx_sub_routers_take_the_prefix_they_are_mounted_under(vertx_inbound):
+    """`root.route("/api/*").subRouter(api)` with `api` built in `build(vertx)`, and a router
+    built with `new RouterImpl(vertx)` mounted at `/m`: their routes serve under the mount's
+    prefix (spec §3c), `resolved`."""
+    rows = _served(vertx_inbound, "ApiRoutes")
+    assert ("GET", "/api/status", "ApiRoutes#status", "resolved") in rows
+    assert ("GET", "/m/impl", "ApiRoutes#status", "resolved") in rows
+    assert not [r for r in rows if r[1] in ("/status", "/impl")], rows
+
+
+@pytest.mark.xfail(strict=True, reason="Task 11")
+def test_vertx_a_router_mounted_at_two_prefixes_serves_under_both(vertx_inbound):
+    """One router built by `v(vertx)` and mounted at `/v1/*` and `/v2/*`: its route is served
+    under both, each `resolved` (enumerable is exact)."""
+    assert _served(vertx_inbound, "MountedTwice") == {
+        ("GET", "/v1/ping", "MountedTwice#ping", "resolved"),
+        ("GET", "/v2/ping", "MountedTwice#ping", "resolved"),
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="Task 11")
+def test_vertx_a_router_built_and_mounted_per_call_keeps_its_own_prefix(vertx_inbound):
+    """`createSubRouter(name)` builds a router and mounts it at `"/" + name + "*"`, called
+    for `users` and `groups`, each getting its own routes: each route under its own prefix
+    only. `/groups/:userUuid` and `/users/:groupUuid/members` are the mixing (OI-222) this
+    pins against."""
+    assert _served(vertx_inbound, "PerCallSubRouters") == {
+        ("GET", "/users/:userUuid", "PerCallSubRouters#user", "resolved"),
+        ("GET", "/groups/:groupUuid/members", "PerCallSubRouters#members", "resolved"),
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="Task 11")
+def test_vertx_a_mount_with_an_unread_prefix_names_the_hole(vertx_inbound):
+    """`RouterSource.prefixes().forEach(p -> root.route(p + "*").subRouter(edge))` over a
+    list from the base jar: the route is `<prefix>/edge`, `partial` — a named hole, never a
+    complete-looking path — and a router handed in from the base jar and given routes here
+    is served at its root, `resolved`."""
+    by_path = {
+        r["path"]: r
+        for r in vertx_inbound
+        if "ApiRoutes#status" in str(r["handler"])
+        or "edge" in str(r["path"])
+        or r["path"] == "/provided"
+    }
+    assert by_path["<prefix>/edge"]["resolution"] == "partial", sorted(by_path)
+    assert "/edge" not in by_path
+    assert by_path["/provided"]["resolution"] == "resolved"
+
+
+# Task 12: outbound parts, absolute URLs and the Hono helper ---------------------------
+
+
+def _vertx_calls(rows: list[dict], caller_class: str) -> set[tuple]:
+    """`(method, path, peer)` of every outbound row a client class sends."""
+    return {
+        (r["method"], r["path"], r["peer"])
+        for r in rows
+        if r["caller"] is not None and f"/{caller_class}#" in str(r["caller"])
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="Task 12")
+def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
+    """`client.get(8080, "inventory", "/stock/" + sku).send()`: `GET`, the path with its
+    unread tail a hole, peer `inventory:8080` — the same peer `getAbs("http://inventory:8080/
+    stock")` gives (spec §3d)."""
+    calls = _vertx_calls(vertx_outbound, "InventoryClient")
+    stock = {c for c in calls if c[0] == "GET"}
+    assert len(stock) == 1, calls
+    (_, path, peer) = next(iter(stock))
+    assert peer == "inventory:8080"
+    assert path.startswith("/stock/"), path
+
+
+@pytest.mark.xfail(strict=True, reason="Task 12")
+def test_vertx_an_absolute_call_splits_its_url_and_carries_the_body_type(vertx_outbound):
+    """`client.postAbs("http://billing/charges").sendJson(charge)`: `POST`, peer `billing`,
+    path `/charges`, request body `Charge`."""
+    rows = [
+        r
+        for r in vertx_outbound
+        if r["method"] == "POST"
+        and r["peer"] == "billing"
+        and "InventoryClient#" in str(r["caller"])
+    ]
+    assert [(r["path"], r["resolution"]) for r in rows] == [("/charges", "resolved")], rows
+    assert "Charge" in str(rows[0]["request_shape"]), rows[0]
+
+
+@pytest.mark.xfail(strict=True, reason="Task 12")
+def test_vertx_a_request_built_in_a_helper_and_sent_by_its_caller_is_one_row(vertx_outbound):
+    """Hono's shape: `request(expression)` builds `client.postAbs(QUERY).addQueryParam(…)`,
+    calls `timeout` and `basicAuthentication` on it in statement style, returns
+    `r.as(BodyCodec.jsonObject())`; `query` sends it. One outbound row — the self-returning
+    calls neither fork the chain nor hide its root."""
+    assert _vertx_calls(vertx_outbound, "PrometheusClient") == {
+        ("POST", "/api/v1/query", "prometheus:9090"),
+    }
+
+
+# Task 13: the client's base address ----------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Task 13")
+def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
+    """`WebClient.create(vertx, new WebClientOptions().setDefaultHost("search")
+    .setDefaultPort(9200))` then `client.get("/q").send()`: `GET /q`, peer `search:9200` —
+    the options object is followed from the factory, and the setters made on that same
+    object are read (spec §3d)."""
+    assert _vertx_calls(vertx_outbound, "SearchClient") == {("GET", "/q", "search:9200")}
+
+
+@pytest.mark.xfail(strict=True, reason="Task 13")
+def test_vertx_a_configured_base_is_the_configured_value_or_its_key(vertx_outbound):
+    """The same, with the host from a getter backed by `application.properties`: the traced
+    value is the configured one, or the config key where the chain leaves the code."""
+    calls = _vertx_calls(vertx_outbound, "ConfiguredSearchClient")
+    assert len(calls) == 1, calls
+    (method, path, peer) = next(iter(calls))
+    assert (method, path) == ("GET", "/suggest")
+    assert peer is not None and ("search-configured" in peer or "search.host" in peer), peer
+
+
+# Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="Task 14")
+def test_quarkus_reactive_routes_verbless_and_regex(quarkus_endpoints):
+    """A `@Route` with no `methods` is registered by Vert.x for any method (the same
+    dispatcher Vert.x Web uses, spec §3a): ONE row, method NULL, any-method marker — not six
+    rows. `@Route(regex = …)` derives the pattern row, the regex verbatim and `resolved`."""
+    inbound = [r for r in quarkus_endpoints if r["direction"] == "inbound"]
+    anyverb = [r for r in inbound if r["path"] == "/qk/orders/anyverb"]
+    assert len(anyverb) == 1, anyverb
+    assert _serves_any_method(anyverb[0]), anyverb[0]
+    regex = "\\/qk\\/files\\/.+"
+    files = [r for r in inbound if r["path"] == regex]
+    assert len(files) == 1, sorted(str(r["path"]) for r in inbound)
+    assert (files[0]["method"], files[0]["resolution"]) == ("GET", "resolved")
+    assert _is_pattern(files[0]), files[0]

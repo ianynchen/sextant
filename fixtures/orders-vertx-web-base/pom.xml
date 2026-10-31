@@ -1,0 +1,22 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- groupId and version are inherited, as `orders-soap-client` does: the coordinate
+       `com.example:orders-vertx-web-base:1.0.0` is what `tests/fixture_stub.py` installs
+       into the local repository and `orders-vertx-web` declares. -->
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>fixtures</artifactId>
+    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>orders-vertx-web-base</artifactId>
+  <!-- The shapes Hono keeps in `service-base` (Vert.x Web spec 2026-10-30 §3f): an
+       inherited CORS-handler factory, a handler factory that is not the framework's, a
+       helper that calls `ctx.next()`, a router built and handed in, and a list of mount
+       prefixes. They live in a jar so the analysed module cannot read their bodies. -->
+  <dependencies>
+    <dependency>
+      <groupId>io.vertx</groupId><artifactId>vertx-web</artifactId><version>5.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
