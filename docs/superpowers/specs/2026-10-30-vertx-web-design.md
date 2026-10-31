@@ -549,7 +549,7 @@ list. The tier says what closing it would take.
 | **Routes registered through an in-house wrapper library**, and pass-through decided in a sibling module (Mesh's `InternalEndpointRoute`; Hono's `service-base`) | The calls are in another Maven module's jar, which a per-module analysis does not read; pass-through there gives `partial` rows (§3b). OI-253 | C |
 | **A router mounted under a prefix outside the module, or Quarkus's `quarkus.http.root-path`** | §3c's standing bound; such rows are published at the root | B |
 | **Vert.x core `HttpClient`** (`vertx.createHttpClient().request(GET, port, host, uri).compose(req -> req.send())`) | A different API whose send sits inside a lambda passed to `compose`. It shares the address forms and would be a catalog of its own | B |
-| **A path served only by a library handler** (`StaticHandler`, `ProxyHandler`) | §3b: a framework handler passes on; nothing in the module answers | C |
+| **A path served only by a library handler** (`StaticHandler`, `TemplateHandler`, `ProxyHandler`, the `handler.graphql` and `handler.sockjs` handlers) | §3b: a framework handler is read as passing on; those that answer serve a route no row names | C |
 | **A handler that calls `next()` on one branch** | §3b: read as middleware | C |
 | **The request body an inbound handler reads** (`ctx.body().asPojo(T.class)`) | No request contract on a Vert.x row, as on Ktor's and Javalin's rows; `respond`'s `Future<T>` gives a response shape only where the existing shape pass reads a handler's return type | B |
 | **`failureHandler`, `errorHandler(int, …)`** | Error handling, not routes; `error_handlers` has no Vert.x catalog | A |
