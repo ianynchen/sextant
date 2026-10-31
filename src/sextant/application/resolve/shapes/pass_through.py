@@ -30,10 +30,12 @@ on a handler object are the catalog's (`pass_through_of`).
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from sextant.application.ports.catalogs import CatalogError
+from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import RECEIVER, ValueIndex, producers_of
@@ -142,8 +144,10 @@ class HandlerReader:
     are each one pass, over the method symbols and over the index's library calls.
     `parameters` is `declared_parameters_of`; `field_types` reads each field's declared type,
     asked only where a handler comes from a field; `dispatch` is the hierarchy `call_edges`
-    reads (`dispatch_of`), so a handler method runs what a call to it would run: its own body
-    and every module override."""
+    reads (`dispatch_of`), and `exact` the methods a reference runs exactly (`exact_methods`),
+    so a handler method runs what `Dispatch.candidates` says a call to it would run: from a
+    construction, the constructed class's declared or inherited body alone; from a declared
+    type or a virtual reference, that body plus every module override below the NAMED type."""
 
     def __init__(
         self,
@@ -153,11 +157,11 @@ class HandlerReader:
         parameters: Mapping[str, Sequence[Mapping[str, Any]]],
         field_types: Callable[[], Mapping[str, str]],
         dispatch: Dispatch,
+        exact: AbstractSet[str],
     ) -> None:
         self._index = index
         self._dispatch = dispatch
-        # Every method whose body the workspace read, as `call_edges` asks it.
-        self._read = {symbol for found in dispatch.bodies.values() for symbol in found}
+        self._exact = exact
         self._rule = rule
         self._method_symbols = method_symbols
         self._parameters = parameters
@@ -178,10 +182,17 @@ class HandlerReader:
             symbol = self._method_symbols.get(named)
             if symbol is None:
                 return Handler(outcome=UNREADABLE, unread=(NO_BODY, named))
-            # A lambda's body takes what it captured first; the context follows.
-            return self._runs((symbol,), int(argument.get("captures") or 0))
+            # A lambda's body takes what it captured first; the context follows. A private or
+            # static method (every synthetic lambda body among them) runs exactly; any other is
+            # dispatched on the type the reference names, as a virtual call is.
+            return self._runs(
+                (symbol,),
+                int(argument.get("captures") or 0),
+                named=owner_of(bare_descriptor(symbol)),
+                dispatched=symbol not in self._exact,
+            )
         if isinstance(argument, dict) and argument.get("kind") == "instance":
-            return self._object(str(argument.get("symbol")), None)
+            return self._object(str(argument.get("symbol")), None, constructed=True)
         at = self._index.sites.get((site[0], site[1])) if site is not None else None
         if at is None or site is None:
             where = site[0] if site is not None else "a registering method"
@@ -195,8 +206,10 @@ class HandlerReader:
                 continue
             owner, name = end.identity
             descriptor = str(made["descriptor"])
-            built = owner if name == "<init>" else returned_type(descriptor)
-            handlers.append(self._object(built, method_descriptor(owner, name, descriptor)))
+            constructed = name == "<init>"
+            built = owner if constructed else returned_type(descriptor)
+            maker = method_descriptor(owner, name, descriptor)
+            handlers.append(self._object(built, maker, constructed=constructed))
         if unmade or not handlers:
             arguments = at.get("arguments") or ()
             argument = arguments[site[2]] if site[2] < len(arguments) else None
@@ -206,23 +219,28 @@ class HandlerReader:
             )
         return _either(handlers)
 
-    def _runs(self, symbols: Sequence[str], context: int = 0) -> Handler:
-        """What calling the handler methods `symbols` runs, as `call_edges` would answer a call
-        to each: its body where the workspace read one, and every module override or
-        implementation of it. A method with neither is not readable here, named."""
+    def _runs(
+        self, symbols: Sequence[str], context: int, named: str | None, dispatched: bool
+    ) -> Handler:
+        """What calling the handler methods `symbols` on an object of the type `named` runs,
+        mirroring `Dispatch.candidates`: the body `named` declares or inherits, and — where the
+        call is `dispatched` (a declared type, a virtual reference) rather than made on a
+        construction or to a private or static method — every module override of it below
+        `named`, never a sibling's. A method with none is not readable here, named."""
         found: list[str] = []
         bodiless: list[str] = []
         alternatives: list[str] = []
         for position, symbol in enumerate(symbols):
             bare = bare_descriptor(symbol)
-            owner = owner_of(bare)
-            runs = [symbol] if symbol in self._read else []
-            for subtype in self._dispatch.subtypes.get(owner or "", ()):
-                runs.extend(
-                    s
-                    for s in self._dispatch.bodies.get(with_owner(bare, subtype), ())
-                    if s not in runs
-                )
+            start = named or owner_of(bare) or ""
+            runs = self._inherited(bare, start)
+            if dispatched:
+                for subtype in self._dispatch.subtypes.get(start, ()):
+                    runs.extend(
+                        s
+                        for s in self._dispatch.bodies.get(with_owner(bare, subtype), ())
+                        if s not in runs
+                    )
             # The first method is the handler the row names (a bridge comes after the method
             # it stands for): what dispatching to it can run are the alternatives.
             if position == 0:
@@ -239,6 +257,19 @@ class HandlerReader:
             unread=(NO_BODY, bodiless[0]) if bodiless else None,
             alternatives=tuple(alternatives),
         )
+
+    def _inherited(self, bare: str, start: str) -> list[str]:
+        """The body of the method `bare` names that an object of type `start` runs: its own
+        declaration's, else the nearest superclass's (JVMS 5.4.3.3's class arm)."""
+        seen: set[str] = set()
+        current: str | None = start
+        while current is not None and current not in seen:
+            seen.add(current)
+            found = self._dispatch.bodies.get(with_owner(bare, current))
+            if found:
+                return list(found)
+            current = self._index.superclasses.get(current)
+        return []
 
     def _declared_type(
         self, method: str, argument: Any, seen: set[tuple[str, int]]
@@ -260,7 +291,7 @@ class HandlerReader:
             seen.add((method, position))
             declared = self._parameters.get(method, ())
             typed = declared[position].get("erased_symbol") if position < len(declared) else None
-            found = self._typed(None if typed is None else str(typed))
+            found = self._typed(None if typed is None else str(typed), constructed=False)
             if found is not None:
                 return [found]
             handed: list[Handler] = []
@@ -277,7 +308,7 @@ class HandlerReader:
         if kind == "field" and argument.get("symbol") is not None:
             field = str(argument["symbol"])
             typed = self._field_types().get(field)
-            found = None if typed is None else self._typed(typed)
+            found = None if typed is None else self._typed(typed, constructed=False)
             return [found or Handler(outcome=UNREADABLE, unread=(FROM_FIELD, field))]
         if argument.get("source") is not None:
             handlers = []
@@ -287,25 +318,34 @@ class HandlerReader:
                     continue
                 descriptor = str(made["descriptor"])
                 owner, name = str(made.get("owner")), str(made["name"])
-                # A construction builds its owner, as `of` reads one.
-                built = owner if name == "<init>" else returned_type(descriptor)
-                handlers.append(self._object(built, method_descriptor(owner, name, descriptor)))
+                # A construction builds its owner, as `of` reads one, and runs exactly its
+                # class's body; a factory's declared return is a type, dispatched.
+                constructed = name == "<init>"
+                built = owner if constructed else returned_type(descriptor)
+                maker = method_descriptor(owner, name, descriptor)
+                handlers.append(self._object(built, maker, constructed=constructed))
             return handlers
         return []
 
-    def _object(self, built: str | None, maker: str | None) -> Handler:
-        """A handler object of type `built` (made by `maker`, where a call made it): the
-        framework's own passes on; a type of this module, or one it extends, runs its handler
-        method; any other was produced where this analysis does not read."""
+    def _object(self, built: str | None, maker: str | None, *, constructed: bool) -> Handler:
+        """A handler object of type `built` (made by `maker`, where a call made it; exactly
+        that class where `constructed`): the framework's own passes on; a type of this
+        module, or one it extends, runs its handler method; any other was produced where this
+        analysis does not read."""
         if maker is not None:
             unread: Unread = (PRODUCED_BY, maker)
         else:
             unread = (OF_TYPE, built or "an unread type")
-        return self._typed(built) or Handler(outcome=UNREADABLE, unread=unread)
+        return self._typed(built, constructed=constructed) or Handler(
+            outcome=UNREADABLE, unread=unread
+        )
 
-    def _typed(self, built: str | None) -> Handler | None:
+    def _typed(self, built: str | None, *, constructed: bool) -> Handler | None:
         """What a type says on its own: a type of a `framework_handlers` package passes on; a
-        type of this module, or one it extends, runs its handler method; None for any other."""
+        type of this module, or one it extends, runs its handler method — exactly the one it
+        declares or inherits where it was `constructed`, and every override below it where it
+        is only declared; None for any other."""
+        named = built
         seen: set[str] = set()
         while built is not None and built not in seen:
             seen.add(built)
@@ -324,7 +364,12 @@ class HandlerReader:
                     for m in methods
                     if any(c in methods for c, _ in self._index.callers.get((m, 0), ()))
                 ]
-                return self._runs((*stands_for, *(m for m in methods if m not in stands_for)))
+                return self._runs(
+                    (*stands_for, *(m for m in methods if m not in stands_for)),
+                    0,
+                    named=named,
+                    dispatched=not constructed,
+                )
             built = self._index.superclasses.get(built)
         return None
 
@@ -342,6 +387,17 @@ def _either(handlers: list[Handler]) -> Handler:
         tuple(dict.fromkeys(s for h in handlers for s in h.symbols)),
         unread=bodiless,
         alternatives=tuple(dict.fromkeys(s for h in handlers for s in h.alternatives)),
+    )
+
+
+def exact_methods(workspace: Workspace) -> frozenset[str]:
+    """The module's private and static methods: a reference to one runs it exactly, never an
+    override (JVMS: neither is dispatched). The `Workspace.once` builder, one read of
+    `method_visibility` per load."""
+    return frozenset(
+        str(row["symbol"])
+        for row in workspace.query("method_visibility")
+        if row["visibility"] == "private" or row["static"]
     )
 
 

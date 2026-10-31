@@ -1582,10 +1582,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="                return self._runs((*stands_for, *(m for m in methods if m "
-                "not in stands_for)))\n",
-                replace="                return self._runs(tuple(methods))  # guard disabled by "
-                "scripts/guard_check.py\n",
+                find="                    (*stands_for, *(m for m in methods if m not in stands_for)),\n",
+                replace="                    tuple(methods),  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1644,8 +1642,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find='            for subtype in self._dispatch.subtypes.get(owner or "", ()):\n',
-                replace="            for subtype in ():  # guard disabled by scripts/guard_check.py\n",
+                find="                for subtype in self._dispatch.subtypes.get(start, ()):\n",
+                replace="                for subtype in ():  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1657,7 +1655,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="            runs = [symbol] if symbol in self._read else []\n",
+                find="            runs = self._inherited(bare, start)\n",
                 replace="            runs = [symbol]  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1702,6 +1700,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-no-body-reason-stays-on-the-bodiless-method": Guard(
+        what="where dispatch runs several read bodies, each alternative keeps its own outcome; "
+        "a no-body reason stays on the method that has no body (Vert.x plan, Task 10, review "
+        "round 3)",
+        why="without it every alternative row is `partial` with a reason about a different method",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                UNREADABLE if symbol == bodiless else outcomes[symbol],\n",
+                replace="                UNREADABLE if bodiless else outcomes[symbol],  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.two-unnamed-handler-objects-are-two-rows": Guard(
         what="two route registrations whose handler objects nothing names (handler NULL) stay "
         "two rows, each with its own reason (Vert.x plan, Task 10, review round 1)",
@@ -1712,6 +1723,62 @@ GUARDS: dict[str, Guard] = {
                 find="                kept.setdefault(handler if handler is not None else "
                 "candidate.registered, candidate)\n",
                 replace="                kept.setdefault(handler, candidate)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-construction-runs-only-its-classs-body": Guard(
+        what="a constructed handler (`new X(…)`) runs only the body X declares or inherits, "
+        "never a subclass's override (Vert.x plan, Task 10, review round 3; "
+        "`Dispatch.candidates`)",
+        why="without it `new BaseHandler()` is judged on `SubHandler#handle`, a body it cannot "
+        "run, and a passing-on override hides an answering route",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            return self._object(str(argument.get("symbol")), None, '
+                "constructed=True)\n",
+                replace='            return self._object(str(argument.get("symbol")), None, '
+                "constructed=False)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.overrides-are-read-below-the-named-type": Guard(
+        what="overrides are read below the handler's own named type, not below the ancestor "
+        "that declares `handle` (Vert.x plan, Task 10, review round 3)",
+        why="without it a handler typed `Left` takes `Right`'s override, a sibling under the "
+        "same base that a `Left` can never be",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            start = named or owner_of(bare) or ""\n',
+                replace='            start = owner_of(bare) or ""  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "pass_through.a-private-or-static-reference-runs-exactly": Guard(
+        what="a reference to a private or static method, every synthetic lambda body among "
+        "them, runs it exactly; only a virtual or interface reference is dispatched (Vert.x "
+        "plan, Task 10, review round 3)",
+        why="without it a private handler takes an unrelated same-named method of a subclass "
+        "as an override",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                dispatched=symbol not in self._exact,\n",
+                replace="                dispatched=True,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-construction-producer-in-the-static-read-is-its-owner": Guard(
+        what="in the static-type read, a `<init>` producer is a construction of its owner "
+        "(Vert.x plan, Task 10, review round 3)",
+        why="without it a handler constructed then configured is read by the `void` return of "
+        "its constructor and is not readable here",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                constructed = name == "<init>"\n',
+                replace="                constructed = False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

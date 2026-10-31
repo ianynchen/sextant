@@ -84,8 +84,10 @@ from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
     PASSES_ON,
     UNREADABLE,
+    Handler,
     HandlerReader,
     PassThroughRule,
+    exact_methods,
     file_unread,
     handler_outcomes,
     pass_through_of,
@@ -930,44 +932,60 @@ def _judge(
         workspace.once(declared_parameters_of),
         lambda: workspace.once(_field_types),
         workspace.once(dispatch_of),
+        workspace.once(exact_methods),
     )
     read = {
         key: reader.of(argument, argument.get(_CAPTURED_AT)) for key, argument in arguments.items()
     }
     contexts = {symbol: handler.context for handler in read.values() for symbol in handler.symbols}
     outcomes, unread = handler_outcomes(index, rule.calls, contexts)
-    judged: dict[Any, _Judged] = {}
-    for key, handler in read.items():
-        if handler.outcome is not None:
-            judged[key] = _Judged(
-                None, handler.outcome, (handler.unread,) if handler.unread else ()
+    return {key: _judged_of(handler, outcomes, unread) for key, handler in read.items()}
+
+
+def _judged_of(
+    handler: Handler,
+    outcomes: Mapping[str, str],
+    unread: Mapping[str, tuple[tuple[str, str], ...]],
+) -> _Judged:
+    """One handler argument's outcome from its methods' (`handler_outcomes`): it passes on if
+    any of them does, is not readable here if any is (a method with no body among them
+    included), and answers otherwise. Where dispatch can run several bodies, each is judged
+    on its own as an alternative, with its own reasons alone."""
+    if handler.outcome is not None:
+        return _Judged(None, handler.outcome, (handler.unread,) if handler.unread else ())
+    found = {outcomes[symbol] for symbol in handler.symbols}
+    names = {entry for symbol in handler.symbols for entry in unread.get(symbol, ())}
+    # A handler method with no body among them (`HandlerReader._runs`) is not readable here
+    # unless another of them passes on.
+    if handler.unread is not None:
+        found.add(UNREADABLE)
+        names.add(handler.unread)
+    alternatives: tuple[_Judged, ...] = ()
+    if len(handler.alternatives) > 1:
+        # The no-body reason belongs to the method that has no body, never to an alternative
+        # whose own body was read.
+        bodiless = handler.unread[1] if handler.unread is not None else None
+        alternatives = tuple(
+            _Judged(
+                symbol,
+                UNREADABLE if symbol == bodiless else outcomes[symbol],
+                tuple(
+                    sorted(
+                        {
+                            *unread.get(symbol, ()),
+                            *((handler.unread,) if symbol == bodiless and handler.unread else ()),
+                        }
+                    )
+                ),
             )
-            continue
-        found = {outcomes[symbol] for symbol in handler.symbols}
-        names = {entry for symbol in handler.symbols for entry in unread.get(symbol, ())}
-        # A handler method with no body among them (`HandlerReader._runs`) is not readable
-        # here unless another of them passes on.
-        if handler.unread is not None:
-            found.add(UNREADABLE)
-            names.add(handler.unread)
-        alternatives: tuple[_Judged, ...] = ()
-        if len(handler.alternatives) > 1:
-            bodiless = (handler.unread,) if handler.unread is not None else ()
-            alternatives = tuple(
-                _Judged(
-                    symbol,
-                    UNREADABLE if bodiless else outcomes[symbol],
-                    tuple(sorted({*unread.get(symbol, ()), *bodiless})),
-                )
-                for symbol in handler.alternatives
-            )
-        judged[key] = _Judged(
-            handler.symbols[0],
-            next(o for o in (PASSES_ON, UNREADABLE, ANSWERS) if o in found),
-            tuple(sorted(names)),
-            alternatives,
+            for symbol in handler.alternatives
         )
-    return judged
+    return _Judged(
+        handler.symbols[0],
+        next(o for o in (PASSES_ON, UNREADABLE, ANSWERS) if o in found),
+        tuple(sorted(names)),
+        alternatives,
+    )
 
 
 def _field_types(workspace: Workspace) -> dict[str, str]:

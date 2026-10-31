@@ -29,6 +29,7 @@ from test_values import (
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.engines.fluent import _judged_of
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.chains import _method_symbols
 from sextant.application.resolve.shapes.pass_through import (
@@ -39,8 +40,10 @@ from sextant.application.resolve.shapes.pass_through import (
     PASSES_ON,
     STORED_IN,
     UNREADABLE,
+    Handler,
     HandlerReader,
     PassThroughRule,
+    exact_methods,
     file_unread,
     handler_outcomes,
     unread_rows,
@@ -261,6 +264,72 @@ _BASE = _PKG + "BaseHandler#"
 _SUB = _PKG + "SubHandler#"
 
 
+# Siblings under `BaseHandler`: `Left` inherits its `handle`, `Right` overrides it and
+# passes on. `BaseHandler#own` is private, and `SubHandler` declares an unrelated `own`.
+# `wire(BaseHandler h)` and `wireLeft(Left h)` hand a parameter nothing calls to a library
+# call; `wireBuilt()` hands it a `Replier` it constructs and then configures. The producer
+# walk reaches no construction for any of them, so the static read decides.
+_LEFT = _PKG + "Left#"
+_RIGHT = _PKG + "Right#"
+_REPLIER = _PKG + "Replier#"
+_TAKES_BASE = "(Lcom/acme/orders/values/BaseHandler;)V"
+_TAKES_LEFT = "(Lcom/acme/orders/values/Left;)V"
+_WIRE = _symbol(_ROUTES, "wire", _TAKES_BASE)
+_WIRE_LEFT = _symbol(_ROUTES, "wireLeft", _TAKES_LEFT)
+_WIRE_BUILT = _symbol(_ROUTES, "wireBuilt", "()V")
+
+
+def _subclass(owner: str, parent: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_values",
+        symbol=_MODULE + owner,
+        construct_kind=ConstructKind.CLASS,
+        superclass=_MODULE + parent,
+    )
+
+
+def _sibling_facts() -> list:
+    return [
+        _subclass(_LEFT, _BASE),
+        _subclass(_RIGHT, _BASE),
+        _declared(_RIGHT, "handle", _TAKES),
+        _void(_RIGHT, "handle", _TAKES),
+        _site(_symbol(_RIGHT, "handle", _TAKES), 0, _NEXT, kind="interface", receiver_parameter=0),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_BASE, "own", _TAKES),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _BASE,
+            visibility="private",
+        ),
+        _void(_BASE, "own", _TAKES),
+        _declared(_SUB, "own", _TAKES),
+        _void(_SUB, "own", _TAKES),
+        _declared(_ROUTES, "wire", _TAKES_BASE),
+        _void(_ROUTES, "wire", _TAKES_BASE),
+        _site(_WIRE, 0, _ONE_TARGET, kind="virtual", arguments=[_PARAMETER_0]),
+        _declared(_ROUTES, "wireLeft", _TAKES_LEFT),
+        _void(_ROUTES, "wireLeft", _TAKES_LEFT),
+        _site(_WIRE_LEFT, 0, _ONE_TARGET, kind="virtual", arguments=[_PARAMETER_0]),
+        _type(_REPLIER),
+        _declared(_REPLIER, "<init>", "()V"),
+        _void(_REPLIER, "<init>", "()V"),
+        _declared(_REPLIER, "handle", _TAKES),
+        _void(_REPLIER, "handle", _TAKES),
+        _declared(_ROUTES, "wireBuilt", "()V"),
+        _void(_ROUTES, "wireBuilt", "()V"),
+        _site(_WIRE_BUILT, 0, (_REPLIER, "<init>", "()V"), kind="special", result=7),
+        _site(_WIRE_BUILT, 1, (_REPLIER, "configure", "()V"), kind="virtual", receiver=7),
+        _site(
+            _WIRE_BUILT,
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="unresolved", source=7)],
+        ),
+    ]
+
+
 def _hierarchy_facts() -> list:
     return [
         _type(_AUTH),
@@ -300,7 +369,7 @@ def walked(tmp_path_factory: pytest.TempPathFactory):
     write_fact_file(
         facts / "routes.jsonl",
         _document(),
-        [*_facts(), *_anonymous_facts(), *_hierarchy_facts()],
+        [*_facts(), *_anonymous_facts(), *_hierarchy_facts(), *_sibling_facts()],
     )
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -320,8 +389,18 @@ def outcomes(walked) -> tuple[dict, dict]:
 
 def _reader(walked) -> HandlerReader:
     rule = PassThroughRule(_PASSES_ON, ("io.vertx.ext.web.handler",), frozenset({"handle"}))
+    parameters = {
+        _WIRE: ({"erased_symbol": _BASE},),
+        _WIRE_LEFT: ({"erased_symbol": _LEFT},),
+    }
     return HandlerReader(
-        value_index(walked), rule, _method_symbols(walked), {}, dict, dispatch_of(walked)
+        value_index(walked),
+        rule,
+        _method_symbols(walked),
+        parameters,
+        dict,
+        dispatch_of(walked),
+        exact_methods(walked),
     )
 
 
@@ -369,15 +448,66 @@ def test_a_handler_method_with_no_body_and_no_override_is_unreadable(walked):
     )
 
 
-@pytest.mark.pins("pass_through.a-handler-method-runs-its-module-overrides")
-def test_a_module_handler_type_runs_every_override_of_its_handle(walked):
-    """A `BaseHandler` may be a `SubHandler` at run time, whose `handle` passes on: both are
-    judged, and the one that passes on makes the handler middleware."""
+@pytest.mark.pins("pass_through.a-construction-runs-only-its-classs-body")
+def test_a_constructed_handler_runs_only_its_classs_handle(walked):
+    """`new BaseHandler()` is a `BaseHandler` and nothing else: it runs `BaseHandler#handle`,
+    never `SubHandler`'s override (user ruling 2026-10-30, `Dispatch.candidates`)."""
     handler = _reader(walked).of({"kind": "instance", "symbol": _BASE}, None)
+    base = _symbol(_BASE, "handle", _TAKES)
+    assert (handler.symbols, handler.alternatives) == ((base,), (base,))
+
+
+@pytest.mark.pins("pass_through.a-handler-method-runs-its-module-overrides")
+def test_a_handler_declared_as_a_module_type_runs_every_override_below_it(walked):
+    """A parameter typed `BaseHandler` may hold a `SubHandler` or a `Right`, whose `handle`
+    passes on: each is judged, and one that passes on makes the handler middleware."""
+    handler = _reader(walked).of({"kind": "parameter", "value": 0}, (_WIRE, 0, 0))
     base, sub = _symbol(_BASE, "handle", _TAKES), _symbol(_SUB, "handle", _TAKES)
-    assert set(handler.symbols) == {base, sub}
+    right = _symbol(_RIGHT, "handle", _TAKES)
+    assert set(handler.symbols) == {base, sub, right}
     found, _ = handler_outcomes(value_index(walked), _PASSES_ON, {base: 0, sub: 0})
     assert (found[base], found[sub]) == (ANSWERS, PASSES_ON)
+
+
+@pytest.mark.pins("pass_through.overrides-are-read-below-the-named-type")
+def test_a_handler_declared_as_a_subclass_never_runs_a_siblings_override(walked):
+    """A parameter typed `Left`, which inherits `BaseHandler#handle`, runs that body or an
+    override below `Left` — never `Right`'s, a sibling under `BaseHandler`. So does
+    `new Left()`."""
+    base = _symbol(_BASE, "handle", _TAKES)
+    declared = _reader(walked).of({"kind": "parameter", "value": 0}, (_WIRE_LEFT, 0, 0))
+    constructed = _reader(walked).of({"kind": "instance", "symbol": _LEFT}, None)
+    assert (declared.symbols, constructed.symbols) == ((base,), (base,))
+
+
+@pytest.mark.pins("pass_through.a-private-or-static-reference-runs-exactly")
+def test_a_reference_to_a_private_method_runs_exactly_and_a_public_one_is_dispatched(walked):
+    """`this::own` on a private method runs it and nothing else (a private method is never
+    dispatched); `base::handle` on a public one runs it or any override below the type the
+    reference names."""
+    reader = _reader(walked)
+    own = reader.of(
+        {"kind": "lambda", "symbol": method_descriptor(_BASE, "own", _TAKES), "captures": 0}, None
+    )
+    handle = reader.of(
+        {"kind": "lambda", "symbol": method_descriptor(_BASE, "handle", _TAKES), "captures": 0},
+        None,
+    )
+    assert own.symbols == (_symbol(_BASE, "own", _TAKES),)
+    assert set(handle.symbols) == {
+        _symbol(_BASE, "handle", _TAKES),
+        _symbol(_SUB, "handle", _TAKES),
+        _symbol(_RIGHT, "handle", _TAKES),
+    }
+
+
+@pytest.mark.pins("pass_through.a-construction-producer-in-the-static-read-is-its-owner")
+def test_a_constructed_then_configured_handler_is_read_as_its_class(walked):
+    """`Replier r = new Replier(); r.configure(); lib.one(r)`: the producer walk answers
+    `escapes`, so the static read decides, and a `<init>` producer is a construction of its
+    owner — `Replier#handle` — not a call whose return type is `void`."""
+    handler = _reader(walked).of({"kind": "unresolved", "source": 7}, (_WIRE_BUILT, 2, 0))
+    assert (handler.outcome, handler.symbols) == (None, (_symbol(_REPLIER, "handle", _TAKES),))
 
 
 @pytest.mark.pins("pass_through.a-question-keeps-an-unread-path-unread")
@@ -800,3 +930,22 @@ def test_an_order_capture_that_is_neither_an_argument_nor_last_is_refused(tmp_pa
     ]
     with pytest.raises(CatalogError, match="vertx-web.*order"):
         _resolve_fluent(tmp_path, [], replace(catalog, matches={**catalog.matches, "steps": steps}))
+
+
+@pytest.mark.pins("fluent.a-no-body-reason-stays-on-the-bodiless-method")
+def test_a_no_body_reason_stays_on_the_method_that_has_no_body():
+    """A handler whose dispatch runs two read bodies, beside a method with no body: each
+    alternative keeps its own outcome and its own reasons; the no-body reason is the
+    handler's alone, never an alternative's whose body was read."""
+    first, second, bodiless = "m#first().", "m#second().", "m#bare()."
+    handler = Handler(
+        (first, second, bodiless),
+        alternatives=(first, second),
+        unread=(NO_BODY, bodiless),
+    )
+    judged = _judged_of(handler, {first: ANSWERS, second: ANSWERS, bodiless: ANSWERS}, {})
+    assert [(a.symbol, a.outcome, a.unread) for a in judged.alternatives] == [
+        (first, ANSWERS, ()),
+        (second, ANSWERS, ()),
+    ]
+    assert (judged.outcome, judged.unread) == (UNREADABLE, ((NO_BODY, bodiless),))
