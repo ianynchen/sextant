@@ -19,6 +19,7 @@ every other test here has one slot, and a per-position walk answers those exactl
 as a per-path one does.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -4493,3 +4494,156 @@ def test_a_leading_hole_reached_from_two_contexts_keeps_both(fetched):
         ("expression", "{}/z"),
         ("literal", "svc-a/z"),
     ]
+
+
+# --- Where a producer path ENDS at a parameter (Vert.x Task 9) ------------------------------
+# The pass-through reader asks whether a `next()` receiver came from a handler's context
+# parameter, walking it back once per call site. Two shapes: `Chain#handle(ctx)` calls
+# `ctx.next()` directly and inside a lambda that captured `ctx`; `Chain#outer(ctx)` hands
+# `ctx` to `Chain#inner`, which calls `ctx.next()`. Nothing in the module calls `handle` or
+# `outer`: the framework does.
+_CHAIN = _PKG + "Chain#"
+_CONTEXT = _PKG + "Context#"
+_TAKES_CONTEXT = "(Lcom/acme/orders/values/Context;)V"
+_CAPTURED = "(Lcom/acme/orders/values/Context;Ljava/lang/Object;)V"
+_NEXT = (_CONTEXT, "next", "()V")
+
+
+def _chain_facts() -> list[Fact]:
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    body = _symbol(_CHAIN, "lambda$handle$0", _CAPTURED)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    return [
+        _type(_CHAIN),
+        _declared(_CHAIN, "handle", _TAKES_CONTEXT),
+        _void(_CHAIN, "handle", _TAKES_CONTEXT),
+        _site(handle, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # `u -> ctx.next()`: the capture site's argument is `ctx`, and the lambda entry names
+        # the body whose parameter 0 is that capture.
+        _site(
+            handle,
+            1,
+            ("java/lang/invoke/LambdaMetafactory#", "handle", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="parameter", value=0)],
+            result=5,
+        ),
+        _site(
+            handle,
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CHAIN, "lambda$handle$0", _CAPTURED),
+                    captures=1,
+                    source=5,
+                )
+            ],
+        ),
+        _declared(_CHAIN, "lambda$handle$0", _CAPTURED),
+        _void(_CHAIN, "lambda$handle$0", _CAPTURED),
+        _site(body, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        _declared(_CHAIN, "outer", _TAKES_CONTEXT),
+        _void(_CHAIN, "outer", _TAKES_CONTEXT),
+        _site(
+            outer,
+            0,
+            (_CHAIN, "inner", _TAKES_CONTEXT),
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _declared(_CHAIN, "inner", _TAKES_CONTEXT),
+        _void(_CHAIN, "inner", _TAKES_CONTEXT),
+        _site(inner, 0, _NEXT, kind="virtual", receiver_parameter=0),
+    ]
+
+
+@pytest.fixture(scope="module")
+def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_chain")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "chain.jsonl", _document(), _chain_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _ends(
+    workspace: DuckDbWorkspace, method: str, ordinal: int, stop: frozenset[str] = frozenset()
+) -> tuple[Producer, ...]:
+    return producers_of(
+        value_index(workspace),
+        _at(workspace, method, ordinal),
+        RECEIVER,
+        frozenset(),
+        stop_at_parameters_of=stop,
+    )
+
+
+@pytest.mark.pins("values.a-producer-end-at-a-callerless-parameter-NAMES-it")
+def test_a_path_ending_at_a_callerless_parameter_names_it(chained):
+    """`ctx.next()` in `handle`: the receiver is `handle`'s parameter 0, which nothing in
+    the module binds. The end is still `external` — the value comes from outside — and it
+    now names WHICH parameter it reached, which is the whole of what the pass-through reader
+    needs. Through `inner`, the path crosses to `outer` and names `outer`'s parameter."""
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    assert _ends(chained, handle, 0) == (Producer(reason="external", parameter=(handle, 0)),)
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0) == (Producer(reason="external", parameter=(outer, 0)),)
+    # The value walk's own answer there is what it was: `external`, nothing else.
+    assert [b.slots[RECEIVER] for b in _bindings(chained, handle, 0)] == [
+        Answer(kind="unresolved", reason="external")
+    ]
+
+
+@pytest.mark.pins("values.a-producer-walk-STOPS-at-a-named-methods-parameter")
+def test_stop_at_parameters_ends_at_the_named_methods_parameter(chained):
+    """Naming `inner` ends the walk AT `inner`'s parameter 0 instead of crossing to `outer`:
+    the reader asked whether the receiver came from that parameter, and it did. The end is
+    no reason — nothing went unresolved — and only the parameter. Naming a method the path
+    does not reach changes nothing."""
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0, frozenset({inner})) == (Producer(parameter=(inner, 0)),)
+    assert _ends(chained, inner, 0, frozenset({outer})) == (Producer(parameter=(outer, 0)),)
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0, frozenset({handle})) == _ends(chained, inner, 0)
+
+
+@pytest.mark.pins("values.a-producer-walk-STOPS-at-a-named-methods-parameter")
+def test_a_next_inside_a_lambda_reaches_the_handlers_captured_parameter(chained):
+    """`u -> ctx.next()` inside `handle`: the body's parameter 0 is the capture, and the
+    capture edge crosses it to the capture site's argument — `handle`'s parameter 0. Named or
+    not, the end is the HANDLER's context parameter, never the lambda body's slot."""
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    body = _symbol(_CHAIN, "lambda$handle$0", _CAPTURED)
+    assert _ends(chained, body, 0) == (Producer(reason="external", parameter=(handle, 0)),)
+    assert _ends(chained, body, 0, frozenset({handle})) == (Producer(parameter=(handle, 0)),)
+
+
+@pytest.mark.pins("values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality")
+def test_without_either_the_reader_is_unchanged(walked):
+    """Every site and slot of the main fixture, read by the producer reader with nothing
+    named to stop at and with a stop set no path reaches: the same ends, field for field.
+    A parameter is named only on an `external` end that names no call, and the value walk's
+    answers compare exactly as before — the parameter an `external` answer carries is not
+    part of what the answer IS, so no reader deduplicating answers sees two where it saw
+    one."""
+    index = value_index(walked)
+    declared = {_FACTORY_IDENTITY}
+    nowhere = frozenset({_symbol(_CHAIN, "nowhere", "()V")})
+    for site in walked.query("call_sites"):
+        for slot in [*range(len(site["arguments"] or [])), RECEIVER]:
+            plain = producers_of(index, site, slot, declared)
+            assert producers_of(index, site, slot, declared, stop_at_parameters_of=nowhere) == plain
+            for end in plain:
+                if end.parameter is not None:
+                    assert end.reason == "external" and end.caller is None
+    assert Answer(kind="unresolved", reason="external") == replace(
+        Answer(kind="unresolved", reason="external"), parameter=("m", 0)
+    )

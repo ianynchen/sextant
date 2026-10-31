@@ -342,6 +342,12 @@ class Answer:
     # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
     # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
     narrowed: bool = False
+    # **Which parameter an `external` answer ended at**, `(method, index)` — set only by
+    # `_Walk._parameter` where nothing in the module binds it, for the producer reader to
+    # hand on (`Producer.parameter`). Not part of what the answer IS, so it is outside
+    # equality: two `external` answers at two parameters are still one answer to every
+    # reader that deduplicates them, exactly as before it existed.
+    parameter: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -376,6 +382,9 @@ class Producer:
     * `ended_at` — the `Answer` itself, where the path ends at a value the code states
       (`literal`, `expression`, `absent`): not a call anyone built, and kept whole so a
       literal end still carries its literal.
+
+    `parameter` says which parameter a path ended at, beside an `external` reason or alone
+    where the reader asked the walk to stop there (`stop_at_parameters_of`).
     """
 
     caller: str | None = None
@@ -394,6 +403,11 @@ class Producer:
     # A branch was passed through on the way (`_Walk._passed_through`): the chain is the
     # shared receiver's, and which of the branch's own calls ran is not known.
     inexact: bool = False
+    # The parameter a path ENDED at, `(method symbol, parameter index)`: one nothing in the
+    # module calls (with `reason` `external`), or one of a method the reader named in
+    # `stop_at_parameters_of` (with no reason — the path ended where it was asked to). None
+    # everywhere else.
+    parameter: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -916,6 +930,7 @@ def producers_of(
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
+    stop_at_parameters_of: AbstractSet[str] = frozenset(),
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -965,6 +980,13 @@ def producers_of(
     on its result in turn (`_Walk._configured_on`). A call after the use never joins: the
     window `_Walk._through` reads is the same one.
 
+    **A path that ends at a parameter names it** (Vert.x spec 2026-10-30 §3b):
+    `Producer.parameter` is the `(method, index)` an `external` end reached where nothing in
+    the module binds it. **`stop_at_parameters_of` ends the walk at a parameter of a named
+    method** instead of crossing to its callers, for a reader asking whether a value came
+    from that parameter — a handler's context — rather than from where its callers got it.
+    The stop is one set lookup per parameter crossing; empty, the default, stops nothing.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
@@ -975,6 +997,7 @@ def producers_of(
         along_receivers=along_receivers,
         past_accessors=past_accessors,
         configuring=configuring,
+        stop_at_parameters_of=stop_at_parameters_of,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -982,7 +1005,7 @@ def producers_of(
         if answer.kind == _PRODUCED:
             found.append(replace(answer.value, inexact=True) if answer.inexact else answer.value)
         elif answer.kind == UNRESOLVED:
-            found.append(Producer(reason=answer.reason))
+            found.append(Producer(reason=answer.reason, parameter=answer.parameter))
         else:
             found.append(Producer(ended_at=answer))
     return tuple(dict.fromkeys(found))
@@ -1029,6 +1052,7 @@ def producer_paths(
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
+    stop_at_parameters_of: AbstractSet[str] = frozenset(),
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1049,6 +1073,7 @@ def producer_paths(
         along_receivers=along_receivers,
         past_accessors=past_accessors,
         configuring=configuring,
+        stop_at_parameters_of=stop_at_parameters_of,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1056,7 +1081,7 @@ def producer_paths(
         if answer.kind == _PRODUCED:
             producer = replace(answer.value, inexact=True) if answer.inexact else answer.value
         elif answer.kind == UNRESOLVED:
-            producer = Producer(reason=answer.reason)
+            producer = Producer(reason=answer.reason, parameter=answer.parameter)
         else:
             producer = Producer(ended_at=answer)
         entered = _entered(trail, index)
@@ -1185,6 +1210,7 @@ class _Walk:
         which_object: bool = False,
         configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
+        stop_at_parameters_of: AbstractSet[str] = frozenset(),
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -1206,6 +1232,9 @@ class _Walk:
         # the chain reader gathers it into the chain (`_configured_on`). Empty for every other
         # reader.
         self._configuring = frozenset(configuring)
+        # The methods whose parameters END a path (`producers_of(..., stop_at_parameters_of=)`)
+        # rather than cross to their callers. Empty for every other reader.
+        self._stop_at_parameters_of = frozenset(stop_at_parameters_of)
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
         self._which_object = which_object
@@ -2625,14 +2654,21 @@ class _Walk:
 
         No edge at all is `external`: nothing this workspace scanned binds this parameter,
         so whatever it receives comes from outside what was scanned — a framework calling
-        an entry point, or a caller in a dependency nobody read.
+        an entry point, or a caller in a dependency nobody read. The answer carries which
+        parameter it was (`Answer.parameter`), for the producer reader to name.
+
+        A parameter of a method the producer reader named (`stop_at_parameters_of`) is where
+        the path ends, before any frame or caller is read: the reader asked whether the value
+        came from this parameter, and every crossing past it answers a different question.
         """
+        if method in self._stop_at_parameters_of:
+            return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
         frame = self._frame_in(frames, method)
         if frame is not None:
             return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
         callers = self._index.callers.get((method, index), ())
         if not callers:
-            return _only(trail, _unresolved(EXTERNAL))
+            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
         reached: list[_Reached] = []
         for caller, ordinal in callers:
             step = _Step((_CALLER_OF, method), f"{caller}@{ordinal}")

@@ -3191,6 +3191,55 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-producer-end-at-a-callerless-parameter-NAMES-it": Guard(
+        what="an `external` end at a parameter nothing in the module binds names that "
+        "parameter, `(method, index)`, on the producer reader's end",
+        why="the Vert.x pass-through reader asks whether a `next()` receiver came from a "
+        "handler's context parameter (spec 2026-10-30 §3b); an end that says only "
+        "`external` cannot tell a handler's own context from any other value handed in from "
+        "outside, so every handler calling `next()` would read as not readable here, or a "
+        "`next()` on some other context would count as passing on",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
+                "parameter=(method, index)))",
+                replace="            return _only(trail, _unresolved(EXTERNAL))  "
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-producer-walk-STOPS-at-a-named-methods-parameter": Guard(
+        what="a parameter of a method named in `stop_at_parameters_of` ends the producer "
+        "walk there, naming it, instead of crossing to the method's callers",
+        why="a handler the module also calls directly has callers, so the walk crosses past "
+        "its context parameter to wherever those callers got a value, and the reader never "
+        "learns the receiver was the handler's own context: a pass-through handler would be "
+        "read as answering, which publishes a route row for middleware",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if method in self._stop_at_parameters_of:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality": Guard(
+        what="the parameter an `external` answer carries is not part of the answer's "
+        "equality, so the value walk deduplicates answers exactly as before it existed",
+        why="two `external` answers at two parameters would become two distinct answers to "
+        "every reader that deduplicates the value walk's answers, which could split one "
+        "unresolved slot into several and change rows no Vert.x code touches",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    parameter: tuple[str, int] | None = dataclass_field(default=None, "
+                "compare=False, repr=False)",
+                replace="    parameter: tuple[str, int] | None = None  "
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- shared argument readers ------------------------------------------
     "arguments.elements-are-an-array-kinds-own": Guard(
         what="an `elements` list is read off an `array`-kind argument and nothing else — "
