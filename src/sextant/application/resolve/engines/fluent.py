@@ -21,6 +21,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     QUERY_KIND,
     CallFacts,
@@ -61,7 +62,13 @@ from sextant.application.resolve.shapes.chains import (
 )
 from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.inbound_routes import media_columns
+from sextant.application.resolve.shapes.inbound_routes import (
+    UNROOTED_PATH,
+    file_refusal,
+    is_unrooted,
+    media_columns,
+    refusal_rows,
+)
 from sextant.application.resolve.shapes.member_values import (
     member_table,
     names_members,
@@ -150,6 +157,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         _validated_direction(root, catalog)
     _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
     verb_fields = _verb_fields(matches, catalog)
+    refuses_unrooted = _refuses_unrooted_path(matches, catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -195,6 +203,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
     metadata: list[dict[str, Any]] = []
+    # DR-6: the declarations the framework would raise on, accumulated across every caller
+    # and filed once, the `rows`/`metadata` discipline.
+    refusals: dict[tuple[str, str | None, str], dict[str, Any]] = {}
     context: _DeriveContext | None = None
     for end in chain_ends(workspace, catalog):
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -225,6 +236,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 bindings=bindings,
                 verb_fields=verb_fields,
                 client_base=client_base,
+                refuses_unrooted=refuses_unrooted,
+                refusals=refusals,
             )
         # A chain walked back across methods is read on the path it took (ruling 5).
         _derive(end, context if end.path is None else replace(context, path=end.path))
@@ -239,6 +252,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # one of them would erase whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
+    # The ledger's reset is the pipeline's, for the `open_questions` reason above.
+    record_open_questions(workspace, refusal_rows(refusals))
 
 
 @dataclass(frozen=True)
@@ -275,6 +290,12 @@ class _DeriveContext:
     # relative to it. None for every catalog not declaring it, whose relative address reads
     # as it always has.
     client_base: Mapping[str, Any] | None = None
+    # DR-6 (Vert.x spec §3a). `matches.refuses_unrooted_path`: the framework THROWS on a
+    # served path that is empty or has no leading `/`, where another repairs it, so a
+    # resolved path of that shape is filed in `refusals` and derives no row. False for
+    # every catalog not declaring it, whose paths are repaired as they always were.
+    refuses_unrooted: bool = False
+    refusals: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
@@ -479,6 +500,27 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # rather than left implicit, because a future inbound fluent catalog
         # would need it and would otherwise have to rediscover it.
         if path is not None and serves_urls(context.catalog.protocol, direction):
+            # DR-6: a path the framework refuses is recorded and never reaches the
+            # canonicaliser, whose leading-slash repair would serve an address the
+            # framework does not. Only a path READ in full is refused: an unread or
+            # partly read one does not show how it starts.
+            if (
+                context.refuses_unrooted
+                and direction == "inbound"
+                and context.refusals is not None
+                and url_resolution == str(Resolution.RESOLVED)
+                and is_unrooted(path)
+            ):
+                file_refusal(
+                    context.refusals,
+                    protocol=context.catalog.protocol,
+                    method=verb,
+                    path=path,
+                    reason=UNROOTED_PATH,
+                    caller=context.caller,
+                    handler=handler,
+                )
+                continue
             path = canonical_http_path(path)
         # **The query string is not part of the address** (`OI-151`), and it comes off HERE —
         # after the canonicaliser and before the dedup key below, which is built from the
@@ -1178,6 +1220,19 @@ def _validated_direction(root: dict[str, Any], catalog: Catalog) -> str | None:
             f"— D00's closed sets are closed (NFR-5)"
         )
     return None if direction is None else str(direction)
+
+
+def _refuses_unrooted_path(matches: dict[str, Any], catalog: Catalog) -> bool:
+    """`matches.refuses_unrooted_path` (DR-6): true for a framework that throws on a served
+    path with no leading `/`, absent for one that repairs it. Anything but a boolean is a
+    broken file (D02 §2's `fluent` style), never read as absent."""
+    declared = matches.get("refuses_unrooted_path", False)
+    if not isinstance(declared, bool):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `refuses_unrooted_path` is true or false, "
+            f"got {declared!r} (D02 §2's `fluent` style)"
+        )
+    return declared
 
 
 def _verb_fields(matches: dict[str, Any], catalog: Catalog) -> dict[tuple[str, str], str]:

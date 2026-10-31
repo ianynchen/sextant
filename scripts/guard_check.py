@@ -1407,6 +1407,34 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-refused-path-is-recorded-and-never-repaired": Guard(
+        what="an inbound `fluent` path a refusing framework (`refuses_unrooted_path`) throws "
+        "on - empty, or no leading `/` - derives no row and is filed as a "
+        "`refused_registration` question (Vert.x plan, Task 7, DR-6)",
+        why="without it the canonicaliser prepends the `/` and the module publishes a route "
+        "Vert.x throws on at startup, at an address it never serves",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and is_unrooted(path)\n",
+                replace="                and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-refusal-is-the-catalogs-word-not-every-frameworks": Guard(
+        what="only a catalog declaring `refuses_unrooted_path` refuses an unrooted path; every "
+        "other fluent catalog keeps the canonicaliser's leading-slash repair (Vert.x plan, "
+        "Task 7)",
+        why="without it a framework that repairs the path (Spring does) lost its row, "
+        "because a rule measured on one framework was applied to all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                context.refuses_unrooted\n",
+                replace="                True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.an-inbound-row-keeps-its-handler-in-the-key": Guard(
         what="an inbound `fluent` row's dedup key carries its handler, so two handlers on one "
         "route, or one handler on two routes, stay separate rows (Vert.x plan, Task 6)",

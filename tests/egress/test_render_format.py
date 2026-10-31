@@ -875,6 +875,37 @@ def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee()
     ) in text
 
 
+def test_a_refused_registration_question_names_the_registering_method_and_handler():
+    """DR-6's arm. Candidate shape (`caller`, `handler`, `reason`) matches what
+    `inbound_routes.refusal_rows` writes; the identity path is the address as written,
+    which no endpoint row carries because none was derived."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "bad",
+            "question": "refused_registration",
+            "candidates": json.dumps(
+                [
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": "com/acme/Routes#lambda$wire$0().",
+                        "reason": "unrooted_path",
+                    }
+                ]
+            ),
+            "evidence": "com/acme/Routes#wire().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `GET bad` — refused_registration: registered by com/acme/Routes#wire(). "
+        "(com/acme/Routes#lambda$wire$0().); the framework refuses a path that is empty or "
+        "lacks a leading `/`, so it serves nothing for it"
+    ) in text
+
+
 def test_a_web_stack_question_names_each_stack_and_the_keys_it_would_apply():
     """Ruling 3's arm, for the reason every arm here has a test. Candidate shape (`stack`,
     `keys`) matches what `path_prefix._ask_web_stack` writes; both identity halves are NULL

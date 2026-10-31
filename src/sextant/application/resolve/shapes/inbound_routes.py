@@ -1,5 +1,6 @@
 """What an inbound route row takes from its declaration, for every engine that derives one:
-the media columns (`consumes`/`produces`) and the join of a prefix and a path.
+the media columns (`consumes`/`produces`), the join of a prefix and a path, and the
+record of a declaration the framework refuses to register.
 
 These were `combinator`'s own. `fluent` derives inbound rows too (Vert.x spec §3g item 2),
 and two copies of "how a media list becomes a column" or "how a framework joins `api` and
@@ -72,3 +73,65 @@ def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
     if rule == LEADING_SLASH and path not in ("", "*") and not path.startswith("/"):
         segment = "/" + path
     return (prefix or "") + segment
+
+
+# The `open_questions` kind a refused declaration is filed under (`resolve/open_questions.py`
+# owns the closed set; this is the one name it holds for the purpose).
+REFUSED_REGISTRATION = "refused_registration"
+
+# Why a registration was refused, the candidate's `reason`. One word per rule so a later
+# refusal (a sub-router mounted on an unrooted path) adds a word here and no new kind.
+UNROOTED_PATH = "unrooted_path"
+
+
+def is_unrooted(path: str) -> bool:
+    """Whether a path is one a framework that refuses (`refuses_unrooted_path`) throws on:
+    empty, or not starting with `/`. Vert.x's `RouteImpl.checkPath` is exactly this."""
+    return not path.startswith("/")
+
+
+def file_refusal(
+    refusals: dict[tuple[str, str | None, str], dict[str, Any]],
+    *,
+    protocol: str,
+    method: str | None,
+    path: str,
+    reason: str,
+    caller: str,
+    handler: str | None,
+) -> None:
+    """Notes one declaration the framework would raise on (DR-6: record it, never repair it).
+
+    `refusals` is the run's accumulator, written to `open_questions` once at the end. An
+    `open_questions` row is identified by `(protocol, method, path, question)`, so every
+    registration of one refused address shares one row and each is a candidate of it,
+    sorted (NFR-1) when the rows are built by `refusal_rows`."""
+    row = refusals.setdefault(
+        (protocol, method, path),
+        {"protocol": protocol, "method": method, "path": path, "candidates": []},
+    )
+    candidate = {"caller": caller, "handler": handler, "reason": reason}
+    if candidate not in row["candidates"]:
+        row["candidates"].append(candidate)
+
+
+def refusal_rows(
+    refusals: Mapping[tuple[str, str | None, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The `open_questions` rows of a run's refusals, in a stable order."""
+    rows = []
+    for key in sorted(refusals, key=lambda k: (k[0], k[1] or "", k[2])):
+        candidates = sorted(
+            refusals[key]["candidates"], key=lambda c: json.dumps(c, sort_keys=True)
+        )
+        rows.append(
+            {
+                "protocol": key[0],
+                "method": key[1],
+                "path": key[2],
+                "question": REFUSED_REGISTRATION,
+                "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+                "evidence": "; and ".join(sorted({str(c["caller"]) for c in candidates})),
+            }
+        )
+    return rows

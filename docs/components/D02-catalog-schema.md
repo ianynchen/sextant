@@ -2078,6 +2078,12 @@ the table does not name is no verb: `method` NULL at `unresolved`, never the roo
 `verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
 refused at load.
 
+**`matches.refuses_unrooted_path: true`** (DR-6, Vert.x spec §3a) declares that the framework
+THROWS on an inbound path that is empty or has no leading `/` (Vert.x's `RouteImpl.checkPath`),
+where another repairs it. A fully read path of that shape derives no row, is never passed to
+`canonical_http_path`, and is filed as a `refused_registration` open question (D01). Absent, the
+leading-slash repair applies as before. A value that is not a boolean is refused at load.
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own

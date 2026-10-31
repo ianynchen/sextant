@@ -2190,15 +2190,21 @@ def test_vertx_respond_is_a_terminal(vertx_inbound):
 
 
 @pytest.mark.xfail(strict=True, reason="Task 8")
-def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound):
+def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound, vertx_tables):
     """`.disable()` ends a chain with no row: Vert.x serves nothing for it. A path with no
     leading `/` is refused by Vert.x, so it is no row and is NOT repaired to `/bad` (DR-6).
-    The refused declaration is recorded; Task 8 adds the assertion on where."""
+    The refused declaration is recorded as a `refused_registration` open question."""
     paths = {r["path"] for r in vertx_inbound}
     assert "/gone" not in paths
     assert "bad" not in paths and "/bad" not in paths
     # Control: the routes beside them derive, so the absence above is the rule's doing.
     assert "/orders" in paths
+    refused = [
+        (q["protocol"], q["method"], q["path"])
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "refused_registration"
+    ]
+    assert ("http", "GET", "bad") in refused, refused
 
 
 @pytest.mark.xfail(strict=True, reason="Task 8")

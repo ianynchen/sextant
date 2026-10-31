@@ -1326,6 +1326,17 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"`{candidate['key']}` is configured but not applied: it is declared for "
             f"{candidate['framework']} {ranges}, and the module runs {running}"
         )
+    if question == "refused_registration":
+        # DR-6: a declaration the framework raises on, filed by
+        # `resolve/shapes/inbound_routes.py::file_refusal` and verified against that
+        # writer's own `candidates` line. The row's own path is the address as written, so
+        # the sentence names the registering method and the handler, which are what a
+        # reader opens; `unrooted_path` is the one reason today.
+        handler = candidate["handler"] or "no handler read"
+        return (
+            f"registered by {candidate['caller']} ({handler}); the framework refuses a path "
+            f"that is empty or lacks a leading `/`, so it serves nothing for it"
+        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

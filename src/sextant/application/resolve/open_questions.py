@@ -130,6 +130,17 @@ QUESTIONS = (
     # Candidates: one per key, with the framework, the module's version(s) and the ranges the
     # key is declared for.
     "prefix_not_measured",
+    # DR-6, Vert.x spec §3a. A declaration the framework raises on rather than repairs —
+    # a route path that is empty or has no leading `/` — so the application does not start
+    # with it and no row serves it. Candidates: one per registration, the caller, the
+    # handler and the reason (`unrooted_path`). Identity is the refused address as written,
+    # which no endpoint row carries because none was derived.
+    #
+    # A question rather than a finding of its own, and rather than a silent drop, for
+    # `routing_conflict`'s reason one table over: a disagreement between the code and the
+    # framework that a person resolves. Repairing the path instead would publish an address
+    # the framework never serves, which DR-5's linking would then match against real ones.
+    "refused_registration",
 )
 
 

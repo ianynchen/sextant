@@ -13,6 +13,7 @@ names its body BARE while the body's own call sites are recorded under the modul
 symbol (D00 §5a).
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,7 @@ def _catalog(
     direction: str = "inbound",
     catalog_id: str = "invented-adapters",
     bean_model: dict | None = None,
+    protocol: str = "amqp",
 ) -> Catalog:
     # **The hoisted identity table, because the engine now resolves through it** (Task 9,
     # the same correction Task 8 made to `test_call_engines`). `YamlCatalogSource.load`
@@ -112,7 +114,7 @@ def _catalog(
     return Catalog(
         id=catalog_id,
         style="fluent",
-        protocol="amqp",
+        protocol=protocol,
         direction=direction,
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
@@ -3433,3 +3435,94 @@ def test_an_inbound_route_the_table_already_holds_is_not_inserted_for_another_me
     workspace.close()
 
     assert [row["path"] for row in rows] == [SUBSCRIPTION]
+
+
+# --- a path the framework refuses -------------------------------------------
+
+_ROUTE_MATCHES = {
+    "roots": [{"owner": ADAPTER_TYPE, "method": "<init>", "captures": {"url": "arg1"}}],
+    "steps": [{"method": "onMessage", "captures": {"handler": "arg0"}}],
+    "terminal": ["<init>"],
+}
+_REFUSING_MATCHES = {**_ROUTE_MATCHES, "refuses_unrooted_path": True}
+
+
+def _route(declared: str, *, caller: str = CALLER) -> list:
+    return [
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            caller=caller,
+            subscription=CallArgument(kind="string", value=declared),
+        ),
+        _body_symbol(),
+    ]
+
+
+def _questions(workspace: DuckDbWorkspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("open_questions")]
+
+
+@pytest.mark.pins("fluent.a-refused-path-is-recorded-and-never-repaired")
+@pytest.mark.parametrize("declared", ["bad", ""], ids=["no-leading-slash", "empty"])
+def test_a_refused_path_derives_no_row_and_is_recorded(tmp_path: Path, declared: str):
+    """Vert.x throws on a path that is empty or does not start with `/` (DR-6): the
+    application does not start with it, so no row serves it, it is not repaired to `/bad`,
+    and the declaration is filed where the other refused registrations are filed."""
+    workspace = _run(tmp_path, _route(declared), _catalog(_REFUSING_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["protocol"], question["path"], question["question"]) == (
+        "http",
+        declared,
+        "refused_registration",
+    )
+    assert json.loads(question["candidates"]) == [
+        {"caller": CALLER, "handler": _MODULE + BODY, "reason": "unrooted_path"}
+    ]
+
+
+def test_a_rooted_path_is_not_refused_when_the_flag_is_set(tmp_path: Path):
+    workspace = _run(tmp_path, _route("/ok"), _catalog(_REFUSING_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["/ok"]
+    assert questions == []
+
+
+def test_two_registrations_of_one_refused_path_are_one_question_with_both_callers(
+    tmp_path: Path,
+):
+    facts = [*_route("bad"), *_route("bad", caller=_OTHER_CALLER)]
+    workspace = _run(tmp_path, facts, _catalog(_REFUSING_MATCHES, protocol="http"))
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert [c["caller"] for c in json.loads(question["candidates"])] == sorted(
+        [CALLER, _OTHER_CALLER]
+    )
+
+
+@pytest.mark.pins("fluent.a-refusal-is-the-catalogs-word-not-every-frameworks")
+def test_without_the_flag_the_leading_slash_is_still_repaired(tmp_path: Path):
+    """A framework that repairs an unrooted path (Spring does) keeps the repair: the flag
+    is the catalog's statement about ONE framework, never a rule applied to all."""
+    workspace = _run(tmp_path, _route("bad"), _catalog(_ROUTE_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["/bad"]
+    assert questions == []
+
+
+def test_a_flag_that_is_not_a_boolean_is_refused_naming_the_file(tmp_path: Path):
+    _refused(
+        tmp_path,
+        {**_ROUTE_MATCHES, "refuses_unrooted_path": "yes"},
+        "invented-adapters.*refuses_unrooted_path.*true or false",
+    )
