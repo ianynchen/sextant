@@ -1079,6 +1079,16 @@ time for a destination that carries no verb.
 - **`all_methods: []` declares a verbless protocol.** A topic has no verb to enumerate, so
   the catalog states an empty set rather than a method list: one row per mapping, `method`
   NULL, and `resolution` untouched by the absence — the destination was read either way.
+- **`verbless_serves: any` says a verbless mapping serves every method of an OPEN set**
+  (spec 2026-10-30 §3a; the word the `fluent` style spells the same). With `all_methods: []`
+  the mapping is ONE row, `method` NULL, marked `method_kind = any`, so the linker joins a
+  call of any verb to it; without the word a NULL method still means "nobody read the verb".
+  A closed enum (Spring's) keeps the fan-out over `all_methods`.
+- **`pattern_from` names attributes whose value is a regular expression, not a path.** A
+  mapping carrying one derives a row whose path is the expression verbatim, `resolved`,
+  `path_kind = pattern`: the type-level prefix is not joined to it, no canonical rule touches
+  it, and the linker never links it by path. It wins over `path_from` (Quarkus's processor
+  reads `regex` first, 3.17.5).
 - **The `reply` block** `{annotation, destination_from, payload: return}` derives one
   additional outbound row per listed reply destination named on the annotation — one row
   per destination, mirroring the multi-valued rule above. The reply row's `caller` is the

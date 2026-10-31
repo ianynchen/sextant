@@ -2542,7 +2542,12 @@ def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
 # Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Task 14")
+@pytest.mark.pins(
+    "derive_endpoints.a-verbless-mapping-serves-any-method-where-the-catalog-says-so",
+    "derive_endpoints.a-pattern-attribute-is-a-pattern-row",
+    "derive_endpoints.a-pattern-row-takes-no-prefix",
+    "derive_endpoints.a-pattern-row-is-not-canonicalised",
+)
 def test_quarkus_reactive_routes_verbless_and_regex(quarkus_endpoints):
     """A `@Route` with no `methods` is registered by Vert.x for any method (the same
     dispatcher Vert.x Web uses, spec §3a): ONE row, method NULL, any-method marker — not six

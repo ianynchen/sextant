@@ -4892,6 +4892,68 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.a-verbless-mapping-serves-any-method-where-the-catalog-says-so": Guard(
+        what="an annotation mapping naming no method, in a catalog declaring `verbless_serves: "
+        "any`, is one row with method NULL and `method_kind = any` (Vert.x plan, Task 14)",
+        why="without it `@Route` with no `methods` reads as a route whose verb nobody read, and "
+        "the linker joins no call of any verb to a route that serves them all",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="           CASE WHEN len(d.methods) = 0 AND vc.verbless_serves = 'any' THEN 'any' END\n",
+                replace="           CAST(NULL AS VARCHAR)  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-malformed-verbless-word-is-refused": Guard(
+        what="`mapping.verbless_serves` other than `any` is refused naming the file (Vert.x "
+        "plan, Task 14)",
+        why="a misspelt word would load and read as no word, publishing a verb nobody read "
+        "where the catalog meant every verb",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/annotation_driven.py",
+                find="    if declared is not None and declared != ANY_METHOD:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-attribute-is-a-pattern-row": Guard(
+        what="a mapping naming a `pattern_from` attribute derives a row marked "
+        "`path_kind = pattern` (Vert.x plan, Task 14)",
+        why="without it `@Route(regex)` is linked by path as if the expression were an address",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="             THEN 'pattern' END AS path_kind\n",
+                replace="             THEN CAST(NULL AS VARCHAR) END AS path_kind\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-row-takes-no-prefix": Guard(
+        what="a pattern row's path is the expression alone: the type-level prefix is not joined "
+        "to it (Vert.x plan, Task 14; Quarkus joins `@RouteBase` to `path` only, 3.17.5)",
+        why="without it `/qk/orders` + `\\/qk\\/files\\/.+` is an expression nobody wrote and "
+        "nothing matches",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        CASE WHEN m.path_kind IS NOT NULL THEN scoped_name\n",
+                replace="        CASE WHEN FALSE THEN scoped_name  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-row-is-not-canonicalised": Guard(
+        what="a pattern row skips the canonical-address rules (Vert.x plan, Task 14)",
+        why="without it `\\/qk\\/files\\/.+` gains a leading `/`, an expression nobody wrote",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        CASE WHEN m.path_kind IS NOT NULL THEN FALSE\n",
+                replace="        CASE WHEN FALSE THEN FALSE  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "derive_endpoints.type-annotation-gate": Guard(
         what="a catalog declaring `$type_annotation` derives only from a declaration whose "
         "enclosing type carries it",

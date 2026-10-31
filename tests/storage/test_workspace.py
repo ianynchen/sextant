@@ -284,6 +284,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     "prefix_from": [],
     "peer_from": [],
     "method_from": "method",
+    # Vert.x plan Task 14's two words, inert: no catalog in this file serves a verbless mapping
+    # for every method or names a regular expression instead of a path.
+    "verbless_serves": None,
+    "pattern_from": [],
     # Task 5: no catalog in this file declares media attributes, so both alias
     # lists are empty — the "every non-HTTP catalog derives NULL" default.
     "consumes_from": [],

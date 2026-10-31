@@ -828,6 +828,39 @@ def test_a_qualifier_without_a_name_fallback_is_refused_rather_than_left_danglin
     assert "invented-naming.yml" in str(raised.value)
 
 
+def _kinds_of(tmp_path: Path, catalog: Catalog) -> set[tuple[str | None, str | None]]:
+    """`(method, method_kind)` of every row the invented catalog derives."""
+    _naming_forms_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    kinds = {(row["method"], row["method_kind"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return kinds
+
+
+@pytest.mark.pins("derive_endpoints.a-verbless-mapping-serves-any-method-where-the-catalog-says-so")
+def test_a_verbless_mapping_serves_any_method_only_where_the_catalog_says_so(tmp_path: Path):
+    """Spec 2026-10-30 §3a: `verbless_serves: any` makes a mapping that names no method ONE
+    row, method NULL, marked `method_kind = any`. A catalog saying nothing keeps the NULL
+    method with NO marker: a NULL method alone still means nobody read the verb."""
+    assert _kinds_of(tmp_path / "says", _naming_forms_catalog(verbless_serves="any")) == {
+        (None, "any")
+    }
+    assert _kinds_of(tmp_path / "silent", _naming_forms_catalog()) == {(None, None)}
+
+
+@pytest.mark.pins("derive_endpoints.a-malformed-verbless-word-is-refused")
+def test_a_verbless_serves_other_than_any_is_refused_by_file(tmp_path: Path):
+    """A misspelt word would load and read as no word at all, publishing a verb nobody read
+    where the catalog meant every verb."""
+    with pytest.raises(CatalogError) as raised:
+        _kinds_of(tmp_path, _naming_forms_catalog(verbless_serves="all"))
+
+    assert "verbless_serves" in str(raised.value)
+    assert "invented-naming.yml" in str(raised.value)
+
+
 def test_an_explicitly_empty_separator_is_refused_like_a_missing_one(tmp_path: Path):
     """`qualifier_separator: ""` passes an `is None` check and then composes
     `Parentmember` — precisely what the missing-separator refusal exists to
