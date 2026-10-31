@@ -2103,11 +2103,11 @@ def _is_pattern(row: dict) -> bool:
 
 
 def _reason_of(row: dict, tables: dict[str, list[dict]]) -> str:
-    """Why a `partial` row is partial, in words. `endpoints.evidence` is a provenance enum
-    (`compiler`, ...) and carries no reason, and no endpoint column does today. The likeliest
-    carrier is the open question keyed by the row's wire identity, whose `evidence` is prose,
-    so that is what this reads. Task 10 decides where the reason lives and adjusts this body
-    and nothing else."""
+    """Why a `partial` row is partial, in words. No carrier for a partial endpoint's reason
+    exists today (`endpoints.evidence` is a provenance enum, and `open_questions` is a closed
+    set of kinds whose writer refuses any other). Task 10 must add one (a new `open_questions`
+    kind or an `endpoint_metadata` entry) and adjust this body. Until then it reads the
+    `open_questions` rows keyed by the row's wire identity, which finds nothing."""
     return " ".join(
         f"{q['question']} {q['evidence']}"
         for q in tables["open_questions"]
@@ -2374,10 +2374,11 @@ def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
     assert len(stock) == 1, calls
     (_, path, peer) = next(iter(stock))
     assert peer == "inventory:8080"
-    # The unread tail is a hole, spelled `{}` as every concatenation template is
-    # (`tests/application/test_values.py`: `/orders/{}`); Task 12 corrects this if the
-    # published spelling differs.
-    assert path == "/stock/{}", path
+    # A hole built from a variable the facts name is published under that name
+    # (`test_a_path_segment_built_from_a_variable_names_that_variable`,
+    # tests/e2e/test_rest_outbound_delivered.py): `sku`, the parameter. The fixture compiles
+    # with `-parameters` so the facts carry the name.
+    assert path == "/stock/{sku}", path
 
 
 @pytest.mark.xfail(strict=True, reason="Task 12")

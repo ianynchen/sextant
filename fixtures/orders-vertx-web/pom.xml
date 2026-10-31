@@ -11,6 +11,8 @@
        Built with JDK 21 (javac 27 renumbers lambdas). -->
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
+    <!-- Parameter names reach the facts, so a hole built from `sku` is published as `{sku}`. -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
   <dependencies>
