@@ -493,7 +493,7 @@ router built and handed in — so the fixture fails where Hono does.
 | A router received from the base jar and given routes here | its routes at the root, `resolved` |
 | `router.getWithRegex("\\/files\\/.+")` | one row, path the regex verbatim, `resolved`, marked a pattern, not canonicalised |
 | `router.get("/v").virtualHost("api.example.com").handler(…)` | one row, host requirement in metadata |
-| A path constant `static final String`, and a `String.format("/a/:%s", P)` | resolved through the walk |
+| A path constant `static final String`, and a `String.format("/a/:%s", P)` | the constant resolved through the walk; the `String.format` route as the structural walk answers it (§4) |
 | A handler reading `ctx.queryParam("q")` and `ctx.request().getHeader("X-T")` | query and header requirements on its row |
 | `client.get(8080, "inventory", "/stock/" + sku).send()` | outbound `GET` `/stock/{sku}` (a hole from a named variable is published under its name, `test_rest_outbound_delivered.py:44-66`), peer `inventory:8080` |
 | `client.postAbs("http://billing/charges").sendJson(charge)` | outbound `POST`, peer `billing`, body `Charge` |
@@ -553,6 +553,7 @@ list. The tier says what closing it would take.
 | **`failureHandler`, `errorHandler(int, …)`** | Error handling, not routes; `error_handlers` has no Vert.x catalog | A |
 | **Kotlin coroutine helpers** (`coHandler`, `coRespond`, `coAwait`) | Extension functions in `vertx-lang-kotlin-coroutines` wrap the handler. A plain Kotlin `router.get("/x").handler { }` is the same bytecode as Java's and is covered | A |
 | **SockJS, the event-bus bridge, WebSockets on a Vert.x `HttpServer`** | Not on the Vert.x target list for those columns | — |
+| **A path built by `String.format`** (Hono's `String.format("/%s/:%s", …)`) | Reading it would model one library method's semantics, which the user ruled out (OI-143: one rule, not one parser per method); the row publishes what the structural walk answers [ruled 2026-10-31, my call] | B |
 | **`setTemplateParam`** | A template hole filled per request; the hole stays a hole | A |
 | **A WebClient call to the module's own server** | The self-call rule covers gRPC only (OI-198) | B |
 
