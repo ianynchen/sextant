@@ -10,10 +10,17 @@ results dropped (row 322).
 from pathlib import Path
 
 import pytest
-from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent
+from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent, _resolve_fluent_walked
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    MethodReturnFact,
+    SymbolFact,
+)
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 
 CLIENT = "io/vertx/ext/web/client/WebClient#"
@@ -27,6 +34,12 @@ _URI = f"(Ljava/lang/String;){_RETURNS}"
 _HOST_URI = f"(Ljava/lang/String;Ljava/lang/String;){_RETURNS}"
 _PORT_HOST_URI = f"(ILjava/lang/String;Ljava/lang/String;){_RETURNS}"
 _SOCKET_URI = f"(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;){_RETURNS}"
+_OPTIONS = f"(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/http/RequestOptions;){_RETURNS}"
+_INVENTORY = "com/acme/vertx/InventoryClient#"
+_SOCKET_HOST_URI = (
+    "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;"
+    f"Ljava/lang/String;){_RETURNS}"
+)
 _STRING_STRING = f"(Ljava/lang/String;Ljava/lang/String;){_RETURNS}"
 _SEND = "()Lio/vertx/core/Future;"
 
@@ -188,22 +201,145 @@ def test_a_uri_template_form_reads_its_template_off_the_factory(tmp_path: Path):
     assert _calls(_rows(tmp_path, body)) == [("GET", "inventory:8080", "/stock/{sku}", "resolved")]
 
 
-@pytest.mark.pins("vertx-webclient.a-socket-address-form-reads-no-address")
-@pytest.mark.pins("vertx-webclient.a-uri-step-names-an-address")
-def test_a_socket_address_form_derives_nothing_until_a_uri_names_an_address(tmp_path: Path):
-    """`client.request(GET, address, "/x").send()` names an address this catalog does not
-    read, so it is no row; a later `uri("/y")` names one (spec §3d)."""
+@pytest.mark.pins("vertx-webclient.a-socket-address-form-reads-its-uri")
+def test_a_socket_address_form_reads_its_uri_as_the_path_with_no_peer(tmp_path: Path):
+    """`client.request(GET, address, "/x").send()` and `client.request(POST, address,
+    "inventory", "/y").send()`: the server address is not read, so neither row has a peer, and
+    the uri string is the path, read as any uri is (coordinator ruling 2026-10-31, item 1)."""
     body = _Body()
-    verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
     socket = CallArgument(kind="unresolved")
-    body.chain(("request", _SOCKET_URI, [verb, socket, _string("/x")]), _send())
     body.chain(
-        ("request", _SOCKET_URI, [verb, socket, _string("/x")]),
-        ("uri", _URI, [_string("/y")]),
+        (
+            "request",
+            _SOCKET_URI,
+            [CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET."), socket, _string("/x")],
+        ),
+        _send(),
+    )
+    body.chain(
+        (
+            "request",
+            _SOCKET_HOST_URI,
+            [
+                CallArgument(kind="enum", symbol=f"{HTTP_METHOD}POST."),
+                socket,
+                _string("inventory"),
+                _string("/y"),
+            ],
+        ),
         _send(),
     )
 
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", None, "/x", "resolved"),
+        ("POST", None, "/y", "resolved"),
+    ]
+
+
+@pytest.mark.pins("vertx-webclient.a-uri-step-names-an-address")
+def test_a_request_options_form_derives_nothing_until_a_uri_names_an_address(tmp_path: Path):
+    """`client.request(GET, options).send()` names an address this catalog does not read (the
+    options object is Task 13's), so it is no row; a later `uri("/y")` names one (spec §3d)."""
+    body = _Body()
+    verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
+    options = CallArgument(kind="unresolved")
+    body.chain(("request", _OPTIONS, [verb, options]), _send())
+    body.chain(("request", _OPTIONS, [verb, options]), ("uri", _URI, [_string("/y")]), _send())
+
     assert _calls(_rows(tmp_path, body)) == [("GET", None, "/y", "resolved")]
+
+
+@pytest.mark.pins("fluent.a-host-or-port-is-traced-as-the-url-is")
+def test_a_host_handed_in_as_a_parameter_is_the_literal_its_callers_pass(tmp_path: Path):
+    """`stock(host)` does `client.get(8080, host, "/stock").send()`, and its one caller passes
+    `"inventory"`: the host is traced to its source as the `url` is, so the peer is
+    `inventory:8080` (coordinator ruling 2026-10-31, item 4)."""
+    jvm = "(Ljava/lang/String;)Lio/vertx/core/Future;"
+    stock = _MODULE + method_descriptor(_INVENTORY, "stock", jvm)
+    run = _MODULE + method_descriptor(_INVENTORY, "run", "()V")
+    body = _Body(stock)
+    body.chain(
+        (
+            "get",
+            _PORT_HOST_URI,
+            [_int(8080), CallArgument(kind="parameter", value=0), _string("/stock")],
+        ),
+        _send(),
+    )
+    facts = [
+        *body.sites,
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _INVENTORY, construct_kind="class"),
+        *(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind="method",
+                enclosing=_MODULE + _INVENTORY,
+            )
+            for symbol in (stock, run)
+        ),
+        # A body was read for `stock`, so the call from `run` reaches it.
+        MethodReturnFact(document_id="doc_1", method=stock, ordinal=2),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=run,
+            target=CallTarget(owner=_INVENTORY, name="stock", descriptor=jvm),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=None,
+            result=None,
+            arguments=[_string("inventory")],
+        ),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert _calls(rows) == [("GET", "inventory:8080", "/stock", "resolved")]
+
+
+@pytest.mark.pins("fluent.a-configured-host-is-its-key")
+def test_a_host_that_reaches_a_config_key_publishes_the_key_as_the_peer(tmp_path: Path):
+    """A host whose trace ends at a configuration key (`${search.host}`, as the field ladder
+    renders one) is that key: the peer is `${search.host}:9200` and the path stays `/q`, never
+    `//${search.host}:9200/q` (coordinator ruling 2026-10-31, item 5)."""
+    body = _Body()
+    body.chain(
+        ("get", _PORT_HOST_URI, [_int(9200), _string("${search.host}"), _string("/q")]), _send()
+    )
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", "${search.host}:9200", "/q", "resolved")]
+
+
+@pytest.mark.pins("fluent.an-unread-first-piece-behind-a-stated-host-is-a-hole")
+def test_an_unread_first_uri_piece_behind_a_stated_host_is_a_hole_in_the_path(tmp_path: Path):
+    """`client.get(8080, "inventory", prefix + "/x")` with `prefix` unread: the reader writes a
+    leading unread piece as `<host>`, but the host is stated, so the peer is `inventory:8080`
+    and the piece is the hole a known authority's unread path piece is (`/{}/x` behind
+    `http://h`), the row `partial` (coordinator ruling 2026-10-31, item 5)."""
+    body = _Body()
+    joined = body.call(
+        "java/lang/invoke/StringConcatFactory#",
+        "makeConcatWithConstants",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        None,
+        [CallArgument(kind="unresolved")],
+        invoke_kind="static",
+    )
+    body.chain(
+        (
+            "get",
+            _PORT_HOST_URI,
+            [
+                _int(8080),
+                _string("inventory"),
+                CallArgument(kind="concat", source=joined, value="{}/x"),
+            ],
+        ),
+        _send(),
+    )
+
+    assert _calls(_rows(tmp_path, body)) == [("GET", "inventory:8080", "{}/x", "partial")]
 
 
 def test_headers_and_query_parameters_are_collected(tmp_path: Path):

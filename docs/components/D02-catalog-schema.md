@@ -2385,10 +2385,13 @@ splits an absolute URL into, so that call and `getAbs("http://inventory:8080/sto
 the same peer. Each part replaces only that part of the authority the address already holds,
 last wins (Vert.x applies a request's own `host` and `port` over an absolute URL's, CP-56 row
 130). A port with neither a stated host nor one in the address is no peer: the host is a
-client default, which is never published. A part captured and not read leaves the peer NULL
-and the row `partial`, the path kept; an authority carrying a placeholder keeps the whole
-composition as `path`, `peer` NULL, as a `base` does. Both count as address fields against
-`channel` (below).
+client default, which is never published. Each part is traced to its source as the `url`
+is (the literal, the field ladder, then the backward walk with no identity entries, so a host
+handed in as a parameter is its callers' literal); a part that reaches a configuration key is
+that key, so `${search.host}:9200` is the peer and the path stays the path. A part captured
+and not read leaves the peer NULL and the row `partial`, the path kept. A uri whose first
+piece went unread, which `url_of` writes `<host>…`, keeps that piece as the hole `{}` once a
+host is stated. Both count as address fields against `channel` (below).
 
 `baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
 its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the

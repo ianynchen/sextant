@@ -26,6 +26,8 @@ from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
+    _HOLE,
+    _UNREADABLE_HOST,
     QUERY_KIND,
     CallFacts,
     CarrierRules,
@@ -33,6 +35,7 @@ from sextant.application.resolve.shapes.arguments import (
     _address_read,
     _arg_at,
     _capture_resolved,
+    _holes,
     _string_value,
     _walked_channels,
     _walked_with,
@@ -112,6 +115,7 @@ from sextant.application.resolve.shapes.pass_through import (
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
     EXPRESSION,
+    INT,
     LITERAL,
     STRING,
     Answer,
@@ -1511,10 +1515,16 @@ def _with_stated_authority(
     goes to `b:1`. A port with no host stated and none in the address is no peer: the host is
     then a client default, and an unset default is never published (spec §2a).
 
-    A part that was captured and could not be read leaves WHO is called unread: peer NULL and
-    the row `partial`, the path kept, because the path is evidence of its own (the user's
-    ruling of 2026-10-17, "peer and path from separate evidence"). An authority carrying a
-    placeholder is `_address_of`'s case: the whole composition is the path, peer NULL."""
+    Each part is traced to its source as the `url` is (`_stated_part`), and a part that reaches
+    a configuration key is that key: `${search.host}:9200` is the peer, and the path stays the
+    path. A part captured and not read leaves WHO is called unread: peer NULL and the row
+    `partial`, the path kept, because the path is evidence of its own (the user's ruling of
+    2026-10-17, "peer and path from separate evidence").
+
+    A path whose FIRST piece went unread was written `<host>` by `url_of`, which reads a
+    leading hole as the authority. With the host stated, that piece is a piece of the path, so
+    it is the hole the reader writes for an unread piece behind a known authority (`url_of`
+    on `http://h/{}/x`), and the row stays `partial`."""
     if "host" not in captures and "port" not in captures:
         return address
     peer, path, resolution = address
@@ -1529,21 +1539,49 @@ def _with_stated_authority(
         host, port = (stated, port) if field == "host" else (host, stated)
     if host is None:
         return address
-    authority = host if port is None else f"{host}:{port}"
-    if carries_expression(authority):
-        return None, (f"//{authority}{path}" if path is not None else None), resolution
-    stated_peer, _ = split_url(f"//{authority}")
+    if path is not None and path.startswith(_UNREADABLE_HOST):
+        path = _HOLE + path.removeprefix(_UNREADABLE_HOST)
+    stated_peer, _ = split_url(f"//{host if port is None else f'{host}:{port}'}")
     return stated_peer, path, resolution
 
 
 def _stated_part(captures: dict[str, Any], field: str, context: _DeriveContext) -> str | None:
-    """The text of a captured `host` or `port`: a string literal, or an integer literal for a
-    port (javac pushes `8080` as one, CP-56 row 317); None where it was not read."""
+    """The text of a captured `host` or `port`, read as the `url` capture is: the literal at
+    the call (a port is an integer literal, CP-56 row 317), the configuration expression the
+    field ladder names (`_address_read`), and otherwise the backward walk the assembled `url`
+    takes (`_url_argument`), with no identity entries and within the chain's path, so a host
+    handed in as a parameter is the literal its callers pass. None where it was not read
+    whole: no answer, several, or one with an unread hole."""
     argument = _address_read(captures.get(field), context)
-    if field == "port" and isinstance(argument, dict) and argument.get("kind") == "int":
-        value = argument.get("value")
-        return str(value) if isinstance(value, int) and not isinstance(value, bool) else None
+    if not isinstance(argument, dict):
+        return None
+    read = _part_text(argument)
+    if read is not None:
+        return read
+    walked = _walked_with(argument, context, (), reader=_part_answer, within=context.path)
+    texts = {text for _, text, resolution in walked or () if resolution == "resolved" and text}
+    return texts.pop() if len(texts) == 1 else None
+
+
+def _part_text(argument: dict[str, Any]) -> str | None:
+    """A `host` or `port` argument's own literal text: a string, or a port's integer."""
+    value = argument.get("value")
+    if argument.get("kind") == "int" and isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
     return _string_value(argument)
+
+
+def _part_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]:
+    """One walk answer for a `host` or `port`, as `(None, text, resolution)`: a string or an
+    integer literal is read; a configuration expression with no unread hole is the key it
+    names; every other answer, a branch among several included, is not read."""
+    if answer is None or answer.narrowed or answer.inexact:
+        return None, None, str(Resolution.UNRESOLVED)
+    if answer.kind == LITERAL and answer.literal_kind in (STRING, INT):
+        return None, str(answer.value), str(Resolution.RESOLVED)
+    if answer.kind == EXPRESSION and not _holes(str(answer.value)):
+        return None, str(answer.value), str(Resolution.RESOLVED)
+    return None, None, str(Resolution.UNRESOLVED)
 
 
 def _authority_parts(peer: str | None) -> tuple[str | None, str | None]:

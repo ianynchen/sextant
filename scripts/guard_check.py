@@ -1846,20 +1846,64 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "vertx-webclient.a-socket-address-form-reads-no-address": Guard(
-        what="a `request(HttpMethod, SocketAddress, …)` form derives nothing unless a later "
-        "`uri(…)` names an address (Vert.x plan, Task 12; spec §3d)",
-        why="without it the form's uri argument is read as the request's address, beside a "
-        "server address nothing here reads",
+    "vertx-webclient.a-socket-address-form-reads-its-uri": Guard(
+        what="a `request(HttpMethod, SocketAddress, …)` form reads its uri string as the path, "
+        "with no peer (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 1)",
+        why="without it a request sent to a server address publishes nothing, though its path "
+        "is in the call",
         edits=(
             Edit(
                 path=_VERTX_WEBCLIENT_CATALOG,
                 find='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
                 "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
-                '",\n        captures: { http_method: arg0, serves: false } }',
+                '",\n        captures: { http_method: arg0, url: arg2 } }',
                 replace='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
                 "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
-                '",\n        captures: { http_method: arg0, url: arg2 } }',
+                '",\n        captures: { http_method: arg0, serves: false } }',
+            ),
+        ),
+    ),
+    "fluent.a-host-or-port-is-traced-as-the-url-is": Guard(
+        what="a `host` or `port` not written at the call is traced by the walk the assembled "
+        "`url` takes (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 4)",
+        why="without it a host handed in as a parameter, with a literal at every caller, "
+        "publishes no peer",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    walked = _walked_with(argument, context, (), reader=_part_answer, "
+                "within=context.path)\n",
+                replace="    walked = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-configured-host-is-its-key": Guard(
+        what="a stated host that is a configuration key is the peer, the path kept (Vert.x plan, "
+        "Task 12; coordinator ruling 2026-10-31, item 5)",
+        why="without it `${search.host}` and the port become a path `//${search.host}:9200/q` "
+        "with no peer",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    stated_peer, _ = split_url(f"//{host if port is None else '
+                "f'{host}:{port}'}\")\n",
+                replace="    if carries_expression(host):  # guard disabled by "
+                "scripts/guard_check.py\n"
+                '        return None, f"//{host}:{port}{path}", resolution\n'
+                '    stated_peer, _ = split_url(f"//{host if port is None else '
+                "f'{host}:{port}'}\")\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-first-piece-behind-a-stated-host-is-a-hole": Guard(
+        what="a uri whose first piece is unread, behind a stated host, writes that piece as a "
+        "hole, not `<host>` (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 5)",
+        why="without it the path says the host went unread beside a peer that names it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if path is not None and path.startswith(_UNREADABLE_HOST):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
