@@ -12,6 +12,10 @@ measured:
       identity: reported, by: scripts/probes/cp56_vertx_web.md }
   - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0", "5.2.1"],
       identity: reported, by: scripts/probes/cp56_vertx_web.md }
+  - { artifact: io.vertx:vertx-rx-java3, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+  - { artifact: io.smallrye.reactive:smallrye-mutiny-vertx-web-client, versions: ["3.23.1", "4.0.2"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
 
 # Where the defaults apply, CP-56 row group (e) (rows 123-132): only `WebClientBase` reads them,
 # when it builds the request (`fill_authority`, `shapes/client_base.py`):
@@ -50,6 +54,39 @@ client_base:
         descriptor: "(Lio/vertx/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/ext/web/client/WebClient;" }
     - { owner: io.vertx.ext.web.client.WebClient, method: wrap, options_arg: 1,
         descriptor: "(Lio/vertx/core/http/HttpClient;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/ext/web/client/WebClient;" }
+
+    # RxJava 3: the same factories, the first parameter the wrapper's own `Vertx` (or `HttpClient`)
+    # and the options the core's (rows 175-176), so the same setters read them.
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/http/PoolOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    - { owner: io.vertx.rxjava3.ext.web.client.WebClient, method: wrap, options_arg: 1,
+        descriptor: "(Lio/vertx/rxjava3/core/http/HttpClient;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/rxjava3/ext/web/client/WebClient;" }
+    # Mutiny: the same factories, the first parameter the wrapper's own `Vertx` (or `HttpClient`)
+    # and the options the core's (rows 254-255), so the same setters read them.
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/http/PoolOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientConfig;Lio/vertx/core/net/ClientSSLOptions;Lio/vertx/core/http/PoolOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
+    - { owner: io.vertx.mutiny.ext.web.client.WebClient, method: wrap, options_arg: 1,
+        descriptor: "(Lio/vertx/mutiny/core/http/HttpClient;Lio/vertx/ext/web/client/WebClientOptions;)Lio/vertx/mutiny/ext/web/client/WebClient;" }
   # The calls that set an address part (rows 80-81, 85-86 for the client's options; 90-92 for
   # a request's `RequestOptions`, which `request(m, options)` is made from). `setSsl` is not
   # one: a peer carries no scheme, so it is a configuring call like any other.

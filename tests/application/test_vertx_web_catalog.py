@@ -607,11 +607,28 @@ def test_the_catalog_names_no_unmeasured_row():
     }  # fmt: skip
     steps = _vertx_web().matches["steps"]
 
-    assert {s["method"] for s in steps if s["owner"] == "io.vertx.ext.web.Route"} == measured
-    assert {
-        s["method"] for s in steps if s["owner"] == "io.vertx.ext.web.Router"
-    } == router_measured
-    assert {s["owner"] for s in steps} == {"io.vertx.ext.web.Route", "io.vertx.ext.web.Router"}
+    def named_by(owner: str) -> set[str]:
+        return {s["method"] for s in steps if owner in _owners(s)}
+
+    # An entry names its owners as a list where the wrappers share the core's parameters
+    # (Task 15, spec §3e); each wrapper carries the same methods as the core.
+    for package in ("io.vertx.ext.web.", "io.vertx.rxjava3.ext.web.", "io.vertx.mutiny.ext.web."):
+        assert named_by(f"{package}Route") == measured
+        assert named_by(f"{package}Router") == router_measured
+    assert {o for s in steps for o in _owners(s)} == {
+        f"{package}{kind}"
+        for package in (
+            "io.vertx.ext.web.",
+            "io.vertx.rxjava3.ext.web.",
+            "io.vertx.mutiny.ext.web.",
+        )
+        for kind in ("Route", "Router")
+    }
     assert all(step["returns_receiver"] is True for step in steps)
     # CP-56 rows 304-323 print some owners with a stray `;`; none is copied here.
-    assert all(not str(step["owner"]).endswith(";") for step in steps)
+    assert all(not o.endswith(";") for step in steps for o in _owners(step))
+
+
+def _owners(entry: dict) -> list[str]:
+    owner = entry["owner"]
+    return owner if isinstance(owner, list) else [owner]

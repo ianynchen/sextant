@@ -166,6 +166,8 @@ _CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
 _SCHEDULED_CHAIN = "sextant/application/resolve/engines/scheduled_chain.py"
 _QUARTZ_CATALOG = "sextant/catalogs/quartz.yml"
 _VERTX_WEBCLIENT_CATALOG = "sextant/catalogs/vertx-webclient.yml"
+_VERTX_WEB_CATALOG = "sextant/catalogs/vertx-web.yml"
+_VERTX_WEB_CLIENT_MODEL = "sextant/catalogs/client-models/vertx-web.yml"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -8396,6 +8398,314 @@ GUARDS: dict[str, Guard] = {
                 path=_ARGUMENTS,
                 find="    return reads.parameters_by_caller.get(str(caller), ())\n",
                 replace="    return reads.caller_parameters  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-routers-are-owners": Guard(
+        what="RxJava 3's `Router` is an owner of every root (Vert.x plan, Task 15; spec §3e; CP-56 rows 135-155)",
+        why='without it `router.get("/orders").handler(…)` on an RxJava 3 router is no route, and the module publishes no inbound endpoint',
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+                replace="owner: &routers [io.vertx.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routers-are-owners": Guard(
+        what="Mutiny's `Router` is an owner of every root (Task 15; spec §3e; CP-56 rows 213-234)",
+        why="without it a Mutiny router's routes are no endpoints",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+                replace="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-routes-are-owners": Guard(
+        what="RxJava 3's `Route` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 156-174)",
+        why="without it `r.method(GET);` written as a statement on an RxJava 3 route forks a branch of its own and the route serves the verb its root named, or none",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+                replace="owner: &routes [io.vertx.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routes-are-owners": Guard(
+        what="Mutiny's `Route` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 235-253)",
+        why="without it a statement-style Mutiny route loses the verbs and paths its later statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+                replace="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-handler-takes-a-consumer": Guard(
+        what="Mutiny's `Route.handler(Consumer)` registers the route (Task 15; spec §3e; CP-56 row 246)",
+        why="without it the one registering call a Mutiny route is written with names no handler, and the route is no endpoint",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Route, method: handler, descriptor:",
+                replace="owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-failure-handler-takes-a-consumer": Guard(
+        what="Mutiny's `Route.failureHandler(Consumer)` is a capture-less step (Task 15; CP-56 row 249)",
+        why="without it `r.failureHandler(…);` written as a statement on a Mutiny route forks a branch of its own, and the route loses what its other statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Route, method: failureHandler,",
+                replace="owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-next-passes-the-request-on": Guard(
+        what="RxJava 3's `RoutingContext.next()` carries the request to the next handler (Task 15; CP-56 row 293)",
+        why="without it an RxJava 3 handler that only calls `next()` is published as the route's answering handler",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="    - { owner: io.vertx.rxjava3.ext.web.RoutingContext, method: next }",
+                replace="    - { owner: io.vertx.rxjava3.ext.web.RoutingContext, method: guardDisabled }",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-next-passes-the-request-on": Guard(
+        what="Mutiny's `RoutingContext.next()` carries the request to the next handler (Task 15; CP-56 row 294)",
+        why="without it a Mutiny handler that only calls `next()` is published as the route's answering handler",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="    - { owner: io.vertx.mutiny.ext.web.RoutingContext, method: next }",
+                replace="    - { owner: io.vertx.mutiny.ext.web.RoutingContext, method: guardDisabled }",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-framework-handlers-pass-on": Guard(
+        what="RxJava 3's own handler package passes on by contract (Task 15; spec §3e)",
+        why="without it `route().handler(BodyHandler.create())` on RxJava 3 is published as an answering route",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-framework-handlers-pass-on": Guard(
+        what="Mutiny's own handler package passes on by contract (Task 15; spec §3e)",
+        why="without it `route().handler(BodyHandler.create())` on Mutiny is published as an answering route",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-sub-router-mounts-by-its-route-path": Guard(
+        what="RxJava 3's `Route.subRouter(Router)` mounts a router at the route's path (Task 15; CP-56 row 171)",
+        why="without it the routes of a sub-router mounted through a RxJava 3 route serve at the root, a path no request takes",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find='owner: io.vertx.rxjava3.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/rxjava3/ext/web/Router;)Lio/vertx/rxjava3/ext/web/Route;",\n        router_arg: 0',
+                replace='owner: io.vertx.rxjava3.ext.web.Route, method: guardDisabled, descriptor: "(Lio/vertx/rxjava3/ext/web/Router;)Lio/vertx/rxjava3/ext/web/Route;",\n        router_arg: 0',
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-sub-router-mounts-by-its-route-path": Guard(
+        what="Mutiny's `Route.subRouter(Router)` mounts a router at the route's path (Task 15; CP-56 row 250)",
+        why="without it the routes of a sub-router mounted through a Mutiny route serve at the root, a path no request takes",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find='owner: io.vertx.mutiny.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/mutiny/ext/web/Router;)Lio/vertx/mutiny/ext/web/Route;",\n        router_arg: 0',
+                replace='owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled, descriptor: "(Lio/vertx/mutiny/ext/web/Router;)Lio/vertx/mutiny/ext/web/Route;",\n        router_arg: 0',
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-mount-sub-router-mounts-at-its-prefix": Guard(
+        what="RxJava 3's `Router.mountSubRouter(String, Router)` mounts at its prefix (Task 15; CP-56 row 137)",
+        why="without it the routes of a sub-router mounted this way at Vert.x 4.5 serve at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.rxjava3.ext.web.Router, method: mountSubRouter, descriptor:",
+                replace="owner: io.vertx.rxjava3.ext.web.Router, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-mount-sub-router-mounts-at-its-prefix": Guard(
+        what="Mutiny's `Router.mountSubRouter(String, Router)` mounts at its prefix (Task 15; CP-56 row 216)",
+        why="without it the routes of a sub-router mounted this way at Vert.x 4.5 serve at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Router, method: mountSubRouter, descriptor:",
+                replace="owner: io.vertx.mutiny.ext.web.Router, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-routers-are-router-types": Guard(
+        what="RxJava 3's `Router` is a router type, so one a producer made is found (Task 15; spec §3c)",
+        why="without it a route registered on a router built by `io.vertx.rxjava3.ext.web.Router.router(vertx)` takes no mount prefix and is published at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+                replace="router_type: [io.vertx.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routers-are-router-types": Guard(
+        what="Mutiny's `Router` is a router type, so one a producer made is found (Task 15; spec §3c)",
+        why="without it a route registered on a router built by `io.vertx.mutiny.ext.web.Router.router(vertx)` takes no mount prefix and is published at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+                replace="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-clients-are-owners": Guard(
+        what="RxJava 3's `WebClient` is an owner of every root whose parameters match the core's (Task 15; CP-56 rows 177-190)",
+        why='without it `client.get(8080, "inventory", "/stock")` on an RxJava 3 client is no outbound call',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+                replace="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-clients-are-owners": Guard(
+        what="Mutiny's `WebClient` is an owner of every root whose parameters match the core's (Task 15; CP-56 rows 256-272)",
+        why="without it a Mutiny client's calls are no outbound calls",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+                replace="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-requests-are-owners": Guard(
+        what="RxJava 3's `HttpRequest` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 191-205)",
+        why="without it `r.putHeader(…);` written as a statement on an RxJava 3 request forks a branch of its own and the sent request carries no header",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+                replace="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-requests-are-owners": Guard(
+        what="Mutiny's `HttpRequest` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 273-284)",
+        why="without it a statement-style Mutiny request carries none of what its statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+                replace="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-rx-send-sends-the-request": Guard(
+        what="RxJava 3's `rxSend…` terminals send a request (Task 15; CP-56 row 298)",
+        why="without them a request sent only through `rxSend()` is no outbound call",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="rxSend, rxSendJson, rxSendJsonObject,",
+                replace="rxSendJson, rxSendJsonObject,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-and-await-sends-the-request": Guard(
+        what="Mutiny's `sendAndAwait` and `sendAndForget` send a request (Task 15; CP-56 row 302)",
+        why="without them a request sent only through `sendAndAwait()` is no outbound call",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="sendAndAwait, sendAndForget, sendJsonAndAwait,",
+                replace="sendJsonAndAwait,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-body-sends-name-their-body": Guard(
+        what="RxJava 3's `rxSendJson` names the body it sends (Task 15; CP-56 row 298)",
+        why="without it a request sent with `rxSendJson(order)` publishes no request shape",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: io.vertx.rxjava3.ext.web.client.HttpRequest, method: rxSendJson, captures",
+                replace="owner: io.vertx.rxjava3.ext.web.client.HttpRequest, method: guardDisabled, captures",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-body-sends-name-their-body": Guard(
+        what="Mutiny's `sendJsonAndAwait` names the body it sends (Task 15; CP-56 row 302)",
+        why="without it a request sent with `sendJsonAndAwait(order)` publishes no request shape",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: sendJsonAndAwait, captures",
+                replace="owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: guardDisabled, captures",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-uri-template-is-read-off-its-factory": Guard(
+        what="a RxJava 3 `UriTemplate` form reads its template off the wrapper's own `UriTemplate.of` (Task 15; `javap` on the wrapper jars)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` on a RxJava 3 client publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &rx3_template [{ owner: io.vertx.rxjava3.uritemplate.UriTemplate, method: of, arg: 0 }]",
+                replace="url_via: &rx3_template [{ owner: io.vertx.rxjava3.uritemplate.UriTemplate, method: guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-uri-template-is-read-off-its-factory": Guard(
+        what="a Mutiny `UriTemplate` form reads its template off the wrapper's own `UriTemplate.of` (Task 15; `javap` on the wrapper jars)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` on a Mutiny client publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &mutiny_template [{ owner: io.vertx.mutiny.uritemplate.UriTemplate, method: of, arg: 0 }]",
+                replace="url_via: &mutiny_template [{ owner: io.vertx.mutiny.uritemplate.UriTemplate, method: guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-client-factory-is-a-rung": Guard(
+        what="RxJava 3's `WebClient.create(Vertx, WebClientOptions)` is a rung of the options ladder (Task 15; CP-56 row 175)",
+        why="without it a RxJava 3 client built from options that set a default host and port publishes its calls with no peer",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CLIENT_MODEL,
+                find='owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,\n        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+                replace='owner: io.vertx.rxjava3.ext.web.client.WebClient, method: guardDisabled, options_arg: 1,\n        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-client-factory-is-a-rung": Guard(
+        what="Mutiny's `WebClient.create(Vertx, WebClientOptions)` is a rung of the options ladder (Task 15; CP-56 row 254)",
+        why="without it a Mutiny client built from options that set a default host and port publishes its calls with no peer",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CLIENT_MODEL,
+                find='owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,\n        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+                replace='owner: io.vertx.mutiny.ext.web.client.WebClient, method: guardDisabled, options_arg: 1,\n        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
             ),
         ),
     ),

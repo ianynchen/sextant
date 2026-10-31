@@ -580,14 +580,35 @@ def test_the_catalog_flags_every_self_returning_request_method_and_nothing_else(
         "bearerTokenAuthentication",
     }  # fmt: skip
     steps = _vertx_webclient().matches["steps"]
-    flagged = {s["method"] for s in steps if s.get("returns_receiver") is True}
-    unflagged = {s["method"] for s in steps if s.get("returns_receiver") is not True}
+    core = [s for s in steps if "io.vertx.ext.web.client.HttpRequest" in _owners(s)]
+    flagged = {s["method"] for s in core if s.get("returns_receiver") is True}
+    unflagged = {s["method"] for s in core if s.get("returns_receiver") is not True}
 
     assert flagged == row_111
     assert unflagged == {"sendJson", "sendJsonObject", "sendBuffer"}
-    assert {s["owner"] for s in steps} == {"io.vertx.ext.web.client.HttpRequest"}
+    # The wrappers' steps (Task 15, spec §3e): the same methods under their own owners, and
+    # the sends of their own that carry a body.
+    assert {o for s in steps for o in _owners(s)} == {
+        "io.vertx.ext.web.client.HttpRequest",
+        "io.vertx.rxjava3.ext.web.client.HttpRequest",
+        "io.vertx.mutiny.ext.web.client.HttpRequest",
+    }
+    for owner in (
+        "io.vertx.rxjava3.ext.web.client.HttpRequest",
+        "io.vertx.mutiny.ext.web.client.HttpRequest",
+    ):
+        wrapper = [s for s in steps if owner in _owners(s)]
+        assert {s["method"] for s in wrapper if s.get("returns_receiver") is True} == row_111
+        assert {s["method"] for s in wrapper if s.get("returns_receiver") is not True} >= {
+            "sendJson", "sendJsonObject", "sendBuffer",
+        }  # fmt: skip
     # CP-56 rows 304-323 print some owners with a stray `;`; none is copied here.
-    assert all(not str(step["owner"]).endswith(";") for step in steps)
+    assert all(not o.endswith(";") for step in steps for o in _owners(step))
+
+
+def _owners(entry: dict) -> list[str]:
+    owner = entry["owner"]
+    return owner if isinstance(owner, list) else [owner]
 
 
 # The client's defaults: an options object handed to the factory (Task 13, spec §3d) -------
