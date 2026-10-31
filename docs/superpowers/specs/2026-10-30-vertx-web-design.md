@@ -495,7 +495,7 @@ router built and handed in — so the fixture fails where Hono does.
 | `router.get("/v").virtualHost("api.example.com").handler(…)` | one row, host requirement in metadata |
 | A path constant `static final String`, and a `String.format("/a/:%s", P)` | resolved through the walk |
 | A handler reading `ctx.queryParam("q")` and `ctx.request().getHeader("X-T")` | query and header requirements on its row |
-| `client.get(8080, "inventory", "/stock/" + sku).send()` | outbound `GET` `/stock/{…}`, peer `inventory:8080` |
+| `client.get(8080, "inventory", "/stock/" + sku).send()` | outbound `GET` `/stock/{sku}` (a hole from a named variable is published under its name, `test_rest_outbound_delivered.py:44-66`), peer `inventory:8080` |
 | `client.postAbs("http://billing/charges").sendJson(charge)` | outbound `POST`, peer `billing`, body `Charge` |
 | Hono's shape: a helper doing `r = client.post(Q).addQueryParam(…); r.timeout(…); r.basicAuthentication(…); return r.as(BodyCodec.jsonObject());`, sent by its caller | one outbound row |
 | `WebClient.create(vertx, new WebClientOptions().setDefaultHost("search").setDefaultPort(9200))` then `client.get("/q").send()` | `GET /q`, peer `search:9200` |
