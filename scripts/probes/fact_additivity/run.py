@@ -139,6 +139,18 @@ def _carries_lambda_key(value: object) -> bool:
     return False
 
 
+def _added_keys_removed(fact: object, before: object) -> object:
+    """`fact` with only the added keys the BEFORE line does not carry removed. A key an
+    earlier release added (`captures` on a lambda, `receiver_parameter`) is on both lines and
+    is compared, not stripped: stripping it from the after line alone made every call site
+    holding a capturing lambda read as "differs beyond the keys" the first time a later key
+    (`receiver_field` on `this`'s fields, 2026-10-31) landed on the same line."""
+    if not isinstance(fact, dict) or not isinstance(before, dict):
+        return fact
+    own = FACT_KEYS.get(str(fact.get("kind")), frozenset())
+    return {k: v for k, v in fact.items() if k not in own or k in before}
+
+
 def _canonical(fact: object) -> str:
     """One fact as a comparable string, key order normalised."""
     return json.dumps(fact, sort_keys=True)
@@ -214,7 +226,10 @@ def compare_trees(before: Path, after: Path) -> tuple[list[str], int, int, int, 
             new_fact = json.loads(new_line)
             if not carries_a_new_key(new_fact):
                 problems.append(f"{relative}:{number}: differs and carries neither new key")
-            elif without_the_new_keys(new_fact) != json.loads(old_line):
+            elif json.loads(old_line) not in (
+                without_the_new_keys(new_fact),
+                _added_keys_removed(new_fact, json.loads(old_line)),
+            ):
                 problems.append(f"{relative}:{number}: differs beyond the two keys")
             else:
                 keyed += 1

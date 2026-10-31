@@ -2333,18 +2333,19 @@ def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):
     assert rows[0]["handler"].rsplit("(", 1)[1] == after["handler"].rsplit("(", 1)[1], rows[0]
 
 
-@pytest.mark.pins("fluent.an-unreadable-handler-gives-a-partial-row")
-def test_vertx_a_context_captured_by_an_anonymous_callback_is_partial(vertx_inbound, vertx_tables):
+def test_vertx_a_context_captured_by_an_anonymous_callback_passes_on(vertx_inbound):
     """`onSuccess(new Handler<String>() { … ctx.next(); })` inside a handler: javac keeps
     `ctx` in a synthetic field the anonymous class's constructor writes, and the `next()` is on
-    a `getfield` of it, which no fact names. Whether the handler passes on is not readable
-    here, so the row is `viaAnonymous` at `partial` with its reason — never an answering row
-    (ruling 2026-10-31)."""
+    a `getfield` of it. Since the receiver of a call on `this`'s field is named (D00 §5,
+    2026-10-31) the walk follows `val$ctx` to the constructor's write and on to the handler's
+    own context: `viaAnonymous` passes the request on, and `after` answers, `resolved`.
+    Re-pinned from `partial` (Vert.x Task 13): the `next()` was unread only because the
+    receiver's field was not in the facts; `fluent.an-unreadable-handler-gives-a-partial-row`
+    stays pinned by the other-module test above."""
     rows = [r for r in vertx_inbound if r["path"] == "/anon-next"]
     assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in rows] == [
-        ("GET", "AnonymousRoutes#viaAnonymous", "partial")
+        ("GET", "AnonymousRoutes#after", "resolved")
     ], rows
-    assert "AnonymousRoutes$2#<init>" in _reason_of(rows[0], vertx_tables), rows[0]
 
 
 @pytest.mark.pins("pass_through.a-handler-is-identified-by-its-declared-type")
