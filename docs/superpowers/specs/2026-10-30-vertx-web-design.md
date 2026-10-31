@@ -336,7 +336,9 @@ rule, not ours.)
   producer reader stops at a `declared` set of `(owner, method)`; that set is **derived from
   the facts by type** — every call site in the module whose descriptor returns the
   catalog's `router_type` (`io.vertx.ext.web.Router` and the wrapper types), and every
-  constructor of a class the module's facts show implementing it — once per resolve, cached.
+  constructor of a class the module's facts show implementing it — EXCEPT a call that hands
+  back its own receiver (`errorHandler`, `allowForward`, …, declared in the catalog), which is
+  the same object configured, never a second producer [ruled 2026-10-31, my call] — once per resolve, cached.
   A router handed in as a parameter with no caller in the module, or read from something
   outside, ends `external`: that is the "produced outside the module" case below.
 - **Same object means the same producer reached along the same call path** (user ruling
