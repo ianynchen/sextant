@@ -1448,6 +1448,119 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.several-accumulated-verbs-are-one-row-each": Guard(
+        what="a `fluent` chain that accumulated several verbs (`repeats`) derives one row per "
+        "verb, in call order (Vert.x plan, Task 8; spec §3f)",
+        why="without it `method(GET).method(DELETE)` publishes one route and drops the verb "
+        "the module also serves",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            for each in (declared_verb if isinstance(declared_verb, tuple) else (declared_verb,))\n",
+                replace="            for each in (declared_verb[:1] if isinstance(declared_verb, tuple) else (declared_verb,))\n",
+            ),
+        ),
+    ),
+    "fluent.a-verbless-chain-serves-any-method-where-the-catalog-says-so": Guard(
+        what="an inbound `fluent` chain with no verb, in a catalog declaring `verbless_serves: "
+        "any`, is one row with method NULL and `method_kind = any` (Vert.x plan, Task 8)",
+        why="without it the row reads as a route whose verb nobody read, and the linker joins "
+        "no call of any verb to a route that serves them all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    method_kind = context.verbless_serves if verbless and direction == "inbound" else None\n',
+                replace="    method_kind = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pathless-chain-serves-the-catalogs-every-path": Guard(
+        what="an inbound `fluent` chain that never captured an address, in a catalog declaring "
+        "`pathless_serves`, serves that path (`/*`), `resolved` (Vert.x plan, Task 8)",
+        why="without it `router.route().handler(h)`, the official hello world, is an "
+        "unresolved row with no path and the module's only route is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]\n",
+                replace="        destinations = [_composed_address(captures, context)]\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-capture-marks-the-row-and-skips-canonicalising": Guard(
+        what="a `fluent` chain whose address was captured `url_is: pattern` publishes it "
+        "verbatim with `path_kind = pattern` (Vert.x plan, Task 8; spec §3a)",
+        why="without it `\\/files\\/.+` is canonicalised to `/\\/files\\/.+`, an expression "
+        "nobody wrote, and linked by path as if it were an address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    path_kind = _URL_IS.get(str(captures.get("url_is")))\n',
+                replace="    path_kind = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-path-is-never-refused": Guard(
+        what="a pattern path is never refused by `refuses_unrooted_path`: Vert.x skips "
+        "`checkPath` for a regex route (Vert.x plan, Task 8; CP-56 row 118)",
+        why="without it a regex route not starting with `/` is filed as refused and derives "
+        "no row, though Vert.x registers and serves it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and path_kind != PATH_KIND_PATTERN\n",
+                replace="                and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-path-keeps-its-query-characters": Guard(
+        what="a pattern path keeps every character: its `?` is a quantifier, not the start of "
+        "a query string (Vert.x plan, Task 8)",
+        why="without it `/(a|b)?q=.+` is cut to `/(a|b)` and a query parameter `q` is invented",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="(path, ()) if path_kind == PATH_KIND_PATTERN else query_entries(path)",
+                replace="query_entries(path)",
+            ),
+        ),
+    ),
+    "fluent.a-chain-marked-not-serving-derives-nothing": Guard(
+        what="a `fluent` chain whose last `serves` capture is false (`disable()`), or whose "
+        "`serves` is poisoned (`remove()`), derives no row (Vert.x plan, Task 8)",
+        why="without it a disabled or removed route is published as served",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    serving = captures.get(_SERVES, True) is True\n",
+                replace="    serving = True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-malformed-route-word-is-refused": Guard(
+        what="`url_is` outside its closed set, a non-boolean `serves`, a `verbless_serves` "
+        "other than `any` and a `pathless_serves` that is not a path are refused naming the "
+        "file (Vert.x plan, Task 8)",
+        why="a misspelt word would load and read as another answer: a pattern published as an "
+        "address, or a disabled route served",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    _validate_route_captures([*roots, *steps], catalog)\n",
+                replace="",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="    if declared is not None and declared != ANY_METHOD:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="    if declared is not None and not (isinstance(declared, str) and declared):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.a-refusal-is-the-catalogs-word-not-every-frameworks": Guard(
         what="only a catalog declaring `refuses_unrooted_path` refuses an unrooted path; every "
         "other fluent catalog keeps the canonicaliser's leading-slash repair (Vert.x plan, "
@@ -6325,8 +6438,8 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path=_FLUENT,
-                find="        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)\n",
-                replace="        else _string_value(declared_verb)  # guard disabled by scripts/guard_check.py\n",
+                find="    return _string_value(argument) or static_field_value(argument, context.verb_fields)\n",
+                replace="    return _string_value(argument)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

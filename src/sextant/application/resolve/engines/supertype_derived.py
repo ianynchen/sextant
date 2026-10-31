@@ -866,6 +866,8 @@ def _row(catalog: Catalog, path: str, handler: str | None, resolution: str) -> d
         "response_shape": None,
         "consumes": None,
         "produces": None,
+        "path_kind": None,
+        "method_kind": None,
     }
 
 

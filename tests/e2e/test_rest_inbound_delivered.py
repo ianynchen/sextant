@@ -2133,7 +2133,11 @@ def _served(rows: list[dict], handler_class: str) -> set[tuple]:
 # Task 8: single-handler routes ---------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
+@pytest.mark.xfail(
+    strict=True,
+    reason="Task 8 greened every shape but `String.format`: reading it means modelling a "
+    "library method's semantics, which OI-143's ruling forbids; awaiting a ruling",
+)
 def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
     """Verb methods, `route(HttpMethod, path)`, accumulated `method(…)` calls, the same route
     as separate statements on a `Route` local with self-returning calls between, a regex
@@ -2160,7 +2164,6 @@ def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
     assert served == expected, sorted(served, key=str)
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
     """`route("/any").handler(…)` serves every verb: ONE row, method NULL, carrying the
     any-method marker — never six rows, and never a bare NULL that reads as "nobody read
@@ -2170,7 +2173,6 @@ def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
     assert _serves_any_method(rows[0]), rows[0]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_a_route_with_no_path_serves_every_path(vertx_inbound):
     """The official hello world's only route, `router.route().handler(rc -> …)`: one row,
     path `/*`, method NULL, answering. `router.route().handler(BodyHandler.create())`
@@ -2178,18 +2180,19 @@ def test_vertx_a_route_with_no_path_serves_every_path(vertx_inbound):
     rows = [r for r in vertx_inbound if "/HelloServer#" in str(r["handler"])]
     assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [(None, "/*", "resolved")]
     assert _serves_any_method(rows[0]), rows[0]
+    # javac 21's name for the lambda (the fixture is built with JDK 21).
+    assert _vertx_handler(rows[0]) == "HelloServer#lambda$start$0", rows[0]["handler"]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_respond_is_a_terminal(vertx_inbound):
     """`router.get("/health").respond(ctx -> Future.succeededFuture(…))`: one row. The
     handler is the lambda, a body of `OrderRoutes`."""
     rows = [r for r in vertx_inbound if r["path"] == "/health"]
     assert [(r["method"], r["resolution"]) for r in rows] == [("GET", "resolved")]
-    assert _vertx_handler(rows[0]).startswith("OrderRoutes#lambda$"), rows[0]["handler"]
+    # javac 21's name for the lambda (the fixture is built with JDK 21).
+    assert _vertx_handler(rows[0]) == "OrderRoutes#lambda$register$0", rows[0]["handler"]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound, vertx_tables):
     """`.disable()` ends a chain with no row: Vert.x serves nothing for it. A path with no
     leading `/` is refused by Vert.x, so it is no row and is NOT repaired to `/bad` (DR-6).
@@ -2207,7 +2210,6 @@ def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound, ver
     assert ("http", "GET", "bad") in refused, refused
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_a_regex_route_is_a_verbatim_pattern_row(vertx_inbound):
     """`router.getWithRegex("\\/files\\/.+")`: the path is the regex verbatim, `resolved`,
     marked a pattern, and not canonicalised (no `/` put in front of its leading `\\`)."""
@@ -2218,7 +2220,6 @@ def test_vertx_a_regex_route_is_a_verbatim_pattern_row(vertx_inbound):
     assert _is_pattern(rows[0]), rows[0]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 8")
 def test_vertx_handler_reads_and_a_virtual_host_reach_endpoint_metadata(vertx_tables):
     """`ctx.queryParam("q")` and `ctx.request().getHeader("X-T")` are requirements of the
     `/search` row (the mechanism `javalin.yml` ships), and `virtualHost("api.example.com")`

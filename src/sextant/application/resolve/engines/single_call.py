@@ -1063,6 +1063,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     "response_shape": response_shape,
                     "consumes": None,
                     "produces": None,
+                    "path_kind": None,
+                    "method_kind": None,
                 }
             )
 

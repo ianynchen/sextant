@@ -476,6 +476,8 @@ def _row(catalog: Catalog, operation: str, address: str, handler: str) -> dict[s
         "response_shape": None,
         "consumes": None,
         "produces": None,
+        "path_kind": None,
+        "method_kind": None,
     }
 
 

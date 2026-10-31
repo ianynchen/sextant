@@ -3250,16 +3250,26 @@ def test_an_unreadable_verb_stays_in_the_list_as_unreadable(tmp_path: Path):
     assert [argument["kind"] for argument in captures["http_method"]] == ["string", "unresolved"]
 
 
-def test_several_accumulated_verbs_read_as_an_unresolved_verb_not_the_first(tmp_path: Path):
-    """One row per verb is a later step's job. Until then the row says it cannot name the
-    verb, rather than naming the first and silently dropping the rest."""
+@pytest.mark.pins("fluent.several-accumulated-verbs-are-one-row-each")
+def test_several_accumulated_verbs_are_one_row_each_not_the_first(tmp_path: Path):
+    """Vert.x spec §3f: `method(GET).method(DELETE)` serves both verbs, so each is a row of
+    its own, never the first with the rest dropped. A verb nobody could read is a row too,
+    `unresolved` with `method` NULL, so the rows never claim the list is complete. (Until
+    Task 8 the chain derived one `unresolved` row for the lot.)"""
+    unreadable = ("verb", [CallArgument(kind="unresolved")])
     workspace = _run(
-        tmp_path, _adapter(_verb("GET"), _verb("DELETE")), _catalog(_REPEATING_MATCHES)
+        tmp_path,
+        _adapter(_verb("GET"), _verb("DELETE"), _verb("GET"), unreadable),
+        _catalog(_REPEATING_MATCHES),
     )
-    [row] = _rows(workspace)
+    rows = _rows(workspace)
     workspace.close()
 
-    assert (row["method"], row["resolution"]) == (None, "unresolved")
+    assert sorted((row["method"] or "", row["resolution"]) for row in rows) == [
+        ("", "unresolved"),
+        ("DELETE", "resolved"),
+        ("GET", "resolved"),
+    ]
 
 
 def test_a_catalog_poison_outlasts_a_repeating_capture(tmp_path: Path):

@@ -2234,6 +2234,8 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
             **row,
             "consumes": media_json(row["consumes"]),
             "produces": media_json(row["produces"]),
+            "path_kind": None,
+            "method_kind": None,
         }
         if row["path"] is not None:
             seen[key] = serialized

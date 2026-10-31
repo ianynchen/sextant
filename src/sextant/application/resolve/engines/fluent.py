@@ -17,6 +17,7 @@ positional slot.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from itertools import product
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -84,7 +85,7 @@ from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
 )
-from sextant.domain.closed_sets import Direction, Resolution
+from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 
@@ -122,6 +123,15 @@ _REDACTOR = Redactor.from_rules()
 # `_validate_url_channel_exclusivity` weighs against it as a group.
 _ADDRESS_FIELDS = ("base", "url")
 
+# What a captured address IS (`url_is`, Vert.x spec §3a), a literal capture beside `url`, last
+# wins: a regular expression the framework matches (`pattern`, the row's `path_kind`), or an
+# address (`address`, the default), which a later step declares to undo an earlier pattern.
+_URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None}
+# A literal capture saying whether the chain serves at all (`serves`, Vert.x spec §3a): a
+# step declaring `serves: false` (`disable()`) makes the chain derive nothing until a later
+# step declares `serves: true`. A `poisons: [serves]` step ends it for good.
+_SERVES = "serves"
+
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per chain reaching a terminal, via the same
@@ -158,6 +168,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
     verb_fields = _verb_fields(matches, catalog)
     refuses_unrooted = _refuses_unrooted_path(matches, catalog)
+    verbless_serves = _verbless_serves(matches, catalog)
+    pathless_serves = _pathless_serves(matches, catalog)
+    _validate_route_captures([*roots, *steps], catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -238,6 +251,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 client_base=client_base,
                 refuses_unrooted=refuses_unrooted,
                 refusals=refusals,
+                verbless_serves=verbless_serves,
+                pathless_serves=pathless_serves,
             )
         # A chain walked back across methods is read on the path it took (ruling 5).
         _derive(end, context if end.path is None else replace(context, path=end.path))
@@ -296,6 +311,15 @@ class _DeriveContext:
     # every catalog not declaring it, whose paths are repaired as they always were.
     refuses_unrooted: bool = False
     refusals: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    # Vert.x spec §3a. `matches.verbless_serves`: what a chain that never captured a verb
+    # serves — `any` (`ANY_METHOD`) for a framework whose route with no verb answers every
+    # verb, written on the row as `method_kind` beside its NULL method. None for every
+    # catalog not declaring it, whose verbless row says nothing about verbs.
+    verbless_serves: str | None = None
+    # `matches.pathless_serves`: the path a chain that never captured an address serves, in
+    # the framework's own spelling (`/*`). None for every catalog not declaring it, whose
+    # address-less chain reads as an unread address.
+    pathless_serves: str | None = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
@@ -381,14 +405,15 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # string, and None where nothing could read it — the honest gap, not the
     # root's default.
     declared_verb = captures.get("http_method")
-    # Several verbs accumulated on one chain (`repeats`) are not one verb: no row is
-    # written for the first and the rest dropped, the verb reads as unresolved.
-    verb = (
-        declared_verb
-        if isinstance(declared_verb, str)
-        else None
-        if isinstance(declared_verb, tuple)
-        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)
+    # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
+    # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
+    # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
+    # never claims to be complete.
+    verbs = list(
+        dict.fromkeys(
+            _verb_of(each, context)
+            for each in (declared_verb if isinstance(declared_verb, tuple) else (declared_verb,))
+        )
     )
     # A chain whose root (and every step it folded through) never captured
     # `http_method` is verbless by declaration — mirroring single_call's D02
@@ -400,6 +425,14 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
+    # A verbless route of a framework that serves it for every verb says so on the row
+    # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
+    # read the verb".
+    method_kind = context.verbless_serves if verbless and direction == "inbound" else None
+    # What the address is (`url_is`): a pattern is published verbatim and linked by nothing.
+    path_kind = _URL_IS.get(str(captures.get("url_is")))
+    # `disable()` without a later `enable()`, or `remove()`: the framework serves nothing.
+    serving = captures.get(_SERVES, True) is True
     body_argument = captures.get("body")
     response_argument = captures.get("response")
     # A chain's own identity comes from EITHER an address capture — `url`
@@ -452,6 +485,14 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             )
         else:
             destinations = literal
+    elif (
+        context.pathless_serves is not None
+        and direction == "inbound"
+        and not any(field in captures for field in _ADDRESS_FIELDS)
+    ):
+        # A route that never named a path serves every path, in the framework's own spelling
+        # (`pathless_serves`), read in full: the framework stores no path, and that is exact.
+        destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]
     else:
         destinations = [_composed_address(captures, context)]
     # Computed once, outside the destinations loop — the same
@@ -492,7 +533,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     link = _string_value(captures.get("channel_link"))
     # The media a served route declares; an outbound row serves nothing, so it carries none.
     consumes, produces = media_columns(captures) if direction == "inbound" else (None, None)
-    for peer, path, url_resolution in destinations:
+    for verb, (peer, path, url_resolution) in product(verbs, destinations):
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -511,6 +552,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 and direction == "inbound"
                 and context.refusals is not None
                 and url_resolution in (str(Resolution.RESOLVED), str(Resolution.PARTIAL))
+                # A pattern is never checked: Vert.x skips `checkPath` for a regex route.
+                and path_kind != PATH_KIND_PATTERN
                 and is_unrooted(path, url_resolution == str(Resolution.RESOLVED))
             ):
                 file_refusal(
@@ -523,13 +566,18 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                     handler=handler,
                 )
                 continue
-            path = canonical_http_path(path)
+            path = canonical_http_path(path, path_kind)
+        # A route the framework does not serve derives nothing — below a refusal, which the
+        # framework raises when the route is made, before any `disable()` could run.
+        if not serving:
+            continue
         # **The query string is not part of the address** (`OI-151`), and it comes off HERE —
         # after the canonicaliser and before the dedup key below, which is built from the
         # path and must be built from the one the row publishes. `single_call` makes the same
         # call at the same point in its own loop; one function answers for both, which is
         # `OI-144`'s lesson about two engines and one piece of evidence.
-        path, query = query_entries(path)
+        # A pattern's `?` is a quantifier, not a query string: it keeps every character.
+        path, query = (path, ()) if path_kind == PATH_KIND_PATTERN else query_entries(path)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -691,8 +739,19 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 "response_shape": response_shape,
                 "consumes": consumes,
                 "produces": produces,
+                "path_kind": path_kind if path is not None else None,
+                "method_kind": method_kind,
             }
         )
+
+
+def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:
+    """One verb a chain captured: a literal the catalog spelled is that literal; one read off
+    an argument (`A-C2`) is the string it reads as, or the static field `verb_values` names,
+    and None where nothing could read it — the honest gap, not the root's default."""
+    if isinstance(argument, str):
+        return argument
+    return _string_value(argument) or static_field_value(argument, context.verb_fields)
 
 
 def _edge(
@@ -1256,3 +1315,49 @@ def _verb_fields(matches: dict[str, Any], catalog: Catalog) -> dict[tuple[str, s
             f"`<owner>#<field>` to a verb, got {fields!r} (D02 §2's `fluent` style)"
         )
     return member_table(fields)
+
+
+def _verbless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:
+    """`matches.verbless_serves` (Vert.x spec §3a): `any` for a framework whose route with no
+    verb serves every verb, absent for one that says nothing. Any other value is a broken file
+    (D02 §2's `fluent` style): the one answer the row can carry is `method_kind = any`."""
+    declared = matches.get("verbless_serves")
+    if declared is not None and declared != ANY_METHOD:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `verbless_serves` is `{ANY_METHOD}`, got "
+            f"{declared!r} (D02 §2's `fluent` style)"
+        )
+    return None if declared is None else ANY_METHOD
+
+
+def _pathless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:
+    """`matches.pathless_serves` (Vert.x spec §3a): the path a route that names none serves,
+    in the framework's own spelling (`/*`). Anything but a non-empty string is a broken file,
+    never read as absent."""
+    declared = matches.get("pathless_serves")
+    if declared is not None and not (isinstance(declared, str) and declared):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `pathless_serves` is a path, got {declared!r} "
+            f"(D02 §2's `fluent` style)"
+        )
+    return declared
+
+
+def _validate_route_captures(entries: list[dict[str, Any]], catalog: Catalog) -> None:
+    """Refuses a `url_is` capture outside its closed set and a `serves` capture that is not a
+    boolean (Vert.x spec §3a): either would load, read as some other answer, and publish a
+    route the framework does not serve, or none it does."""
+    for entry in entries:
+        captures = entry["captures"]
+        if "url_is" in captures and captures["url_is"] not in _URL_IS:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                f"`url_is: {captures['url_is']!r}`, which is one of "
+                f"{', '.join(sorted(_URL_IS))} (D02 §2's `fluent` style)"
+            )
+        if _SERVES in captures and not isinstance(captures[_SERVES], bool):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                f"`serves: {captures[_SERVES]!r}`, which is true or false (D02 §2's `fluent` "
+                f"style)"
+            )

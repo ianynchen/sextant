@@ -1,0 +1,243 @@
+id: vertx-web
+displayName: Vert.x Web (Router routes)
+style: fluent
+protocol: http
+direction: inbound
+
+# A Vert.x route is a chain on a `Router` (spec 2026-10-30 §3a): a root that may name a
+# verb and a path (`router.get("/orders")`), steps on the `Route` it returns that refine
+# it (`method`, `path`, `produces`), and a handler that registers it. This is the shape
+# `vertx-eventbus-chain.yml` ships for the event bus, read by the same engine. Not
+# `combinator`: a router is not one tree of calls, each route is its own statement on a
+# shared `Router` object.
+#
+# What javac writes, measured (CP-56 row group (h), rows 304-316,
+# `scripts/probes/cp56_vertx_web.md`): every call is `invokeinterface` on the interface
+# (`Router`, `Route`), left to right on one operand stack, so `router.get("/x").handler(h)`
+# is a root whose result is the receiver of the step. A method reference `this::h` is a
+# `lambda` argument naming `h` itself (row 304); a lambda names its synthetic body
+# (rows 305-308). The statement style, `Route r = router.route(p); r.method(GET);
+# r.handler(h);`, calls each later method on the local and pops the result (row 309):
+# every self-returning call is flagged `returns_receiver` below, so those statements are
+# one chain and not a fork per call.
+
+detect:
+  coordinates: ["io.vertx:vertx-web"]
+
+# Three lines, each as its jars' own manifests state it (CP-56's version scope). Every
+# descriptor below is the same in all three (row group (a)), and the RxJava 3 and Mutiny
+# wrappers are not read here.
+measured:
+  - { artifact: io.vertx:vertx-web, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # A ROUTE WITH NO VERB SERVES EVERY VERB (row 114: `RouteState.matches` skips the method
+  # test when the route's method set is empty). One row, method NULL, marked as serving any
+  # method — never a fan-out to a list: `HttpMethod` is a class with 31 constants at 4.5.10
+  # and 5.0.0, 32 at 5.2.1, plus `valueOf` for any other token (row 133), so the set is
+  # open.
+  verbless_serves: any
+  # A ROUTE WITH NO PATH SERVES EVERY PATH (rows 113, 117: `route()` stores no path and no
+  # pattern, and `matches` then skips the path test). Published as `/*`, Vert.x's own
+  # spelling of "every path".
+  pathless_serves: "/*"
+  # A PATH VERT.X REFUSES IS NOT REPAIRED (row 118): `RouteImpl.checkPath` throws
+  # `IllegalArgumentException("Path must start with /")` for an empty path or one whose
+  # first character is not `/`, from `route(String)`, `route(HttpMethod, String)`, every
+  # verb's `x(String)` and `path(String)` (row 121). The regex forms do not call it, so a
+  # pattern is never refused.
+  refuses_unrooted_path: true
+  # The verb a `getstatic HttpMethod.X` names (row 133). `VERSION_CONTROL` and
+  # `BASELINE_CONTROL` are not listed: their wire spelling is not the field's name and was
+  # not measured, so a route given one reads its verb as unread rather than as a guess.
+  # `QUERY` is 5.2.1 only.
+  verb_values:
+    fields:
+      "io.vertx.core.http.HttpMethod#OPTIONS": OPTIONS
+      "io.vertx.core.http.HttpMethod#GET": GET
+      "io.vertx.core.http.HttpMethod#HEAD": HEAD
+      "io.vertx.core.http.HttpMethod#POST": POST
+      "io.vertx.core.http.HttpMethod#PUT": PUT
+      "io.vertx.core.http.HttpMethod#DELETE": DELETE
+      "io.vertx.core.http.HttpMethod#TRACE": TRACE
+      "io.vertx.core.http.HttpMethod#CONNECT": CONNECT
+      "io.vertx.core.http.HttpMethod#PATCH": PATCH
+      "io.vertx.core.http.HttpMethod#QUERY": QUERY
+      "io.vertx.core.http.HttpMethod#PROPFIND": PROPFIND
+      "io.vertx.core.http.HttpMethod#PROPPATCH": PROPPATCH
+      "io.vertx.core.http.HttpMethod#MKCOL": MKCOL
+      "io.vertx.core.http.HttpMethod#COPY": COPY
+      "io.vertx.core.http.HttpMethod#MOVE": MOVE
+      "io.vertx.core.http.HttpMethod#LOCK": LOCK
+      "io.vertx.core.http.HttpMethod#UNLOCK": UNLOCK
+      "io.vertx.core.http.HttpMethod#MKCALENDAR": MKCALENDAR
+      "io.vertx.core.http.HttpMethod#REPORT": REPORT
+      "io.vertx.core.http.HttpMethod#CHECKOUT": CHECKOUT
+      "io.vertx.core.http.HttpMethod#CHECKIN": CHECKIN
+      "io.vertx.core.http.HttpMethod#UNCHECKOUT": UNCHECKOUT
+      "io.vertx.core.http.HttpMethod#MKWORKSPACE": MKWORKSPACE
+      "io.vertx.core.http.HttpMethod#UPDATE": UPDATE
+      "io.vertx.core.http.HttpMethod#LABEL": LABEL
+      "io.vertx.core.http.HttpMethod#MERGE": MERGE
+      "io.vertx.core.http.HttpMethod#MKACTIVITY": MKACTIVITY
+      "io.vertx.core.http.HttpMethod#ORDERPATCH": ORDERPATCH
+      "io.vertx.core.http.HttpMethod#ACL": ACL
+      "io.vertx.core.http.HttpMethod#SEARCH": SEARCH
+
+  # THE ROOTS, every `Router` method that makes a route (rows 2-22), each by its erased
+  # descriptor: `get()` and `get(String)` are one name at two arities. The argument-less
+  # forms are roots too, so a later `path(…)` or `method(…)` supplies what they lack. A
+  # regex root's path is a PATTERN (`url_is: pattern`): published verbatim, never given a
+  # leading `/`, never linked by path (spec §3a).
+  #
+  # Not here: `Router.router(Vertx)` and `new RouterImpl(vertx)` make the router, not a
+  # route (rows 1, 314), and `mountSubRouter` (4.5 only, row 4) mounts one; prefixes are
+  # joined by a later task.
+  roots:
+    - { owner: io.vertx.ext.web.Router, method: route, descriptor: "()Lio/vertx/ext/web/Route;" }
+    - { owner: io.vertx.ext.web.Router, method: route, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: route, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.Router, method: routeWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: routeWithRegex, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: arg0, url: arg1, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: get, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: GET } }
+    - { owner: io.vertx.ext.web.Router, method: get, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: GET, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: getWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: GET, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: post, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: POST } }
+    - { owner: io.vertx.ext.web.Router, method: post, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: POST, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: postWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: POST, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: put, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: PUT } }
+    - { owner: io.vertx.ext.web.Router, method: put, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: PUT, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: putWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: PUT, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: delete, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: DELETE } }
+    - { owner: io.vertx.ext.web.Router, method: delete, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: DELETE, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: deleteWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: DELETE, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: patch, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: PATCH } }
+    - { owner: io.vertx.ext.web.Router, method: patch, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: PATCH, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: patchWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: PATCH, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: head, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: HEAD } }
+    - { owner: io.vertx.ext.web.Router, method: head, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: HEAD, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: headWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: HEAD, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: options, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: OPTIONS } }
+    - { owner: io.vertx.ext.web.Router, method: options, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: OPTIONS, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: optionsWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: OPTIONS, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: trace, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: TRACE } }
+    - { owner: io.vertx.ext.web.Router, method: trace, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: TRACE, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: traceWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: TRACE, url: arg0, url_is: pattern } }
+    - { owner: io.vertx.ext.web.Router, method: connect, descriptor: "()Lio/vertx/ext/web/Route;", captures: { http_method: CONNECT } }
+    - { owner: io.vertx.ext.web.Router, method: connect, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: CONNECT, url: arg0 } }
+    - { owner: io.vertx.ext.web.Router, method: connectWithRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: CONNECT, url: arg0, url_is: pattern } }
+
+  # THE STEPS: every method `Route` declares to return `Route` (row 110, the interface a
+  # caller names, row group (b)): 20 abstract at all three versions, which `RouteImpl`
+  # answers with `this` for every one, plus the defaults `respond(Function)` and, at 4.5.10
+  # only, `useNormalisedPath(boolean)`, each answering a self-returning call. Every one is
+  # `returns_receiver: true`, so a statement-style route stays one chain; the ones that
+  # carry nothing a row reads are capture-less. Owner-gated, because a call on another
+  # type sharing a name (`MessageConsumer.handler`) is not this chain's.
+  steps:
+    # `method` ADDS a verb (`RouteImpl` keeps a set): `.method(GET).method(DELETE)` is two
+    # rows, one per verb, and a verb root's own verb stays in the set.
+    - { owner: io.vertx.ext.web.Route, method: method, descriptor: "(Lio/vertx/core/http/HttpMethod;)Lio/vertx/ext/web/Route;",
+        captures: { http_method: arg0 }, repeats: [http_method], returns_receiver: true }
+    # `path` sets the path (and is refused as the roots are, row 121); `pathRegex` sets it
+    # as a pattern, which `checkPath` never sees. Each says which, so the last call wins.
+    - { owner: io.vertx.ext.web.Route, method: path, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { url: arg0, url_is: address }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: pathRegex, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { url: arg0, url_is: pattern }, returns_receiver: true }
+    # Each call adds one media type, as the route's own `produces`/`consumes` lists do.
+    - { owner: io.vertx.ext.web.Route, method: produces, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { produces: arg0 }, repeats: [produces], returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: consumes, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        captures: { consumes: arg0 }, repeats: [consumes], returns_receiver: true }
+    # `virtualHost` restricts which `Host` the route serves: a requirement on the row, an
+    # `endpoint_metadata` entry of kind `host` naming the host pattern it matches.
+    - { owner: io.vertx.ext.web.Route, method: virtualHost, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
+        collects: { kind: host, name: arg0, value: arg0 }, returns_receiver: true }
+    # A disabled route serves nothing until it is enabled again, last call wins; a removed
+    # route leaves the router, and `enable()` after it restores nothing (`poisons` holds to
+    # the chain's end).
+    - { owner: io.vertx.ext.web.Route, method: disable, descriptor: "()Lio/vertx/ext/web/Route;",
+        captures: { serves: false }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: enable, descriptor: "()Lio/vertx/ext/web/Route;",
+        captures: { serves: true }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: remove, descriptor: "()Lio/vertx/ext/web/Route;",
+        poisons: [serves], returns_receiver: true }
+    # THE REGISTRATION STEPS, named again in `terminal` below: a route serves once it is
+    # given a handler. Every handler is kept, in call order (`.handler(auth).handler(h)` is
+    # two handlers on one route); until the answering one is chosen the row names the
+    # first. `blockingHandler` has two overloads, both with the handler at argument 0.
+    - { owner: io.vertx.ext.web.Route, method: handler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Route;",
+        captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: blockingHandler,
+        captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: respond, descriptor: "(Ljava/util/function/Function;)Lio/vertx/ext/web/Route;",
+        captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
+    # Self-returning and carrying nothing a row reads (yet): `order`/`last` decide which of
+    # several routes answers first, `subRouter` mounts a router (both later tasks), and
+    # `failureHandler` answers only a failed request, so it registers no route of its own.
+    - { owner: io.vertx.ext.web.Route, method: order, descriptor: "(I)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: last, descriptor: "()Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: failureHandler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: setName, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: useNormalizedPath, descriptor: "(Z)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: useNormalisedPath, descriptor: "(Z)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: putMetadata, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: setRegexGroupsNames, descriptor: "(Ljava/util/List;)Lio/vertx/ext/web/Route;", returns_receiver: true }
+  # A route given no handler serves nothing and derives nothing: `route("/api/*").subRouter(
+  # api)` and a route built and configured but never handed one.
+  terminal: [handler, blockingHandler, respond]
+
+  # HANDLER-BODY READS (spec §3a), the mechanism `javalin.yml` ships: what the handler body
+  # reads off its `RoutingContext`, one `endpoint_metadata` row per read, matched against
+  # the body's own call sites. `queryParam(String)` reads the query string; `pathParam` a
+  # path parameter, so one naming the route's own `:name` segment gets no row;
+  # `request().getHeader(String)` a header, matched through the `request()` call that
+  # produced its receiver. Each hands back null when the value is absent: `requirement`
+  # NULL, the handler reads it and Vert.x decides nothing. The handler body only: a
+  # context handed to a helper is not followed here.
+  request_reads:
+    - { owner: io.vertx.ext.web.RoutingContext, method: queryParam, arity: 1, name_arg: 0, kind: query }
+    - { owner: io.vertx.ext.web.RoutingContext, method: pathParam,  arity: 1, name_arg: 0, kind: query,
+        skip_path_variables: true }
+    - { via: { owner: io.vertx.ext.web.RoutingContext, method: request }, method: getHeader, arity: 1, name_arg: 0,
+        kind: header }
+
+# BOUNDARIES, stated rather than discovered:
+#   * WHICH HANDLER ANSWERS. A route's handlers run in order until one does not call
+#     `RoutingContext.next()`; middleware (`BodyHandler`, an auth handler) passes on. Until
+#     that rule is built, a chain's row names its FIRST handler, and a middleware-only route
+#     is a row.
+#   * SUB-ROUTERS. A route registered on a router mounted under a prefix is published
+#     without the prefix until mounts are joined.
+#   * THE RXJAVA 3 AND MUTINY WRAPPERS (`io.vertx.rxjava3.ext.web.*`,
+#     `io.vertx.mutiny.ext.web.*`, row group (g)) are not owners here yet.
+#   * VERT.X 3.x, unmeasured and unmatched by every descriptor above.
