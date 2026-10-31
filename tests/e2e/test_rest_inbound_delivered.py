@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN
 from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -2091,15 +2092,15 @@ def vertx_outbound(vertx_tables: dict[str, list[dict]]) -> list[dict]:
 
 
 def _serves_any_method(row: dict) -> bool:
-    """The any-method marker (spec §3a). Task 3 creates it and decides where it lives; this
-    is the one place the tests name that, so Task 3 adjusts this body and nothing else."""
-    return row["method"] is None and bool(row.get("any_method"))
+    """The any-method marker (spec §3a): `endpoints.method_kind`. This is the one place the
+    tests name where it lives."""
+    return row["method"] is None and row.get("method_kind") == ANY_METHOD
 
 
 def _is_pattern(row: dict) -> bool:
-    """A path that is a regular expression, not an address (spec §3a). Task 3 decides where
-    the path kind lives; this body is the one place the tests name it."""
-    return row.get("path_kind") == "pattern"
+    """A path that is a regular expression, not an address (spec §3a): `endpoints.path_kind`.
+    This body is the one place the tests name it."""
+    return row.get("path_kind") == PATH_KIND_PATTERN
 
 
 def _reason_of(row: dict, tables: dict[str, list[dict]]) -> str:

@@ -72,7 +72,17 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- the bean here. NULL from an engine that composes no type with a row, which
     -- then falls back to the handler's (or caller's) enclosing class. Last, so a
     -- workspace migrated by adding columns has the same column order.
-    served_by         TEXT
+    served_by         TEXT,
+    -- Two markers about the row's OWN address, read by the canonicaliser and the linker off
+    -- the row they already hold (`closed_sets.PATH_KIND_PATTERN`, `ANY_METHOD`). `path_kind`
+    -- is `pattern` where the path is a regular expression the framework matches rather than
+    -- a template it serves, NULL otherwise: a pattern is never canonicalised and never
+    -- linked by path. `method_kind` is `any` where the row serves every HTTP method, NULL
+    -- otherwise; a NULL `method` WITHOUT it still means "nobody read the verb". Columns, not
+    -- `endpoint_metadata` entries, because `system_endpoints` is the one list the linker
+    -- reads and a side table would add a read per row. Last, as `served_by` was.
+    path_kind         TEXT,
+    method_kind       TEXT
 );
 
 -- Pre-declared for the same reason as `endpoints` above: a scanner too weak

@@ -73,6 +73,13 @@ here would restate those documents rather than add anything.
   helper, not that it is read at runtime. An `@Scheduled` job's name is empty rather than
   NULL, printed `—`: the framework gives none. `not in the code` is left for a value the
   code really does not state. `GRAPH_SCHEMA_VERSION` 10.
+- **`GRAPH_SCHEMA_VERSION` 13**: `endpoints` gains `path_kind` and `method_kind`, two markers
+  about a row's own address. A path marked `pattern` is a regular expression: it is not
+  canonicalised and no call is linked to it by path. A row marked `any` serves every HTTP
+  method, so a call of any verb links to it; a NULL method without the marker still links to
+  no verb. A path holding a named hole (`<prefix>/status`) is never linked by path either.
+  Nothing writes a marker yet. The export carries both columns; a workspace of the older
+  vintage is refused and re-analysed.
 - **`GRAPH_SCHEMA_VERSION` 12**: `endpoints` gains `served_by`, the class a row is served by
   (ruling 8). A row's conditions are read off that class's bean — the handler's own where the
   handler is a bean — so a row a conditional controller inherits carries the controller's

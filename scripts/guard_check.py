@@ -990,6 +990,56 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "stitch.a-PATTERN-path-is-never-linked-by-path": Guard(
+        what="an inbound row marked as a pattern is left out of the served index",
+        why="a regular expression is not an address. Indexed, `/files/.+` would be linked to "
+        "any call that happens to spell that text, and a pattern that matches many addresses "
+        "would be linked to none of the ones it serves: either way a dependency is invented",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):\n',
+                replace="        if _NAMED_HOLE.search(str(path)):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.a-NAMED-HOLE-in-a-served-path-is-never-linked-by-path": Guard(
+        what="an inbound row whose path holds a named hole is left out of the served index",
+        why="`<prefix>/status` says the mount prefix went unread. Linked by equality it would "
+        "tie a call to another service's `<prefix>/status` that merely shares the placeholder "
+        "(the `<host>` refusal, user decision 6, applied to a path segment)",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):\n',
+                replace='        if row.get("path_kind") == PATH_KIND_PATTERN:  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-row-links-an-outbound-call-of-any-verb": Guard(
+        what="a call of any verb finds an inbound row marked any-method on the same path",
+        why="the row serves every verb, so without this a DELETE to `/any` is reported as a "
+        "call nothing serves, and the route as uncalled: a missing dependency",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="    candidates = (exact | served.get((protocol, ANY_METHOD, path), set())) - {source}\n",
+                replace="    candidates = exact - {source}  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "paths.a-PATTERN-path-is-never-canonicalised": Guard(
+        what="canonical_http_path returns a pattern path untouched",
+        why="a regular expression given a leading slash is a different expression, so the "
+        "row would publish a pattern that matches other addresses than the one written",
+        edits=(
+            Edit(
+                path="sextant/domain/paths.py",
+                find="    if path_kind == PATH_KIND_PATTERN or not is_path_shaped(raw):\n",
+                replace="    if not is_path_shaped(raw):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not": Guard(
         what="a module's registered service name becomes an alias, and one equal to the "
         "artifactId does not",

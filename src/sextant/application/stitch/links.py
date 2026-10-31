@@ -12,11 +12,12 @@ imprecision — "and an agent will then reason from it".
 """
 
 import json
+import re
 from dataclasses import dataclass
 
 from sextant.application.resolve.shapes.arguments import UNREADABLE_HOST
 from sextant.application.stitch.participants import Participant
-from sextant.domain.closed_sets import Resolution
+from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, Resolution
 from sextant.domain.redaction import authority_without_userinfo
 
 # `M06` step 4's evidence words, the two this slice can produce.
@@ -34,6 +35,10 @@ NAME_MATCH = "name_match"
 # it is a URI scheme sitting in the `path` column, and what this module does with it is
 # publish a participant-level link, never a guess about which endpoint a request reaches.
 _LOAD_BALANCED = "lb://"
+
+# A segment holding a NAMED HOLE: `<prefix>/status`, a route whose mount prefix nobody read
+# (the same marker idea as `<host>`, applied to a path segment).
+_NAMED_HOLE = re.compile(r"<[^<>/]+>")
 
 
 @dataclass(frozen=True)
@@ -131,6 +136,12 @@ def match(
     unread — `<host>/services/admin` — is never matched by path alone, even where exactly one
     participant serves that path. Uniqueness inside the set cannot rule out a target outside
     it, so the only key that would link it rests on the half of the address nobody read.
+
+    **The same refusal for two kinds of SERVED path.** One holding a named hole
+    (`<prefix>/status`) has an unread part, and one marked as a pattern (`path_kind`) is a
+    regular expression rather than an address: neither enters the index, so nothing is
+    linked to them by path. And a row marked `method_kind = any` serves every verb, so a
+    call of any verb finds it — where a plain NULL method still links to no verb (`_verb`).
     """
     # Every name a client could state, to the participant it names. A participant answers to
     # its artifactId AND to the name it registers in discovery, because those differ — the
@@ -151,7 +162,13 @@ def match(
         path = row["path"]
         if path is None:
             continue
-        key = (str(row["protocol"]), _verb(row), str(path))
+        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):
+            continue
+        # An any-method row is indexed under the marker in the verb's place, which no real
+        # verb can equal (verbs are upper case): the lookup asks for the call's own verb and
+        # then for this.
+        verb = ANY_METHOD if row.get("method_kind") == ANY_METHOD else _verb(row)
+        key = (str(row["protocol"]), verb, str(path))
         served.setdefault(key, set()).add(str(row["participant"]))
 
     links: list[Link] = []
@@ -238,7 +255,14 @@ def _one(
         )
 
     # Key 1: the peer the client stated narrows WHO before the path picks the route.
-    candidates = served.get((protocol, verb, path), set()) - {source}
+    exact = served.get((protocol, verb, path), set())
+    candidates = (exact | served.get((protocol, ANY_METHOD, path), set())) - {source}
+
+    def served_method(participant: str) -> str | None:
+        # The method of the row the link points AT: the call's verb where the participant
+        # serves it by name, NULL where only an any-method row does.
+        return verb if participant in exact else None
+
     if peer is not None:
         target = by_name.get(peer)
         if target is _AMBIGUOUS:
@@ -275,7 +299,7 @@ def _one(
                 from_caller=caller,
                 to_participant=named_participant.name,
                 to_protocol=protocol,
-                to_method=verb,
+                to_method=served_method(named_participant.name),
                 to_path=path,
                 evidence=DECLARED,
             ),
@@ -300,13 +324,14 @@ def _one(
                 # must for `format` beside `format_resolution` (D01 §3).
                 to_participant=min(candidates),
                 to_protocol=protocol,
-                to_method=verb,
+                to_method=served_method(min(candidates)),
                 to_path=path,
                 resolution=str(Resolution.NARROWED),
                 candidates=tuple(sorted(candidates)),
             ),
             None,
         )
+    only = next(iter(candidates))
     return (
         Link(
             from_participant=source,
@@ -314,9 +339,9 @@ def _one(
             from_method=verb,
             from_path=path,
             from_caller=caller,
-            to_participant=next(iter(candidates)),
+            to_participant=only,
             to_protocol=protocol,
-            to_method=verb,
+            to_method=served_method(only),
             to_path=path,
         ),
         None,
@@ -365,12 +390,14 @@ def uncalled(
     endpoint row each only if they differ, and a finding stated twice is noise.
     """
     reached: set[tuple[str, str, str | None, str]] = set()
+    reached_by_path: set[tuple[str, str, str]] = set()
     whole: set[str] = set()
     for link in links:
         if link.to_path is None:
             whole.add(link.to_participant)
         else:
             reached.add((link.to_participant, str(link.to_protocol), link.to_method, link.to_path))
+            reached_by_path.add((link.to_participant, str(link.to_protocol), link.to_path))
     out = set()
     for row in endpoints:
         if str(row["direction"]) != "inbound" or row["path"] is None:
@@ -380,6 +407,10 @@ def uncalled(
             continue
         key = (participant, str(row["protocol"]), _verb(row), str(row["path"]))
         if key in reached:
+            continue
+        # A call of any verb reaches an any-method row, whichever method the link states
+        # (a participant serving the verb by name AND for any verb links at the verb).
+        if row.get("method_kind") == ANY_METHOD and key[:2] + key[3:] in reached_by_path:
             continue
         out.add(
             Uncalled(

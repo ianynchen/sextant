@@ -150,6 +150,13 @@ SEXTANT_VERSION = version("sextant")
 #             the column — it names a class, which means something outside the run. A
 #             workspace of the older vintage has no serving class, and would read every
 #             inherited row's conditions off the base, so it is refused and re-analysed.
+#     13      `endpoints` gains `path_kind` (`pattern` where the path is a regular
+#             expression, not an address) and `method_kind` (`any` where the row serves
+#             every HTTP method), spec 2026-10-30-vertx-web §3a. The linker never links a
+#             pattern path and links any verb to an any-method row; a NULL `method` without
+#             the marker still means no verb was read. The export carries both columns. A
+#             workspace of the older vintage has no marker, so a pattern would be read as
+#             an address, and it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -167,5 +174,5 @@ SEXTANT_VERSION = version("sextant")
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 12
+GRAPH_SCHEMA_VERSION = 13
 BOUNDARY_VOCABULARY_VERSION = 3
