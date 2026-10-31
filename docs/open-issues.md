@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-253 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-255 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -256,6 +256,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-250 | [SEXTANT-243](https://app.plane.so/portolan/browse/SEXTANT-243/) | A read with one unplaced receiver end is not placed at all: ruoyi's getAdminApi().getPrefix() still answers /app-api — **closed 2026-10-30** by `c29fc0e8` (value walk: each receiver path is answered by itself) |
 | OI-251 | [SEXTANT-244](https://app.plane.so/portolan/browse/SEXTANT-244/) | candidate_presence decides a call's presence per class, not per object: a call through an inherited method stands for every subclass; needs a receiver-class column on call_edges (related to OI-243) |
 | OI-252 | [SEXTANT-245](https://app.plane.so/portolan/browse/SEXTANT-245/) | grpc-java ImplBase path assumes registration: a class extending the generated ImplBase is a handler whether or not anything registers it |
+| OI-253 | [SEXTANT-246](https://app.plane.so/portolan/browse/SEXTANT-246/) | read a sibling Maven module's bytecode: Mesh's route wrapper, Hono's service-base pass-through |
+| OI-254 | [SEXTANT-247](https://app.plane.so/portolan/browse/SEXTANT-247/) | vertx-eventbus-chain.yml still says the chain walk is per method body |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
