@@ -96,7 +96,6 @@ _NOT_MEASURED_YET: dict[str, str] = {
     "aws-sqs-sdk": "no probe opens the AWS SDK v2 `SqsClient` jar",
     "google-pubsub-publisher": "CP-10 measured `google-pubsub-client`'s descriptor only",
     "graphql-schema": "a schema-file rule; no framework jar has been read for it",
-    "grpc-java": "CP-3/CP-8 ship a fixture and coordinates but measure fact shapes, not a jar",
     "grpc-schema": "a schema-file rule; no framework jar has been read for it",
     "jakarta-jws-client": "CP-13 measured the SERVER side (`RuntimeModeler`) only",
     "netflix-dgs": "no probe opens `com.netflix.graphql.dgs:graphql-dgs`",
