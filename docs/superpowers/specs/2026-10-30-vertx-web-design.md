@@ -86,26 +86,42 @@ them all (the 2026-10-31 read: `method`, `path`, `pathRegex`, `produces`, `consu
 - `request(HttpMethod, …)` with the same address forms, plus `SocketAddress` and
   `RequestOptions` forms, and `requestAbs(HttpMethod, …)`.
 
-**`HttpRequest<T>`** (`HttpRequestImpl`): 24 methods return `this` (`as` included:
-`putfield codec; aload_0; areturn`), among them `method`, `uri`, `host`, `port`, `ssl`,
-`putHeader`, `addQueryParam`, `setQueryParam`, `setTemplateParam`, `timeout`,
-`basicAuthentication`, `bearerTokenAuthentication`, `followRedirects`, `expect`. Terminals
+**`HttpRequest<T>`**: the interface declares 28 / 27 / 29 self-returning methods
+(4.5.10 / 5.0.0 / 5.2.1; CP-56 row group (b)), `HttpRequestImpl` implements 24 / 24 / 26 of
+them returning `this` (`as` included: `putfield codec; aload_0; areturn`); `copy()` is the
+one that does not. Among them `method`, `uri`, `host`, `port`, `ssl`, `putHeader`,
+`addQueryParam`, `setQueryParam`, `setTemplateParam`, `timeout`, `basicAuthentication`,
+`bearerTokenAuthentication`, `followRedirects`; `expect` exists at 4.5.10 only. Catalogs
+flag the INTERFACE methods, as the call sites name them. Terminals
 `send()`, `sendJson(Object)`, `sendJsonObject(JsonObject)`, `sendBuffer(Buffer)`,
 `sendForm(MultiMap[, String])`, `sendMultipartForm(…)`, `sendStream(…)`. 4.5 has each with
 and without a trailing callback; 5.0 has the `Future` forms only.
 
 **`WebClientOptions`**: `setDefaultHost(String)`, `setDefaultPort(int)`, `setSsl(boolean)`,
-each returning `this`. The probe records where `HttpRequestImpl` takes the default host and
-port (a request naming its own host or port keeps it).
+each returning `this` — 4 literally, the rest through `super.setX(…)` (CP-56 (b)). **5.2
+adds `WebClientConfig`**, with its own `setDefaultHost`/`setDefaultPort`/`setSsl` and new
+`WebClient.create` overloads taking it; both are options objects to the §3d rung
+[ruled 2026-10-31, my call: one rung shape, two owners, catalog data].
 
-**`HttpMethod`** (vertx-core) is a class with **31** static constants and
-`valueOf(String)` for any other token; it is not an enum, so the set a route with no verb
+**The default join (CP-56 (e)), measured in `WebClientBase`, which alone reads the
+defaults when it builds the request:** `x(uri)` takes the default host and port; `x(host,
+uri)` the default port only; `x(port, host, uri)` neither; `request(m, RequestOptions)`
+fills a null host and a null port separately; `xAbs` reads neither. At send time a request's
+own `host`, `port` (≥ 0) and `ssl` steps overwrite what an absolute URL parsed. Unset
+defaults are `localhost` and `80`, which — as for Ktor (D02) — are never published, since
+that a client sets no default cannot be proven from bytecode.
+
+**`HttpMethod`** (vertx-core) is a class with **31** static constants (32 at 5.2.1, which
+adds `QUERY`) and `valueOf(String)` for any other token; it is not an enum, so the set a route with no verb
 serves is open (§3a).
 
 The probe must also record:
 - whether `io.vertx.rxjava3.ext.web.*` and `io.vertx.mutiny.ext.web.*` declare the same
-  names, and their descriptors — Mutiny's `Route.handler` takes `java.util.function.Consumer`
-  and its `RoutingContext.next()` is on `io.vertx.mutiny.ext.web.RoutingContext` (§3e);
+  names, and their descriptors (measured: Rx3 declares every core name and takes `Handler`;
+  Mutiny's `Route.handler`/`failureHandler`/`blockingHandler` take
+  `java.util.function.Consumer` — `blockingHandler(Handler, boolean)` at Mutiny 3.23.1 but
+  `(Consumer, boolean)` at 4.0.2 — and its `RoutingContext.next()` is on
+  `io.vertx.mutiny.ext.web.RoutingContext`) (§3e);
 - how javac compiles `router.get("/x").handler(this::h)` and a lambda handler;
 - the full self-returning method list of `Route`, `HttpRequest` and `WebClientOptions`, per
   owner and version.
