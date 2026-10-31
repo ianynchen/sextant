@@ -167,7 +167,12 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
             continue
         rows.append(
             {column: endpoint.get(column) for column in _MATCH_COLUMNS}
-            | {"prefixed": canonical_http_path(f"{served_under}{by_package}{path}")}
+            | {
+                "prefixed": canonical_http_path(
+                    f"{served_under}{by_package}{path}",
+                    str(endpoint["path_kind"]) if endpoint.get("path_kind") else None,
+                )
+            }
         )
     if rows:
         workspace.derive("prefix_endpoint_paths", rows=rows)

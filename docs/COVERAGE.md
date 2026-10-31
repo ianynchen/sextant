@@ -859,6 +859,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `quarkus-consume-event` | `io.quarkus:quarkus-vertx` | 3.17.5 |
 |  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
+|  | `io.quarkus:quarkus-reactive-routes-deployment` | 3.17.5 |
 | `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
 | `quartz` | `org.quartz-scheduler:quartz` | 2.5.1 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |

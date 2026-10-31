@@ -2495,7 +2495,7 @@ GUARDS: dict[str, Guard] = {
                 replace="",
             ),
             Edit(
-                path=_FLUENT,
+                path=_INBOUND_ROUTES,
                 find="    if declared is not None and declared != ANY_METHOD:\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -4912,7 +4912,7 @@ GUARDS: dict[str, Guard] = {
         "where the catalog meant every verb",
         edits=(
             Edit(
-                path="sextant/application/resolve/engines/annotation_driven.py",
+                path=_INBOUND_ROUTES,
                 find="    if declared is not None and declared != ANY_METHOD:\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -4951,6 +4951,19 @@ GUARDS: dict[str, Guard] = {
                 path=_DERIVE_ENDPOINTS,
                 find="        CASE WHEN m.path_kind IS NOT NULL THEN FALSE\n",
                 replace="        CASE WHEN FALSE THEN FALSE  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "path_prefix.a-pattern-row-is-not-canonicalised-by-the-prefix": Guard(
+        what="the configured/installed prefix passes the row's `path_kind` to "
+        "`canonical_http_path`, so a pattern is prefixed but never rewritten",
+        why="without it a pattern's doubled separator collapses and the expression published "
+        "is one nobody wrote",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/path_prefix.py",
+                find='                    str(endpoint["path_kind"]) if endpoint.get("path_kind") else None,\n',
+                replace="                    None,\n",
             ),
         ),
     ),

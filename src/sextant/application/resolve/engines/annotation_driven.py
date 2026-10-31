@@ -22,8 +22,9 @@ from sextant.application.resolve.effective_annotations import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
-from sextant.domain.closed_sets import ANY_METHOD, Direction
+from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
@@ -209,7 +210,7 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # open set, so the derivation writes ONE row marked `method_kind = any` instead of
         # fanning `all_methods` out; NULL for every catalog that says nothing, Spring's
         # closed-enum fan-out included. The word `fluent` catalogs already use.
-        "verbless_serves": _verbless_serves(mapping, catalog),
+        "verbless_serves": validated_verbless_serves(mapping, catalog.source, "annotation_driven"),
         # The attributes whose value is a regular expression, not a path: the derivation
         # publishes it verbatim as a pattern row. Empty for every catalog declaring none.
         "pattern_from": list(mapping.get("pattern_from", [])),
@@ -699,20 +700,6 @@ _CLASS_LEVEL = "class_level"
 _PREFIX = "prefix"
 _SIBLING = "sibling"
 _CLASS_LEVEL_VALUES = (_PREFIX, _SIBLING)
-
-
-def _verbless_serves(mapping: dict[str, Any], catalog: Catalog) -> str | None:
-    """`mapping.verbless_serves` (Vert.x spec §3a): `any` for a framework whose mapping with
-    no method serves every method, absent for one that says nothing. Any other value is a
-    broken file — the one answer the row can carry is `method_kind = any` — and the
-    `fluent` style's `matches.verbless_serves` is the same word under the same rule."""
-    declared = mapping.get("verbless_serves")
-    if declared is not None and declared != ANY_METHOD:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.verbless_serves` is `{ANY_METHOD}`, "
-            f"got {declared!r}"
-        )
-    return None if declared is None else ANY_METHOD
 
 
 def _class_level(mapping: dict[str, Any], catalog: Catalog) -> str:

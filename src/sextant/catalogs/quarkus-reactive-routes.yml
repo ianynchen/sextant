@@ -9,6 +9,8 @@ detect:
 measured:
   - { artifact: io.quarkus:quarkus-reactive-routes, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+  - { artifact: io.quarkus:quarkus-reactive-routes-deployment, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp25_binder_rules.md }
 requires: [annotation_args]
 
 matches:
@@ -53,8 +55,8 @@ matches:
     all_methods: []
     verbless_serves: any
     # `@Route(regex = …)` is matched on the regular expression ALONE, which the processor
-    # reads before `path` (3.17.5, `ReactiveRoutesProcessor`: with `regex` set it takes the
-    # expression and joins no `@RouteBase` path to it). So the row's path is the expression
+    # reads before `path` (3.17.5, `ReactiveRoutesProcessor`, CP-25 row 19: with `regex` set
+    # it takes the expression and joins no `@RouteBase` path to it). So the row's path is the expression
     # verbatim, `resolved`, marked as a pattern: never prefixed, never canonicalised, never
     # linked by path. Same row Vert.x Web's `getWithRegex` derives.
     pattern_from: [regex]

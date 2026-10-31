@@ -391,6 +391,46 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
     assert metadata == [("/shop/x", endpoint_id)]
 
 
+@pytest.mark.pins("path_prefix.a-pattern-row-is-not-canonicalised-by-the-prefix")
+def test_a_pattern_row_is_prefixed_but_never_canonicalised(tmp_path):
+    """A row marked `path_kind = pattern` is a regular expression, not an address: the
+    configured prefix may stand in front of it, but the canonical rules (one separator per
+    boundary) must not rewrite the expression. `/y//z` is an address and collapses; the
+    pattern `/f//(a|b)` keeps its doubled slash, which in a regex means what it says."""
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
+    handler = "sextant-jvm maven com.acme/shop 1.0.0 com/acme/Shop#x(sig_00000001)."
+    for row_id, path, kind in ((1, "/y//z", None), (2, "/f//(a|b)", "pattern")):
+        workspace._connection.execute(
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, "
+            "catalog_id, path_kind) VALUES (?, 'http', 'inbound', 'GET', ?, ?, 'invented', ?)",
+            [row_id, path, handler, kind],
+        )
+    workspace._connection.execute(
+        "INSERT INTO resolved_config (key, value, source, environment) "
+        "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
+    )
+    catalog = Catalog(
+        id="invented",
+        style="annotation",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={},
+        source=Path("tests/invented.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+        dispatcher="spring",
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
+    )
+    apply_path_prefixes(workspace, [catalog])
+    paths = dict(workspace._connection.execute("SELECT row_id, path FROM endpoints").fetchall())
+    workspace.close()
+
+    assert paths == {1: "/shop/y/z", 2: "/shop/f//(a|b)"}
+
+
 def _module_workspace(
     tmp_path: Path, coordinates: list[str], versions: dict[str, str] | None = None
 ) -> DuckDbWorkspace:

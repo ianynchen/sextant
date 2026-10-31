@@ -14,6 +14,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.shapes.arguments import HOLE, UNREADABLE_HOST
+from sextant.domain.closed_sets import ANY_METHOD
 from sextant.domain.paths import EXPRESSION_OPENS
 
 # The one `path_join` a catalog may declare, beside "absent" (verbatim). Named once so the
@@ -71,6 +72,20 @@ def validated_path_join(matches: Mapping[str, Any], source: object, style: str) 
             f"leave it out for verbatim concatenation (D02 §2's `{style}` style)"
         )
     return matches.get("path_join")
+
+
+def validated_verbless_serves(matches: Mapping[str, Any], source: object, style: str) -> str | None:
+    """`verbless_serves` (Vert.x spec §3a), the word `fluent` and `annotation_driven` catalogs
+    share: `any` for a framework whose route with no verb serves every verb of an open set,
+    absent for one that says nothing. Any other value is a broken file — the one answer the
+    row can carry is `method_kind = any`. `style` names the D02 style the refusal cites."""
+    declared = matches.get("verbless_serves")
+    if declared is not None and declared != ANY_METHOD:
+        raise CatalogError(
+            f"loading catalog {source}: `verbless_serves` is `{ANY_METHOD}`, got "
+            f"{declared!r} (D02 §2's `{style}` style)"
+        )
+    return None if declared is None else ANY_METHOD
 
 
 def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:

@@ -86,6 +86,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     is_unrooted,
     media_columns,
     refusal_rows,
+    validated_verbless_serves,
 )
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -131,7 +132,7 @@ from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
 )
-from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, Direction, Resolution
+from sextant.domain.closed_sets import PATH_KIND_PATTERN, Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor
@@ -233,7 +234,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
     verb_fields = _verb_fields(matches, catalog)
     refuses_unrooted = _refuses_unrooted_path(matches, catalog)
-    verbless_serves = _verbless_serves(matches, catalog)
+    verbless_serves = validated_verbless_serves(matches, catalog.source, "fluent")
     pathless_serves = _pathless_serves(matches, catalog)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
@@ -2051,19 +2052,6 @@ def _verb_fields(matches: dict[str, Any], catalog: Catalog) -> dict[tuple[str, s
             f"`<owner>#<field>` to a verb, got {fields!r} (D02 §2's `fluent` style)"
         )
     return member_table(fields)
-
-
-def _verbless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:
-    """`matches.verbless_serves` (Vert.x spec §3a): `any` for a framework whose route with no
-    verb serves every verb, absent for one that says nothing. Any other value is a broken file
-    (D02 §2's `fluent` style): the one answer the row can carry is `method_kind = any`."""
-    declared = matches.get("verbless_serves")
-    if declared is not None and declared != ANY_METHOD:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `verbless_serves` is `{ANY_METHOD}`, got "
-            f"{declared!r} (D02 §2's `fluent` style)"
-        )
-    return None if declared is None else ANY_METHOD
 
 
 def _pathless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:

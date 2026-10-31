@@ -797,6 +797,36 @@ def q18_micronaut_fallback_spelling(micronaut_core: Path, micronaut_http: Path) 
     return _STEP.join(cells)
 
 
+# --- Q19: quarkus-reactive-routes — a regex route is not prefixed by @RouteBase -------
+
+
+def q19_reactive_routes_regex_ignores_the_base(deployment: Path) -> str:
+    """Where `ReactiveRoutesProcessor.addAdditionalRoutes` reads `regex` and `path`, and
+    which branch joins `@RouteBase`'s path: the regex is branched on FIRST and, when set,
+    jumps past the base-path join and the leading-slash repair."""
+    processor = _javap(
+        "-c", "-p", "io.quarkus.vertx.web.deployment.ReactiveRoutesProcessor", classpath=deployment
+    )
+    body = _method_body(processor, "void addAdditionalRoutes(")
+
+    def keep(first: int, last: int) -> str:
+        return _STEP.join(
+            s
+            for s in _steps_between(body, first, last)
+            if s.startswith(("ldc", "invoke", "ifnull", "ifnonnull", "ifne", "goto"))
+        )
+
+    return _STEP.join(
+        [
+            "route reads: " + keep(235, 248),
+            "branch (a non-null regex jumps to offset 578, past the join): "
+            + _STEP.join(s for s in _steps_between(body, 394, 399) if s.startswith("if")),
+            "regex null, base path set (402-511) builds base + `/` + path: " + keep(402, 511),
+            "regex taken as written (578-585): " + keep(578, 585),
+        ]
+    )
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     for spec in specs:
@@ -921,6 +951,11 @@ def main(specs: list[str]) -> int:
             q18_micronaut_fallback_spelling(
                 artifacts["micronaut-core"].jar, artifacts["micronaut-http"].jar
             ),
+        ),
+        (
+            "Quarkus Reactive Routes: a route naming `regex` is registered on the expression alone — `@RouteBase`'s path is joined only when `regex` is absent (Vert.x plan Task 14, spec §3a)",
+            (artifacts["reactive-routes-deployment"],),
+            q19_reactive_routes_regex_ignores_the_base(artifacts["reactive-routes-deployment"].jar),
         ),
     ]
     for number, (question, measured, observed) in enumerate(rows, start=1):
