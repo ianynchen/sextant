@@ -405,8 +405,9 @@ class Producer:
     inexact: bool = False
     # The parameter a path ENDED at, `(method symbol, parameter index)`: one nothing in the
     # module calls (with `reason` `external`), or one of a method the reader named in
-    # `stop_at_parameters_of` (with no reason — the path ended where it was asked to). None
-    # everywhere else.
+    # `stop_at_parameters_of` (with no reason — the path ended where it was asked to). After
+    # a lambda's capture crossing, the method named is the CAPTURING method, never the body.
+    # None everywhere else.
     parameter: tuple[str, int] | None = None
 
 
@@ -998,6 +999,7 @@ def producers_of(
         past_accessors=past_accessors,
         configuring=configuring,
         stop_at_parameters_of=stop_at_parameters_of,
+        parameters_apart=True,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -1074,6 +1076,7 @@ def producer_paths(
         past_accessors=past_accessors,
         configuring=configuring,
         stop_at_parameters_of=stop_at_parameters_of,
+        parameters_apart=True,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1211,6 +1214,7 @@ class _Walk:
         configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
         stop_at_parameters_of: AbstractSet[str] = frozenset(),
+        parameters_apart: bool = False,
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -1235,6 +1239,10 @@ class _Walk:
         # The methods whose parameters END a path (`producers_of(..., stop_at_parameters_of=)`)
         # rather than cross to their callers. Empty for every other reader.
         self._stop_at_parameters_of = frozenset(stop_at_parameters_of)
+        # The producer reader (`producers_of`, `producer_paths`): two ends that differ only in
+        # the parameter an `external` answer ended at are two ends (`_distinct`). False for
+        # every other reader, whose answers stay exactly what they were.
+        self._parameters_apart = parameters_apart
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
         self._which_object = which_object
@@ -2642,6 +2650,19 @@ class _Walk:
                 return rule
         return None
 
+    def _distinct(self, reached: list[_Reached]) -> tuple[_Reached, ...]:
+        """`reached` with repeats removed, keeping the first of each. For the producer reader
+        two `external` answers at two parameters are two ends — the parameter is outside the
+        answer's equality (`Answer.parameter`), so it is keyed here too: two field writers
+        nothing calls, `m1(p)` and `m2(q)`, name both. Every other reader dedupes on the
+        answer alone, as before, since `resolve_site` does not dedupe again and two equal
+        `external` answers would be two bindings saying one thing."""
+        if not self._parameters_apart:
+            return tuple(dict.fromkeys(reached))
+        return tuple(
+            {(path, answer, answer.parameter): (path, answer) for path, answer in reached}.values()
+        )
+
     def _parameter(
         self, method: str, index: int, trail: _Trail, frames: "_Frames"
     ) -> tuple[_Reached, ...]:
@@ -2658,14 +2679,17 @@ class _Walk:
         parameter it was (`Answer.parameter`), for the producer reader to name.
 
         A parameter of a method the producer reader named (`stop_at_parameters_of`) is where
-        the path ends, before any frame or caller is read: the reader asked whether the value
-        came from this parameter, and every crossing past it answers a different question.
+        the path ends, before any caller is read: the reader asked whether the value came
+        from this parameter, and every crossing past it answers a different question. **The
+        frame answers first**: inside a callee the walk entered through its return, the
+        parameter IS the argument at that call — `log(ctx).next()` — and stopping there would
+        name a handler that never received this value.
         """
-        if method in self._stop_at_parameters_of:
-            return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
         frame = self._frame_in(frames, method)
         if frame is not None:
             return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
+        if method in self._stop_at_parameters_of:
+            return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
         callers = self._index.callers.get((method, index), ())
         if not callers:
             return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
@@ -2821,7 +2845,7 @@ class _Walk:
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
-        return tuple(dict.fromkeys(reached))
+        return self._distinct(reached)
 
     def _object_site(
         self, symbol: str, frames: "_Frames", reader: str | None
@@ -3018,7 +3042,7 @@ class _Walk:
                             if target is not None
                             else [(path, replace(answer, inexact=True)) for path, answer in answers]
                         )
-        return tuple(dict.fromkeys(reached))
+        return self._distinct(reached)
 
     def _written(
         self,

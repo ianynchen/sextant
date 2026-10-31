@@ -4507,6 +4507,7 @@ _CONTEXT = _PKG + "Context#"
 _TAKES_CONTEXT = "(Lcom/acme/orders/values/Context;)V"
 _CAPTURED = "(Lcom/acme/orders/values/Context;Ljava/lang/Object;)V"
 _NEXT = (_CONTEXT, "next", "()V")
+_LOGS = "(Lcom/acme/orders/values/Context;)Lcom/acme/orders/values/Context;"
 
 
 def _chain_facts() -> list[Fact]:
@@ -4514,6 +4515,8 @@ def _chain_facts() -> list[Fact]:
     body = _symbol(_CHAIN, "lambda$handle$0", _CAPTURED)
     outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
     inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    relay = _symbol(_CHAIN, "relay", _TAKES_CONTEXT)
+    own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
     return [
         _type(_CHAIN),
         _declared(_CHAIN, "handle", _TAKES_CONTEXT),
@@ -4556,6 +4559,52 @@ def _chain_facts() -> list[Fact]:
         _declared(_CHAIN, "inner", _TAKES_CONTEXT),
         _void(_CHAIN, "inner", _TAKES_CONTEXT),
         _site(inner, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # `RoutingContext log(RoutingContext c) { return c; }`, and `relay(ctx)` calling
+        # `log(ctx).next()`: the walk enters `log` through its return, so `log`'s parameter is
+        # `relay`'s argument at that call.
+        _declared(_CHAIN, "log", _LOGS),
+        _returns(_CHAIN, "log", _LOGS, 0, CallArgument(kind="parameter", value=0)),
+        _declared(_CHAIN, "relay", _TAKES_CONTEXT),
+        _void(_CHAIN, "relay", _TAKES_CONTEXT),
+        _site(
+            relay,
+            0,
+            (_CHAIN, "log", _LOGS),
+            arguments=[CallArgument(kind="parameter", value=0)],
+            result=7,
+        ),
+        _site(relay, 1, _NEXT, kind="virtual", receiver=7),
+        # A handler that is itself a lambda: `route.handler(ctx -> ctx.next())` captures
+        # nothing, so its parameter 0 is what the framework hands it.
+        _declared(_CHAIN, "register", "()V"),
+        _site(
+            _symbol(_CHAIN, "register", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+                    captures=0,
+                )
+            ],
+        ),
+        _declared(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+        _void(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+        _site(own, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # A context held in a field two methods write from their parameter 0, neither of
+        # them called in the module, and `held()` calling `next()` on the field.
+        *_writes(_CHAIN, "first", _TAKES_CONTEXT, "context"),
+        *_writes(_CHAIN, "second", _TAKES_CONTEXT, "context"),
+        _declared(_CHAIN, "held", "()V"),
+        _site(
+            _symbol(_CHAIN, "held", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_CHAIN + "context.")],
+        ),
     ]
 
 
@@ -4627,13 +4676,13 @@ def test_a_next_inside_a_lambda_reaches_the_handlers_captured_parameter(chained)
 
 
 @pytest.mark.pins("values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality")
-def test_without_either_the_reader_is_unchanged(walked):
+def test_a_stop_set_no_path_reaches_ends_every_path_as_no_stop_does(walked):
     """Every site and slot of the main fixture, read by the producer reader with nothing
-    named to stop at and with a stop set no path reaches: the same ends, field for field.
-    A parameter is named only on an `external` end that names no call, and the value walk's
-    answers compare exactly as before — the parameter an `external` answer carries is not
-    part of what the answer IS, so no reader deduplicating answers sees two where it saw
-    one."""
+    named to stop at and with a stop set no path reaches: the same ends, field for field. A
+    parameter is named only on an `external` end that names no call, and an `external`
+    answer carrying a parameter compares equal to one without — the parameter is not part of
+    what the answer IS. That the existing readers' output did not move is shown by their own
+    tests, which pass unchanged; this test does not compare against the code before it."""
     index = value_index(walked)
     declared = {_FACTORY_IDENTITY}
     nowhere = frozenset({_symbol(_CHAIN, "nowhere", "()V")})
@@ -4647,3 +4696,39 @@ def test_without_either_the_reader_is_unchanged(walked):
     assert Answer(kind="unresolved", reason="external") == replace(
         Answer(kind="unresolved", reason="external"), parameter=("m", 0)
     )
+
+
+@pytest.mark.pins("values.a-descended-FRAME-answers-before-the-stop")
+def test_a_stop_set_method_entered_through_its_return_answers_its_callers_argument(chained):
+    """`log(ctx).next()` in `relay`: the walk enters `log` through its return, so `log`'s
+    parameter 0 is `relay`'s argument at that call, and the end is `relay`'s parameter —
+    even with `log` named. Stopping in `log` would blame a handler that never received this
+    context."""
+    relay = _symbol(_CHAIN, "relay", _TAKES_CONTEXT)
+    log = _symbol(_CHAIN, "log", _LOGS)
+    assert _ends(chained, relay, 1, frozenset({log})) == (
+        Producer(reason="external", parameter=(relay, 0)),
+    )
+    assert _ends(chained, relay, 1, frozenset({log, relay})) == (Producer(parameter=(relay, 0)),)
+
+
+@pytest.mark.pins("values.two-callerless-WRITERS-are-two-named-ends")
+def test_two_callerless_writers_of_one_field_name_both_parameters(chained):
+    """The field is written from `first`'s parameter 0 and from `second`'s, and nothing in the
+    module calls either: two `external` ends at two parameters, each named. They compare
+    equal as answers, so the value walk still answers one `external`."""
+    held = _symbol(_CHAIN, "held", "()V")
+    ends = producers_of(value_index(chained), _at(chained, held, 0), 0, frozenset())
+    assert ends == (
+        Producer(reason="external", parameter=(_symbol(_CHAIN, "first", _TAKES_CONTEXT), 0)),
+        Producer(reason="external", parameter=(_symbol(_CHAIN, "second", _TAKES_CONTEXT), 0)),
+    )
+    assert _reasons(_bindings(chained, held, 0)) == ["external"]
+
+
+@pytest.mark.pins("values.a-producer-end-at-a-callerless-parameter-NAMES-it")
+def test_a_handler_that_is_itself_a_lambda_ends_at_the_lambdas_own_parameter(chained):
+    """`route.handler(ctx -> ctx.next())`: the lambda captured nothing, so its parameter 0 is
+    the framework's to supply, and the end names the lambda body's own parameter."""
+    own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
+    assert _ends(chained, own, 0) == (Producer(reason="external", parameter=(own, 0)),)

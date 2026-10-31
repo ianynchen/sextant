@@ -3224,6 +3224,44 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-descended-FRAME-answers-before-the-stop": Guard(
+        what="inside a callee the walk entered through its return, a parameter of a method "
+        "named in `stop_at_parameters_of` is the argument at that call, not a stop",
+        why="`log(ctx).next()` with `log` registered as a handler too: stopping in `log` "
+        "names `log`'s parameter as where the receiver came from, so the pass-through reader "
+        "credits `log` with passing on a context it never received, and blames the wrong "
+        "handler for the route",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        frame = self._frame_in(frames, method)\n"
+                "        if frame is not None:\n"
+                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
+                "frames)\n"
+                "        if method in self._stop_at_parameters_of:\n",
+                replace="        frame = None if method in self._stop_at_parameters_of else "
+                "self._frame_in(frames, method)  # guard disabled by scripts/guard_check.py\n"
+                "        if frame is not None:\n"
+                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
+                "frames)\n"
+                "        if method in self._stop_at_parameters_of:\n",
+            ),
+        ),
+    ),
+    "values.two-callerless-WRITERS-are-two-named-ends": Guard(
+        what="for the producer reader, two `external` ends at two different parameters are "
+        "kept apart where a binding's writes are gathered",
+        why="the parameter is outside the answer's equality, so a plain dedupe keeps the "
+        "first writer's parameter only: a context held in a field two handlers write would "
+        "name one handler, and the other's `next()` would read as coming from nowhere it owns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if not self._parameters_apart:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality": Guard(
         what="the parameter an `external` answer carries is not part of the answer's "
         "equality, so the value walk deduplicates answers exactly as before it existed",
