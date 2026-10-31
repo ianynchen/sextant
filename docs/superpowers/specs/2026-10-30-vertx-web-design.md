@@ -558,6 +558,8 @@ list. The tier says what closing it would take.
 | **Kotlin coroutine helpers** (`coHandler`, `coRespond`, `coAwait`) | Extension functions in `vertx-lang-kotlin-coroutines` wrap the handler. A plain Kotlin `router.get("/x").handler { }` is the same bytecode as Java's and is covered | A |
 | **SockJS, the event-bus bridge, WebSockets on a Vert.x `HttpServer`** | Not on the Vert.x target list for those columns | — |
 | **A path built by `String.format`** (Hono's `String.format("/%s/:%s", …)`) | Reading it would model one library method's semantics, which the user ruled out (OI-143: one rule, not one parser per method); the row publishes what the structural walk answers [ruled 2026-10-31, my call] | B |
+| **A Mutiny handler that is an object of a module class implementing `Consumer`** (`handler(new Auth())`) | Vert.x calls `accept`, the catalog's `handler_methods` is `handle` for every owner; reading it needs per-owner `handler_methods`. Gives a `partial` row with a `handler_pass_through` question. Lambdas and method references are read | B |
+| **Request reads in a wrapper handler's body** (`queryParam`, `request().getHeader` on the Rx3/Mutiny `RoutingContext`) | `request_reads` names the core `RoutingContext` only | A |
 | **`setTemplateParam`** | A template hole filled per request; the hole stays a hole | A |
 | **A WebClient call to the module's own server** | The self-call rule covers gRPC only (OI-198) | B |
 
