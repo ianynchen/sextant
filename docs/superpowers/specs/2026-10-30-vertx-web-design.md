@@ -198,10 +198,13 @@ route.handler(this::readOrder);
   Reactive Routes**, whose catalog fans a `@Route` with no `methods` out to 6 verbs
   (`quarkus-reactive-routes.yml:48-50`) while its own comment says Vert.x registers it for
   any method; DR-6 allows one framework one behaviour, so that catalog moves to the same
-  one-row rule in this work, and its goldens move with a stated reason. **Linking:** an
-  inbound row with method NULL is matched by an outbound call of any verb on the same path
-  (a general rule in `stitch/links.py`; today the served index keys on the verb). The builder
-  first checks how today's NULL-method rows link, and changes it once for all of them.
+  one-row rule in this work, and its goldens move with a stated reason. **"Any method" is
+  said explicitly, never by NULL alone**: `stitch/links.py` (`_verb`) reads a NULL method as
+  "nobody read the verb" and deliberately links it to no verb, and a row is identified by
+  what it is, not by an absent value. So the row carries an **any-method marker** (stored
+  where §3g item 3's path kind is stored), and the linker matches an outbound call of any
+  verb to an inbound row with that marker on the same path; a plain NULL-method row keeps
+  today's meaning and today's linking.
 - **A route with no path serves any path.** Its row's path is `/*`, Vert.x's own spelling of
   "every path" (`route("/*")` is the same route) [ruled 2026-10-31, my call, replacing the
   draft's "no path, no row" — that rule dropped the official hello world and six other
@@ -311,7 +314,13 @@ rule, not ours.)
   path** — never by which factory made it. Each route root's **receiver** is followed to its
   producer with `producer_paths`, whatever that producer is (`Router.router(vertx)`,
   `new RouterImpl(vertx)`, a wrapper's factory); no `router_root` list [ruled 2026-10-31, my
-  call; the draft's `router_root: Router.router` missed Mesh's `new RouterImpl`].
+  call; the draft's `router_root: Router.router` missed Mesh's `new RouterImpl`]. The
+  producer reader stops at a `declared` set of `(owner, method)`; that set is **derived from
+  the facts by type** — every call site in the module whose descriptor returns the
+  catalog's `router_type` (`io.vertx.ext.web.Router` and the wrapper types), and every
+  constructor of a class the module's facts show implementing it — once per resolve, cached.
+  A router handed in as a parameter with no caller in the module, or read from something
+  outside, ends `external`: that is the "produced outside the module" case below.
 - **Same object means the same producer reached along the same call path** (user ruling
   2026-10-30, review issue 2). The mount call's router argument is followed the same way,
   and routes whose receiver reaches the same producer on the same path take that mount's
@@ -337,7 +346,8 @@ rule, not ours.)
   the rule Ktor and Javalin already use. A mount Vert.x refuses (`subRouter` on an exact or
   regex path, 4.5 `mountSubRouter` with a trailing `*`) adds no prefix and is recorded as an
   error (DR-6).
-- **New catalog key:** `mount: [{ method: subRouter, router_arg: 0, prefix_from: receiver_path },
+- **New catalog keys:** `router_type: [io.vertx.ext.web.Router, …]` and
+  `mount: [{ method: subRouter, router_arg: 0, prefix_from: receiver_path },
   { method: mountSubRouter, router_arg: 1, prefix_arg: 0 }]`. The engine reads "routes built
   on the object a mount call received take its prefix". **Generalisation check:** Express's
   `app.use('/api', router)` is the same rule.
@@ -445,7 +455,7 @@ router built and handed in — so the fixture fails where Hono does.
 | `router.route(HttpMethod.PUT, "/orders/:id").handler(…)` | one row, verb from the constant |
 | `router.route("/orders/:id").method(GET).method(DELETE).handler(…)` | two rows |
 | The same route as separate statements on a `Route` local, with `failureHandler(…)` and `setName(…)` between: `r.method(GET); r.failureHandler(…); r.method(DELETE); r.handler(…)` | the same two rows, no others |
-| `router.route("/any").handler(this::any)` (no verb) | one row, method NULL |
+| `router.route("/any").handler(this::any)` (no verb) | one row, method NULL, any-method marker |
 | `router.route().handler(rc -> rc.response().end("hi"))` as a server's only route | one row, path `/*`, method NULL |
 | `router.get("/health").respond(ctx -> Future.succeededFuture(status))` | one row |
 | Hono's pair: `router.post(EVENTS).handler(auth).handler(BodyHandler.create())` then `router.post(EVENTS).handler(this::ingest)`, same method | one row, handler `ingest`, `resolved` |
@@ -495,14 +505,15 @@ twin, beside the Ktor and Javalin ones.
    copied. The verbless-route rule is now one NULL-method row (§3a), so `all_methods`
    fan-out is not needed by `fluent`; the SQL fan-out in `annotation_driven`
    (`derive_endpoints.sql`) stays where it is, for Spring's closed enum.
-3. **Pattern paths** — a path kind on the row; canonicalisation and path linking skip it.
+3. **Row markers** — a path kind (pattern) and an any-method marker, stored once, read by
+   the canonicaliser and the linker; canonicalisation and path linking skip a pattern path.
 4. **`passes_on`** and the reader extension (a walk end naming `(method, parameter index)`),
    the three outcomes, and chain/cross-chain ordering (§3b).
 5. **`mount`** — the per-path prefix join through `producer_paths`, nested composition, the
    named-hole prefix (§3c).
 6. **`host` and `port` captures** composed into one peer (§3d).
 7. **The options-object `client_base` rung** (§3d).
-8. **Linking**: a NULL-method inbound row matches any verb; a path holding a named hole is
+8. **Linking**: an inbound row with the any-method marker matches any verb; a path holding a named hole is
    never linked by path; a pattern path is never linked by path (`stitch/links.py`).
 9. **The inbound dedup key** (§3b) and its SQL twin.
 10. **A refused path is recorded, not repaired** — a catalog flag that a framework refuses
@@ -599,8 +610,8 @@ code, the Vert.x jars and the corpora (1 Critical, 10 Major, 18 Minor). Every fi
 resolved in the text above; the rulings taken under the 2026-10-31 delegation, for the user to
 review after Vert.x:
 
-1. A route with no verb is one NULL-method row, linked by any verb; Quarkus Reactive Routes
-   moves to the same rule (§3a).
+1. A route with no verb is one row, method NULL plus an explicit any-method marker, linked
+   by any verb; Quarkus Reactive Routes moves to the same rule (§3a).
 2. A route with no path is a `/*` row; middleware is excluded by pass-through (§3a).
 3. A regex path is `resolved` and marked as a pattern, never canonicalised or path-linked;
    Quarkus's `@Route(regex)` gains the same row (§3a).
