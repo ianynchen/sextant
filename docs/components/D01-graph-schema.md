@@ -968,7 +968,10 @@ have applied — on ONE row per protocol, `method` and `path` NULL because the q
 module's, filed where a module configures a prefix, has rows a dispatcher serves, and carries
 none of the server model's `stacks` coordinates (D02 §1h); a `refused_registration` candidate holds `caller`, `handler` and `reason` — a declaration the
 framework raises on rather than repairs (`unrooted_path`: a route path that is empty or has no
-leading `/`, where the catalog declares `refuses_unrooted_path`) — on ONE row per refused
+leading `/`, where the catalog declares `refuses_unrooted_path`; for a sub-router mount the
+catalog's `mount[].refuses` declares, Vert.x spec §3c, `exact_mount_path`: a mount path with
+no trailing wildcard, `pattern_mount_path`: a regular expression path, `wildcard_mount_point`:
+a mount point given the wildcard the framework adds) — on ONE row per refused
 `(protocol, method, path)`, the path as written, since no endpoint row carries it; a
 `handler_pass_through` candidate holds `handler`, `caller` and `unread` — an inbound row whose
 handler is not readable here (Vert.x spec §3b: it hands the request's context to a method

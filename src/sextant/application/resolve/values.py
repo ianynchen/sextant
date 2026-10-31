@@ -1055,6 +1055,7 @@ def producer_paths(
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
     stop_at_parameters_of: AbstractSet[str] = frozenset(),
+    which_object: bool = False,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1068,12 +1069,19 @@ def producer_paths(
     call the descent came through. A path that descends into ONE helper on two different
     calls cannot be held by one binding, which is the M-1 ruling's own bound; the path
     records which steps were written for an entry (`Path.entered`), so a reader can tell
-    that bound from two paths through different callers (`Path.two_calls_of_one_helper`)."""
+    that bound from two paths through different callers (`Path.two_calls_of_one_helper`).
+
+    **`which_object` asks which OBJECT the value is** (Vert.x spec 2026-10-30 §3c), the
+    object reader's own switch (`_Walk._objects`): no call made on an object changes which
+    producer made it, so the `escapes` window does not apply. A router given its routes and
+    then mounted is the router its producer made, routes and all. Off, the default, every
+    reader keeps the window it had."""
     walk = _Walk(
         index,
         declared=declared,
         along_receivers=along_receivers,
         past_accessors=past_accessors,
+        which_object=which_object,
         configuring=configuring,
         stop_at_parameters_of=stop_at_parameters_of,
         parameters_apart=True,

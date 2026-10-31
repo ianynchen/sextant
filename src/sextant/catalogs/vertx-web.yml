@@ -96,8 +96,7 @@ matches:
   # leading `/`, never linked by path (spec §3a).
   #
   # Not here: `Router.router(Vertx)` and `new RouterImpl(vertx)` make the router, not a
-  # route (rows 1, 314), and `mountSubRouter` (4.5 only, row 4) mounts one; prefixes are
-  # joined by a later task.
+  # route (rows 1, 314), and `mountSubRouter` (4.5 only, row 4) mounts one (`mount` below).
   roots:
     - { owner: io.vertx.ext.web.Router, method: route, descriptor: "()Lio/vertx/ext/web/Route;" }
     - { owner: io.vertx.ext.web.Router, method: route, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
@@ -210,9 +209,9 @@ matches:
         captures: { order: arg0 }, returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: last, descriptor: "()Lio/vertx/ext/web/Route;",
         captures: { order: last }, returns_receiver: true }
-    # Self-returning and carrying nothing a row reads (yet): `subRouter` mounts a router (a
-    # later task), and `failureHandler` answers only a failed request, so it registers no
-    # route of its own.
+    # Self-returning and carrying nothing a row reads: `subRouter` mounts a router (a
+    # terminal, and `mount` below), and `failureHandler` answers only a failed request, so it
+    # registers no route of its own.
     - { owner: io.vertx.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: failureHandler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: setName, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;", returns_receiver: true }
@@ -220,9 +219,34 @@ matches:
     - { owner: io.vertx.ext.web.Route, method: useNormalisedPath, descriptor: "(Z)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: putMetadata, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: setRegexGroupsNames, descriptor: "(Ljava/util/List;)Lio/vertx/ext/web/Route;", returns_receiver: true }
-  # A route given no handler serves nothing and derives nothing: `route("/api/*").subRouter(
-  # api)` and a route built and configured but never handed one.
-  terminal: [handler, blockingHandler, respond]
+  # A route given no handler serves nothing and derives nothing: a route built and configured
+  # but never handed one. `subRouter` ends a chain too, so the mount below reads the path of
+  # the route it is called on; a mount's chain derives no row of its own.
+  terminal: [handler, blockingHandler, respond, subRouter]
+
+  # SUB-ROUTERS (spec §3c). `parent.route("/api/*").subRouter(sub)` (row 38, all three
+  # versions) and 4.5's `parent.mountSubRouter("/api", sub)` (row 4; row 122: it builds
+  # `route(mountPoint + "*")` and calls `subRouter`) serve every route registered on `sub`
+  # under `/api`. A router is the OBJECT a producer made, reached along one call path: a route
+  # takes the prefix of the mount that received the same router on the same path, its routes
+  # and the mount in any methods. The producers are every call returning a `router_type`
+  # whose body the module does not read (`Router.router(vertx)`, row 1) and every constructor
+  # of a class implementing one (`new RouterImpl(vertx)`, row 314), derived from the facts.
+  # The prefix is the mount path less its trailing `*` and the `/` before it: `/api/*`,
+  # `/api*` and `"/" + name + "*"` mount at `/api` or `/<name>`. Every path Vert.x accepts
+  # starts with `/` (row 118), so the join is `leading_slash`, as Ktor's and Javalin's.
+  #
+  # A MOUNT VERT.X REFUSES adds no prefix and is recorded (rows 119-120): `subRouter` on a
+  # route whose path is exact (no trailing `*`) or a regular expression throws
+  # `IllegalStateException`; 4.5's `mountSubRouter` given a mount point ending in `*` throws
+  # `IllegalArgumentException`. `route().subRouter(sub)`, with no path, mounts at the root.
+  router_type: [io.vertx.ext.web.Router]
+  mount:
+    - { owner: io.vertx.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;",
+        router_arg: 0, prefix_from: receiver_path, wildcard: "*", refuses: [exact, pattern] }
+    - { owner: io.vertx.ext.web.Router, method: mountSubRouter, descriptor: "(Ljava/lang/String;Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;",
+        router_arg: 1, prefix_arg: 0, wildcard: "*", refuses: [wildcard] }
+  path_join: leading_slash
 
   # WHICH HANDLER ANSWERS (spec §3b). Vert.x calls a route's handlers in order, then the next
   # matching route's, for as long as each calls `next()` on the `RoutingContext` it was
@@ -266,8 +290,11 @@ matches:
 #     constructor (an anonymous class's synthetic capture field). A `next()` on it later is on
 #     a `getfield` the facts do not name, so the handler is not readable here: `partial`, with
 #     the field or constructor named in its `handler_pass_through` question.
-#   * SUB-ROUTERS. A route registered on a router mounted under a prefix is published
-#     without the prefix until mounts are joined.
+#   * A ROUTER MOUNTED OUTSIDE THIS MODULE. A router this module does not build (Quarkus's
+#     `@Observes Router`, one handed in from another module) is published at its root,
+#     `resolved`: it may be mounted under a prefix this module cannot see, and Quarkus's
+#     `quarkus.http.root-path` is not applied. A mount whose path is not read whole puts the
+#     named hole `<prefix>` in front of the route's path, `partial`, never linked by path.
 #   * THE RXJAVA 3 AND MUTINY WRAPPERS (`io.vertx.rxjava3.ext.web.*`,
 #     `io.vertx.mutiny.ext.web.*`, row group (g)) are not owners here yet.
 #   * VERT.X 3.x, unmeasured and unmatched by every descriptor above.

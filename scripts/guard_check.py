@@ -148,6 +148,8 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
+_MOUNTS = "sextant/application/resolve/shapes/mounts.py"
+_INBOUND_ROUTES = "sextant/application/resolve/shapes/inbound_routes.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
@@ -1501,6 +1503,167 @@ GUARDS: dict[str, Guard] = {
                 find="            captures[_ORDER] == _LAST or "
                 "_ARG_REFERENCE.match(str(captures[_ORDER]))\n",
                 replace="            True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-route-takes-the-prefix-of-the-mount-that-received-its-router": Guard(
+        what="a route whose router reaches the producer a mount's router argument reaches, on "
+        "paths that agree, serves under that mount's prefix (Vert.x plan, Task 11; spec §3c)",
+        why="without it every sub-router's routes are published at the root, `/status` for "
+        "`/api/status`, resolved and wrong",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                if (mounted.caller, mounted.ordinal) != made:\n",
+                replace="                if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-mount-reads-its-prefix-on-the-routes-own-path": Guard(
+        what="a mount's path is read within the path that joined the route to the mount (Vert.x "
+        "plan, Task 11; spec §3c, user ruling 2026-10-30)",
+        why="without it a helper that builds and mounts a router per call gives every caller's "
+        "routes every caller's prefix: `/groups/:userUuid` (OI-222's mixing)",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find='                self._workspace, {"prefix": mount.prefix}, self._index, '
+                "within=path\n",
+                replace='                self._workspace, {"prefix": mount.prefix}, self._index, '
+                "within=None\n",
+            ),
+        ),
+    ),
+    "mounts.a-module-method-returning-a-router-is-walked-into": Guard(
+        what="the producer reader stops at a call returning a router only where the module does "
+        "not read its body (Vert.x plan, Task 11; spec §3c)",
+        why="without it a router built in a helper and mounted by its caller is two producers, "
+        "the helper's factory and the helper call, and its routes take no prefix",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        elif call in index.unscanned:\n",
+                replace="        else:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-prefix-argument-is-the-mount-point": Guard(
+        what="a mount call naming its prefix as an argument (`prefix_arg`, 4.5's "
+        "`mountSubRouter`) is a mount (Vert.x plan, Task 11; spec §3c)",
+        why='without it a 4.5 router mounted by `mountSubRouter("/api", sub)` serves its '
+        "routes at the root",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if rule.prefix_arg is not None and rule.matches(site):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.nested-mounts-compose": Guard(
+        what="a mount's prefix goes behind the prefixes of the router it is mounted on (Vert.x "
+        "plan, Task 11; spec §3c)",
+        why="without it a router mounted inside a mounted router loses the outer prefix: "
+        "`/v1/orders` for `/api/v1/orders`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if mount.parent is None:\n            return [ROOT]\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            return [ROOT]\n",
+            ),
+        ),
+    ),
+    "mounts.a-refused-mount-adds-no-prefix": Guard(
+        what="a mount the framework refuses (`refuses`) gives no prefix (Vert.x plan, Task 11; "
+        "spec §3c, DR-6)",
+        why="without it `subRouter` on an exact path, which Vert.x throws on, publishes its "
+        "router's routes under a prefix nothing serves",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if self._refusal(mount, text) is not None:\n            return None\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return None\n",
+            ),
+        ),
+    ),
+    "mounts.a-refused-mount-is-recorded": Guard(
+        what="a mount the framework refuses is filed as a `refused_registration` question with "
+        "its reason (Vert.x plan, Task 11; spec §3c, DR-6)",
+        why="without it a mount Vert.x throws on vanishes without a word",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="            if text is not None and (reason := self._refusal(mount, text)) "
+                "is not None:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-unread-prefix-is-a-named-hole": Guard(
+        what="a mount whose path is not read whole puts `<prefix>` in front of the route's path "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why="without it a route under an unread mount reads as served at the root, a "
+        "complete-looking path that is not the address",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if text is None:\n            return Prefix(UNREAD_PREFIX, "
+                "str(Resolution.PARTIAL))\n",
+                replace="        if text is None:  # guard disabled by scripts/guard_check.py\n"
+                "            return None\n",
+            ),
+        ),
+    ),
+    "fluent.a-prefix-row-takes-the-weaker-word": Guard(
+        what="a route row under a prefix takes the weaker of its own word and the prefix's "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why="without it `<prefix>/edge` is published `resolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            url_resolution = weaker(url_resolution, prefix.resolution)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-mount-chain-derives-no-row-of-its-own": Guard(
+        what="a chain ending at a mount call derives no row unless it was given a handler "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why='without it every `route("/api/*").subRouter(sub)` is a handler-less row of its own',
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if "handler" not in end.captures:\n                continue\n',
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n",
+            ),
+        ),
+    ),
+    "values.an-object-reader-lets-calls-on-the-object-past": Guard(
+        what="`producer_paths(..., which_object=True)` lets every call made on the value past "
+        "the `escapes` window (Vert.x plan, Task 11; spec §3c)",
+        why="without it a router given its routes before it is mounted answers `escapes` at "
+        "the mount, and no route on it takes the prefix",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        which_object=which_object,\n",
+                replace="        which_object=False,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.leading-slash-gives-a-slashless-segment-its-slash": Guard(
+        what="`join_prefix` under `leading_slash` gives a segment not starting with `/` one "
+        "(Vert.x plan, Task 4 review, built in Task 11)",
+        why='without it `route("api") { get("orders") }` reads `/apiorders`',
+        edits=(
+            Edit(
+                path=_INBOUND_ROUTES,
+                find='    if rule == LEADING_SLASH and path not in ("", "*") and not '
+                'path.startswith("/"):\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

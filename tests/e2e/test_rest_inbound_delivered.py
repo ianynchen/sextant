@@ -2369,7 +2369,7 @@ def test_vertx_a_framework_handler_is_identified_by_its_declared_type(vertx_inbo
 # Task 11: mounts -------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Task 11")
+@pytest.mark.pins("mounts.a-route-takes-the-prefix-of-the-mount-that-received-its-router")
 def test_vertx_sub_routers_take_the_prefix_they_are_mounted_under(vertx_inbound):
     """`root.route("/api/*").subRouter(api)` with `api` built in `build(vertx)`, and a router
     built with `new RouterImpl(vertx)` mounted at `/m`: their routes serve under the mount's
@@ -2380,7 +2380,10 @@ def test_vertx_sub_routers_take_the_prefix_they_are_mounted_under(vertx_inbound)
     assert not [r for r in rows if r[1] in ("/status", "/impl")], rows
 
 
-@pytest.mark.xfail(strict=True, reason="Task 11")
+@pytest.mark.pins(
+    "values.an-object-reader-lets-calls-on-the-object-past",
+    "mounts.a-module-method-returning-a-router-is-walked-into",
+)
 def test_vertx_a_router_mounted_at_two_prefixes_serves_under_both(vertx_inbound):
     """One router built by `v(vertx)` and mounted at `/v1/*` and `/v2/*`: its route is served
     under both, each `resolved` (enumerable is exact)."""
@@ -2390,7 +2393,7 @@ def test_vertx_a_router_mounted_at_two_prefixes_serves_under_both(vertx_inbound)
     }
 
 
-@pytest.mark.xfail(strict=True, reason="Task 11")
+@pytest.mark.pins("mounts.a-mount-reads-its-prefix-on-the-routes-own-path")
 def test_vertx_a_router_built_and_mounted_per_call_keeps_its_own_prefix(vertx_inbound):
     """`createSubRouter(name)` builds a router and mounts it at `"/" + name + "*"`, called
     for `users` and `groups`, each getting its own routes: each route under its own prefix
@@ -2402,7 +2405,9 @@ def test_vertx_a_router_built_and_mounted_per_call_keeps_its_own_prefix(vertx_in
     }
 
 
-@pytest.mark.xfail(strict=True, reason="Task 11")
+@pytest.mark.pins(
+    "mounts.an-unread-prefix-is-a-named-hole", "fluent.a-prefix-row-takes-the-weaker-word"
+)
 def test_vertx_a_mount_with_an_unread_prefix_names_the_hole(vertx_inbound):
     """`RouterSource.prefixes().forEach(p -> root.route(p + "*").subRouter(edge))` over a
     list from the base jar: the route is `<prefix>/edge`, `partial` — a named hole, never a
@@ -2415,9 +2420,21 @@ def test_vertx_a_mount_with_an_unread_prefix_names_the_hole(vertx_inbound):
         or "edge" in str(r["path"])
         or r["path"] == "/provided"
     }
+    assert "<prefix>/edge" in by_path, sorted(by_path)
     assert by_path["<prefix>/edge"]["resolution"] == "partial", sorted(by_path)
     assert "/edge" not in by_path
     assert by_path["/provided"]["resolution"] == "resolved"
+
+
+def test_vertx_a_router_built_in_a_base_class_takes_the_prefix_a_third_method_mounts(
+    vertx_inbound,
+):
+    """Hono's shape: `MountingVerticle` builds the router into a field, hands it to the
+    abstract `addRoutes(router)` that `TelemetryVerticle` overrides, and mounts it in a third
+    method at `/hono/*`: the subclass's route serves under the prefix (spec §3c)."""
+    assert _served(vertx_inbound, "TelemetryVerticle") == {
+        ("POST", "/hono/telemetry-in", "TelemetryVerticle#accept", "resolved"),
+    }
 
 
 # Task 12: outbound parts, absolute URLs and the Hono helper ---------------------------

@@ -64,6 +64,7 @@ from sextant.application.resolve.shapes.chains import (
     _method_symbols,
     _resolve_captures,
     _resolves_beans,
+    _site_key,
     chain_ends,
 )
 from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
@@ -79,6 +80,16 @@ from sextant.application.resolve.shapes.member_values import (
     member_table,
     names_members,
     static_field_value,
+)
+from sextant.application.resolve.shapes.mounts import (
+    ROOT,
+    Mount,
+    MountReader,
+    MountRules,
+    Prefix,
+    mount_rules_of,
+    router_producers,
+    weaker,
 )
 from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
@@ -197,6 +208,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     pathless_serves = _pathless_serves(matches, catalog)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
+    mount_rules = mount_rules_of(matches, catalog.source)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -252,11 +264,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     judged: dict[Any, _Judged] | None = None
     candidates: list[_Candidate] | None = None
     unread: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
-    if pass_through is not None:
+    # Spec §3c: the mounts are found among the chain ends too, before any route's prefix is
+    # read.
+    read_whole: list[ChainEnd] = []
+    if pass_through is not None or mount_rules is not None:
         read_whole = list(ends)
-        judged = _judge(read_whole, pass_through, walk_index, method_symbols, workspace)
         ends = read_whole
+    if pass_through is not None:
+        judged = _judge(read_whole, pass_through, walk_index, method_symbols, workspace)
         candidates = []
+    mounts: MountReader | None = None
+    mounted: dict[tuple[str, int], Mount] = {}
+    if mount_rules is not None:
+        mounts, mounted = _mounts(read_whole, mount_rules, walk_index, workspace, refuses_unrooted)
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -295,12 +315,45 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 judged=judged,
                 candidates=candidates,
                 unread=unread,
+                mounts=mounts,
             )
+        # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
+        # and it derives a row only where it was given a handler as well.
+        mount = mounted.get(_site_key(end.terminal)) if end.terminal is not None else None
+        if mount is not None and mounts is not None:
+            for path, reason in mounts.refusals(mount):
+                file_refusal(
+                    refusals,
+                    protocol=catalog.protocol,
+                    method=_root_verb(end, context),
+                    path=path,
+                    reason=reason,
+                    caller=end.caller,
+                    handler=None,
+                )
+            if "handler" not in end.captures:
+                continue
         # A chain walked back across methods is read on the path it took (ruling 5).
         _derive(end, context if end.path is None else replace(context, path=end.path))
 
     if candidates is not None:
         _settle(candidates, rows, metadata, unread)
+    # A mount made by a call of its own (`prefix_arg`) is no chain: its refusals are filed
+    # here, under no verb, as the route the framework builds for it names none.
+    if mounts is not None:
+        for mount in mounted.values():
+            if mount.rule.prefix_arg is None:
+                continue
+            for path, reason in mounts.refusals(mount):
+                file_refusal(
+                    refusals,
+                    protocol=catalog.protocol,
+                    method=None,
+                    path=path,
+                    reason=reason,
+                    caller=str(mount.site["caller"]),
+                    handler=None,
+                )
     workspace.derive("call_endpoints", rows=rows)
     if bindings:
         workspace.derive("channel_bindings_insert", rows=bindings)
@@ -383,6 +436,10 @@ class _DeriveContext:
     judged: "dict[Any, _Judged] | None" = None
     candidates: "list[_Candidate] | None" = None
     unread: dict[tuple[str, str | None, str | None], dict[str, Any]] | None = None
+    # Vert.x spec §3c, for a catalog declaring `mount`: the prefixes each route's router is
+    # served under (`shapes.mounts`). None for every other catalog, and for a module with no
+    # mount, whose routes serve at their root as read.
+    mounts: MountReader | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -595,7 +652,15 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # is ONE refusal, under the verb the root named, however many verbs the chain went on to
     # add (`file_refusal` keeps one row per address).
     refused_verb = _root_verb(end, context) if context.refuses_unrooted else None
-    for verb, (peer, path, url_resolution) in product(verbs, destinations):
+    # Spec §3c: every prefix the route's router is served under, one row each; the root alone
+    # where no mount received it.
+    prefixes: tuple[Prefix, ...] = (ROOT,)
+    if context.mounts is not None and direction == "inbound" and end.root:
+        prefixes = context.mounts.of_route(end.root, end.path)
+    for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
+        # An address nobody read takes no prefix: one row for it, not one per prefix.
+        if path is None and prefix is not prefixes[0]:
+            continue
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -644,6 +709,11 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # `OI-144`'s lesson about two engines and one piece of evidence.
         # A pattern's `?` is a quantifier, not a query string: it keeps every character.
         path, query = (path, ()) if path_kind == PATH_KIND_PATTERN else query_entries(path)
+        # The mount's prefix goes in front of the address the route itself named and the
+        # framework accepted (spec §3c), at the weaker of the two words.
+        if context.mounts is not None and path is not None:
+            path = context.mounts.joined(prefix, path, path_kind == PATH_KIND_PATTERN)
+            url_resolution = weaker(url_resolution, prefix.resolution)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -940,6 +1010,58 @@ def _judge(
     contexts = {symbol: handler.context for handler in read.values() for symbol in handler.symbols}
     outcomes, unread = handler_outcomes(index, rule.calls, contexts)
     return {key: _judged_of(handler, outcomes, unread) for key, handler in read.items()}
+
+
+def _mounts(
+    ends: Sequence[ChainEnd],
+    rules: MountRules,
+    index: ValueIndex,
+    workspace: Workspace,
+    refuses_unrooted: bool,
+) -> tuple[MountReader | None, dict[tuple[str, int], Mount]]:
+    """The module's mounts (Vert.x spec §3c), by the mount call's site, and the reader of the
+    prefixes they give; None and nothing where the module mounts nothing, so its routes read
+    nothing more. A `prefix_from: receiver_path` mount is a chain end whose terminal is the
+    mount call: its path is the route's own `url` capture, read at the position the capture
+    carries, and the router it mounts on is its root's receiver. A `prefix_arg` mount is a
+    call of its own, found in one pass over the sites."""
+    found: dict[tuple[str, int], Mount] = {}
+    for end in ends:
+        terminal = end.terminal
+        rule = next(
+            (
+                rule
+                for rule in rules.mounts
+                if rule.prefix_arg is None and terminal is not None and rule.matches(terminal)
+            ),
+            None,
+        )
+        if rule is None or terminal is None:
+            continue
+        url = end.captures.get("url")
+        at = url.get(_CAPTURED_AT) if isinstance(url, dict) else None
+        read = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+        found.setdefault(
+            _site_key(terminal),
+            Mount(
+                rule,
+                terminal,
+                end.root or None,
+                None if read is None or at is None else (read, int(at[2])),
+                pattern=_URL_IS.get(str(end.captures.get("url_is"))) == PATH_KIND_PATTERN,
+                within=end.path,
+                unread="url" in end.captures and read is None,
+            ),
+        )
+    for site in index.sites.values():
+        for rule in rules.mounts:
+            if rule.prefix_arg is not None and rule.matches(site):
+                found.setdefault(_site_key(site), Mount(rule, site, site, (site, rule.prefix_arg)))
+    if not found:
+        return None, {}
+    declared = router_producers(index, rules.router_types, workspace.once(dispatch_of).ancestors)
+    reader = MountReader(workspace, index, rules, declared, list(found.values()), refuses_unrooted)
+    return reader, found
 
 
 def _judged_of(

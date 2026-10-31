@@ -60,18 +60,13 @@ def _media_strings(argument: Any) -> list[str]:
 
 
 def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
-    """One literal path segment as the framework will join it behind `prefix` — the
-    catalog's `path_join` applied, or the literal untouched when none is declared. Every
-    literal the fold reads for a path position passes through here, so a join
-    declared once holds for prefixes, verbs and (when they are read) array
-    elements alike; a rule's own `path: ""` does not, since the empty segment is
-    exactly one the join leaves alone. `leading_slash` is the framework's own
-    three exceptions, verbatim: a segment that already starts with `/`, the
-    empty segment, and the bare `*` stay as written; every other segment gains
-    a leading `/`. Two spellings of one registration must be one row, and the
-    join is what makes `path("api", …)` and `path("/api", …)` the same address
-    here as they are in the framework. The prefix is already an address and is
-    written as it is."""
+    """One path segment as the framework will join it behind `prefix` — the catalog's
+    `path_join` applied, or the segment untouched when none is declared. `leading_slash` is
+    the framework's own three exceptions, verbatim: a segment that already starts with `/`,
+    the empty segment, and the bare `*` stay as written; every other segment gains a leading
+    `/`. Two spellings of one registration must be one row, and the join is what makes `api`
+    and `/api` the same address here as they are in the framework. The prefix is already an
+    address and is written as it is."""
     segment = path
     if rule == LEADING_SLASH and path not in ("", "*") and not path.startswith("/"):
         segment = "/" + path
@@ -83,8 +78,14 @@ def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
 REFUSED_REGISTRATION = "refused_registration"
 
 # Why a registration was refused, the candidate's `reason`. One word per rule so a later
-# refusal (a sub-router mounted on an unrooted path) adds a word here and no new kind.
+# refusal adds a word here and no new kind.
 UNROOTED_PATH = "unrooted_path"
+# A mount the framework refuses (`mount[].refuses`, Vert.x spec §3c): a mount path with no
+# trailing wildcard where the framework needs one (an exact path), a pattern path, and a mount
+# point given the wildcard the framework adds itself.
+EXACT_MOUNT_PATH = "exact_mount_path"
+PATTERN_MOUNT_PATH = "pattern_mount_path"
+WILDCARD_MOUNT_POINT = "wildcard_mount_point"
 
 
 # What an unread piece of a partly read path starts with, each spelled by the layer that

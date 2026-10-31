@@ -133,8 +133,9 @@ QUESTIONS = (
     # DR-6, Vert.x spec §3a. A declaration the framework raises on rather than repairs —
     # a route path that is empty or has no leading `/` — so the application does not start
     # with it and no row serves it. Candidates: one per registration, the caller, the
-    # handler and the reason (`unrooted_path`). Identity is the refused address as written,
-    # which no endpoint row carries because none was derived.
+    # handler and the reason (`unrooted_path`; for a mount, Vert.x spec §3c,
+    # `exact_mount_path`, `pattern_mount_path` or `wildcard_mount_point`). Identity is the
+    # refused address as written, which no endpoint row carries because none was derived.
     #
     # A question rather than a finding of its own, and rather than a silent drop, for
     # `routing_conflict`'s reason one table over: a disagreement between the code and the

@@ -53,6 +53,7 @@ def test_an_accumulated_capture_is_read_element_by_element():
     assert media_columns(captures) == ('["a/b"]', '["application/json","text/xml"]')
 
 
+@pytest.mark.pins("inbound_routes.leading-slash-gives-a-slashless-segment-its-slash")
 def test_the_leading_slash_rule_adds_one_slash_and_leaves_three_cases_alone():
     assert join_prefix(None, "orders", "leading_slash") == "/orders"
     assert join_prefix(None, "/orders", "leading_slash") == "/orders"

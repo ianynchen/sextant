@@ -1176,6 +1176,14 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
 
 # `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
 # (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
+# Why the framework refuses a registration, one phrase per `inbound_routes` reason word.
+_REFUSAL_PHRASES = {
+    "unrooted_path": "refuses a path that is empty or lacks a leading `/`",
+    "exact_mount_path": "refuses to mount a router on a path with no trailing wildcard",
+    "pattern_mount_path": "refuses to mount a router on a regular expression path",
+    "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
+}
+
 _PASS_THROUGH_PHRASES = {
     "handed_to": "hands the request's context to {}, where it is not followed here",
     "stored_in": "stores the request's context in {}, where it is not followed here",
@@ -1344,11 +1352,11 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # `resolve/shapes/inbound_routes.py::file_refusal` and verified against that
         # writer's own `candidates` line. The row's own path is the address as written, so
         # the sentence names the registering method and the handler, which are what a
-        # reader opens; `unrooted_path` is the one reason today.
+        # reader opens, and says the reason the framework refuses it.
         handler = candidate["handler"] or "no handler read"
         return (
-            f"registered by {candidate['caller']} ({handler}); the framework refuses a path "
-            f"that is empty or lacks a leading `/`, so it serves nothing for it"
+            f"registered by {candidate['caller']} ({handler}); the framework "
+            f"{_REFUSAL_PHRASES[str(candidate['reason'])]}, so it serves nothing for it"
         )
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by

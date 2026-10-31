@@ -906,6 +906,37 @@ def test_a_refused_registration_question_names_the_registering_method_and_handle
     ) in text
 
 
+@pytest.mark.parametrize(
+    ("reason", "phrase"),
+    [
+        ("exact_mount_path", "refuses to mount a router on a path with no trailing wildcard"),
+        ("pattern_mount_path", "refuses to mount a router on a regular expression path"),
+        ("wildcard_mount_point", "refuses a mount point that ends in the wildcard it adds"),
+    ],
+)
+def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str, phrase: str):
+    """A refused mount (Vert.x spec §3c) is filed under its own reason, and the sentence says
+    that reason, never the unrooted path's."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/api",
+            "question": "refused_registration",
+            "candidates": json.dumps(
+                [{"caller": "com/acme/Routes#wire().", "handler": None, "reason": reason}]
+            ),
+            "evidence": "com/acme/Routes#wire().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "registered by com/acme/Routes#wire(). (no handler read); the framework "
+        f"{phrase}, so it serves nothing for it"
+    ) in text
+
+
 def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
     """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
     and `name`) matches what `pass_through.file_unread` writes: a context handed to an

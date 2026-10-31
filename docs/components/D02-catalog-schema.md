@@ -2105,6 +2105,29 @@ in no known order are each a row, `narrowed`. Absent, every handler answers and 
 names its first. A malformed entry, or `framework_handlers`/`handler_methods` without
 `passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
 
+**`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
+router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, refuses?}, …]`** (Vert.x spec
+§3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
+mount that received that same router — the object one producer made, reached along one call
+path. The producers are derived from the facts by type: every call returning a `router_type`
+whose body the module does not read, and every constructor of a class the hierarchy shows
+implementing one; a module method returning a router is walked into, never a stop. A route's
+root receiver and a mount's `router_arg` are each followed to that producer with the producer
+reader (calls made on the router do not open `escapes`), and where the two paths agree the
+mount's path is read WITHIN the joined path, so a helper that builds and mounts a router per
+call gives each caller's routes that caller's prefix. The prefix is the mount path — the path
+of the route the mount call is made on (`prefix_from: receiver_path`, which must name a
+declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
+`/` before it, joined by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s).
+Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
+and a router no mount received serves at its root, as read. A mount path not read whole gives
+the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by
+path. `refuses` lists what the framework throws on — `exact` (a path with no trailing
+`wildcard`), `pattern` (a pattern path), `wildcard` (a mount point ending in it) — and such a
+mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
+entry, either key without the other, or a `prefix_from` mount that is not a terminal, is
+refused at load.
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own
