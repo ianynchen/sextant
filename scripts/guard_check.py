@@ -5275,6 +5275,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "supertype_derived.an-AsyncService-implementation-is-served-once-BOUND": Guard(
+        what="a class handed to the generated static `<Service>Grpc.bindService` is matched "
+        "against the bind method's parameter type, followed to that class through the value walk",
+        why="ruled 2026-10-30, option B: a class implementing `<Service>Grpc$AsyncService` "
+        "directly is not a `BindableService`, and gRPC serves it only through that call "
+        "(`fixtures/grpc-probe`, 1.81.0). Without the read, every such service loses its "
+        "handler and its RPCs show the `.proto` row alone",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/supertype_derived.py",
+                find="            if implementer is not None:\n"
+                "                found.append((implementer, supertype, outer))\n",
+                replace="",
+            ),
+        ),
+    ),
     "injected_client.a-GENERATED-class-own-nesting-does-not-fence": Guard(
         what="an `extends` edge whose both ends are nested in one outer class does not fence "
         "that outer class's injected stubs",

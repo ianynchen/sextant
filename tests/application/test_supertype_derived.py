@@ -36,11 +36,14 @@ from sextant.domain.facts import (
     CallTarget,
     DeclaredShapeFact,
     Document,
+    MethodReturnFact,
     OperationRecord,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1015,3 +1018,291 @@ def test_the_shipped_client_side_keys_are_accepted(tmp_path: Path):
     catalog = _catalog(matches=dict(_shipped("grpc-java").matches))
     assert derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES) == []
     workspace.close()
+
+
+# --- (f) a class implementing the generated interface, served only once bound ----
+
+ASYNC_SERVICE = "com/acme/grpcprobe/proto/OrderServiceGrpc$AsyncService#"
+ASYNC_IMPL = "com/acme/grpcprobe/OrderServiceAsyncImpl#"
+SERVER = "com/acme/grpcprobe/Server#"
+_BIND_DESCRIPTOR = (
+    "(Lcom/acme/grpcprobe/proto/OrderServiceGrpc$AsyncService;)Lio/grpc/ServerServiceDefinition;"
+)
+
+
+def _async_facts(*implementers: str) -> list[SymbolFact]:
+    """The generated `AsyncService` interface with its one default RPC method, and each
+    `implementer` declaring it directly with a public `getOrder` — the 1.81.0 shape
+    `fixtures/grpc-probe` measured (`scripts/probes/cp3_cp8_grpc_facts.md`)."""
+    facts: list[SymbolFact] = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + ASYNC_SERVICE,
+            construct_kind=ConstructKind.INTERFACE,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{ASYNC_SERVICE}getOrder(sig_async).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + ASYNC_SERVICE,
+        ),
+    ]
+    for implementer in implementers:
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + implementer,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_MODULE + ASYNC_SERVICE],
+            )
+        )
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=f"{_MODULE}{implementer}getOrder(sig_impl).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + implementer,
+            )
+        )
+    return facts
+
+
+def _bind_site(argument: CallArgument, *, caller: str, ordinal: int = 0) -> CallSiteFact:
+    """`OrderServiceGrpc.bindService(<argument>)`: the generated static method that turns
+    an `AsyncService` into something a server can serve, owned by the marked outer class."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=f"{_MODULE}{caller}",
+        target=CallTarget(owner=OUTER, name="bindService", descriptor=_BIND_DESCRIPTOR),
+        invoke_kind="static",
+        ordinal=ordinal,
+        arguments=[argument],
+    )
+
+
+def _binding_catalog() -> Catalog:
+    return _catalog(matches={**_catalog().matches, "binding_method": "bindService"})
+
+
+@pytest.mark.pins("supertype_derived.an-AsyncService-implementation-is-served-once-BOUND")
+def test_a_class_bound_through_the_generated_bind_method_is_a_handler(tmp_path: Path):
+    """gRPC serves an `AsyncService` implementation only once `bindService` turns it into
+    a service definition (ruled 2026-10-30, option B). The walk follows the argument to
+    the class that was constructed, and that class's override is the handler."""
+    facts = [
+        *_async_facts(ASYNC_IMPL),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _bind_site(
+            CallArgument(kind="instance", symbol=ASYNC_IMPL, source=4),
+            caller=f"{SERVER}serve(sig_serve).",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _binding_catalog())
+    rows = [(r["path"], r["handler"], r["resolution"]) for r in workspace.query("endpoints")]
+    workspace.close()
+
+    assert rows == [
+        (f"{SERVICE_NAME}/GetOrder", f"{_MODULE}{ASYNC_IMPL}getOrder(sig_impl).", "resolved")
+    ]
+
+
+def test_an_implementation_nothing_binds_is_not_a_handler(tmp_path: Path):
+    """Implementing the interface is not being served: with no `bindService` call taking
+    it, gRPC never dispatches to this class, so there is no row and no question."""
+    facts = [*_async_facts(ASYNC_IMPL), _service_name_site(), _method_name_site("GetOrder")]
+    workspace = _resolve(tmp_path, facts, _binding_catalog())
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+@pytest.mark.pins("supertype_derived.an-AsyncService-implementation-is-served-once-BOUND")
+def test_a_bind_inside_a_helper_names_the_class_each_caller_hands_it(tmp_path: Path):
+    """`register(AsyncService s) { bindService(s) }`, called with one class from one place
+    and another from another: the object is followed back through each call, so both
+    classes are handlers — and a third class that implements the interface but is never
+    handed to `register` is not."""
+    other = "com/acme/grpcprobe/OtherAsyncImpl#"
+    unbound = "com/acme/grpcprobe/UnboundAsyncImpl#"
+    takes_service = f"(L{ASYNC_SERVICE[:-1]};)V"
+    # A real method symbol, since the walk crosses from `register`'s parameter to the
+    # calls that resolve to it; and its return fact, which says its body was read.
+    register = method_descriptor(SERVER, "register", takes_service)
+    main = method_descriptor(SERVER, "main", "()V")
+    facts = [
+        *_async_facts(ASYNC_IMPL, other, unbound),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + SERVER, construct_kind=ConstructKind.CLASS
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + register,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + SERVER,
+            signature=Signature(
+                parameters=[Parameter(name="service", type=TypeRef(symbol=ASYNC_SERVICE))],
+                returns=TypeRef(symbol="void#"),
+            ),
+        ),
+        MethodReturnFact(document_id="doc_1", method=_MODULE + register, ordinal=0, value=None),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + main,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + SERVER,
+        ),
+        _bind_site(CallArgument(kind="parameter", value=0), caller=register),
+        *(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=_MODULE + main,
+                target=CallTarget(owner=SERVER, name="register", descriptor=takes_service),
+                invoke_kind="static",
+                ordinal=ordinal,
+                arguments=[CallArgument(kind="instance", symbol=implementer, source=ordinal)],
+            )
+            for ordinal, implementer in ((0, ASYNC_IMPL), (1, other))
+        ),
+    ]
+    # The whole pipeline, not `derive_endpoints` alone: crossing from `register`'s
+    # parameter to its callers reads the call edges the pipeline records first.
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(workspace, tmp_path / "facts", _Catalogs([_binding_catalog()]), CAPABILITIES)
+    handlers = sorted(str(r["handler"]) for r in workspace.query("endpoints"))
+    workspace.close()
+
+    assert handlers == [
+        f"{_MODULE}{ASYNC_IMPL}getOrder(sig_impl).",
+        f"{_MODULE}{other}getOrder(sig_impl).",
+    ]
+
+
+def test_without_the_binding_key_a_bound_class_derives_nothing(tmp_path: Path):
+    """The key is opt-in per catalog: a catalog that does not name the bind method
+    matches exactly as before."""
+    facts = [
+        *_async_facts(ASYNC_IMPL),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _bind_site(
+            CallArgument(kind="instance", symbol=ASYNC_IMPL, source=4),
+            caller=f"{SERVER}serve(sig_serve).",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_malformed_binding_method_is_refused(tmp_path: Path):
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _catalog(matches={**_catalog().matches, "binding_method": ["bindService"]})
+    with pytest.raises(CatalogError, match="binding_method"):
+        derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    workspace.close()
+
+
+def test_a_class_bound_for_two_services_serves_both(tmp_path: Path):
+    """One class implementing two generated interfaces and handed to each service's own
+    `bindService` serves both services' RPCs: one class, two services, two rows."""
+    other_outer = "com/acme/grpcprobe/proto/BillingServiceGrpc#"
+    billing = "com/acme/grpcprobe/proto/BillingServiceGrpc$AsyncService#"
+    facts = [
+        *_async_facts(ASYNC_IMPL),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + billing, construct_kind=ConstructKind.INTERFACE
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{billing}charge(sig_billing).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + billing,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{ASYNC_IMPL}charge(sig_impl).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + ASYNC_IMPL,
+        ),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _service_name_site("billing.v1.BillingService", ordinal=2, outer=other_outer),
+        _method_name_site(
+            "Charge", service="billing.v1.BillingService", ordinal=3, outer=other_outer
+        ),
+        _bind_site(
+            CallArgument(kind="instance", symbol=ASYNC_IMPL, source=4),
+            caller=f"{SERVER}serve(sig_serve).",
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=f"{_MODULE}{SERVER}serve(sig_serve).",
+            target=CallTarget(
+                owner=other_outer,
+                name="bindService",
+                descriptor=f"(L{billing[:-1]};)Lio/grpc/ServerServiceDefinition;",
+            ),
+            invoke_kind="static",
+            ordinal=1,
+            arguments=[CallArgument(kind="instance", symbol=ASYNC_IMPL, source=5)],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _binding_catalog())
+    rows = sorted((r["path"], r["handler"]) for r in workspace.query("endpoints"))
+    workspace.close()
+
+    assert rows == [
+        ("billing.v1.BillingService/Charge", f"{_MODULE}{ASYNC_IMPL}charge(sig_impl)."),
+        (f"{SERVICE_NAME}/GetOrder", f"{_MODULE}{ASYNC_IMPL}getOrder(sig_impl)."),
+    ]
+
+
+def test_a_class_extending_the_base_and_bound_for_it_is_one_set_of_rows(tmp_path: Path):
+    """`bindService(new OrderServiceImpl())` on a class that already extends the base:
+    one class serving one service, so one row and no question."""
+    facts = [
+        *_supertype_facts("getOrder"),
+        *_implementor_facts("getOrder"),
+        *_async_facts(),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _bind_site(
+            CallArgument(kind="instance", symbol=IMPLEMENTOR, source=4),
+            caller=f"{SERVER}serve(sig_serve).",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _binding_catalog())
+    rows = [(r["path"], r["handler"]) for r in workspace.query("endpoints")]
+    workspace.close()
+
+    assert rows == [(f"{SERVICE_NAME}/GetOrder", f"{_MODULE}{IMPLEMENTOR}getOrder(sig_impl).")]
+
+
+def test_a_bound_enum_constant_names_its_enum(tmp_path: Path):
+    """`enum Orders implements AsyncService { INSTANCE; ... }` bound as `Orders.INSTANCE`:
+    the walk answers the constant, and the enum declaring it is the handler class."""
+    facts = [
+        *_async_facts(ASYNC_IMPL),
+        _service_name_site(),
+        _method_name_site("GetOrder"),
+        _bind_site(
+            CallArgument(kind="enum", symbol=f"{ASYNC_IMPL}INSTANCE."),
+            caller=f"{SERVER}serve(sig_serve).",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _binding_catalog())
+    rows = [r["handler"] for r in workspace.query("endpoints")]
+    workspace.close()
+
+    assert rows == [f"{_MODULE}{ASYNC_IMPL}getOrder(sig_impl)."]

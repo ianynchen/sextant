@@ -51,6 +51,12 @@ matches:
   # restated for a style reached by `extends` rather than a framework
   # registration call.
   members: overridden_public_methods
+  # The other half of what protoc generates (ruled 2026-10-30, option B): a class
+  # implementing `<Service>Grpc$AsyncService` directly is not a `BindableService`, so
+  # gRPC serves it only once the code hands an instance of it to the generated static
+  # `<Service>Grpc.bindService(AsyncService)`. Measured on `fixtures/grpc-probe` at
+  # 1.81.0 (`OrderServiceAsyncImpl`); the method exists at 1.62.2 too.
+  binding_method: bindService
   # The CLIENT side, read by `resolve/rpc_hops.py` and not by this style's engine
   # (spec 2026-10-25 §3d): a call from a generated client stub to an RPC this module
   # serves lands on its handler. protoc-gen-grpc-java emits every stub

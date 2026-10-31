@@ -43,14 +43,14 @@ def probe_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dic
 @pytest.mark.pins("supertype_derived.a-supertypes-members-are-what-it-INHERITS")
 def test_an_rpc_inherited_from_the_generated_interface_names_its_handler(probe_tables):
     """The one RPC, at its wire identity, with the implementer's override as its handler.
-    `schema_operations` merges the `.proto`'s row into the same identity, so there is one
-    row, not two."""
+    `schema_operations` merges the `.proto`'s row into the same identity rather than adding
+    a handlerless row beside it. The bound `AsyncService` class is the test below."""
     rows = [
         (str(r["path"]), str(r["handler"]).rsplit(" ", 1)[-1], str(r["resolution"]))
         for r in probe_tables["endpoints"]
         if r["protocol"] == "grpc"
     ]
-    assert rows == [
+    assert [row for row in rows if "AsyncImpl" not in row[1]] == [
         (
             "sextant.grpcprobe.OrderService/GetOrder",
             "com/example/grpcprobe/OrderServiceImpl#getOrder(sig_ba59a558).",
@@ -60,3 +60,20 @@ def test_an_rpc_inherited_from_the_generated_interface_names_its_handler(probe_t
     assert not [q for q in probe_tables["open_questions"] if q["question"] == "service_identity"], (
         probe_tables["open_questions"]
     )
+
+
+@pytest.mark.pins("supertype_derived.an-AsyncService-implementation-is-served-once-BOUND")
+def test_a_class_implementing_the_generated_interface_is_a_handler_once_bound(probe_tables):
+    """`OrderServiceAsyncImpl implements OrderServiceGrpc.AsyncService` and
+    `serve` hands a new one to `OrderServiceGrpc.bindService` (ruled 2026-10-30, option B).
+    Measured before the rule: no row named it. Now the same RPC names both classes, each a
+    handler of its own server."""
+    handlers = sorted(
+        str(r["handler"]).rsplit(" ", 1)[-1]
+        for r in probe_tables["endpoints"]
+        if r["protocol"] == "grpc" and r["path"] == "sextant.grpcprobe.OrderService/GetOrder"
+    )
+    assert [h.split("#")[0] for h in handlers] == [
+        "com/example/grpcprobe/OrderServiceAsyncImpl",
+        "com/example/grpcprobe/OrderServiceImpl",
+    ], handlers
