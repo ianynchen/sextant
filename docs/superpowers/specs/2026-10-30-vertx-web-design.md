@@ -243,9 +243,11 @@ route.handler(this::readOrder);
     `\/telemetry\/.+` into `/\/telemetry\/.+`) and **not linked by path**. The draft's
     `partial` is withdrawn. `quarkus-reactive-routes.yml`'s `@Route(regex = …)`, which
     derives nothing today, publishes the same pattern row, for the same dispatcher.
-- **Request requirements** — `RoutingContext.queryParam(String)`, `pathParam(String)`
-  (skipping the route's own path variables) and `request().getHeader(String)` (`via` the
-  producing `request()` call) — are `request_reads` entries, the mechanism `javalin.yml`
+- **Request requirements** — `RoutingContext.queryParam(String)` and
+  `request().getHeader(String)` (`via` the producing `request()` call) — are `request_reads`
+  entries (`pathParam` is not: a path parameter is part of the address, as on Javalin's rows,
+  and every name left after the route's own variables are skipped would be a mount-prefix
+  variable or nothing [ruled 2026-10-31, my call]), the mechanism `javalin.yml`
   already ships (catalog data only; it fills the COVERAGE line that reads "Not recorded").
 
 ### 3b. Which handler answers — a route chain's pass-through rule (new, general)
