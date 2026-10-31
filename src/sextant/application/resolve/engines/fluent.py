@@ -153,10 +153,10 @@ _DIRECTIONS = sorted(member.value for member in Direction)
 # a repository adding a pattern for a header name of its own gets no masking from it.
 _REDACTOR = Redactor.from_rules()
 
-# The two captures that are halves of one address (2F design §4's base
-# composition) — `channel`'s alternative, and what
+# The captures that are parts of one address (2F design §4's base
+# composition; `host` and `port`, Vert.x spec §3d) — `channel`'s alternative, and what
 # `_validate_url_channel_exclusivity` weighs against it as a group.
-_ADDRESS_FIELDS = ("base", "url")
+_ADDRESS_FIELDS = ("base", "url", "host", "port")
 
 # What a captured address IS (`url_is`, Vert.x spec §3a), a literal capture beside `url`, last
 # wins: a regular expression the framework matches (`pattern`, the row's `path_kind`), or an
@@ -1458,20 +1458,28 @@ def _composed_address(
     url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         if context.workspace is None or context.values is None:
-            return _against_client_base(url_of(url_argument), captures, context)
+            return _against_client_base(
+                _with_stated_authority(url_of(url_argument), captures, context),
+                captures,
+                context,
+            )
         # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
         # identities, so the path is text the code states, and who is CALLED is asked
         # separately of the first operand — the user's ruling of 2026-10-17, "peer and path
         # from separate evidence".
         captured = (_address_read(captures.get("url"), context) or {}).get("captured_at")
         return _against_client_base(
-            with_authority(
-                url_of(url_argument),
-                _address_read(captures.get("url"), context),
-                str(captured[0]) if captured else None,
-                context.workspace,
-                context.values,
-                context.catalog.value_model or (),
+            _with_stated_authority(
+                with_authority(
+                    url_of(url_argument),
+                    _address_read(captures.get("url"), context),
+                    str(captured[0]) if captured else None,
+                    context.workspace,
+                    context.values,
+                    context.catalog.value_model or (),
+                ),
+                captures,
+                context,
             ),
             captures,
             context,
@@ -1485,6 +1493,68 @@ def _composed_address(
     if path is None:
         return None, None, "unresolved"
     return _address_of(base + path)
+
+
+def _with_stated_authority(
+    address: tuple[str | None, str | None, str],
+    captures: dict[str, Any],
+    context: _DeriveContext,
+) -> tuple[str | None, str | None, str]:
+    """`address` with the `host` and `port` the call states apart from its path composed into
+    ONE peer (Vert.x spec §3d): `host`, or `host:port` where a port is stated — the authority
+    CP-2 splits an absolute URL into, so `client.get(8080, "inventory", "/stock")` and
+    `getAbs("http://inventory:8080/stock")` have one peer.
+
+    Each part replaces that part of the authority the address already holds, and only that
+    part: the framework applies a request's own host and port at send time over what an
+    absolute URL parsed (Vert.x: CP-56 rows 129-130), so `getAbs("http://a:1/x").host("b")`
+    goes to `b:1`. A port with no host stated and none in the address is no peer: the host is
+    then a client default, and an unset default is never published (spec §2a).
+
+    A part that was captured and could not be read leaves WHO is called unread: peer NULL and
+    the row `partial`, the path kept, because the path is evidence of its own (the user's
+    ruling of 2026-10-17, "peer and path from separate evidence"). An authority carrying a
+    placeholder is `_address_of`'s case: the whole composition is the path, peer NULL."""
+    if "host" not in captures and "port" not in captures:
+        return address
+    peer, path, resolution = address
+    host, port = _authority_parts(peer)
+    for field in ("host", "port"):
+        if field not in captures:
+            continue
+        stated = _stated_part(captures, field, context)
+        if stated is None:
+            partly = weaker(resolution, str(Resolution.PARTIAL))
+            return None, path, (partly if path is not None else resolution)
+        host, port = (stated, port) if field == "host" else (host, stated)
+    if host is None:
+        return address
+    authority = host if port is None else f"{host}:{port}"
+    if carries_expression(authority):
+        return None, (f"//{authority}{path}" if path is not None else None), resolution
+    stated_peer, _ = split_url(f"//{authority}")
+    return stated_peer, path, resolution
+
+
+def _stated_part(captures: dict[str, Any], field: str, context: _DeriveContext) -> str | None:
+    """The text of a captured `host` or `port`: a string literal, or an integer literal for a
+    port (javac pushes `8080` as one, CP-56 row 317); None where it was not read."""
+    argument = _address_read(captures.get(field), context)
+    if field == "port" and isinstance(argument, dict) and argument.get("kind") == "int":
+        value = argument.get("value")
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) else None
+    return _string_value(argument)
+
+
+def _authority_parts(peer: str | None) -> tuple[str | None, str | None]:
+    """A peer as its host and port (`inventory:8080` → `inventory`, `8080`); a peer with no
+    port is all host, and no peer is neither. A bracketed IPv6 host keeps its colons."""
+    if peer is None:
+        return None, None
+    head, colon, tail = peer.rpartition(":")
+    if colon and tail.isdigit() and head:
+        return head, tail
+    return peer, None
 
 
 def _against_client_base(

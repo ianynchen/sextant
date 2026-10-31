@@ -90,7 +90,10 @@ from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter
 # already use, rather than `url_of`'s CP-2 split. `base` (2F design §4) is
 # the other half of ONE address: a builder's own base address, composed with
 # the `url` capture at derive time rather than read as an address of its own.
-_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
+# `host` and `port` (Vert.x spec 2026-10-30 §3d) are the authority's two parts where a call
+# names them apart from its path (`client.get(8080, "inventory", "/stock")`), composed with
+# `url` at derive time into one peer, `host` or `host:port`.
+_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", "port")
 
 # Every other capture field a catalog may spell EITHER as its own literal or
 # as an `argN` reference, and the value itself says which (`_reads_an_argument`).
@@ -1580,7 +1583,7 @@ def _distinct_overloads(first: dict[str, Any], second: dict[str, Any]) -> bool:
 def _validate_captures(
     entries: list[dict[str, Any]], catalog: Catalog, *, allow_when: bool
 ) -> None:
-    """Refuses a catalog whose `url`/`body`/`response`/`channel` capture does
+    """Refuses a catalog whose `url`/`body`/`response`/`channel`/`host`/`port` capture does
     not name a call-site position (`ports/catalogs.py`'s own discipline
     again: an unchecked value does not stay in the file).
 

@@ -2377,6 +2377,19 @@ does the same, for the same reason: half an address presented as the whole one n
 the module never calls. A `url` capture never reached at all is no claim, and the base then
 stands alone as the address.
 
+**A root's or a step's own `captures` may also name `host` and `port`** (Vert.x spec
+2026-10-30 §3d), each an `argN` position: the authority's two parts where a call names them
+apart from its path (`client.get(8080, "inventory", "/stock")`). They compose with the `url`
+into ONE peer, `host` or `host:port` where a port is stated, which is the authority CP-2
+splits an absolute URL into, so that call and `getAbs("http://inventory:8080/stock")` have
+the same peer. Each part replaces only that part of the authority the address already holds,
+last wins (Vert.x applies a request's own `host` and `port` over an absolute URL's, CP-56 row
+130). A port with neither a stated host nor one in the address is no peer: the host is a
+client default, which is never published. A part captured and not read leaves the peer NULL
+and the row `partial`, the path kept; an authority carrying a placeholder keeps the whole
+composition as `path`, `peer` NULL, as a `base` does. Both count as address fields against
+`channel` (below).
+
 `baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
 its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the
 root, outermost producer first, so last-wins reads the same in both directions. A row's

@@ -371,6 +371,7 @@ _ASKS_PER_CATALOG = {
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
     "vertx-web": (35, 38),
+    "vertx-webclient": (101, 151),
     "vertx-eventbus-mutiny": (8, 14),
 }
 
@@ -401,8 +402,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # catalog, same comment. **+5 on 2026-10-29**: its job steps, same comment. **+32 on
     # 2026-10-31**: the new `vertx-web` catalog, same comment. **+1 on 2026-10-31**: its
     # `order` capture, same comment. **+2 on 2026-10-31**: its two `mount` entries, same
-    # comment.
-    assert sum(asks for asks, _ in counted.values()) == 930
+    # comment. **+101 on 2026-10-31**: the new `vertx-webclient` catalog, its roots' `url`,
+    # `host` and `port` positions and its steps', same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1031
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

@@ -1,0 +1,325 @@
+id: vertx-webclient
+displayName: Vert.x WebClient
+style: fluent
+protocol: http
+direction: outbound
+
+# A Vert.x WebClient call is a chain on a `WebClient` (spec 2026-10-30 §3d): a root that
+# names the verb and the address (`client.get(8080, "inventory", "/stock")`), steps on the
+# `HttpRequest` it returns that refine it (`putHeader`, `addQueryParam`, `timeout`), and a
+# `send*` call that sends it. Read by the engine `vertx-web.yml` and `spring-webclient.yml`
+# share.
+#
+# What javac writes, measured (CP-56 row group (h), rows 317-322,
+# `scripts/probes/cp56_vertx_web.md`): every call is `invokeinterface` on the interface
+# (`WebClient`, `HttpRequest`), the root's result the receiver of the next call, an `int`
+# port pushed as a literal (row 317). The statement style, `HttpRequest r = client.post(q);
+# r.addQueryParam(…); r.send();`, calls each later method on the local and pops the result
+# (row 322): every self-returning call is flagged `returns_receiver` below, so those
+# statements are one chain and not a fork per call, and a request a helper builds and
+# returns is reached from the caller's `send()` by the walk back along receivers.
+
+detect:
+  coordinates: ["io.vertx:vertx-web-client"]
+
+# Three lines, each as its jars' own manifests state it (CP-56's version scope). The RxJava 3
+# and Mutiny wrappers are not read here.
+measured:
+  - { artifact: io.vertx:vertx-web-client, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0", "5.2.1"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # The verb a `getstatic HttpMethod.X` names (row 133), the table `vertx-web.yml` declares,
+  # spelled again because a `fluent` catalog keeps it here. `request(HttpMethod, …)` and the
+  # `method(HttpMethod)` step read it.
+  verb_values:
+    fields:
+      "io.vertx.core.http.HttpMethod#OPTIONS": OPTIONS
+      "io.vertx.core.http.HttpMethod#GET": GET
+      "io.vertx.core.http.HttpMethod#HEAD": HEAD
+      "io.vertx.core.http.HttpMethod#POST": POST
+      "io.vertx.core.http.HttpMethod#PUT": PUT
+      "io.vertx.core.http.HttpMethod#DELETE": DELETE
+      "io.vertx.core.http.HttpMethod#TRACE": TRACE
+      "io.vertx.core.http.HttpMethod#CONNECT": CONNECT
+      "io.vertx.core.http.HttpMethod#PATCH": PATCH
+      "io.vertx.core.http.HttpMethod#QUERY": QUERY
+      "io.vertx.core.http.HttpMethod#PROPFIND": PROPFIND
+      "io.vertx.core.http.HttpMethod#PROPPATCH": PROPPATCH
+      "io.vertx.core.http.HttpMethod#MKCOL": MKCOL
+      "io.vertx.core.http.HttpMethod#COPY": COPY
+      "io.vertx.core.http.HttpMethod#MOVE": MOVE
+      "io.vertx.core.http.HttpMethod#LOCK": LOCK
+      "io.vertx.core.http.HttpMethod#UNLOCK": UNLOCK
+      "io.vertx.core.http.HttpMethod#MKCALENDAR": MKCALENDAR
+      "io.vertx.core.http.HttpMethod#REPORT": REPORT
+      "io.vertx.core.http.HttpMethod#CHECKOUT": CHECKOUT
+      "io.vertx.core.http.HttpMethod#CHECKIN": CHECKIN
+      "io.vertx.core.http.HttpMethod#UNCHECKOUT": UNCHECKOUT
+      "io.vertx.core.http.HttpMethod#MKWORKSPACE": MKWORKSPACE
+      "io.vertx.core.http.HttpMethod#UPDATE": UPDATE
+      "io.vertx.core.http.HttpMethod#LABEL": LABEL
+      "io.vertx.core.http.HttpMethod#MERGE": MERGE
+      "io.vertx.core.http.HttpMethod#MKACTIVITY": MKACTIVITY
+      "io.vertx.core.http.HttpMethod#ORDERPATCH": ORDERPATCH
+      "io.vertx.core.http.HttpMethod#ACL": ACL
+      "io.vertx.core.http.HttpMethod#SEARCH": SEARCH
+
+  # THE ROOTS, every `WebClient` method that makes a request (rows 44-57), each by its erased
+  # descriptor, the same at all three versions except `request(RequestOptions)` (5.2.1 only,
+  # row 56). Each form captures the address parts it names, and the engine composes them into
+  # one peer, `host` or `host:port`, which is what an absolute URL's authority splits into
+  # (`getAbs("http://inventory:8080/…")` → `inventory:8080`):
+  #   * `x(uri)` → `url`, the host and port left to the client's defaults (row 124);
+  #   * `x(host, uri)` → `host` and `url`, the port left to the client's default;
+  #   * `x(port, host, uri)` → `port`, `host` and `url`;
+  #   * `xAbs(url)` → the whole address, split by CP-2.
+  # The defaults themselves (`localhost` and `80` when nobody set them, rows 131-132) are never
+  # published: that a client sets none cannot be proven from the bytecode (spec §2a).
+  #
+  # A `UriTemplate` form reads its template off `UriTemplate.of(String)`, the one factory the
+  # type declares (`url_via`; measured with `javap -s` on vertx-uri-template 4.5.10, 5.0.0 and
+  # 5.2.1, each as its manifest states it: `public static UriTemplate of(String)`, descriptor
+  # `(Ljava/lang/String;)Lio/vertx/uritemplate/UriTemplate;`). Its `{var}` holes stay holes;
+  # `setTemplateParam` fills them per request, which is not read (spec §4).
+  #
+  # A `RequestOptions` or `SocketAddress` form names no address read here: the chain derives
+  # nothing (`serves: false`) unless a later `uri(…)` names one (spec §3d).
+  roots:
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, url: arg0 }, url_via: &template [{ owner: io.vertx.uritemplate.UriTemplate, method: of, arg: 0 }] }
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: getAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: getAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: GET, url: arg0 }, url_via: *template }
+
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, url: arg0 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: post, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: postAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: postAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: POST, url: arg0 }, url_via: *template }
+
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, url: arg0 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: put, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: putAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: putAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PUT, url: arg0 }, url_via: *template }
+
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, url: arg0 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: delete, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: deleteAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: deleteAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: DELETE, url: arg0 }, url_via: *template }
+
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, url: arg0 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patch, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patchAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: patchAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: PATCH, url: arg0 }, url_via: *template }
+
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, host: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, port: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, url: arg0 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, host: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: head, descriptor: "(ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, port: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: headAbs, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, url: arg0 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: headAbs, descriptor: "(Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: HEAD, url: arg0 }, url_via: *template }
+
+    # `request(HttpMethod, …)` (row 56) and `requestAbs(HttpMethod, …)` (row 57): the same
+    # address forms one argument along, the verb read off the constant (`verb_values`).
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, host: arg1, url: arg2 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, port: arg1, host: arg2, url: arg3 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, url: arg1 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, host: arg1, url: arg2 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, port: arg1, host: arg2, url: arg3 }, url_via: *template }
+    - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, url: arg1 } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, url: arg1 }, url_via: *template }
+    # The forms naming a `RequestOptions` or a `SocketAddress`: no address read, no row unless
+    # a later `uri(…)` names one. `request(RequestOptions)` (5.2.1) names no verb either.
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+    - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0, serves: false } }
+
+  # THE STEPS: every method the `HttpRequest` INTERFACE declares to return `HttpRequest` and
+  # answers with its receiver (row 111, the interface a call site names, row group (b)), per
+  # version:
+  #   * 4.5.10, 28: 24 abstract (every abstract one but `copy()`, which `HttpRequestImpl`
+  #     answers with a new request) and 4 defaults, each answering a self-returning call
+  #     (`basicAuthentication` ×2, `bearerTokenAuthentication`, `expect(Function)`);
+  #   * 5.0.0, 27: `expect` gone, `routingKey` added, 3 defaults;
+  #   * 5.2.1, 29: 5.0.0's, plus the defaults `putHeader(CharSequence, CharSequence)` and
+  #     `putHeader(CharSequence, Iterable)`.
+  # Every one is `returns_receiver: true`, so a statement-style request stays one chain, and
+  # one returned through `as(…)` is the request it was called on. Owner-gated, because the
+  # names are generic. `copy()` is not a step: it answers another request.
+  steps:
+    # The address parts a request may change after it was made: Vert.x applies the request's
+    # own `host`, `port` (≥ 0) and `uri` at send time over what the root stored or an absolute
+    # URL parsed (rows 129-130), so the last call wins, as a capture does. A `uri(…)` names
+    # an address on a chain whose root read none (`serves: true`).
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: method, descriptor: "(Lio/vertx/core/http/HttpMethod;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { http_method: arg0 }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: uri, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { url: arg0, serves: true }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: host, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { host: arg0 }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: port, descriptor: "(I)Lio/vertx/ext/web/client/HttpRequest;",
+        captures: { port: arg0 }, returns_receiver: true }
+    # Headers and query parameters accumulate, one `endpoint_metadata` entry per call, as
+    # `spring-webclient.yml`'s `header` and `queryParam` do. `putHeader` is matched by name:
+    # every overload (two at 4.5.10 and 5.0.0, four at 5.2.1, row 63) takes the name at
+    # argument 0 and the value at argument 1. `putHeaders(MultiMap)` sets many at once from a
+    # map whose entries are not read here.
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: putHeader,
+        collects: { kind: header, name: arg0, value: arg1 }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: addQueryParam, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        collects: { kind: query, name: arg0, value: arg1 }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: setQueryParam, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
+        collects: { kind: query, name: arg0, value: arg1 }, returns_receiver: true }
+    # THE BODY-CARRYING TERMINALS, named again in `terminal` below: the body a request sends
+    # (rows 74-76). `sendForm`, `sendMultipartForm` and `sendStream` carry no body shape: a
+    # form or a stream has no contract type to publish (spec §3d).
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: sendJson, captures: { body: arg0 } }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: sendJsonObject, captures: { body: arg0 } }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: sendBuffer, captures: { body: arg0 } }
+    # Self-returning and carrying nothing a row reads.
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: as, descriptor: "(Lio/vertx/ext/web/codec/BodyCodec;)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: authentication, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: basicAuthentication, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: bearerTokenAuthentication, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: connectTimeout, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: expect, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: followRedirects, descriptor: "(Z)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: idleTimeout, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: multipartMixed, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: proxy, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: putHeaders, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: routingKey, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: setTemplateParam, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: ssl, descriptor: "(Ljava/lang/Boolean;)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: timeout, descriptor: "(J)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: traceOperation, returns_receiver: true }
+    - { owner: io.vertx.ext.web.client.HttpRequest, method: virtualHost, returns_receiver: true }
+  # Every `send*` sends the request (rows 73-79): with and without a trailing callback at
+  # 4.5.10, the `Future` form alone at 5.0.0 and 5.2.1. A request never sent derives nothing.
+  terminal: [send, sendJson, sendJsonObject, sendBuffer, sendForm, sendMultipartForm, sendStream]
+
+# Shared verbatim across every outbound catalog on purpose — `okhttp.yml` carries the
+# reason: shape expansion is a global insert-if-absent pass keyed on the type symbol
+# alone, so every outbound catalog's `wrappers` must agree.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered:
+#   * THE CLIENT'S DEFAULT HOST AND PORT. A request naming no host (`x(uri)`) or no port
+#     (`x(host, uri)`) takes the client's defaults, set on the options object handed to
+#     `WebClient.create`; that options object is not read here, so such a row's peer is
+#     the host it names, or NULL.
+#   * A REQUEST BUILT FROM A `RequestOptions` OR SENT TO A `SocketAddress`: no address read.
+#   * `setTemplateParam`: a template hole filled per request stays a hole.
+#   * A CALL TO THE MODULE'S OWN SERVER (`localhost` in the module that serves it) is an
+#     outbound row: the self-call rule covers gRPC only (OI-198).
+#   * THE RXJAVA 3 AND MUTINY WRAPPERS (`io.vertx.rxjava3.ext.web.client.*`,
+#     `io.vertx.mutiny.ext.web.client.*`, row group (g)) are not owners here yet.
+#   * VERT.X 3.x, unmeasured and unmatched by every descriptor above.

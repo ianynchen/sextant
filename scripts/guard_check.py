@@ -165,6 +165,7 @@ _EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
 _CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
 _SCHEDULED_CHAIN = "sextant/application/resolve/engines/scheduled_chain.py"
 _QUARTZ_CATALOG = "sextant/catalogs/quartz.yml"
+_VERTX_WEBCLIENT_CATALOG = "sextant/catalogs/vertx-webclient.yml"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -1772,6 +1773,121 @@ GUARDS: dict[str, Guard] = {
                 find='            if "handler" not in end.captures:\n                continue\n',
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n"
                 "                continue\n",
+            ),
+        ),
+    ),
+    "fluent.host-and-port-compose-one-peer": Guard(
+        what="a call's `host` and `port` captures compose with its `url` into one peer, `host` "
+        "or `host:port` (Vert.x plan, Task 12; spec §3d)",
+        why='without it `client.get(8080, "inventory", "/stock")` publishes no peer, though '
+        '`getAbs("http://inventory:8080/stock")`, the same call, publishes `inventory:8080`',
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if "host" not in captures and "port" not in captures:\n'
+                "        return address\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        return address\n",
+            ),
+        ),
+    ),
+    "fluent.a-stated-host-or-port-replaces-the-urls-own": Guard(
+        what="a stated `host` or `port` replaces only that part of the authority an absolute URL "
+        "holds (Vert.x plan, Task 12; CP-56 row 130)",
+        why='without it `getAbs("http://a:1/x").host("b")` publishes `b`, dropping the port '
+        "Vert.x keeps, and `.port(9)` on an absolute URL is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    host, port = _authority_parts(peer)\n",
+                replace="    host, port = None, None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-host-leaves-the-peer-unread": Guard(
+        what="a `host` or `port` captured and not read leaves the peer NULL and the row "
+        "`partial` (Vert.x plan, Task 12)",
+        why="without it a call to a host nobody read is a `resolved` relative call, a claim that "
+        "the address was read in full",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if stated is None:\n            partly = weaker(",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            partly = weaker(",
+            ),
+        ),
+    ),
+    "chains.host-and-port-are-call-site-positions": Guard(
+        what="a `host` or `port` capture that is not `argN` is refused at load (Vert.x plan, "
+        "Task 12)",
+        why="without it `host: inventory` loads, captures a literal no reader takes, and every "
+        "row of the chain publishes no peer",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", '
+                '"port")\n',
+                replace='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")  '
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-uri-template-is-read-off-its-factory": Guard(
+        what="a `UriTemplate` form reads its template off `UriTemplate.of` (Vert.x plan, Task 12)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &template [{ owner: io.vertx.uritemplate.UriTemplate, method: of, "
+                "arg: 0 }]",
+                replace="url_via: &template [{ owner: io.vertx.uritemplate.UriTemplate, method: "
+                "guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-socket-address-form-reads-no-address": Guard(
+        what="a `request(HttpMethod, SocketAddress, …)` form derives nothing unless a later "
+        "`uri(…)` names an address (Vert.x plan, Task 12; spec §3d)",
+        why="without it the form's uri argument is read as the request's address, beside a "
+        "server address nothing here reads",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, serves: false } }',
+                replace='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, url: arg2 } }',
+            ),
+        ),
+    ),
+    "vertx-webclient.a-uri-step-names-an-address": Guard(
+        what="a `uri(…)` step makes a chain whose root read no address derive (Vert.x plan, "
+        "Task 12; spec §3d)",
+        why='without it `request(GET, address, p).uri("/y").send()` is no row though it '
+        "names its path",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="captures: { url: arg0, serves: true }, returns_receiver: true }",
+                replace="captures: { url: arg0 }, returns_receiver: true }",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-statement-style-timeout-returns-its-receiver": Guard(
+        what="`HttpRequest.timeout(long)` is flagged `returns_receiver` (Vert.x plan, Task 12; "
+        "CP-56 row 111)",
+        why="without it `r.timeout(5000);` written as a statement in a helper that returns the "
+        "request (Hono's shape) hides the request from the walk back from its caller's "
+        "`send()`, and the call is no row",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: timeout, descriptor: "(J)Lio/vertx/ext/web/client/HttpRequest;", '
+                "returns_receiver: true }",
+                replace='method: timeout, descriptor: "(J)Lio/vertx/ext/web/client/HttpRequest;" }',
             ),
         ),
     ),

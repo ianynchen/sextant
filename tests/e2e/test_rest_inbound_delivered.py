@@ -2467,7 +2467,7 @@ def _vertx_calls(rows: list[dict], caller_class: str) -> set[tuple]:
     }
 
 
-@pytest.mark.xfail(strict=True, reason="Task 12")
+@pytest.mark.pins("fluent.host-and-port-compose-one-peer")
 def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
     """`client.get(8080, "inventory", "/stock/" + sku).send()`: `GET`, the path with its
     unread tail a hole, peer `inventory:8080` — the same peer `getAbs("http://inventory:8080/
@@ -2484,7 +2484,6 @@ def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
     assert path == "/stock/{sku}", path
 
 
-@pytest.mark.xfail(strict=True, reason="Task 12")
 def test_vertx_an_absolute_call_splits_its_url_and_carries_the_body_type(vertx_outbound):
     """`client.postAbs("http://billing/charges").sendJson(charge)`: `POST`, peer `billing`,
     path `/charges`, request body `Charge`."""
@@ -2499,7 +2498,7 @@ def test_vertx_an_absolute_call_splits_its_url_and_carries_the_body_type(vertx_o
     assert "Charge" in str(rows[0]["request_shape"]), rows[0]
 
 
-@pytest.mark.xfail(strict=True, reason="Task 12")
+@pytest.mark.pins("vertx-webclient.a-statement-style-timeout-returns-its-receiver")
 def test_vertx_a_request_built_in_a_helper_and_sent_by_its_caller_is_one_row(vertx_outbound):
     """Hono's shape: `request(expression)` builds `client.postAbs(QUERY).addQueryParam(…)`,
     calls `timeout` and `basicAuthentication` on it in statement style, returns
