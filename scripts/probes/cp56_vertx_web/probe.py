@@ -684,6 +684,116 @@ def group_b_event_bus(repo: Repo) -> None:
     emit_interface_listing(repo, MESSAGE_CONSUMER, MESSAGE_CONSUMER_IMPL)
 
 
+HTTP_CLIENT_IMPL = "io.vertx.core.http.impl.HttpClientImpl"
+
+
+def _local(step: Instruction) -> str:
+    """The local a load or store names: `astore_2` and `astore 2` both name local 2."""
+    return step.opcode.rsplit("_", 1)[-1] if "_" in step.opcode else step.operand
+
+
+def group_e_server(repo: Repo) -> None:
+    """(e) where a request built with a `SocketAddress` goes: what the request hands
+    `RequestOptions.setServer` at send time, and what the core client does with that server.
+    Added after (h) and the event bus's (b) so every earlier row keeps its number (Vert.x
+    plan, Task 12 review)."""
+
+    def server_handed_on(methods: list[Method]) -> str:
+        chosen = [m for m in methods if m.name == "buildRequestOptions"]
+        if not chosen:
+            return "absent"
+        code = chosen[0].code
+        found = []
+        for i, step in enumerate(code):
+            if "RequestOptions.setServer:" not in step.comment or i == 0:
+                continue
+            given = code[i - 1]
+            source = (
+                given.comment.removeprefix("Field ")
+                if given.opcode == "getfield"
+                else given.comment.split("Method ", 1)[-1].split(":")[0]
+                if given.opcode.startswith("invoke")
+                else f"{given.opcode} {given.operand}".strip()
+            )
+            found.append(
+                f"@{step.offset} `setServer({descriptor_parts(step.comment.split(':', 1)[1])[0][0].strip('L;').rsplit('/', 1)[-1]})`"
+                f" is handed `{source}`"
+            )
+        return "; ".join(found) or "NOT FOUND"
+
+    emit(
+        "`HttpRequestImpl.buildRequestOptions`: what it hands `RequestOptions.setServer` at send "
+        "time (e)",
+        f"`{HTTP_REQUEST_IMPL}`",
+        {c: server_handed_on(repo.methods(c, HTTP_REQUEST_IMPL) or []) for c in VERSIONS},
+    )
+
+    def server_chosen(methods: list[Method]) -> str:
+        found = []
+        for m in methods:
+            code = m.code
+            for i, step in enumerate(code):
+                if "RequestOptions.getServer:" not in step.comment or i + 1 >= len(code):
+                    continue
+                store = code[i + 1]
+                if not store.opcode.startswith("astore"):
+                    continue
+                for j in range(i + 2, len(code) - 1):
+                    load, test = code[j], code[j + 1]
+                    if not (
+                        load.opcode.startswith("aload")
+                        and _local(load) == _local(store)
+                        and test.opcode in ("ifnull", "ifnonnull")
+                    ):
+                        continue
+                    target = int(test.operand)
+                    when_null = (
+                        [x for x in code[j + 2 :] if x.offset < target]
+                        if test.opcode == "ifnonnull"
+                        else [x for x in code if x.offset >= target]
+                    )
+                    built = [
+                        x.comment.split("Method ", 1)[-1].split(":")[0]
+                        for x in when_null
+                        if x.opcode.startswith("invoke") and "inetSocketAddress" in x.comment
+                    ]
+                    loads = [
+                        k
+                        for k, x in enumerate(code)
+                        if x.opcode.startswith("aload") and _local(x) == _local(store)
+                    ]
+                    handed = next(
+                        (
+                            x.comment.split("Method ", 1)[-1]
+                            for x in code[loads[-1] + 1 :]
+                            if x.opcode.startswith("invoke")
+                            # the call taking it: the first one with an address parameter
+                            and re.search(
+                                r"\(.*Lio/vertx/core/net/(Socket)?Address;.*\)", x.comment
+                            )
+                        ),
+                        "NOTHING",
+                    )
+                    found.append(
+                        f"`{signature(m)}`: `getServer()` into local {_local(store)}, tested "
+                        f"`{test.opcode}` @{test.offset}; only when it is null is an address "
+                        f"built from the request's port and host"
+                        f" ({', '.join(f'`{b}`' for b in built) or 'NOTHING BUILT'}); the local, "
+                        f"set or built, is last loaded @{code[loads[-1]].offset} and handed to "
+                        f"`{handed}`"
+                    )
+                    break
+        return "; ".join(found) or "NOT FOUND"
+
+    emit(
+        "`HttpClientImpl`: in the method reading `RequestOptions.getServer`, whether a set server "
+        "is the address the request goes to, and when the request's own host and port build "
+        "one instead (e)",
+        f"`{HTTP_CLIENT_IMPL}`",
+        {c: server_chosen(repo.methods(c, HTTP_CLIENT_IMPL) or []) for c in VERSIONS},
+    )
+
+
 def group_c(repo: Repo) -> None:
     """(c) RouteState's method set and null path; how RouterImpl builds a route."""
 
@@ -1422,6 +1532,7 @@ def main(argv: list[str]) -> int:
     group_g(repo)
     group_h(classes_dir)
     group_b_event_bus(repo)
+    group_e_server(repo)
     print(render())
     return 0
 

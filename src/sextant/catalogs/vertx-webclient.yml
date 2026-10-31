@@ -89,7 +89,7 @@ matches:
   #
   # A `RequestOptions` form names no address read here: the chain derives nothing (`serves:
   # false`) unless a later `uri(…)` names one (spec §3d). A `SocketAddress` form reads its uri
-  # string as the path, with no peer.
+  # string as the path, with no peer (rows 325-326).
   roots:
     - { owner: io.vertx.ext.web.client.WebClient, method: get, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
         captures: { http_method: GET, url: arg0 } }
@@ -219,27 +219,29 @@ matches:
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
         captures: { serves: false } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/core/http/RequestOptions;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, serves: false } }
-    # The forms naming a `SocketAddress`, the server the connection is made to (row 56): the
-    # address is not read, so it gives no peer, and the uri string is read as the request's
-    # path. A host or port these forms also name is the request's own `Host`, not where it
-    # goes, and is not read as the peer.
+        captures: { http_method: arg0, serves: false, destination: unread } }
+    # The forms naming a `SocketAddress` (row 56): the request is SENT to that address, which
+    # is not read here. At send time the request hands it to `RequestOptions.setServer` (row
+    # 325), and the core client builds the address from the request's host and port only when
+    # no server is set (row 326). So the row has no peer (`destination: unread`), whatever an
+    # absolute URL's authority or a later `host(…)`/`port(…)` names: those are the request's
+    # `Host`, not where it goes. The uri string is the path, read as any uri is.
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg2 } }
+        captures: { http_method: arg0, destination: unread, url: arg2 } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg2 }, url_via: *template }
+        captures: { http_method: arg0, destination: unread, url: arg2 }, url_via: *template }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg3 } }
+        captures: { http_method: arg0, destination: unread, url: arg3 } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg3 }, url_via: *template }
+        captures: { http_method: arg0, destination: unread, url: arg3 }, url_via: *template }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;ILjava/lang/String;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg4 } }
+        captures: { http_method: arg0, destination: unread, url: arg4 } }
     - { owner: io.vertx.ext.web.client.WebClient, method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;ILjava/lang/String;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg4 }, url_via: *template }
+        captures: { http_method: arg0, destination: unread, url: arg4 }, url_via: *template }
     - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg2 } }
+        captures: { http_method: arg0, destination: unread, url: arg2 } }
     - { owner: io.vertx.ext.web.client.WebClient, method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/core/net/SocketAddress;Lio/vertx/uritemplate/UriTemplate;)Lio/vertx/ext/web/client/HttpRequest;",
-        captures: { http_method: arg0, url: arg2 }, url_via: *template }
+        captures: { http_method: arg0, destination: unread, url: arg2 }, url_via: *template }
 
   # THE STEPS: every method the `HttpRequest` INTERFACE declares to return `HttpRequest` and
   # answers with its receiver (row 111, the interface a call site names, row group (b)), per

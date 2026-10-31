@@ -48,6 +48,20 @@ def _vertx_webclient() -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "vertx-webclient")
 
 
+def _replaced(catalog: Catalog, **matches: object) -> Catalog:
+    """`catalog` with some of its `matches` replaced."""
+    return Catalog(
+        id=catalog.id,
+        style=catalog.style,
+        protocol=catalog.protocol,
+        direction=catalog.direction,
+        requires=catalog.requires,
+        matches={**catalog.matches, **matches},
+        source=catalog.source,
+        value_model=catalog.value_model,
+    )
+
+
 def _string(value: str) -> CallArgument:
     return CallArgument(kind="string", value=value)
 
@@ -236,6 +250,60 @@ def test_a_socket_address_form_reads_its_uri_as_the_path_with_no_peer(tmp_path: 
     ]
 
 
+@pytest.mark.pins("fluent.an-unread-destination-names-no-peer")
+@pytest.mark.pins("vertx-webclient.a-socket-address-form-names-no-peer")
+def test_a_socket_address_request_names_no_peer_whatever_its_url_or_host_steps_say(
+    tmp_path: Path,
+):
+    """The request goes to the `SocketAddress` (CP-56 rows 325-326), which is not read:
+    `requestAbs(POST, address, "http://billing/charges")` has no peer and the path `/charges`;
+    `request(GET, address, "/x").host("b")` has no peer either — the URL's authority and the
+    host step name the request's `Host`, not where it is sent."""
+    body = _Body()
+    socket = CallArgument(kind="unresolved")
+    body.chain(
+        (
+            "requestAbs",
+            _SOCKET_URI,
+            [
+                CallArgument(kind="enum", symbol=f"{HTTP_METHOD}POST."),
+                socket,
+                _string("http://billing/charges"),
+            ],
+        ),
+        _send(),
+    )
+    body.chain(
+        (
+            "request",
+            _SOCKET_URI,
+            [CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET."), socket, _string("/x")],
+        ),
+        ("host", _URI, [_string("b")]),
+        _send(),
+    )
+
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", None, "/x", "resolved"),
+        ("POST", None, "/charges", "resolved"),
+    ]
+
+
+@pytest.mark.pins("fluent.an-unread-destination-is-the-one-word")
+def test_a_destination_word_other_than_unread_is_refused(tmp_path: Path):
+    """`destination` takes the one literal `unread`; anything else would load and read as a
+    chain whose destination is read, silently."""
+    catalog = _vertx_webclient()
+    roots = [
+        {**root, "captures": {**root["captures"], "destination": "server"}}
+        if root.get("captures", {}).get("destination") == "unread"
+        else root
+        for root in catalog.matches["roots"]
+    ]
+    with pytest.raises(CatalogError, match="`destination: 'server'`, which is only `unread`"):
+        _resolve_fluent(tmp_path, [], _replaced(catalog, roots=roots))
+
+
 @pytest.mark.pins("vertx-webclient.a-uri-step-names-an-address")
 def test_a_request_options_form_derives_nothing_until_a_uri_names_an_address(tmp_path: Path):
     """`client.request(GET, options).send()` names an address this catalog does not read (the
@@ -298,17 +366,67 @@ def test_a_host_handed_in_as_a_parameter_is_the_literal_its_callers_pass(tmp_pat
     assert _calls(rows) == [("GET", "inventory:8080", "/stock", "resolved")]
 
 
-@pytest.mark.pins("fluent.a-configured-host-is-its-key")
-def test_a_host_that_reaches_a_config_key_publishes_the_key_as_the_peer(tmp_path: Path):
-    """A host whose trace ends at a configuration key (`${search.host}`, as the field ladder
-    renders one) is that key: the peer is `${search.host}:9200` and the path stays `/q`, never
-    `//${search.host}:9200/q` (coordinator ruling 2026-10-31, item 5)."""
-    body = _Body()
-    body.chain(
-        ("get", _PORT_HOST_URI, [_int(9200), _string("${search.host}"), _string("/q")]), _send()
-    )
+@pytest.mark.pins("fluent.the-parts-form-reads-as-the-absolute-form")
+@pytest.mark.parametrize(
+    ("host", "port", "path"),
+    [("inventory", 8080, "/stock"), ("${search.host}", 9200, "/q")],
+    ids=["literal-host", "configured-host"],
+)
+def test_the_parts_form_and_the_absolute_form_publish_one_row(
+    tmp_path: Path, host: str, port: int, path: str
+):
+    """One peer per call, whichever form (coordinator ruling 2026-10-31): `client.get(port,
+    host, path)` publishes exactly what `client.getAbs("http://host:port" + path)` does, a host
+    that is a configuration key included — the parts are composed into the address the
+    absolute form carries and read by the same reader."""
+    parts, absolute = _Body(), _Body()
+    parts.chain(("get", _PORT_HOST_URI, [_int(port), _string(host), _string(path)]), _send())
+    absolute.chain(("getAbs", _URI, [_string(f"http://{host}:{port}{path}")]), _send())
 
-    assert _calls(_rows(tmp_path, body)) == [("GET", "${search.host}:9200", "/q", "resolved")]
+    from_parts = _calls(_rows(tmp_path / "parts", parts))
+    from_absolute = _calls(_rows(tmp_path / "absolute", absolute))
+    assert from_parts == from_absolute
+    assert len(from_parts) == 1
+
+
+@pytest.mark.pins("fluent.a-host-or-port-is-traced-as-the-url-is")
+@pytest.mark.pins("fluent.a-walked-configuration-expression-is-a-read-host")
+def test_a_host_the_walk_answers_as_a_configuration_expression_is_read(tmp_path: Path):
+    """The walk's EXPRESSION answer for a host (`_part_answer`'s expression arm): a host built
+    by a concatenation whose template is the configuration key `${search.host}` and which has
+    no operand to fill is an expression, not a literal (§8.2: a deployment's to set), with no
+    unread hole, so it is read as the key it names. The row agrees with
+    `getAbs("http://${search.host}:9200/q")`."""
+    body = _Body()
+    joined = body.call(
+        "java/lang/invoke/StringConcatFactory#",
+        "makeConcatWithConstants",
+        "()Ljava/lang/String;",
+        None,
+        [],
+        invoke_kind="static",
+    )
+    body.chain(
+        (
+            "get",
+            _PORT_HOST_URI,
+            [
+                _int(9200),
+                CallArgument(kind="concat", source=joined, value="${search.host}"),
+                _string("/q"),
+            ],
+        ),
+        _send(),
+    )
+    absolute = _Body()
+    absolute.chain(("getAbs", _URI, [_string("http://${search.host}:9200/q")]), _send())
+
+    assert _calls(_rows(tmp_path / "parts", body)) == [
+        ("GET", "${search.host}:9200", "/q", "resolved")
+    ]
+    assert _calls(_rows(tmp_path / "absolute", absolute)) == [
+        ("GET", "${search.host}:9200", "/q", "resolved")
+    ]
 
 
 @pytest.mark.pins("fluent.an-unread-first-piece-behind-a-stated-host-is-a-hole")
@@ -366,14 +484,17 @@ def test_headers_and_query_parameters_are_collected(tmp_path: Path):
     ]
 
 
-def test_a_statement_style_request_through_self_returning_calls_is_one_row(tmp_path: Path):
-    """Row 322: `r = client.post(q); r.addQueryParam(…); r.timeout(…); r.basicAuthentication(…);
-    r.as(…).send()` — each call made on the stored request, its result dropped. One row."""
+@pytest.mark.pins("vertx-webclient.a-statement-style-put-header-returns-its-receiver")
+def test_a_statement_style_request_keeps_what_each_statement_set(tmp_path: Path):
+    """Row 322: `r = client.post(q); r.putHeader(…); r.addQueryParam(…); r.timeout(…);
+    r.as(…).send()` — each call made on the stored request, its result dropped. One row, and
+    it carries the header and the query parameter set as statements: a call not flagged
+    `returns_receiver` would fork its own branch, and the sent request would carry neither."""
     body = _Body()
     request = body.call(CLIENT, "postAbs", _URI, 90, [_string("http://prometheus:9090/q")])
+    body.call(REQUEST, "putHeader", _STRING_STRING, request, [_string("X-Tenant"), _string("acme")])
     body.call(REQUEST, "addQueryParam", _STRING_STRING, request, [_string("a"), _string("b")])
     body.call(REQUEST, "timeout", f"(J){_RETURNS}", request, [CallArgument(kind="long", value=5)])
-    body.call(REQUEST, "basicAuthentication", _STRING_STRING, request, [_string("u"), _string("p")])
     typed = body.call(
         REQUEST,
         "as",
@@ -382,8 +503,15 @@ def test_a_statement_style_request_through_self_returning_calls_is_one_row(tmp_p
         [CallArgument(kind="unresolved")],
     )
     body.call(REQUEST, "send", _SEND, typed, [])
+    workspace = _resolve_fluent(tmp_path, body.sites, _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    entries = sorted(
+        (r["kind"], r["name"], r["value"]) for r in workspace.query("endpoint_metadata")
+    )
+    workspace.close()
 
-    assert _calls(_rows(tmp_path, body)) == [("POST", "prometheus:9090", "/q", "resolved")]
+    assert _calls(rows) == [("POST", "prometheus:9090", "/q", "resolved")]
+    assert entries == [("header", "X-Tenant", "acme"), ("query", "a", "b")]
 
 
 @pytest.mark.declines("vertx-webclient")

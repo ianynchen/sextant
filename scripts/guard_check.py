@@ -1856,10 +1856,10 @@ GUARDS: dict[str, Guard] = {
                 path=_VERTX_WEBCLIENT_CATALOG,
                 find='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
                 "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
-                '",\n        captures: { http_method: arg0, url: arg2 } }',
+                '",\n        captures: { http_method: arg0, destination: unread, url: arg2 } }',
                 replace='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
                 "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
-                '",\n        captures: { http_method: arg0, serves: false } }',
+                '",\n        captures: { http_method: arg0, destination: unread, serves: false } }',
             ),
         ),
     ),
@@ -1877,21 +1877,89 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "fluent.a-configured-host-is-its-key": Guard(
-        what="a stated host that is a configuration key is the peer, the path kept (Vert.x plan, "
-        "Task 12; coordinator ruling 2026-10-31, item 5)",
-        why="without it `${search.host}` and the port become a path `//${search.host}:9200/q` "
-        "with no peer",
+    "fluent.the-parts-form-reads-as-the-absolute-form": Guard(
+        what="a call's host and port are composed into the address the absolute form of the call "
+        "carries and read by that form's reader (Vert.x plan, Task 12 review; coordinator "
+        "ruling 2026-10-31: one peer per call, whichever form)",
+        why='without it `get(9200, "${search.host}", "/q")` and `getAbs("http://${search.host}'
+        ':9200/q")`, one call, publish two different rows',
         edits=(
             Edit(
                 path=_FLUENT,
-                find='    stated_peer, _ = split_url(f"//{host if port is None else '
-                "f'{host}:{port}'}\")\n",
-                replace="    if carries_expression(host):  # guard disabled by "
-                "scripts/guard_check.py\n"
-                '        return None, f"//{host}:{port}{path}", resolution\n'
-                '    stated_peer, _ = split_url(f"//{host if port is None else '
-                "f'{host}:{port}'}\")\n",
+                find='    stated_peer, _, _ = url_of({"kind": "string", "value": f"//{authority}'
+                '{tail}"})\n',
+                replace='    stated_peer, _, _ = _address_of(f"//{authority}{tail}")  # guard '
+                "disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-walked-configuration-expression-is-a-read-host": Guard(
+        what="a host or port the walk answers as a configuration expression with no unread hole "
+        "is read as that key (Vert.x plan, Task 12 review)",
+        why="without it a host traced to `${search.host}` through the walk publishes no peer, "
+        "though the same key written in an absolute URL does",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if answer.kind == EXPRESSION and not _holes(str(answer.value)):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-destination-names-no-peer": Guard(
+        what="a chain whose root says `destination: unread` has no peer, whatever its URL or a "
+        "host or port step names (Vert.x plan, Task 12 review; CP-56 rows 325-326)",
+        why='without it `requestAbs(POST, address, "http://billing/charges")` publishes `billing`, '
+        "the request's `Host`, as where it is sent, though it goes to the address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if captures.get(_DESTINATION) == _UNREAD_DESTINATION:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-destination-is-the-one-word": Guard(
+        what="a `destination` capture other than `unread` is refused at load (Vert.x plan, Task 12 "
+        "review)",
+        why="without it `destination: server` loads and reads as a chain whose destination is read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if _DESTINATION in captures and captures[_DESTINATION] != "
+                "_UNREAD_DESTINATION:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-socket-address-form-names-no-peer": Guard(
+        what="the `SocketAddress` roots say `destination: unread` (Vert.x plan, Task 12 review; "
+        "CP-56 rows 325-326)",
+        why="without it an absolute URL handed to `requestAbs(m, address, url)` publishes its "
+        "authority as where the request goes",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, destination: unread, url: arg2 } }',
+                replace='method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/'
+                "vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/"
+                'HttpRequest;",\n        captures: { http_method: arg0, url: arg2 } }',
+            ),
+        ),
+    ),
+    "vertx-webclient.a-statement-style-put-header-returns-its-receiver": Guard(
+        what="`HttpRequest.putHeader` is flagged `returns_receiver` (Vert.x plan, Task 12 review; "
+        "CP-56 row 111)",
+        why="without it `r.putHeader(…);` written as a statement forks a branch of its own, and "
+        "the request `r.send()` sends carries no header",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="        collects: { kind: header, name: arg0, value: arg1 }, returns_receiver: "
+                "true }",
+                replace="        collects: { kind: header, name: arg0, value: arg1 } }",
             ),
         ),
     ),

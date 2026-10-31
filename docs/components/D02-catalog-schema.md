@@ -2387,11 +2387,20 @@ last wins (Vert.x applies a request's own `host` and `port` over an absolute URL
 130). A port with neither a stated host nor one in the address is no peer: the host is a
 client default, which is never published. Each part is traced to its source as the `url`
 is (the literal, the field ladder, then the backward walk with no identity entries, so a host
-handed in as a parameter is its callers' literal); a part that reaches a configuration key is
-that key, so `${search.host}:9200` is the peer and the path stays the path. A part captured
-and not read leaves the peer NULL and the row `partial`, the path kept. A uri whose first
-piece went unread, which `url_of` writes `<host>…`, keeps that piece as the hole `{}` once a
-host is stated. Both count as address fields against `channel` (below).
+handed in as a parameter is its callers' literal). The parts are then the address the
+absolute form of the same call carries, scheme-relative, read by the reader that reads that
+form, so the two forms publish one row: `get(9200, "${search.host}", "/q")` and
+`getAbs("http://${search.host}:9200/q")` agree. A part captured and not read leaves the peer
+NULL and the row `partial`, the path kept. A uri whose first piece went unread, which `url_of`
+writes `<host>…`, keeps that piece as the hole `{}` once a host is stated. Both count as
+address fields against `channel` (below).
+
+**A root's own `captures` may say `destination: unread`** (Vert.x Task 12 review), the one
+literal the word takes: the framework sends the chain's request to an address the code hands
+it apart from the URL, which is not read here (Vert.x's `SocketAddress` forms; CP-56 rows
+325-326). The row then has no peer, whatever its URL's authority or a later `host`/`port`
+step names, and no client base is joined to it; the path is read as any uri is. It names no
+framework type.
 
 `baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
 its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the

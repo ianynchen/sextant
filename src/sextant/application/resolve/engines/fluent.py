@@ -162,6 +162,11 @@ _REDACTOR = Redactor.from_rules()
 # `_validate_url_channel_exclusivity` weighs against it as a group.
 _ADDRESS_FIELDS = ("base", "url", "host", "port")
 
+# A root's literal word saying where its chain is sent is not read here (`destination: unread`):
+# the framework sends the request to an address the code hands it apart from the URL, so the
+# row has no peer (Vert.x's `SocketAddress` forms, CP-56 rows 325-326).
+_DESTINATION = "destination"
+_UNREAD_DESTINATION = "unread"
 # What a captured address IS (`url_is`, Vert.x spec §3a), a literal capture beside `url`, last
 # wins: a regular expression the framework matches (`pattern`, the row's `path_kind`), or an
 # address (`address`, the default), which a later step declares to undo an earlier pattern.
@@ -1462,31 +1467,29 @@ def _composed_address(
     url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         if context.workspace is None or context.values is None:
-            return _against_client_base(
-                _with_stated_authority(url_of(url_argument), captures, context),
-                captures,
-                context,
+            read = url_of(url_argument)
+        else:
+            # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
+            # identities, so the path is text the code states, and who is CALLED is asked
+            # separately of the first operand — the user's ruling of 2026-10-17, "peer and
+            # path from separate evidence".
+            captured = (_address_read(captures.get("url"), context) or {}).get("captured_at")
+            read = with_authority(
+                url_of(url_argument),
+                _address_read(captures.get("url"), context),
+                str(captured[0]) if captured else None,
+                context.workspace,
+                context.values,
+                context.catalog.value_model or (),
             )
-        # **The PEER is its own question** (`OI-138` cause 3): the join above is handed no
-        # identities, so the path is text the code states, and who is CALLED is asked
-        # separately of the first operand — the user's ruling of 2026-10-17, "peer and path
-        # from separate evidence".
-        captured = (_address_read(captures.get("url"), context) or {}).get("captured_at")
+        # A chain whose destination the framework takes from somewhere this analysis does not
+        # read (`destination: unread`, a root's word: Vert.x's `SocketAddress` forms, CP-56
+        # rows 325-326) names no peer, whatever its URL's authority or a later host or port
+        # step says, and no client base is joined to it. The path is the address's own.
+        if captures.get(_DESTINATION) == _UNREAD_DESTINATION:
+            return None, read[1], read[2]
         return _against_client_base(
-            _with_stated_authority(
-                with_authority(
-                    url_of(url_argument),
-                    _address_read(captures.get("url"), context),
-                    str(captured[0]) if captured else None,
-                    context.workspace,
-                    context.values,
-                    context.catalog.value_model or (),
-                ),
-                captures,
-                context,
-            ),
-            captures,
-            context,
+            _with_stated_authority(read, captures, context), captures, context
         )
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
@@ -1515,9 +1518,10 @@ def _with_stated_authority(
     goes to `b:1`. A port with no host stated and none in the address is no peer: the host is
     then a client default, and an unset default is never published (spec §2a).
 
-    Each part is traced to its source as the `url` is (`_stated_part`), and a part that reaches
-    a configuration key is that key: `${search.host}:9200` is the peer, and the path stays the
-    path. A part captured and not read leaves WHO is called unread: peer NULL and the row
+    Each part is traced to its source as the `url` is (`_stated_part`). The parts are then
+    the address the absolute form of the same call carries and are read by that form's reader,
+    so the two forms publish one row: a host that is a configuration key gives the peer
+    `getAbs("http://${search.host}:9200/q")` gives. A part captured and not read leaves WHO is called unread: peer NULL and the row
     `partial`, the path kept, because the path is evidence of its own (the user's ruling of
     2026-10-17, "peer and path from separate evidence").
 
@@ -1541,7 +1545,12 @@ def _with_stated_authority(
         return address
     if path is not None and path.startswith(_UNREADABLE_HOST):
         path = _HOLE + path.removeprefix(_UNREADABLE_HOST)
-    stated_peer, _ = split_url(f"//{host if port is None else f'{host}:{port}'}")
+    # One peer per call, whichever form (coordinator ruling 2026-10-31): the parts are the
+    # address the absolute form of the same call carries, scheme-relative, read by the reader
+    # that reads that form (`url_of`), so the two publish the same row.
+    authority = host if port is None else f"{host}:{port}"
+    tail = path if path is not None and path.startswith("/") else ""
+    stated_peer, _, _ = url_of({"kind": "string", "value": f"//{authority}{tail}"})
     return stated_peer, path, resolution
 
 
@@ -1978,6 +1987,12 @@ def _validate_route_captures(entries: list[dict[str, Any]], catalog: Catalog) ->
                 f"loading catalog {catalog.source}: `{entry['method']}` captures "
                 f"`order: {captures[_ORDER]!r}`, which reads `argN` or is `{_LAST}` (D02 §2's "
                 f"`fluent` style)"
+            )
+        if _DESTINATION in captures and captures[_DESTINATION] != _UNREAD_DESTINATION:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                f"`{_DESTINATION}: {captures[_DESTINATION]!r}`, which is only "
+                f"`{_UNREAD_DESTINATION}` (D02 §2's `fluent` style)"
             )
         if _SERVES in captures and not isinstance(captures[_SERVES], bool):
             raise CatalogError(
