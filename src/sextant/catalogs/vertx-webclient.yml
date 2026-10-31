@@ -481,12 +481,11 @@ matches:
     - { owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: sendBufferAndAwait, captures: { body: arg0 } }
     - { owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: sendBufferAndForget, captures: { body: arg0 } }
     # Self-returning and carrying nothing a row reads.
-    # `as` takes the wrapper's own `BodyCodec` (rows 205, 284). The wrapper's `as` answers a
-    # new wrapper object around the SAME core request (`javap`: `newInstance(delegate.as(…))`),
-    # so a request sent through either is the one request: still `returns_receiver`.
+    # The wrappers' `as` takes their own `BodyCodec` (rows 205, 284) and answers a new wrapper
+    # around the SAME core request (`javap`: `newInstance(delegate.as(…))`). It has no entry for
+    # them: an unmatched step passes through uncaptured, and no row changes (the test
+    # `test_a_wrapper_request_typed_by_as_and_then_configured_by_statements_keeps_them`).
     - { owner: io.vertx.ext.web.client.HttpRequest, method: as, descriptor: "(Lio/vertx/ext/web/codec/BodyCodec;)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }
-    - { owner: io.vertx.rxjava3.ext.web.client.HttpRequest, method: as, descriptor: "(Lio/vertx/rxjava3/ext/web/codec/BodyCodec;)Lio/vertx/rxjava3/ext/web/client/HttpRequest;", returns_receiver: true }
-    - { owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: as, descriptor: "(Lio/vertx/mutiny/ext/web/codec/BodyCodec;)Lio/vertx/mutiny/ext/web/client/HttpRequest;", returns_receiver: true }
     - { owner: *requests, method: authentication, returns_receiver: true }
     - { owner: *requests, method: basicAuthentication, returns_receiver: true }
     - { owner: *requests, method: bearerTokenAuthentication, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;", returns_receiver: true }

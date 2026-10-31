@@ -598,7 +598,9 @@ def test_the_catalog_flags_every_self_returning_request_method_and_nothing_else(
         "io.vertx.mutiny.ext.web.client.HttpRequest",
     ):
         wrapper = [s for s in steps if owner in _owners(s)]
-        assert {s["method"] for s in wrapper if s.get("returns_receiver") is True} == row_111
+        assert {s["method"] for s in wrapper if s.get("returns_receiver") is True} == row_111 - {
+            "as"
+        }  # `as` needs no wrapper entry
         assert {s["method"] for s in wrapper if s.get("returns_receiver") is not True} >= {
             "sendJson", "sendJsonObject", "sendBuffer",
         }  # fmt: skip

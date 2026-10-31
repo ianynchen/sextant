@@ -834,3 +834,92 @@ def test_no_owner_in_a_wrapper_catalog_entry_is_a_stray_or_a_typo():
             assert not owner.endswith(";")
             if owner.startswith(_WRAPPER_PACKAGES):
                 assert owner.rsplit(".", 1)[-1] in known
+
+
+@WRAPPERS
+def test_a_wrapper_request_typed_by_as_and_then_configured_by_statements_keeps_them(
+    tmp_path: Path, wrapper: Wrapper
+):
+    """`t = r.as(codec); t.putHeader(…); t.send()`: the typed request is stored and configured
+    on its own, its result dropped. `as` answers the same request, so the header is the sent
+    request's."""
+    calls = _Calls(wrapper)
+    request = calls.call(
+        wrapper.client,
+        "postAbs",
+        f"(Ljava/lang/String;){calls.request_type()}",
+        90,
+        [_string("http://prometheus:9090/q")],
+    )
+    codec = wrapper.jvm(wrapper.web + "codec/BodyCodec#")
+    typed = calls.step(request, "as", f"({codec})", [CallArgument(kind="unresolved")])
+    calls.step(
+        typed, "putHeader", "Ljava/lang/String;Ljava/lang/String;", [_string("X"), _string("1")]
+    )
+    calls.send(typed)
+    workspace = _resolve_fluent(tmp_path, calls.sites, _catalog("vertx-webclient"))
+    entries = sorted((r["kind"], r["name"]) for r in workspace.query("endpoint_metadata"))
+    workspace.close()
+
+    assert entries == [("header", "X")]
+
+
+def _shape(entries, owner: str, arity) -> set[tuple]:
+    return {
+        (e["method"], arity(e))
+        for e in entries
+        if owner in _owners(e) and not str(e["method"]).startswith(("rxSend", "guard"))
+    }
+
+
+def _parameters_count(entry: dict) -> str | None:
+    """The entry's parameter types with the wrapper's own types written as the core's
+    (`Lio/vertx/mutiny/uritemplate/UriTemplate;` is `Lio/vertx/uritemplate/UriTemplate;`, a
+    `Consumer` a `Handler`), so a twin is the same overload as its core entry."""
+    descriptor = entry.get("descriptor")
+    if descriptor is None:
+        return None
+    parameters = _parameters(descriptor)
+    parameters = re.sub(r"Lio/vertx/(?:rxjava3|mutiny)/", "Lio/vertx/", parameters)
+    return parameters.replace("Ljava/util/function/Consumer;", "Lio/vertx/core/Handler;")
+
+
+def test_every_wrapper_has_a_twin_of_every_core_root_step_and_rung():
+    """The wrapper entries that are written out by hand (the `UriTemplate` and `SocketAddress`
+    roots, `Route.subRouter`, the Mutiny `Consumer` steps, the client rungs) must cover what the
+    core declares, by method and by parameter types (the wrapper's own types read as the core's): a missing twin fails here, where the
+    citation test above only catches a descriptor that drifted. `as` is the one step the wrapper
+    does not need (an unmatched step passes through), and the send steps are named differently."""
+    client = _catalog("vertx-webclient").matches
+    web = _catalog("vertx-web").matches
+    sets = (
+        (
+            client["roots"],
+            "io.vertx.ext.web.client.WebClient",
+            "io.vertx.%s.ext.web.client.WebClient",
+        ),
+        (web["roots"], "io.vertx.ext.web.Router", "io.vertx.%s.ext.web.Router"),
+        (
+            client["steps"],
+            "io.vertx.ext.web.client.HttpRequest",
+            "io.vertx.%s.ext.web.client.HttpRequest",
+        ),
+        (web["steps"], "io.vertx.ext.web.Route", "io.vertx.%s.ext.web.Route"),
+        (web["steps"], "io.vertx.ext.web.Router", "io.vertx.%s.ext.web.Router"),
+        (web["mount"], "io.vertx.ext.web.Route", "io.vertx.%s.ext.web.Route"),
+        (web["mount"], "io.vertx.ext.web.Router", "io.vertx.%s.ext.web.Router"),
+        (
+            client["client_base"]["ladder"],
+            "io.vertx.ext.web.client.WebClient",
+            "io.vertx.%s.ext.web.client.WebClient",
+        ),
+    )
+    for entries, core, twin in sets:
+        expected = {m for m in _shape(entries, core, _parameters_count) if m[0] != "as"}
+        for package in ("rxjava3", "mutiny"):
+            found = _shape(entries, twin % package, _parameters_count)
+            # Core entries a wrapper only gets by name (no descriptor) are the same set.
+            missing = {
+                m for m in expected - found if m[0] not in {x[0] for x in found if x[1] is None}
+            }
+            assert missing == set(), (core, package, sorted(missing, key=str))
