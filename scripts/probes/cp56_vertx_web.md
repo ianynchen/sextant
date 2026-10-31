@@ -392,6 +392,7 @@ name: `Router`, `Route`, `RoutingContext` are `io.vertx.ext.web.*`, `WebClient` 
 | 321 | javac 21 for `client.post("/q").addQueryParam(…).timeout(…).basicAuthentication(…).as(…).send()` (h) | `probe.Shapes.clientChain` | – | ldc /q -> invokeinterface `WebClient.post(String)HttpRequest;` -> ldc a -> ldc b -> invokeinterface `HttpRequest.addQueryParam(String,String)HttpRequest;` -> ldc long 1000l -> invokeinterface `HttpRequest.timeout(long)HttpRequest;` -> ldc u -> ldc p -> invokeinterface `HttpRequest.basicAuthentication(String,String)HttpRequest;` -> invokestatic `BodyCodec.jsonObject()BodyCodec;` -> invokeinterface `HttpRequest.as(BodyCodec)HttpRequest;` -> invokeinterface `HttpRequest.send()Future;` -> pop -> return | – | – | – |
 | 322 | javac 21 for `HttpRequest<Buffer> request = client.post("/q"); request.addQueryParam(…); request.timeout(…); request.send();` (h) | `probe.Shapes.clientStatementStyle` | – | ldc /q -> invokeinterface `WebClient.post(String)HttpRequest;` -> ldc a -> ldc b -> invokeinterface `HttpRequest.addQueryParam(String,String)HttpRequest;` -> pop -> ldc long 1000l -> invokeinterface `HttpRequest.timeout(long)HttpRequest;` -> pop -> invokeinterface `HttpRequest.send()Future;` -> pop -> return | – | – | – |
 | 323 | javac 21 for `WebClient.create(vertx, new WebClientOptions().setDefaultHost("h").setDefaultPort(9))` (h) | `probe.Shapes.clientWithDefaults` | – | new `WebClientOptions` -> invokespecial `WebClientOptions.<init>()` -> ldc h -> invokevirtual `WebClientOptions.setDefaultHost(String)WebClientOptions;` -> bipush 9 -> invokevirtual `WebClientOptions.setDefaultPort(int)WebClientOptions;` -> invokestatic `WebClient.create(Vertx,WebClientOptions)WebClient;` -> areturn | – | – | – |
+| 324 | every method `MessageConsumer` declares to return `MessageConsumer`, abstract or default, and whether `MessageConsumerImpl` and the defaults answer the receiver (b) | `io.vertx.core.eventbus.MessageConsumer` | **7 + 0** declared to return `MessageConsumer`: 7 abstract: `endHandler(Handler)`, `exceptionHandler(Handler)`, `fetch(long)`, `handler(Handler)`, `pause()`, `resume()`, `setMaxBufferedMessages(int)`; the implementation does not answer `this` for: none; 0 default: none; of those, answering the result of a self-returning call: none | **6 + 0** declared to return `MessageConsumer`: 6 abstract: `endHandler(Handler)`, `exceptionHandler(Handler)`, `fetch(long)`, `handler(Handler)`, `pause()`, `resume()`; the implementation does not answer `this` for: none; 0 default: none; of those, answering the result of a self-returning call: none | **7 + 0** declared to return `MessageConsumer`: 7 abstract: `endHandler(Handler)`, `exceptionHandler(Handler)`, `fetch(long)`, `handler(Handler)`, `pause()`, `processor(Function)`, `resume()`; the implementation does not answer `this` for: none; 0 default: none; of those, answering the result of a self-returning call: none | – | – |
 
 ## What the rows say
 
@@ -452,6 +453,12 @@ the interface's, rows 110–111, and the implementation rows 101–102 cross-che
   type is the **superclass**, so the owner on such a call is `WebClientOptions` and the descriptor
   returns `HttpClientOptions`/`TCPSSLOptions`/`ClientOptionsBase`/`NetworkOptions`.
   `WebClientConfig` (5.2.1, row 104): **4 + 21**.
+- **`MessageConsumer`** (row 324, added by the Vert.x plan's Task 8 for
+  `vertx-eventbus-chain.yml`, and printed after (h) so no earlier row moved): **7 / 6 / 7**
+  abstract methods declared to return `MessageConsumer` — `endHandler`, `exceptionHandler`,
+  `fetch`, `handler`, `pause`, `resume` at all three, `setMaxBufferedMessages(int)` at
+  4.5.10 only, `processor(Function)` at 5.2.1 only — and `MessageConsumerImpl` answers `this`
+  for every one.
 - **`RequestOptions`** (row 105): **19 + 4 / 21 + 4 / 19 + 7**, every `setX`/`addHeader`/`putHeader`
   and `removeHeader`.
 - **Wrappers** (rows 106–109): `io.vertx.rxjava3.ext.web.Route` **22 / 21 / 21** (direct), its

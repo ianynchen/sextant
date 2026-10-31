@@ -2962,8 +2962,8 @@ def _vertx_call(
 
 def _vertx_chain(*, with_handler: bool, owner: str = _VERTX_BUS) -> list:
     """`bus.consumer("orders.twostep")` followed either by `.handler(lambda)` — the
-    registration — or by `.setMaxBufferedMessages(16)`, an undeclared step that passes
-    through and ends the chain short of any terminal."""
+    registration — or by `.setMaxBufferedMessages(16)`, a capture-less step that is no
+    terminal and ends the chain short of any."""
     facts = [
         _vertx_call(
             owner,

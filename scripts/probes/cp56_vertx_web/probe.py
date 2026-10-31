@@ -58,6 +58,8 @@ ROUTE = "io.vertx.ext.web.Route"
 ROUTING_CONTEXT = "io.vertx.ext.web.RoutingContext"
 ROUTER_IMPL = "io.vertx.ext.web.impl.RouterImpl"
 ROUTE_IMPL = "io.vertx.ext.web.impl.RouteImpl"
+MESSAGE_CONSUMER = "io.vertx.core.eventbus.MessageConsumer"
+MESSAGE_CONSUMER_IMPL = "io.vertx.core.eventbus.impl.MessageConsumerImpl"
 ROUTE_STATE = "io.vertx.ext.web.impl.RouteState"
 WEB_CLIENT = "io.vertx.ext.web.client.WebClient"
 WEB_CLIENT_BASE = "io.vertx.ext.web.client.impl.WebClientBase"
@@ -602,56 +604,7 @@ def group_b(repo: Repo) -> None:
     # The interfaces the caller's static type usually is: what they declare to return their own
     # type, and whether the implementation answers `this` for each abstract one.
     for interface, implementation in ((ROUTE, ROUTE_IMPL), (HTTP_REQUEST, HTTP_REQUEST_IMPL)):
-
-        def interface_listing(
-            column: str, interface: str = interface, implementation: str = implementation
-        ) -> str:
-            declared = repo.methods(column, interface) or []
-            own = [
-                m
-                for m in declared
-                if not m.is_static
-                and not m.is_bridge
-                and returns(m) == f"L{interface.replace('.', '/')};"
-            ]
-            impl = repo.methods(column, implementation) or []
-            answers = {
-                (m.name, m.descriptor)
-                for m in impl
-                if not m.is_bridge and classify(repo, column, implementation, m)
-            }
-            abstract = sorted({signature(m) for m in own if m.is_abstract})
-            defaults = sorted({signature(m) for m in own if not m.is_abstract})
-            unanswered = sorted(
-                {
-                    signature(m)
-                    for m in own
-                    if m.is_abstract and (m.name, m.descriptor) not in answers
-                }
-            )
-            default_this = sorted(
-                {
-                    signature(m)
-                    for m in own
-                    if not m.is_abstract and classify(repo, column, interface, m)
-                }
-            )
-            return (
-                f"**{len(abstract)} + {len(defaults)}** declared to return `{short(interface)}`: "
-                f"{len(abstract)} abstract: "
-                + ", ".join(f"`{n}`" for n in abstract)
-                + f"; the implementation does not answer `this` for: {', '.join(f'`{n}`' for n in unanswered) or 'none'}"
-                + f"; {len(defaults)} default: "
-                + (", ".join(f"`{n}`" for n in defaults) or "none")
-                + f"; of those, answering the result of a self-returning call: {', '.join(f'`{n}`' for n in default_this) or 'none'}"
-            )
-
-        emit(
-            f"every method `{short(interface)}` declares to return `{short(interface)}`, abstract or default, "
-            f"and whether `{short(implementation)}` and the defaults answer the receiver (b)",
-            f"`{interface}`",
-            {c: interface_listing(c) for c in COLUMNS if repo.methods(c, interface) is not None},
-        )
+        emit_interface_listing(repo, interface, implementation)
 
     # WebClientOptions: setters it inherits and does not override. Called on a WebClientOptions
     # they answer the SUPERCLASS type, so a chain typed through them leaves WebClientOptions.
@@ -676,6 +629,59 @@ def group_b(repo: Repo) -> None:
         f"`{WEB_CLIENT_OPTIONS}`",
         {c: inherited(c) for c in VERSIONS},
     )
+
+
+def interface_listing(repo: Repo, column: str, interface: str, implementation: str) -> str:
+    """What `interface` declares to return its own type, abstract or default, and whether
+    `implementation` and the defaults answer the receiver (b)."""
+    declared = repo.methods(column, interface) or []
+    own = [
+        m
+        for m in declared
+        if not m.is_static and not m.is_bridge and returns(m) == f"L{interface.replace('.', '/')};"
+    ]
+    impl = repo.methods(column, implementation) or []
+    answers = {
+        (m.name, m.descriptor)
+        for m in impl
+        if not m.is_bridge and classify(repo, column, implementation, m)
+    }
+    abstract = sorted({signature(m) for m in own if m.is_abstract})
+    defaults = sorted({signature(m) for m in own if not m.is_abstract})
+    unanswered = sorted(
+        {signature(m) for m in own if m.is_abstract and (m.name, m.descriptor) not in answers}
+    )
+    default_this = sorted(
+        {signature(m) for m in own if not m.is_abstract and classify(repo, column, interface, m)}
+    )
+    return (
+        f"**{len(abstract)} + {len(defaults)}** declared to return `{short(interface)}`: "
+        f"{len(abstract)} abstract: "
+        + ", ".join(f"`{n}`" for n in abstract)
+        + f"; the implementation does not answer `this` for: {', '.join(f'`{n}`' for n in unanswered) or 'none'}"
+        + f"; {len(defaults)} default: "
+        + (", ".join(f"`{n}`" for n in defaults) or "none")
+        + f"; of those, answering the result of a self-returning call: {', '.join(f'`{n}`' for n in default_this) or 'none'}"
+    )
+
+
+def emit_interface_listing(repo: Repo, interface: str, implementation: str) -> None:
+    emit(
+        f"every method `{short(interface)}` declares to return `{short(interface)}`, abstract or default, "
+        f"and whether `{short(implementation)}` and the defaults answer the receiver (b)",
+        f"`{interface}`",
+        {
+            c: interface_listing(repo, c, interface, implementation)
+            for c in COLUMNS
+            if repo.methods(c, interface) is not None
+        },
+    )
+
+
+def group_b_event_bus(repo: Repo) -> None:
+    """(b) for the event bus's `MessageConsumer`, which `vertx-eventbus-chain.yml` walks: added
+    after (h) so every earlier row keeps its number (Vert.x plan, Task 8)."""
+    emit_interface_listing(repo, MESSAGE_CONSUMER, MESSAGE_CONSUMER_IMPL)
 
 
 def group_c(repo: Repo) -> None:
@@ -1415,6 +1421,7 @@ def main(argv: list[str]) -> int:
     group_f(repo)
     group_g(repo)
     group_h(classes_dir)
+    group_b_event_bus(repo)
     print(render())
     return 0
 
