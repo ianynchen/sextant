@@ -3328,3 +3328,108 @@ def test_an_inbound_row_takes_the_first_handler_of_several(tmp_path: Path):
     workspace.close()
 
     assert row["handler"] == _MODULE + BODY
+
+
+# --- the inbound dedup key --------------------------------------------------
+
+_OTHER_CALLER = _MODULE + "com/acme/streams/Wiring#inboundAgain()."
+
+
+@pytest.mark.pins("fluent.an-inbound-row-is-keyed-on-what-it-serves")
+def test_two_registrations_of_one_route_and_handler_in_two_methods_are_one_row(tmp_path: Path):
+    """An inbound row's wire identity does not depend on which method registered it: the
+    same route answered by the same handler is one consumer registered twice."""
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(("onMessage", [_lambda()]), caller=_OTHER_CALLER),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"]) for row in rows] == [(SUBSCRIPTION, _MODULE + BODY)]
+
+
+@pytest.mark.pins("fluent.an-inbound-row-keeps-its-route-in-the-key")
+def test_one_handler_on_two_routes_is_two_rows(tmp_path: Path):
+    """The same handler method referenced on two routes serves two addresses."""
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            caller=_OTHER_CALLER,
+            subscription=CallArgument(kind="string", value="billing.queue"),
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(row["path"] for row in rows) == ["billing.queue", SUBSCRIPTION]
+
+
+@pytest.mark.pins("fluent.an-inbound-row-keeps-its-handler-in-the-key")
+def test_two_handlers_on_one_route_are_two_rows(tmp_path: Path):
+    other = "com/acme/streams/Wiring#lambda$inboundAgain$0(Lcom/acme/streams/Message;)V."
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(("onMessage", [_lambda(other)]), caller=_OTHER_CALLER),
+        _body_symbol(),
+        _body_symbol(other),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(row["handler"] for row in rows) == sorted([_MODULE + BODY, _MODULE + other])
+
+
+@pytest.mark.pins("fluent.an-inbound-row-is-keyed-on-what-it-serves")
+def test_two_registrations_of_one_route_with_no_handler_are_one_row(tmp_path: Path):
+    facts = [
+        *_adapter(("discard", [])),
+        *_adapter(("discard", []), caller=_OTHER_CALLER),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"]) for row in rows] == [(SUBSCRIPTION, None)]
+
+
+@pytest.mark.pins("derive_call_endpoints.an-inbound-row-ignores-its-registering-method")
+def test_an_inbound_route_the_table_already_holds_is_not_inserted_for_another_method(
+    tmp_path: Path,
+):
+    """The table-side twin of the key above: the same route handed in again from another
+    method finds the route there already."""
+
+    def row(caller: str) -> dict[str, Any]:
+        return {
+            "protocol": "amqp",
+            "direction": "inbound",
+            "method": None,
+            "path": SUBSCRIPTION,
+            "handler": _MODULE + BODY,
+            "caller": caller,
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "catalog_id": "invented-adapters",
+            "request_shape": None,
+            "response_shape": None,
+            "consumes": None,
+            "produces": None,
+        }
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoints_reset")
+    workspace.derive("call_endpoints", rows=[row(CALLER)])
+    workspace.derive("call_endpoints", rows=[row(_OTHER_CALLER)])
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == [SUBSCRIPTION]

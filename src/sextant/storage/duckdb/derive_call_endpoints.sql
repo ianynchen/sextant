@@ -119,6 +119,15 @@ WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
 -- why it belongs here: two calls to one path at two addresses are two calls, and only
 -- the address separates them.
 --
+-- AN INBOUND row also matches on `handler`, the SQL twin of fluent's inbound key
+-- `(protocol, verb, path, handler)`: which method registered a route is not part of what the
+-- route serves, so the route a table row already serves with the same handler is not
+-- inserted again because another method registered it. The `caller`/`peer` comparison
+-- stays as one more way to match, not the only one: this guard also stands between two
+-- ENGINES describing one route, and what they agree on there is the caller, not the
+-- handler's spelling. A NULL handler matches nothing here, which keeps two handler-less
+-- rows of different callers apart exactly as before.
+--
 -- `IS NOT DISTINCT FROM` on both, like `method` above: either may be NULL, and plain
 -- equality reads NULL = NULL as unknown, which would stop the guard matching the very
 -- rows it exists to catch.
@@ -128,7 +137,8 @@ WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
       AND existing.direction = r.direction
       AND existing.method IS NOT DISTINCT FROM r.method
       AND existing.path      = r.path
-      AND existing.caller IS NOT DISTINCT FROM r.caller
-      AND existing.peer   IS NOT DISTINCT FROM r.peer
+      AND ((existing.caller IS NOT DISTINCT FROM r.caller
+            AND existing.peer IS NOT DISTINCT FROM r.peer)
+           OR (r.direction = 'inbound' AND existing.handler = r.handler))
 )
 ) r;

@@ -190,7 +190,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_call_endpoints.sql's own contract — it only guards against what
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
-    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
+    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]] = set()
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
@@ -252,7 +252,7 @@ class _DeriveContext:
     carrier_rules: CarrierRules
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
-    seen: set[tuple[str, str, str, str, str | None, str | None]]
+    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]]
     # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
     # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
     # chain may carry any number, which is why D01 gives it a side table rather than
@@ -544,13 +544,23 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             # "Collapse only within one caller, where both sides are observable" (§6.1):
             # one method calling one target twice is still one row, because caller and
             # peer are equal there.
+            #
+            # **An INBOUND row is keyed on what it serves instead**: `(protocol, verb,
+            # path, handler)`, with no `caller` and no `peer`. The method that registered a
+            # route is not part of the route's wire identity, so the same route answered by
+            # the same handler, registered from two methods, is one consumer registered
+            # twice; the same handler on two routes, or two handlers on one route, stay two
+            # rows. A NULL handler is a valid part: two handler-less registrations of one
+            # route are one row. The outbound key is unchanged.
+            inbound = direction == "inbound"
             key = (
                 context.catalog.protocol,
                 direction,
                 verb or "",
                 path,
-                context.caller,
-                peer,
+                None if inbound else context.caller,
+                None if inbound else peer,
+                handler if inbound else None,
             )
             if key in context.seen:
                 continue

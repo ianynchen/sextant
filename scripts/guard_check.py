@@ -1394,6 +1394,45 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.an-inbound-row-is-keyed-on-what-it-serves": Guard(
+        what="an inbound `fluent` row dedups on `(protocol, verb, path, handler)`, never on "
+        "the method that registered it (Vert.x plan, Task 6)",
+        why="a route answered by one handler and registered from two methods is one consumer "
+        "registered twice; keyed on the registering method it published two rows for it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                None if inbound else context.caller,\n",
+                replace="                context.caller,\n",
+            ),
+        ),
+    ),
+    "fluent.an-inbound-row-keeps-its-handler-in-the-key": Guard(
+        what="an inbound `fluent` row's dedup key carries its handler, so two handlers on one "
+        "route, or one handler on two routes, stay separate rows (Vert.x plan, Task 6)",
+        why="with the registering method out of the key and no handler in it, a second "
+        "consumer of a route would vanish into the first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                handler if inbound else None,\n",
+                replace="                None,\n",
+            ),
+        ),
+    ),
+    "fluent.an-inbound-row-keeps-its-route-in-the-key": Guard(
+        what="an inbound `fluent` row's dedup key carries its route, so one handler method "
+        "registered on two routes is two rows (Vert.x plan, Task 6)",
+        why="the handler is in the key now and the registering method is not; a key of "
+        "handler alone would fold every route one method serves into the first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                path,\n                None if inbound else context.caller,\n",
+                replace="                None,\n                None if inbound else context.caller,\n",
+            ),
+        ),
+    ),
     "inbound_routes.media-reads-an-accumulated-capture": Guard(
         what="the media columns read a `produces`/`consumes` capture accumulated over several "
         "calls, element by element",
@@ -4350,6 +4389,19 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/storage/duckdb/derive_call_endpoints.sql",
                 find="WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)",
                 replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "derive_call_endpoints.an-inbound-row-ignores-its-registering-method": Guard(
+        what="an inbound call-site row is not inserted when its route is already in the "
+        "table with the same handler, whichever method registered it (Vert.x plan, Task 6)",
+        why="the method that registered a route is not part of what the route serves; "
+        "compared on caller and peer alone, a route registered from two methods was two rows",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/derive_call_endpoints.sql",
+                find="           OR (r.direction = 'inbound' AND existing.handler = r.handler))\n",
+                replace="           OR FALSE)\n",
             ),
         ),
     ),
