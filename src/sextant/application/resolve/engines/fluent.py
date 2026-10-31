@@ -682,6 +682,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # A handler not readable here (spec §3b): its identity is read, whether it passes the
         # request on is decided in code this analysis does not read, so the row is `partial`
         # and a `handler_pass_through` question names that code.
+        read_resolution = resolution
         unreadable = answering.outcome == UNREADABLE
         if unreadable and resolution == str(Resolution.RESOLVED):
             resolution = str(Resolution.PARTIAL)
@@ -821,20 +822,35 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             "path_kind": path_kind if path is not None else None,
             "method_kind": method_kind,
         }
-        if ranked and context.candidates is not None:
-            context.candidates.append(
-                _Candidate(
-                    row=row,
-                    metadata=metadata,
-                    registered=_registered_at(end),
-                    order=_order_of(captures.get(_ORDER)),
-                    unread=answering.unread if unreadable else None,
+        # Dispatch that can run several bodies (`_Judged.alternatives`) is the narrowed case
+        # several handlers on one route already are: one row per answering body, each judged
+        # on its own, `narrowed` among them (`_settle`). The route's metadata goes with the
+        # first, since every one is the same registration.
+        variants = answering.alternatives or (answering,)
+        for position, variant in enumerate(variants):
+            variant_row = row
+            if len(variants) > 1:
+                variant_resolution = read_resolution
+                if variant.outcome == UNREADABLE and variant_resolution == str(Resolution.RESOLVED):
+                    variant_resolution = str(Resolution.PARTIAL)
+                variant_row = {**row, "handler": variant.symbol, "resolution": variant_resolution}
+            variant_unread = variant.unread if variant.outcome == UNREADABLE else None
+            if ranked and context.candidates is not None:
+                context.candidates.append(
+                    _Candidate(
+                        row=variant_row,
+                        metadata=metadata if position == 0 else [],
+                        registered=_registered_at(end),
+                        order=_order_of(captures.get(_ORDER)),
+                        unread=variant_unread,
+                    )
                 )
-            )
-            continue
-        context.rows.append(row)
-        if unreadable and context.unread is not None:
-            file_unread(context.unread, row, answering.unread)
+                continue
+            if len(variants) > 1 and variant_row["resolution"] == str(Resolution.RESOLVED):
+                variant_row = {**variant_row, "resolution": str(Resolution.NARROWED)}
+            context.rows.append(variant_row)
+            if variant_unread is not None and context.unread is not None:
+                file_unread(context.unread, variant_row, variant_unread)
 
 
 def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
@@ -866,6 +882,10 @@ class _Judged:
     # Why an `unreadable` handler is, `(how, name)` each (`pass_through.HANDED_TO`, …), for
     # its question.
     unread: tuple[tuple[str, str], ...] = ()
+    # Where dispatch can run several bodies and none passes on: each answering body, judged
+    # on its own. One row each, `narrowed` (`_settle`) — the case several handlers on one
+    # route already are. Empty where one body runs.
+    alternatives: tuple["_Judged", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -930,10 +950,22 @@ def _judge(
         if handler.unread is not None:
             found.add(UNREADABLE)
             names.add(handler.unread)
+        alternatives: tuple[_Judged, ...] = ()
+        if len(handler.alternatives) > 1:
+            bodiless = (handler.unread,) if handler.unread is not None else ()
+            alternatives = tuple(
+                _Judged(
+                    symbol,
+                    UNREADABLE if bodiless else outcomes[symbol],
+                    tuple(sorted({*unread.get(symbol, ()), *bodiless})),
+                )
+                for symbol in handler.alternatives
+            )
         judged[key] = _Judged(
             handler.symbols[0],
             next(o for o in (PASSES_ON, UNREADABLE, ANSWERS) if o in found),
             tuple(sorted(names)),
+            alternatives,
         )
     return judged
 

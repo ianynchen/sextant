@@ -536,6 +536,11 @@ class _Routes:
                 symbol = OWNER + f"{operand}{_RECEIVES}."
                 argument = CallArgument(kind="lambda", source=90, symbol=symbol, captures=0)
                 value = self._call(caller, ROUTE, "handler", _HANDLER, value, [argument])
+            elif step == "ref":
+                # `auth::check`, a method reference to a module interface method.
+                symbol = f"{operand}check{_RECEIVES}."
+                argument = CallArgument(kind="lambda", source=90, symbol=symbol, captures=0)
+                value = self._call(caller, ROUTE, "handler", _HANDLER, value, [argument])
             elif step == "object":
                 # `handler(Lib.make())`: an object a library call builds, typed `Handler`.
                 made = self._call(
@@ -562,6 +567,44 @@ class _Routes:
                 receiver_parameter=0,
             )
         )
+
+    def implemented(self, interface: str, *implementations: str) -> None:
+        """`interface check(ctx)` with no body, and each implementation's `check`, which
+        answers."""
+        method = f"check{_RECEIVES}."
+        self.facts.extend(
+            [
+                SymbolFact(
+                    document_id="doc_1",
+                    symbol=_MODULE + interface,
+                    construct_kind=ConstructKind.INTERFACE,
+                ),
+                SymbolFact(
+                    document_id="doc_1",
+                    symbol=_MODULE + interface + method,
+                    construct_kind=ConstructKind.METHOD,
+                ),
+            ]
+        )
+        for implementation in implementations:
+            self.facts.extend(
+                [
+                    SymbolFact(
+                        document_id="doc_1",
+                        symbol=_MODULE + implementation,
+                        construct_kind=ConstructKind.CLASS,
+                        interfaces=[_MODULE + interface],
+                    ),
+                    SymbolFact(
+                        document_id="doc_1",
+                        symbol=_MODULE + implementation + method,
+                        construct_kind=ConstructKind.METHOD,
+                    ),
+                    MethodReturnFact(
+                        document_id="doc_1", method=_MODULE + implementation + method, ordinal=0
+                    ),
+                ]
+            )
 
     def all_facts(self) -> list:
         symbols = [
@@ -653,6 +696,47 @@ def test_two_unreadable_handler_objects_from_two_methods_are_two_rows(tmp_path: 
     assert {r[3] for r in rows} == {_register("one"), _register("two")}
     assert "Lib#first" in question["candidates"] and "Lib#second" in question["candidates"]
     assert '"how":"produced_by"' in question["candidates"]
+
+
+_AUTH_IFACE = "com/acme/vertx/Auth#"
+
+
+@pytest.mark.pins("fluent.several-bodies-dispatch-can-run-are-one-narrowed-row-each")
+def test_a_reference_to_a_method_two_classes_implement_is_one_narrowed_row_each(tmp_path: Path):
+    """`auth::check` on a module interface two classes implement: a call to it runs either
+    body, so each is a row, `narrowed` — the case several handlers on one route already are
+    — never one picked by name."""
+    routes = _Routes()
+    routes.route("wire", "/x", ("ref", _AUTH_IFACE))
+    routes.implemented(_AUTH_IFACE, "com/acme/vertx/TokenAuth#", "com/acme/vertx/KeyAuth#")
+    workspace = _resolve_fluent_walked(tmp_path, routes.all_facts(), _vertx_web())
+    rows = sorted(
+        (
+            r["path"],
+            str(r["handler"]).split(" ")[-1].split("(")[0].rsplit("/", 1)[-1],
+            r["resolution"],
+        )
+        for r in workspace.query("endpoints")
+    )
+    workspace.close()
+    assert rows == [("/x", "KeyAuth#check", "narrowed"), ("/x", "TokenAuth#check", "narrowed")]
+
+
+def test_a_reference_to_a_method_one_class_implements_names_it_resolved(tmp_path: Path):
+    routes = _Routes()
+    routes.route("wire", "/x", ("ref", _AUTH_IFACE))
+    routes.implemented(_AUTH_IFACE, "com/acme/vertx/TokenAuth#")
+    workspace = _resolve_fluent_walked(tmp_path, routes.all_facts(), _vertx_web())
+    rows = [
+        (
+            r["path"],
+            str(r["handler"]).split(" ")[-1].split("(")[0].rsplit("/", 1)[-1],
+            r["resolution"],
+        )
+        for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    assert rows == [("/x", "TokenAuth#check", "resolved")]
 
 
 def test_one_handler_registered_from_two_methods_is_one_resolved_row(tmp_path: Path):

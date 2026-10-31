@@ -90,6 +90,11 @@ class Handler:
     # `symbols`, a handler method with no body, which makes the handler unreadable unless one
     # of the others passes on.
     unread: Unread | None = None
+    # The bodies that may be the one answering, where dispatch can run more than one — a
+    # bodiless method's several implementations, a method and its overrides, or several
+    # objects the argument may be. Several is the narrowed case: one row each (`fluent`).
+    # A bridge and the method it stands for are one handler, never two alternatives.
+    alternatives: tuple[str, ...] = ()
 
 
 def pass_through_of(matches: Mapping[str, Any], source: object) -> PassThroughRule | None:
@@ -207,7 +212,8 @@ class HandlerReader:
         implementation of it. A method with neither is not readable here, named."""
         found: list[str] = []
         bodiless: list[str] = []
-        for symbol in symbols:
+        alternatives: list[str] = []
+        for position, symbol in enumerate(symbols):
             bare = bare_descriptor(symbol)
             owner = owner_of(bare)
             runs = [symbol] if symbol in self._read else []
@@ -217,6 +223,10 @@ class HandlerReader:
                     for s in self._dispatch.bodies.get(with_owner(bare, subtype), ())
                     if s not in runs
                 )
+            # The first method is the handler the row names (a bridge comes after the method
+            # it stands for): what dispatching to it can run are the alternatives.
+            if position == 0:
+                alternatives = list(runs)
             if runs:
                 found.extend(r for r in runs if r not in found)
             else:
@@ -224,7 +234,10 @@ class HandlerReader:
         if not found:
             return Handler(outcome=UNREADABLE, unread=(NO_BODY, bodiless[0]))
         return Handler(
-            tuple(found), context=context, unread=(NO_BODY, bodiless[0]) if bodiless else None
+            tuple(dict.fromkeys([*alternatives, *found])),
+            context=context,
+            unread=(NO_BODY, bodiless[0]) if bodiless else None,
+            alternatives=tuple(alternatives),
         )
 
     def _declared_type(
@@ -325,7 +338,11 @@ def _either(handlers: list[Handler]) -> Handler:
         if found:
             return found[0]
     bodiless = next((h.unread for h in handlers if h.unread is not None), None)
-    return Handler(tuple(dict.fromkeys(s for h in handlers for s in h.symbols)), unread=bodiless)
+    return Handler(
+        tuple(dict.fromkeys(s for h in handlers for s in h.symbols)),
+        unread=bodiless,
+        alternatives=tuple(dict.fromkeys(s for h in handlers for s in h.alternatives)),
+    )
 
 
 def handler_outcomes(

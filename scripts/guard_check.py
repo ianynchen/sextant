@@ -1688,6 +1688,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.several-bodies-dispatch-can-run-are-one-narrowed-row-each": Guard(
+        what="a handler whose dispatch can run several bodies (a module interface method two "
+        "classes implement) is one row per answering body, each `narrowed` (Vert.x plan, "
+        "Task 10, review round 2)",
+        why="without it the row names one implementation picked by symbol order, `resolved`, "
+        "a claim about which body runs that nothing read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        variants = answering.alternatives or (answering,)\n",
+                replace="        variants = (answering,)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.two-unnamed-handler-objects-are-two-rows": Guard(
         what="two route registrations whose handler objects nothing names (handler NULL) stay "
         "two rows, each with its own reason (Vert.x plan, Task 10, review round 1)",
