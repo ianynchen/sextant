@@ -178,9 +178,10 @@ matches:
     - { owner: io.vertx.ext.web.Route, method: consumes, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
         captures: { consumes: arg0 }, repeats: [consumes], returns_receiver: true }
     # `virtualHost` restricts which `Host` the route serves: a requirement on the row, an
-    # `endpoint_metadata` entry of kind `host` naming the host pattern it matches.
+    # `endpoint_metadata` entry of kind `host`, named for the header it matches (a literal
+    # `name`) and valued with the host pattern the call names.
     - { owner: io.vertx.ext.web.Route, method: virtualHost, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;",
-        collects: { kind: host, name: arg0, value: arg0 }, returns_receiver: true }
+        collects: { kind: host, name: Host, value: arg0 }, returns_receiver: true }
     # A disabled route serves nothing until it is enabled again, last call wins; a removed
     # route leaves the router, and `enable()` after it restores nothing (`poisons` holds to
     # the chain's end).
@@ -218,16 +219,15 @@ matches:
 
   # HANDLER-BODY READS (spec §3a), the mechanism `javalin.yml` ships: what the handler body
   # reads off its `RoutingContext`, one `endpoint_metadata` row per read, matched against
-  # the body's own call sites. `queryParam(String)` reads the query string; `pathParam` a
-  # path parameter, so one naming the route's own `:name` segment gets no row;
+  # the body's own call sites. `queryParam(String)` reads the query string;
   # `request().getHeader(String)` a header, matched through the `request()` call that
-  # produced its receiver. Each hands back null when the value is absent: `requirement`
+  # produced its receiver. `pathParam(String)` is not here: a path parameter is part of the
+  # address, as in Javalin, and once the route's own `:name`s are set aside every other name
+  # it reads is a mount prefix's variable, a regex group or nothing, never a requirement. Each hands back null when the value is absent: `requirement`
   # NULL, the handler reads it and Vert.x decides nothing. The handler body only: a
   # context handed to a helper is not followed here.
   request_reads:
     - { owner: io.vertx.ext.web.RoutingContext, method: queryParam, arity: 1, name_arg: 0, kind: query }
-    - { owner: io.vertx.ext.web.RoutingContext, method: pathParam,  arity: 1, name_arg: 0, kind: query,
-        skip_path_variables: true }
     - { via: { owner: io.vertx.ext.web.RoutingContext, method: request }, method: getHeader, arity: 1, name_arg: 0,
         kind: header }
 

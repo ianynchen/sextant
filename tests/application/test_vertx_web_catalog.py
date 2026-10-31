@@ -351,22 +351,88 @@ def test_a_path_vertx_refuses_is_no_row_and_is_recorded(tmp_path: Path):
     )
 
 
-def test_a_virtual_host_is_a_host_requirement_on_the_row(tmp_path: Path):
-    """`router.get("/v").virtualHost("api.example.com").handler(…)`."""
+@pytest.mark.pins("fluent.a-refused-path-is-one-refusal-under-its-roots-verb")
+def test_a_refused_path_with_several_verbs_is_one_refusal_under_its_roots_verb(tmp_path: Path):
+    """`route("bad").method(GET).method(DELETE).handler(…)`: Vert.x throws at `route("bad")`,
+    before either `method(…)` runs, so it is ONE refusal, under the verb the root named
+    (none), never one per verb the chain went on to add."""
+    body = _Body()
+    body.chain(
+        ("route", _PATH, [_string("bad")]),
+        ("method", _METHOD, [_verb("GET")]),
+        ("method", _METHOD, [_verb("DELETE")]),
+        _h("bad"),
+    )
+    rows, questions = _derived(tmp_path, body, "bad")
+
+    assert rows == []
+    assert [(q["method"], q["path"]) for q in questions] == [(None, "bad")]
+
+
+def test_a_refused_verb_root_given_another_verb_keeps_the_roots_verb(tmp_path: Path):
+    body = _Body()
+    body.chain(("get", _PATH, [_string("bad")]), ("method", _METHOD, [_verb("POST")]), _h("bad"))
+    _, questions = _derived(tmp_path, body, "bad")
+
+    assert [(q["method"], q["path"]) for q in questions] == [("GET", "bad")]
+
+
+@pytest.mark.pins("fluent.a-handler-tuple-answers-with-its-first")
+def test_a_route_with_two_handlers_names_its_first(tmp_path: Path):
+    """`get("/two").handler(this::a).handler(this::b)`: until the answering handler is
+    chosen, the row names the first one registered (Vert.x plan, Task 8 brief)."""
+    body = _Body()
+    body.chain(("get", _PATH, [_string("/two")]), _h("first"), _h("second"))
+    rows, _ = _derived(tmp_path, body, "first", "second")
+
+    assert _served(rows) == {("GET", "/two", "first", "resolved")}
+
+
+@pytest.mark.pins("chains.a-collects-name-may-be-a-literal")
+@pytest.mark.parametrize("host", ["api.example.com", "token.example.com"])
+def test_a_virtual_host_is_a_host_requirement_named_host_and_published_unmasked(
+    tmp_path: Path, host: str
+):
+    """`router.get("/v").virtualHost(host).handler(…)`: one `host` entry, named `Host` (the
+    header the route matches, a literal `name` in the catalog) and valued with the host as
+    written. The redactor keys on the name, so a host that merely CONTAINS a credential word
+    (`token.example.com`) is published as it is."""
     body = _Body()
     body.chain(
         ("get", _PATH, [_string("/v")]),
-        ("virtualHost", _PATH, [_string("api.example.com")]),
+        ("virtualHost", _PATH, [_string(host)]),
         _h("virtualHost"),
     )
     workspace = _resolve_fluent(tmp_path, [*body.sites, *_symbols("virtualHost")], _vertx_web())
     entries = [
-        (r["method"], r["path"], r["kind"], r["name"], r["value"])
+        (r["method"], r["path"], r["kind"], r["name"], r["value"], r["resolution"])
         for r in workspace.query("endpoint_metadata")
     ]
     workspace.close()
 
-    assert entries == [("GET", "/v", "host", "api.example.com", "api.example.com")]
+    assert entries == [("GET", "/v", "host", "Host", host, "resolved")]
+
+
+@pytest.mark.pins("chains.a-malformed-collects-is-refused")
+@pytest.mark.parametrize(
+    "collects",
+    [
+        {"kind": "host", "name": "", "value": "arg0"},
+        {"kind": "host", "name": 7, "value": "arg0"},
+        {"kind": "host", "name": "Host", "value": "Host"},
+        {"kind": "host", "value": "arg0", "label": "x"},
+        {"name": "Host", "value": "arg0"},
+    ],
+    ids=["empty-name", "name-not-a-string", "literal-value", "unknown-key", "no-kind"],
+)
+def test_a_malformed_collects_is_refused_naming_the_file(tmp_path: Path, collects: dict):
+    catalog = _vertx_web()
+    steps = [
+        {**step, "collects": collects} if step["method"] == "virtualHost" else step
+        for step in catalog.matches["steps"]
+    ]
+    with pytest.raises(CatalogError, match="vertx-web.*virtualHost.*collects"):
+        _resolve_fluent(tmp_path, [], _with(steps=steps))
 
 
 def test_media_types_accumulate_into_the_media_columns(tmp_path: Path):

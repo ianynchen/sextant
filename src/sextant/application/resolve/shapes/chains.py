@@ -483,7 +483,7 @@ def _declared_entries(
             # keys, so a key not listed here is silently dropped at load, which is exactly
             # what happened to `collects` the first time and produced a catalog
             # declaration that read as valid and derived nothing.
-            "collects": step.get("collects"),
+            "collects": _validated_collects(step, catalog),
             # D02 §2's `fluent` style: a step may declare a value guard on
             # another argument — None for the (default) unguarded step, read
             # by `_walk` (`_step_captures`) where `_matching_step` finds this
@@ -1384,6 +1384,31 @@ def _validated_repeats(step: dict[str, Any], catalog: Catalog) -> tuple[str, ...
                 f"up (spec 2026-10-30 §3g item 1)"
             )
     return tuple(declared)
+
+
+def _validated_collects(step: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
+    """A step's optional `collects` (F5 §6.2, W29), refused unless it is `{kind, value,
+    [name]}` with `kind` a word, `value` an `argN` position and `name` either an `argN`
+    position or a literal name (a non-empty string). Anything else would load and collect
+    nothing, or collect under a label nobody wrote. A literal spelled `argN` is a position:
+    the two spellings share one key, and the position wins."""
+    declared = step.get("collects")
+    if declared is None:
+        return None
+    name = declared.get("name") if isinstance(declared, dict) else None
+    if (
+        not isinstance(declared, dict)
+        or not set(declared) <= {"kind", "name", "value"}
+        or not (isinstance(declared.get("kind"), str) and declared["kind"])
+        or not _ARG_REFERENCE.match(str(declared.get("value")))
+        or ("name" in declared and not (isinstance(name, str) and name))
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: step `{step.get('method')}` declares "
+            f"`collects: {declared!r}`, which is not `{{kind, value: argN, name: argN or a "
+            f"literal name}}` (F5 §6.2)"
+        )
+    return dict(declared)
 
 
 def _validated_receiver_arg(step: dict[str, Any], catalog: Catalog) -> int | None:
@@ -2482,7 +2507,10 @@ def _step_collects(step: dict[str, Any], site: dict[str, Any]) -> tuple[dict[str
         - { method: header, collects: { kind: header, name: arg0, value: arg1 } }
 
     `name` is optional: a Kafka partition key and an AMQP routing key have a value and no
-    name at all, and writing one in would invent a label the wire does not carry.
+    name at all, and writing one in would invent a label the wire does not carry. It may
+    also be a literal string where the framework fixes the name and the call carries only
+    the value — `virtualHost("api.example.com")` restricts the `Host` header, `name: Host` —
+    so the entry is keyed (and redacted) on the name the wire carries.
 
     **The value is the RAW argument here, not a string.** Resolving it is the caller's
     job, because whether it resolved is what the entry's own `resolution` records — an
@@ -2494,7 +2522,14 @@ def _step_collects(step: dict[str, Any], site: dict[str, Any]) -> tuple[dict[str
     if not collects:
         return ()
     arguments = site["arguments"]
-    name = _arg_at(arguments, _arg_index(collects["name"])) if "name" in collects else None
+    declared_name = collects.get("name")
+    name = (
+        None
+        if declared_name is None
+        else _arg_at(arguments, _arg_index(declared_name))
+        if _ARG_REFERENCE.match(str(declared_name))
+        else {"kind": "string", "value": str(declared_name)}
+    )
     value = _arg_at(arguments, _arg_index(collects["value"]))
     return tuple(
         {"kind": str(collects["kind"]), "name": name, "value": held} for held in _held_values(value)

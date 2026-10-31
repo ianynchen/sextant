@@ -946,7 +946,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `temporal-untyped` | `io.temporal:temporal-sdk` | 1.27.0 |
 | `temporal-workflow` | `io.temporal:temporal-sdk` | 1.27.0 |
 |  | `io.temporal:temporal-spring-boot-autoconfigure` | 1.27.0 |
-| `vertx-eventbus-chain` | `io.vertx:vertx-core` | 4.5.10, 5.0.0, 5.2.1 |
+| `vertx-eventbus-chain` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
 | `vertx-eventbus-mutiny` | `io.smallrye.reactive:smallrye-mutiny-vertx-core` | 3.16.0 |
 | `vertx-eventbus` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
 | `vertx-web` | `io.vertx:vertx-core` | 4.5.10, 5.0.0, 5.2.1 |

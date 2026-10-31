@@ -57,7 +57,9 @@ from sextant.application.resolve.shapes.chains import (
     ChainEnd,
     _captured_at,
     _declared_entries,
+    _matching_root,
     _method_symbols,
+    _resolve_captures,
     _resolves_beans,
     chain_ends,
 )
@@ -170,7 +172,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     refuses_unrooted = _refuses_unrooted_path(matches, catalog)
     verbless_serves = _verbless_serves(matches, catalog)
     pathless_serves = _pathless_serves(matches, catalog)
-    _validate_route_captures([*roots, *steps], catalog)
+    _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -251,6 +253,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 client_base=client_base,
                 refuses_unrooted=refuses_unrooted,
                 refusals=refusals,
+                roots=roots,
                 verbless_serves=verbless_serves,
                 pathless_serves=pathless_serves,
             )
@@ -311,6 +314,9 @@ class _DeriveContext:
     # every catalog not declaring it, whose paths are repaired as they always were.
     refuses_unrooted: bool = False
     refusals: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    # The catalog's roots, so a refusal is filed under the verb its ROOT named
+    # (`_root_verb`): the framework throws when the route is made, before any later step.
+    roots: Sequence[dict[str, Any]] = ()
     # Vert.x spec §3a. `matches.verbless_serves`: what a chain that never captured a verb
     # serves — `any` (`ANY_METHOD`) for a framework whose route with no verb answers every
     # verb, written on the row as `method_kind` beside its NULL method. None for every
@@ -533,6 +539,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     link = _string_value(captures.get("channel_link"))
     # The media a served route declares; an outbound row serves nothing, so it carries none.
     consumes, produces = media_columns(captures) if direction == "inbound" else (None, None)
+    # Vert.x throws at `route("bad")`, before any `method(…)` on the route runs: a refused path
+    # is ONE refusal, under the verb the root named, however many verbs the chain went on to
+    # add (`file_refusal` keeps one row per address).
+    refused_verb = _root_verb(end, context) if context.refuses_unrooted else None
     for verb, (peer, path, url_resolution) in product(verbs, destinations):
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
@@ -559,7 +569,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 file_refusal(
                     context.refusals,
                     protocol=context.catalog.protocol,
-                    method=verb,
+                    method=refused_verb,
                     path=path,
                     reason=UNROOTED_PATH,
                     caller=context.caller,
@@ -743,6 +753,16 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 "method_kind": method_kind,
             }
         )
+
+
+def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
+    """The verb the chain's ROOT call named — `get("bad")`'s GET, `route(PUT, "bad")`'s PUT —
+    or None for a root naming none (`route("bad")`), read as the root walk read it."""
+    root = _matching_root(dict(end.root), context.roots) if end.root else None
+    if root is None or "http_method" not in root["captures"]:
+        return None
+    captured = _resolve_captures({"http_method": root["captures"]["http_method"]}, dict(end.root))
+    return _verb_of(captured["http_method"], context)
 
 
 def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:

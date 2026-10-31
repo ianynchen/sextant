@@ -1546,7 +1546,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    _validate_route_captures([*roots, *steps], catalog)\n",
+                find="    _validate_route_captures([*roots, *bean_roots, *steps], catalog)\n",
                 replace="",
             ),
             Edit(
@@ -1558,6 +1558,46 @@ GUARDS: dict[str, Guard] = {
                 path=_FLUENT,
                 find="    if declared is not None and not (isinstance(declared, str) and declared):\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-refused-path-is-one-refusal-under-its-roots-verb": Guard(
+        what="a refused path is filed once per chain, under the verb its ROOT named, however "
+        "many verbs later steps add (Vert.x plan, Task 8 fix round 1)",
+        why='Vert.x throws at `route("bad")` before any `method(...)` runs; filed per verb, '
+        "one refused registration reads as several",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                    method=refused_verb,\n",
+                replace="                    method=verb,\n",
+            ),
+        ),
+    ),
+    "chains.a-collects-name-may-be-a-literal": Guard(
+        what="a `collects` entry's `name` may be a literal name the framework fixes (`name: "
+        "Host`), read as that string, beside an `argN` position (Vert.x plan, Task 8 fix "
+        "round 1)",
+        why="without it `virtualHost(h)`'s entry has no name, and `_metadata_row` masks a "
+        "value whose name is unread: the host is published as `«redacted»`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/chains.py",
+                find='        else {"kind": "string", "value": str(declared_name)}\n',
+                replace="        else None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-malformed-collects-is-refused": Guard(
+        what="a `collects` block that is not `{kind, value: argN, name: argN or a literal "
+        "name}` is refused naming the file (Vert.x plan, Task 8 fix round 1)",
+        why="a misspelt block would load and collect nothing, or collect under a label nobody "
+        "wrote",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/chains.py",
+                find='            "collects": _validated_collects(step, catalog),\n',
+                replace='            "collects": step.get("collects"),\n',
             ),
         ),
     ),

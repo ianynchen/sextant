@@ -2133,17 +2133,12 @@ def _served(rows: list[dict], handler_class: str) -> set[tuple]:
 # Task 8: single-handler routes ---------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Task 8 greened every shape but `String.format`: reading it means modelling a "
-    "library method's semantics, which OI-143's ruling forbids; awaiting a ruling",
-)
 def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
     """Verb methods, `route(HttpMethod, path)`, accumulated `method(…)` calls, the same route
     as separate statements on a `Route` local with self-returning calls between, a regex
-    route, a path from a constant and a path from `String.format`, and a `virtualHost`
-    route. Each shape is on its own path, so the set below is the whole class: a row it does
-    not list is a wrong row."""
+    route, a path from a constant, and a `virtualHost` route. Each shape is on its own path,
+    so the set below is the whole class bar the `String.format` route, which has its own test
+    below: a row it does not list is a wrong row."""
     expected = {
         ("GET", "/orders", "OrderRoutes#list", "resolved"),
         ("POST", "/orders", "OrderRoutes#create", "resolved"),
@@ -2156,12 +2151,27 @@ def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
         ("GET", "\\/files\\/.+", "OrderRoutes#file", "resolved"),
         ("GET", "/v", "OrderRoutes#virtualHost", "resolved"),
         ("GET", "/items", "OrderRoutes#items", "resolved"),
-        ("GET", "/a/:id", "OrderRoutes#formatted", "resolved"),
         ("GET", "/search", "OrderRoutes#search", "resolved"),
     }
-    # The `/health` lambda has its own test below; its synthetic name is javac's.
-    served = {r for r in _served(vertx_inbound, "OrderRoutes") if "#lambda$" not in r[2]}
+    # The `/health` lambda and the `String.format` route have their own tests below.
+    served = {
+        r
+        for r in _served(vertx_inbound, "OrderRoutes")
+        if "#lambda$" not in r[2] and r[2] != "OrderRoutes#formatted"
+    }
     assert served == expected, sorted(served, key=str)
+
+
+def test_vertx_a_string_format_path_is_what_the_structural_walk_answers(vertx_inbound):
+    """`router.get(String.format("/a/:%s", P))` (spec §4, a stated boundary): `String.format`
+    is not modelled (OI-143: one rule, not one parser per method), so the route is the verb
+    its root names with the path unread — one row, `GET`, path NULL, `unresolved` — never a
+    path guessed from the format string. Measured on the fixture 2026-10-31."""
+    assert [
+        (r["method"], r["path"], r["resolution"])
+        for r in vertx_inbound
+        if r["handler"] is not None and _vertx_handler(r) == "OrderRoutes#formatted"
+    ] == [("GET", None, "unresolved")]
 
 
 def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
