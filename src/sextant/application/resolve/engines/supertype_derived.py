@@ -97,7 +97,18 @@ outer class makes no marker call:
   `delegate_field` is a generated bean that forwards to a module class; that
   class is the handler, under the bean's base's identity. The bean itself is
   never a handler, because it carries no `served_by_annotation`.
-A catalog declaring none of them matches exactly as before."""
+A catalog declaring none of them matches exactly as before.
+
+**`binding_method`** (ruled 2026-10-30, option B) serves the other half of what protoc
+generates: a class implementing the nested `<Service>Grpc$AsyncService` directly, never
+extending `<Service>ImplBase`. Such a class is not a `BindableService`, so nothing serves it
+until the code hands an instance of it to the generated static `<Service>Grpc.bindService`,
+and that call is the evidence. Every static call of that name owned by a marked class is
+read through the value walk (`resolve_site`): each path's argument that resolves to a
+constructed class names an implementer, matched against what the call's own parameter type
+declares, exactly as an `extends` match is against its base. A class nothing binds derives
+nothing. The `ImplBase` path does not ask this, because frameworks register a
+`BindableService` bean with no call in the module's code at all (OI-252)."""
 
 import json
 from dataclasses import dataclass, field
@@ -107,6 +118,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.identity_calls import (
     all_string_arguments,
+    caller_outer_class,
     calling_classes,
     delegated_outers,
     first_string_arguments,
@@ -116,13 +128,25 @@ from sextant.application.resolve.shapes.identity_calls import (
     split_call,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
+from sextant.application.resolve.values import SYMBOL, cached_value_index, resolve_site
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_parameter_types,
+    is_type_descriptor,
+    member_name,
+    method_name,
+    owner_of,
+)
 
 _REQUIRED_MATCHES = ("supertype_marker", "members")
 _REQUIRED_MARKER = ("service_name_call", "method_name_call")
 _MEMBERS = "overridden_public_methods"
 # The optional keys (spec 2026-10-25 §3a, §3b), each naming one type.
 _OPTIONAL_TYPES = ("service_supertype", "served_by_annotation")
+# The generated static method that turns an implementation into a served definition
+# (ruled 2026-10-30, option B), named by its method name alone: its owner is the generated
+# class of each service, which the marker calls already identify.
+_BINDING_METHOD = "binding_method"
 _DELEGATING_BEAN = ("implements", "delegate_field")
 # The client side (spec 2026-10-25 §3d), read by `resolve/rpc_hops.py` and not by this
 # engine; checked here so a malformed catalog is refused like the keys above.
@@ -395,6 +419,35 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
         )
         if match is not None:
             matches.append(match)
+    binding = catalog.matches.get(_BINDING_METHOD)
+    if binding is not None:
+        known_by_bare = {bare_descriptor(symbol): symbol for symbol in known_symbols}
+        # One class serving one SERVICE once: a class extending one service's base and
+        # bound for it as well is one set of rows, while the same class bound for a second
+        # service serves that one too, so the key is the pair.
+        already = {
+            (match.implementer, identities.of(bare_descriptor(match.supertype)))
+            for match in matches
+        }
+        for implementer, supertype, outer in _bound(
+            workspace, call_sites, binding, identities, known_by_bare
+        ):
+            # The serving annotation, where the catalog names one, is a conjunct of every
+            # form (CP-52 row 7), this one included.
+            unannotated = served is not None and implementer not in served
+            if (implementer, outer) in already or unannotated:
+                continue
+            match = _matched(
+                implementer,
+                supertype,
+                _inherited_names(supertype, methods_by_bare, parents),
+                methods_by_class.get(implementer, {}),
+                service_names.get(outer),
+                wire_names.get(outer, []),
+            )
+            if match is not None:
+                already.add((implementer, outer))
+                matches.append(match)
     # Spec §3b, CP-53 rows 8-10: a generated bean that delegates to a module
     # class is served by that class. The bean's identity and wire names are its
     # base's; the handler's candidate methods are the ones the delegate type
@@ -433,6 +486,53 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             if match is not None:
                 matches.append(match)
     return matches
+
+
+def _bound(
+    workspace: Workspace,
+    call_sites: list[dict[str, Any]],
+    method: str,
+    identities: "_Identities",
+    known_by_bare: dict[str, str],
+) -> list[tuple[str, str, str]]:
+    """`(implementer, the bind method's parameter type, marked outer)` for every class an
+    instance of which reaches a static `method` call owned by a marked class, one entry per
+    distinct triple, in the walk's order (NFR-1).
+
+    The argument is followed through the value walk, so a bind inside a helper names the
+    class each caller hands it, on that caller's own path, and a branch between two
+    constructed classes names each of them: the set is closed, so both are handlers. An
+    enum constant names its enum. A value from outside the module names nothing.
+
+    A call made inside the generated class itself is skipped: that is `<Service>ImplBase`'s
+    own `bindService()` handing over `this`, which the `extends` match already reads. So
+    a module that only extends bases builds no walk fold here at all (§8.7)."""
+    found: list[tuple[str, str, str]] = []
+    index = None
+    for site in call_sites:
+        if site["name"] != method or site["invoke_kind"] != "static":
+            continue
+        outer = identities.of(str(site["owner"]))
+        parameters = descriptor_parameter_types(str(site["descriptor"]))
+        if outer is None or len(parameters) != 1:
+            continue
+        caller = caller_outer_class(str(site["caller"]))
+        if caller is not None and outer_of(caller, identities.hosts) == outer:
+            continue
+        supertype = _catalog_symbol(parameters[0])
+        if index is None:
+            index = cached_value_index(workspace)
+        for binding in resolve_site(workspace, site, index):
+            answer = binding.slots.get(0)
+            if answer is None or answer.literal_kind != SYMBOL:
+                continue
+            # A type answers itself; an enum constant answers the enum that declares it.
+            value = bare_descriptor(str(answer.value))
+            declaring = value if is_type_descriptor(value) else owner_of(value)
+            implementer = known_by_bare.get(declaring) if declaring is not None else None
+            if implementer is not None:
+                found.append((implementer, supertype, outer))
+    return list(dict.fromkeys(found))
 
 
 def _matched(
@@ -806,6 +906,11 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: `matches.{key}` must name one type, "
                 f"got {matches[key]!r} (spec 2026-10-25 §3a, §3b)"
             )
+    if _BINDING_METHOD in matches and not isinstance(matches[_BINDING_METHOD], str):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `matches.{_BINDING_METHOD}` must name one "
+            f"method, got {matches[_BINDING_METHOD]!r} (ruled 2026-10-30, option B)"
+        )
     if "delegating_bean" in matches:
         bean = matches["delegating_bean"]
         valid = isinstance(bean, dict) and all(

@@ -11,9 +11,8 @@ import io.grpc.stub.StreamObserver;
  *  ({@code scripts/probes/cp3_cp8_grpc_facts.md}): a class implementing the generated
  *  {@code AsyncService} interface directly, never extending {@code OrderServiceImplBase},
  *  and registered through the generated static {@code OrderServiceGrpc.bindService}.
- *  MEASURED 2026-10-30: {@code grpc-java.yml} derives no row for it, so this class is
- *  not named as a handler. Kept as the evidence for that finding, not as a pinned
- *  expectation. */
+ *  gRPC serves it only through that call, which is what {@code grpc-java.yml}'s
+ *  {@code binding_method} reads (ruled 2026-10-30, option B). */
 public class OrderServiceAsyncImpl implements OrderServiceGrpc.AsyncService {
     @Override
     public void getOrder(GetOrderRequest request, StreamObserver<GetOrderReply> responseObserver) {
