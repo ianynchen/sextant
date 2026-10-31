@@ -502,14 +502,16 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         if path is not None and serves_urls(context.catalog.protocol, direction):
             # DR-6: a path the framework refuses is recorded and never reaches the
             # canonicaliser, whose leading-slash repair would serve an address the
-            # framework does not. Only a path READ in full is refused: an unread or
-            # partly read one does not show how it starts.
+            # framework does not. The framework looks at the first character alone, so a
+            # partly read path is refused too where that character was read (`"bad" + id`);
+            # one whose first piece is unread (`prefix + "/x"`) is undecided and keeps
+            # today's behaviour (`inbound_routes.is_unrooted`).
             if (
                 context.refuses_unrooted
                 and direction == "inbound"
                 and context.refusals is not None
-                and url_resolution == str(Resolution.RESOLVED)
-                and is_unrooted(path)
+                and url_resolution in (str(Resolution.RESOLVED), str(Resolution.PARTIAL))
+                and is_unrooted(path, url_resolution == str(Resolution.RESOLVED))
             ):
                 file_refusal(
                     context.refusals,

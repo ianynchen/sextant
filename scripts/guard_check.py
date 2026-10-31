@@ -1416,8 +1416,35 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="                and is_unrooted(path)\n",
+                find="                and is_unrooted(path, url_resolution == str(Resolution.RESOLVED))\n",
                 replace="                and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-partly-read-path-is-refused-where-its-first-character-was-read": Guard(
+        what="an inbound `fluent` path read only in part is refused by a refusing framework "
+        'when its first character was read and is not `/` (`"bad" + id`), since '
+        "`checkPath` looks at that character alone (Vert.x plan, Task 7 fix round 1)",
+        why="without it the half-read path is repaired to `/bad{id}` and published as a route "
+        "Vert.x throws on at startup",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and url_resolution in (str(Resolution.RESOLVED), str(Resolution.PARTIAL))\n",
+                replace="                and url_resolution == str(Resolution.RESOLVED)\n",
+            ),
+        ),
+    ),
+    "fluent.a-path-whose-first-piece-is-unread-is-not-refused": Guard(
+        what='a partly read path whose FIRST piece is unread (`prefix + "/x"`) is not '
+        "refused: the unread piece may be the `/` (Vert.x plan, Task 7 fix round 1)",
+        why="without it every route built on a prefix the analysis could not read was "
+        "dropped as refused, a route Vert.x serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/inbound_routes.py",
+                find="    return read_whole or not path.startswith(_UNKNOWN_START)\n",
+                replace="    return True\n",
             ),
         ),
     ),

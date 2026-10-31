@@ -3526,3 +3526,64 @@ def test_a_flag_that_is_not_a_boolean_is_refused_naming_the_file(tmp_path: Path)
         {**_ROUTE_MATCHES, "refuses_unrooted_path": "yes"},
         "invented-adapters.*refuses_unrooted_path.*true or false",
     )
+
+
+def _assembled_route(template: str) -> list:
+    """A route whose path is `template` assembled from one operand nobody can read
+    (`"bad" + id`, `prefix + "/x"`): the concat the walk reads back, `{}` standing for the
+    unread piece."""
+    concat = CallSiteFact(
+        document_id="doc_1",
+        caller=CALLER,
+        target=CallTarget(
+            owner="java/lang/invoke/StringConcatFactory#",
+            name="makeConcatWithConstants",
+            descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+        ),
+        invoke_kind="static",
+        ordinal=-1,
+        receiver=None,
+        result=88,
+        arguments=[CallArgument(kind="unresolved", source=86)],
+    )
+    return [
+        concat,
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            subscription=CallArgument(kind="concat", source=88, value=template),
+        ),
+        _body_symbol(),
+    ]
+
+
+@pytest.mark.pins("fluent.a-partly-read-path-is-refused-where-its-first-character-was-read")
+def test_a_partly_read_path_whose_first_character_is_read_and_unrooted_is_refused(
+    tmp_path: Path,
+):
+    """`"bad" + id`: Vert.x checks the first character alone, so whatever the tail is the
+    route is refused, and the half-read path is not repaired to `/bad{}`."""
+    workspace = _run(
+        tmp_path, _assembled_route("bad{}"), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    rows = _rows(workspace)
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["path"], question["question"]) == ("bad{}", "refused_registration")
+
+
+@pytest.mark.pins("fluent.a-path-whose-first-piece-is-unread-is-not-refused")
+def test_a_path_whose_first_piece_is_unread_is_not_refused(tmp_path: Path):
+    """`prefix + "/x"` with an unread prefix: the unread piece may be the `/`, so the
+    refusal is undecided and the row derives as it did before."""
+    workspace = _run(
+        tmp_path, _assembled_route("{}/x"), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    # Today's behaviour, unchanged: the row derives (the canonicaliser roots the unread piece).
+    assert [row["path"] for row in rows] == ["/<host>/x"]
+    assert questions == []

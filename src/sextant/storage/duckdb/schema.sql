@@ -178,12 +178,11 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- One of the closed set `payload_binding`, `format_conflict`,
     -- `channel_destination`, `service_identity`, `environment_divergence`,
     -- `binder_protocol`, `unselected_binding`, `handler_protocol`,
-    -- `registration_activation`
-    -- (2G design §6, extended by 2O design §0, F2 §3.4, F2 §3.6 and `OI-64`) — checked in
-    -- `resolve/open_questions.py`, which owns the set and refuses anything
-    -- outside it. This comment named the original TWO until 2O Task 9, which
-    -- shipped the writer `channel_destination` had been waiting for; the
-    -- other two gained theirs earlier in the same phase.
+    -- `registration_activation`, `self_exchange`, `routing_conflict`,
+    -- `routing_depth`, `web_stack`, `prefix_not_measured` and
+    -- `refused_registration` - checked in `resolve/open_questions.py`, which
+    -- owns the set (its `QUESTIONS`, with each kind's reason) and refuses
+    -- anything outside it. This list is kept equal to that tuple.
     question   TEXT,
     -- The answers that were on the table, as a JSON array — each carrying
     -- what it would have made the format or payload type, where it was seen,

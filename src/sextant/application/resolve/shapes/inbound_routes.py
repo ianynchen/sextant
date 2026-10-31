@@ -84,10 +84,26 @@ REFUSED_REGISTRATION = "refused_registration"
 UNROOTED_PATH = "unrooted_path"
 
 
-def is_unrooted(path: str) -> bool:
+# What an unread piece of a partly read path starts with: `<host>` (the address reader's
+# marker for an unread authority), `{}` / `{name}` (a hole the walk printed) and `${…}` (a
+# configuration placeholder). A path starting with one of these has an unknown first
+# character.
+_UNKNOWN_START = ("<", "{", "$")
+
+
+def is_unrooted(path: str, read_whole: bool) -> bool:
     """Whether a path is one a framework that refuses (`refuses_unrooted_path`) throws on:
-    empty, or not starting with `/`. Vert.x's `RouteImpl.checkPath` is exactly this."""
-    return not path.startswith("/")
+    empty, or not starting with `/`. Vert.x's `RouteImpl.checkPath` looks at the first
+    character alone, so a PARTLY read path is refused too wherever that character was read.
+
+    A path whose FIRST piece is unread (`_UNKNOWN_START`) is undecided and not refused: the
+    unread piece may well be the `/`. `read_whole` says the path is the whole address, in
+    which case a leading `<`, `{` or `$` is a literal character like any other."""
+    if not path:
+        return read_whole
+    if path.startswith("/"):
+        return False
+    return read_whole or not path.startswith(_UNKNOWN_START)
 
 
 def file_refusal(
