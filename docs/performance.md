@@ -570,3 +570,44 @@ row split by the per-phase timer. The previous table (after P-1 and P-3) read 2.
 | render | 0.1s | 0.3s |
 | export | 0.2s | 1.3s |
 | **total** | **1.3–1.4s** | **5.2–5.5s** |
+
+## Baseline before the Vert.x catalogs (CP-56, 2026-10-31)
+
+Taken before any Vert.x Web or WebClient catalog exists, so the Vert.x work (spec
+`2026-10-30-vertx-web-design.md`) has numbers to be compared with. Machine: Apple M4, arm64, macOS,
+JDK 21 (`/opt/homebrew/opt/openjdk@21`). Each corpus was built first, then analyzed with
+`sextant module analyze <module> --workspace <fresh dir>` under `logging.basicConfig(level=INFO)`, so
+`pipeline._timed` prints one line per resolve pass. Three runs each, wall time of the whole command
+(Python start-up included):
+
+| module | built with | endpoints | wall, three runs |
+|---|---|---|---|
+| `examples/quarkus-quickstarts/reactive-routes-quickstart` | its `./mvnw -B -DskipTests compile` (17s; the offline attempt failed — dependencies were not cached — and the online retry succeeded) | 2 | 2.15s, 2.17s, 2.12s |
+| `examples/hono/adapters/http-base` | system `mvn` (Hono ships no wrapper), `-pl adapters/http-base -am -DskipTests compile` (30s, same offline-then-online) | 0 | 2.34s, 2.38s, 2.30s |
+| `examples/mesh/core` | **not timed: no build** | — | — |
+
+Per stage (the third run of each; the other runs print the same figures at this resolution, except
+that Hono's scan read 0.2s in its second run):
+
+| stage | quarkus `reactive-routes-quickstart` | hono `http-base` |
+|---|---|---|
+| scan | 0.1s (46 facts) | 0.1s (1606 facts) |
+| interpret schemas | under 0.1s | under 0.1s |
+| `derive_endpoints` | 0.4s | 0.4s |
+| `derive_endpoint_shapes` | 0.2s | 0.2s |
+| resolve, whole | 0.6s | 0.7s |
+| every other `pipeline._timed` pass | 0.0s | 0.0s |
+
+Hono's 0 endpoints is the point of the baseline: Sextant reads no Vert.x Web route today, and the
+cost shown is the cost of a module with no Vert.x work in it. Quarkus's 2 endpoints are the
+Reactive Routes ones.
+
+**Mesh: not timed — Maven 3.10.0 will not read the reactor.** `mvn -B -o -pl core -am compile` fails
+offline on the parent pom (`com.gentics:maven-parent:5.1.1`, served only by the Gentics repository);
+online the parent downloads and Maven then refuses two poms of the reactor
+(`'dependencyManagement.dependencies.dependency.(groupId:artifactId:type:classifier)' must be unique:
+com.gentics.mesh:mesh-bom:pom`, `mesh-server` and one more), so no module builds. `core` also needs its
+siblings built from source (their versions are `3.3.3-SNAPSHOT`), so building it alone is no way
+round. `examples/mesh/core/target/classes` does not exist, and `analyze` stops at the scan with
+`--classes must name a directory of class files or a .jar file`. A build under an older Maven (3.9.x)
+might read the poms; none is installed, and downloading one was not part of this task.
