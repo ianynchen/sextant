@@ -231,10 +231,13 @@ matches:
   # create())`).
   passes_on:
     - { owner: io.vertx.ext.web.RoutingContext, method: next }
-  # The framework's own handlers (`BodyHandler`, `CorsHandler`, `AuthenticationHandler` and
-  # every other type of this package) carry the request on or fail it, by Vert.x's contract,
-  # so a handler object of one passes on without its body being read. One package and its
-  # subpackages; a handler of another type the module does not build is not readable here.
+  # The framework's own handlers (`BodyHandler`, `CorsHandler`, `AuthenticationHandler`, …)
+  # carry the request on or fail it, by Vert.x's contract, so a handler object of this
+  # package or its subpackages passes on without its body being read. NOT every one does:
+  # `StaticHandler`, `TemplateHandler` and the `graphql` and `sockjs` subpackages answer the
+  # request themselves, and a route served only by one of them derives no row — a stated
+  # boundary (spec §4), not a claim that nothing serves it. A handler of another type the
+  # module does not build is not readable here.
   framework_handlers: [io.vertx.ext.web.handler]
   # What Vert.x calls on a handler OBJECT (`Handler<RoutingContext>.handle`): a route given
   # `new X(…)` runs `X.handle` (user ruling 2026-10-30).

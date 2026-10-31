@@ -907,9 +907,10 @@ def test_a_refused_registration_question_names_the_registering_method_and_handle
 
 
 def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
-    """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread`) matches what
-    `pass_through.unread_rows` writes: one names the out-of-module method the handler hands
-    its context to, one is an object built where nothing is read and names no call."""
+    """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
+    and `name`) matches what `pass_through.file_unread` writes: a context handed to an
+    out-of-module method reads as a hand-off, and a handler object a factory built reads as
+    built by it — never as a hand-off."""
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
     open_questions = [
         {
@@ -922,9 +923,15 @@ def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code()
                     {
                         "caller": "com/acme/Routes#wire().",
                         "handler": "com/acme/Routes#check().",
-                        "unread": ["com/acme/base/HttpUtils#nextRoute()."],
+                        "unread": [
+                            {"how": "handed_to", "name": "com/acme/base/HttpUtils#nextRoute()."}
+                        ],
                     },
-                    {"caller": "com/acme/Routes#wire().", "handler": None, "unread": []},
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": None,
+                        "unread": [{"how": "produced_by", "name": "com/acme/Routes#factory()."}],
+                    },
                 ]
             ),
             "evidence": "com/acme/Routes#check().",
@@ -935,8 +942,8 @@ def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code()
         "- `PUT /u2/:id` — handler_pass_through: com/acme/Routes#check(). (registered by "
         "com/acme/Routes#wire().) hands the request's context to "
         "com/acme/base/HttpUtils#nextRoute()., where it is not followed here, so whether it "
-        "passes the request on is not known; "
-        "a handler object (registered by com/acme/Routes#wire().) is built where no body is "
+        "passes the request on is not known; a handler object (registered by "
+        "com/acme/Routes#wire().) is built by com/acme/Routes#factory()., whose body is not "
         "read here, so whether it passes the request on is not known"
     ) in text
 

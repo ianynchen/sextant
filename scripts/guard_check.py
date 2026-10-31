@@ -1582,9 +1582,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="                return Handler((*stands_for, *(m for m in methods if m not "
-                "in stands_for)))\n",
-                replace="                return Handler(tuple(methods))  # guard disabled by scripts/guard_check.py\n",
+                find="                return self._runs((*stands_for, *(m for m in methods if m "
+                "not in stands_for)))\n",
+                replace="                return self._runs(tuple(methods))  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1597,7 +1598,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="        outside.extend(stored.get((method, parameter), ()))\n",
+                find="        outside.extend((STORED_IN, field) for field in stored.get((method, "
+                "parameter), ()))\n",
                 replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1629,6 +1631,73 @@ GUARDS: dict[str, Guard] = {
                 path=_PASS_THROUGH,
                 find="            declared = self._declared_type(site[0], argument, set())\n",
                 replace="            declared: list[Handler] = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-method-runs-its-module-overrides": Guard(
+        what="a handler method runs what a call to it would: its own body and every module "
+        "override or implementation, through the hierarchy `call_edges` reads (Vert.x plan, "
+        "Task 10, review round 1)",
+        why="without it `auth::check` on a module interface, or a module handler type whose "
+        "subclass overrides `handle`, is judged on a body that never runs and may publish an "
+        "answering row for a handler that passes on",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            for subtype in self._dispatch.subtypes.get(owner or "", ()):\n',
+                replace="            for subtype in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-method-with-no-body-is-unreadable": Guard(
+        what="a handler method with no body read here and no module override is not readable "
+        "here, named (Vert.x plan, Task 10, review round 1)",
+        why="without it an abstract or interface method with nothing implementing it reads as "
+        "a body with no `next()` and its row is published `resolved`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            runs = [symbol] if symbol in self._read else []\n",
+                replace="            runs = [symbol]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-producer-is-named-as-a-producer": Guard(
+        what="an unreadable handler object names the call that BUILT it as its producer "
+        "(`produced_by`), never as a hand-off (Vert.x plan, Task 10, review round 1)",
+        why="without it the reason says the handler hands its context to the factory that "
+        "made it, a call the context never reaches",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            unread: Unread = (PRODUCED_BY, maker)\n",
+                replace="            unread = (HANDED_TO, maker)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-question-keeps-an-unread-path-unread": Guard(
+        what="a `handler_pass_through` question is filed under the row's own path, NULL where "
+        "the path is unread (Vert.x plan, Task 10, review round 1)",
+        why="without it a route whose path is unread files its question under the text "
+        "`None`, an address no route has",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='        (str(row["protocol"]), row["method"], row["path"]),\n',
+                replace='        (str(row["protocol"]), row["method"], str(row["path"])),  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "fluent.two-unnamed-handler-objects-are-two-rows": Guard(
+        what="two route registrations whose handler objects nothing names (handler NULL) stay "
+        "two rows, each with its own reason (Vert.x plan, Task 10, review round 1)",
+        why="without it the NULL handler merges them and one registration's reason is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                kept.setdefault(handler if handler is not None else "
+                "candidate.registered, candidate)\n",
+                replace="                kept.setdefault(handler, candidate)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

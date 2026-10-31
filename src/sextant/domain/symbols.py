@@ -58,6 +58,14 @@ def with_descriptor(symbol: str, descriptor: str) -> str:
     return symbol[: len(symbol) - len(bare_descriptor(symbol))] + descriptor
 
 
+def with_owner(descriptor: str, owner: str) -> str:
+    """The member `descriptor` names (`A#m(sig_1).`), as the same member of the type `owner`
+    (`B#`) — `B#m(sig_1).`. An override has the same name and JVM descriptor as the method it
+    overrides, so its bare descriptor is the overridden one's under its own type: the
+    pass-through reader expands a handler method to its overrides this way."""
+    return owner + descriptor.rpartition(_TYPE_MARKER)[2]
+
+
 def owner_of(descriptor: str) -> str | None:
     """The owning type's descriptor, trailing `#` included, or `None` for a
     free-function descriptor — SCIP spells those with no `#` at all, and an

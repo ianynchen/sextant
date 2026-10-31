@@ -28,20 +28,33 @@ from test_values import (
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.chains import _method_symbols
 from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
+    HANDED_TO,
+    NO_BODY,
+    OF_TYPE,
     PASSES_ON,
+    STORED_IN,
     UNREADABLE,
     HandlerReader,
     PassThroughRule,
+    file_unread,
     handler_outcomes,
+    unread_rows,
 )
 from sextant.application.resolve.values import value_index
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    MethodReturnFact,
+    SymbolFact,
+)
 from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -237,11 +250,58 @@ def _anonymous_facts() -> list:
     ]
 
 
+# A handler method with no body of its own: `Auth#check` on a module interface one class
+# implements, whose `check` calls `next()`; `Bare#check`, declared with no body and no
+# implementation; and a `BaseHandler` whose `handle` answers, overridden by `SubHandler`'s,
+# which passes on.
+_AUTH = _PKG + "Auth#"
+_AUTH_IMPL = _PKG + "AuthImpl#"
+_BARE = _PKG + "Bare#"
+_BASE = _PKG + "BaseHandler#"
+_SUB = _PKG + "SubHandler#"
+
+
+def _hierarchy_facts() -> list:
+    return [
+        _type(_AUTH),
+        _declared(_AUTH, "check", _TAKES),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _AUTH_IMPL,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[_MODULE + _AUTH],
+        ),
+        _declared(_AUTH_IMPL, "check", _TAKES),
+        _void(_AUTH_IMPL, "check", _TAKES),
+        _site(
+            _symbol(_AUTH_IMPL, "check", _TAKES), 0, _NEXT, kind="interface", receiver_parameter=0
+        ),
+        _type(_BARE),
+        _declared(_BARE, "check", _TAKES),
+        _type(_BASE),
+        _declared(_BASE, "handle", _TAKES),
+        _void(_BASE, "handle", _TAKES),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _SUB,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _BASE,
+        ),
+        _declared(_SUB, "handle", _TAKES),
+        _void(_SUB, "handle", _TAKES),
+        _site(_symbol(_SUB, "handle", _TAKES), 0, _NEXT, kind="interface", receiver_parameter=0),
+    ]
+
+
 @pytest.fixture(scope="module")
 def walked(tmp_path_factory: pytest.TempPathFactory):
     tmp_path = tmp_path_factory.mktemp("pass_through")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "routes.jsonl", _document(), [*_facts(), *_anonymous_facts()])
+    write_fact_file(
+        facts / "routes.jsonl",
+        _document(),
+        [*_facts(), *_anonymous_facts(), *_hierarchy_facts()],
+    )
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -260,7 +320,9 @@ def outcomes(walked) -> tuple[dict, dict]:
 
 def _reader(walked) -> HandlerReader:
     rule = PassThroughRule(_PASSES_ON, ("io.vertx.ext.web.handler",), frozenset({"handle"}))
-    return HandlerReader(value_index(walked), rule, _method_symbols(walked), {}, dict)
+    return HandlerReader(
+        value_index(walked), rule, _method_symbols(walked), {}, dict, dispatch_of(walked)
+    )
 
 
 @pytest.mark.pins("pass_through.a-bridge-hands-the-context-to-the-method-the-row-names")
@@ -283,9 +345,58 @@ def test_a_handler_object_of_a_framework_package_passes_on(walked):
     assert _reader(walked).of(built, None).outcome == PASSES_ON
 
 
+@pytest.mark.pins("pass_through.a-handler-method-runs-its-module-overrides")
+def test_a_method_reference_to_a_module_interface_runs_its_implementation(walked):
+    """`auth::check` on a module interface: the reference names a method with no body, and a
+    call to it runs `AuthImpl.check`, which passes on — never an answering row."""
+    handler = _reader(walked).of(
+        {"kind": "lambda", "symbol": method_descriptor(_AUTH, "check", _TAKES), "captures": 0},
+        None,
+    )
+    implemented = _symbol(_AUTH_IMPL, "check", _TAKES)
+    assert (handler.outcome, handler.symbols, handler.unread) == (None, (implemented,), None)
+    found, _ = handler_outcomes(value_index(walked), _PASSES_ON, {implemented: 0})
+    assert found[implemented] == PASSES_ON
+
+
+@pytest.mark.pins("pass_through.a-handler-method-with-no-body-is-unreadable")
+def test_a_handler_method_with_no_body_and_no_override_is_unreadable(walked):
+    bare = method_descriptor(_BARE, "check", _TAKES)
+    handler = _reader(walked).of({"kind": "lambda", "symbol": bare, "captures": 0}, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (NO_BODY, _symbol(_BARE, "check", _TAKES)),
+    )
+
+
+@pytest.mark.pins("pass_through.a-handler-method-runs-its-module-overrides")
+def test_a_module_handler_type_runs_every_override_of_its_handle(walked):
+    """A `BaseHandler` may be a `SubHandler` at run time, whose `handle` passes on: both are
+    judged, and the one that passes on makes the handler middleware."""
+    handler = _reader(walked).of({"kind": "instance", "symbol": _BASE}, None)
+    base, sub = _symbol(_BASE, "handle", _TAKES), _symbol(_SUB, "handle", _TAKES)
+    assert set(handler.symbols) == {base, sub}
+    found, _ = handler_outcomes(value_index(walked), _PASSES_ON, {base: 0, sub: 0})
+    assert (found[base], found[sub]) == (ANSWERS, PASSES_ON)
+
+
+@pytest.mark.pins("pass_through.a-question-keeps-an-unread-path-unread")
+def test_a_question_on_a_row_whose_path_is_unread_carries_no_path():
+    """The question is filed against the row's own identity: an unread path is NULL there,
+    never the text `None`."""
+    questions: dict = {}
+    row = {"protocol": "http", "method": "GET", "path": None, "handler": None, "caller": "c"}
+    file_unread(questions, row, ((HANDED_TO, "x"),))
+    file_unread(questions, {**row, "path": "/a"}, ((HANDED_TO, "y"),))
+    assert [(q["method"], q["path"]) for q in unread_rows(questions)] == [
+        ("GET", None),
+        ("GET", "/a"),
+    ]
+
+
 def test_a_handler_object_built_elsewhere_and_not_the_frameworks_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "instance", "symbol": "com/other/Thing#"}, None)
-    assert (handler.outcome, handler.unread) == (UNREADABLE, "com/other/Thing#")
+    assert (handler.outcome, handler.unread) == (UNREADABLE, (OF_TYPE, "com/other/Thing#"))
 
 
 @pytest.mark.pins("pass_through.a-next-reached-on-the-received-context-passes-on")
@@ -306,7 +417,7 @@ def test_a_context_handed_to_a_body_outside_the_module_is_unreadable(outcomes):
     read, and the method is named so a reader can say why."""
     found, unread = outcomes
     assert found[_handler("outside")] == UNREADABLE
-    assert unread[_handler("outside")] == (method_descriptor(_LIB, "forward", _TAKES),)
+    assert unread[_handler("outside")] == ((HANDED_TO, method_descriptor(_LIB, "forward", _TAKES)),)
 
 
 @pytest.mark.pins("pass_through.only-an-argument-is-a-hand-off")
@@ -340,7 +451,7 @@ def test_a_context_written_to_a_field_is_not_readable_here(outcomes):
     the walk cannot tell — never an answering row (ruling 2026-10-31)."""
     found, unread = outcomes
     assert found[_handler("stores")] == UNREADABLE
-    assert unread[_handler("stores")] == (_ROUTES + "held.",)
+    assert unread[_handler("stores")] == ((STORED_IN, _ROUTES + "held."),)
 
 
 @pytest.mark.pins("pass_through.a-context-handed-to-a-constructor-is-unreadable")
@@ -349,7 +460,9 @@ def test_a_context_handed_to_a_constructor_is_not_readable_here(outcomes):
     body reads here."""
     found, unread = outcomes
     assert found[_handler("wraps")] == UNREADABLE
-    assert unread[_handler("wraps")] == (method_descriptor(_WRAPPER, "<init>", _TAKES),)
+    assert unread[_handler("wraps")] == (
+        (HANDED_TO, method_descriptor(_WRAPPER, "<init>", _TAKES)),
+    )
 
 
 def test_a_handler_that_replies_through_a_module_helper_answers(outcomes):
@@ -423,6 +536,13 @@ class _Routes:
                 symbol = OWNER + f"{operand}{_RECEIVES}."
                 argument = CallArgument(kind="lambda", source=90, symbol=symbol, captures=0)
                 value = self._call(caller, ROUTE, "handler", _HANDLER, value, [argument])
+            elif step == "object":
+                # `handler(Lib.make())`: an object a library call builds, typed `Handler`.
+                made = self._call(
+                    caller, "com/other/Lib#", str(operand), "()Lio/vertx/core/Handler;", None, []
+                )
+                argument = CallArgument(kind="unresolved", source=made)
+                value = self._call(caller, ROUTE, "handler", _HANDLER, value, [argument])
             elif step == "order":
                 value = self._call(
                     caller, ROUTE, "order", _ORDER, value, [CallArgument(kind="int", value=operand)]
@@ -445,12 +565,18 @@ class _Routes:
 
     def all_facts(self) -> list:
         symbols = [
-            SymbolFact(
-                document_id="doc_1",
-                symbol=_MODULE + OWNER + f"{name}{_RECEIVES}.",
-                construct_kind=ConstructKind.METHOD,
-            )
+            fact
             for name in sorted(self._handlers)
+            for fact in (
+                SymbolFact(
+                    document_id="doc_1",
+                    symbol=_MODULE + OWNER + f"{name}{_RECEIVES}.",
+                    construct_kind=ConstructKind.METHOD,
+                ),
+                MethodReturnFact(
+                    document_id="doc_1", method=_MODULE + OWNER + f"{name}{_RECEIVES}.", ordinal=0
+                ),
+            )
         ]
         return [*self.facts, *symbols]
 
@@ -506,6 +632,27 @@ def test_a_last_route_runs_after_the_others(tmp_path: Path):
     routes.route("one", "/x", ("last", None), ("handler", "first"))
     routes.route("two", "/x", ("handler", "second"))
     assert _rows(tmp_path, routes) == {("/x", "second", "resolved")}
+
+
+@pytest.mark.pins("fluent.two-unnamed-handler-objects-are-two-rows")
+def test_two_unreadable_handler_objects_from_two_methods_are_two_rows(tmp_path: Path):
+    """Two handler objects nothing names (handler NULL), built by two library calls in two
+    methods: two registrations in no known order, each a row with its own reason — never
+    merged on the NULL handler."""
+    routes = _Routes()
+    routes.route("one", "/x", ("object", "first"))
+    routes.route("two", "/x", ("object", "second"))
+    workspace = _resolve_fluent_walked(tmp_path, routes.all_facts(), _vertx_web())
+    rows = sorted(
+        (r["path"], r["handler"], r["resolution"], r["caller"])
+        for r in workspace.query("endpoints")
+    )
+    [question] = [dict(q) for q in workspace.query("open_questions")]
+    workspace.close()
+    assert [(p, h, res) for p, h, res, _ in rows] == [("/x", None, "partial")] * 2
+    assert {r[3] for r in rows} == {_register("one"), _register("two")}
+    assert "Lib#first" in question["candidates"] and "Lib#second" in question["candidates"]
+    assert '"how":"produced_by"' in question["candidates"]
 
 
 def test_one_handler_registered_from_two_methods_is_one_resolved_row(tmp_path: Path):

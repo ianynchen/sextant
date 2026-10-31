@@ -2289,7 +2289,10 @@ def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
     assert ("GET", "/reply", "PassThroughRoutes#viaHelper", "resolved") in rows
 
 
-@pytest.mark.pins("fluent.an-unreadable-handler-gives-a-partial-row")
+@pytest.mark.pins(
+    "fluent.an-unreadable-handler-gives-a-partial-row",
+    "pass_through.a-producer-is-named-as-a-producer",
+)
 def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vertx_tables):
     """`check` hands `ctx` to the base jar's `HttpUtils.nextRoute`, whose body is outside the
     module: the handler's identity is read, its outcome is not, so the row is `check`,
@@ -2306,9 +2309,14 @@ def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vert
     assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in check] == [
         ("PUT", "PassThroughRoutes#check", "partial")
     ]
-    assert "nextRoute" in _reason_of(check[0], vertx_tables), check[0]
+    reason = _reason_of(check[0], vertx_tables)
+    assert '{"how":"handed_to","name":"com/acme/vertx/base/HttpUtils#nextRoute(' in reason, reason
     plain = [r for r in rows if r["path"] == "/plain"]
     assert [r["resolution"] for r in plain] == ["partial"], plain
+    # The base factory BUILT the handler: it is named as its producer, never as a hand-off.
+    reason = _reason_of(plain[0], vertx_tables)
+    assert '{"how":"produced_by","name":"com/acme/vertx/PassThroughRoutes#baseFactory(' in reason
+    assert "handed_to" not in reason, reason
     assert not [r for r in rows if r["path"] == "/cors"]
 
 

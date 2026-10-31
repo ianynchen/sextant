@@ -1174,6 +1174,19 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
     return _runs(f"{what}, so nothing above accounts for it: library `{coordinate}`{tail}.")
 
 
+# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
+# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
+_PASS_THROUGH_PHRASES = {
+    "handed_to": "hands the request's context to {}, where it is not followed here",
+    "stored_in": "stores the request's context in {}, where it is not followed here",
+    "produced_by": "is built by {}, whose body is not read here",
+    "of_type": "is declared as {}, a type whose handler is not read here",
+    "from_field": "comes from {}, whose declared type is not a handler read here",
+    "no_body": "runs {}, which has no body read here and no module override",
+    "argument": "is an argument of {} that is not read here",
+}
+
+
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
@@ -1340,19 +1353,17 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
         # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
-        # own `candidates` line. The sentence names the handler and where its context went
-        # that the analysis does not follow — a body not read, a field, a constructor — which
-        # is what a reader opens; an object built where nothing is read names no call.
+        # own `candidates` line. Each `unread` entry says what its name IS — where the
+        # context went unfollowed, what built the handler object, or the handler method with
+        # no body — so a builder is never called a hand-off.
         handler = candidate["handler"] or "a handler object"
-        unread = cast(list[str], candidate["unread"])
-        where = (
-            f"hands the request's context to {', '.join(unread)}, where it is not followed here"
-            if unread
-            else "is built where no body is read here"
+        reasons = ", and ".join(
+            _PASS_THROUGH_PHRASES[str(entry["how"])].format(entry["name"])
+            for entry in cast(list[dict[str, str]], candidate["unread"])
         )
         return (
-            f"{handler} (registered by {candidate['caller']}) {where}, so whether it passes "
-            f"the request on is not known"
+            f"{handler} (registered by {candidate['caller']}) {reasons}, so whether it "
+            f"passes the request on is not known"
         )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list

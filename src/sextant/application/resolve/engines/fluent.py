@@ -22,6 +22,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
@@ -248,7 +249,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     ends: Iterable[ChainEnd] = chain_ends(workspace, catalog)
     judged: dict[Any, _Judged] | None = None
     candidates: list[_Candidate] | None = None
-    unread: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    unread: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
     if pass_through is not None:
         read_whole = list(ends)
         judged = _judge(read_whole, pass_through, walk_index, method_symbols, workspace)
@@ -379,7 +380,7 @@ class _DeriveContext:
     # catalog, whose rows are written as they are derived, the first handler answering.
     judged: "dict[Any, _Judged] | None" = None
     candidates: "list[_Candidate] | None" = None
-    unread: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    unread: dict[tuple[str, str | None, str | None], dict[str, Any]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -862,8 +863,9 @@ class _Judged:
 
     symbol: str | None
     outcome: str
-    # The code outside the module an `unreadable` handler depends on, for its question.
-    unread: tuple[str, ...] = ()
+    # Why an `unreadable` handler is, `(how, name)` each (`pass_through.HANDED_TO`, …), for
+    # its question.
+    unread: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -878,7 +880,7 @@ class _Candidate:
     registered: tuple[str, int]
     # The order the chain set (`_order_of`), or None for the registration order.
     order: int | str | None
-    unread: tuple[str, ...] | None
+    unread: tuple[tuple[str, str], ...] | None
 
 
 def _judge(
@@ -907,6 +909,7 @@ def _judge(
         method_symbols,
         workspace.once(declared_parameters_of),
         lambda: workspace.once(_field_types),
+        workspace.once(dispatch_of),
     )
     read = {
         key: reader.of(argument, argument.get(_CAPTURED_AT)) for key, argument in arguments.items()
@@ -921,10 +924,16 @@ def _judge(
             )
             continue
         found = {outcomes[symbol] for symbol in handler.symbols}
+        names = {entry for symbol in handler.symbols for entry in unread.get(symbol, ())}
+        # A handler method with no body among them (`HandlerReader._runs`) is not readable
+        # here unless another of them passes on.
+        if handler.unread is not None:
+            found.add(UNREADABLE)
+            names.add(handler.unread)
         judged[key] = _Judged(
             handler.symbols[0],
             next(o for o in (PASSES_ON, UNREADABLE, ANSWERS) if o in found),
-            tuple(sorted({name for symbol in handler.symbols for name in unread.get(symbol, ())})),
+            tuple(sorted(names)),
         )
     return judged
 
@@ -1008,7 +1017,7 @@ def _settle(
     candidates: list[_Candidate],
     rows: list[dict[str, Any]],
     metadata: list[dict[str, Any]],
-    unread: dict[tuple[str, str | None, str], dict[str, Any]],
+    unread: dict[tuple[str, str | None, str | None], dict[str, Any]],
 ) -> None:
     """The held-back inbound rows that answer (Vert.x spec §3b), written once every chain is
     read. Routes on one verb and path are one wire identity, tried in order: a route some
@@ -1020,10 +1029,13 @@ def _settle(
         row = candidate.row
         groups.setdefault((row["protocol"], row["method"] or "", row["path"]), []).append(candidate)
     for group in groups.values():
-        kept: dict[str | None, _Candidate] = {}
+        # One handler is one row; two handler objects nothing names (handler NULL) are two
+        # registrations, each with its own reason, never merged on the NULL.
+        kept: dict[Any, _Candidate] = {}
         for candidate in group:
             if not any(_runs_before(other, candidate) for other in group if other is not candidate):
-                kept.setdefault(candidate.row["handler"], candidate)
+                handler = candidate.row["handler"]
+                kept.setdefault(handler if handler is not None else candidate.registered, candidate)
         for candidate in kept.values():
             row = candidate.row
             if len(kept) > 1 and row["resolution"] == str(Resolution.RESOLVED):

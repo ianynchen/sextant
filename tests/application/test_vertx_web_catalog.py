@@ -20,7 +20,13 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, ConstructKind
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    MethodReturnFact,
+    SymbolFact,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -98,14 +104,20 @@ class _Body:
         return value
 
 
-def _symbols(*names: str) -> list[SymbolFact]:
+def _symbols(*names: str) -> list[SymbolFact | MethodReturnFact]:
+    """Each handler's symbol fact and the `method_return` its body carries (D00 §5): a
+    handler method with no body read is not readable here (spec §3b)."""
     return [
-        SymbolFact(
-            document_id="doc_1",
-            symbol=_MODULE + _handler(name),
-            construct_kind=ConstructKind.METHOD,
-        )
+        fact
         for name in names
+        for fact in (
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + _handler(name),
+                construct_kind=ConstructKind.METHOD,
+            ),
+            MethodReturnFact(document_id="doc_1", method=_MODULE + _handler(name), ordinal=0),
+        )
     ]
 
 
