@@ -1349,6 +1349,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "inbound_routes.fluent-fills-the-media-columns": Guard(
+        what="an inbound `fluent` row carries the media its chain captured in `consumes` and "
+        "`produces`, read by the same function `combinator` calls",
+        why="Vert.x declares what a route consumes and produces on the route chain; without "
+        "this the row published both NULL, and a client sending the wrong media type to a "
+        "route that refuses it looked like a route with no media contract at all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    consumes, produces = media_columns(captures) if direction == "inbound" '
+                "else (None, None)\n",
+                replace="    consumes, produces = None, None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.a-BRANCHED-assembled-address-keeps-its-unfilled-template": Guard(
         what="a fluent chain whose assembled url answers only branch literals keeps the "
         "template it published before ruling 7, its hole unfilled, at `partial`",

@@ -61,6 +61,7 @@ from sextant.application.resolve.shapes.chains import (
 )
 from sextant.application.resolve.shapes.client_base import against_client_base, client_base_of
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.inbound_routes import media_columns
 from sextant.application.resolve.shapes.member_values import (
     member_table,
     names_members,
@@ -464,6 +465,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # channel we cannot name is not a channel we can bind, and the chain then
     # keeps its own row with `handler` NULL.
     link = _string_value(captures.get("channel_link"))
+    # The media a served route declares; an outbound row serves nothing, so it carries none.
+    consumes, produces = media_columns(captures) if direction == "inbound" else (None, None)
     for peer, path, url_resolution in destinations:
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
@@ -628,8 +631,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 "catalog_id": context.catalog.id,
                 "request_shape": request_shape,
                 "response_shape": response_shape,
-                "consumes": None,
-                "produces": None,
+                "consumes": consumes,
+                "produces": produces,
             }
         )
 

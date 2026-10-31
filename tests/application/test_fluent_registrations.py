@@ -3070,3 +3070,41 @@ def test_a_vertx_consumer_never_given_a_handler_derives_nothing(tmp_path: Path):
     either would notice a regression. Disabling it derives a row for this input, which is
     the false positive M6 forbids."""
     assert _vertx_rows(tmp_path, with_handler=False) == []
+
+
+# --- the media columns of an inbound row ------------------------------------
+
+_MEDIA_MATCHES = {
+    **_ADAPTER_MATCHES,
+    "steps": [
+        *_ADAPTER_MATCHES["steps"],
+        {"method": "produces", "captures": {"produces": "arg0"}},
+        {"method": "consumes", "captures": {"consumes": "arg0"}},
+    ],
+}
+
+
+@pytest.mark.pins("inbound_routes.fluent-fills-the-media-columns")
+def test_an_inbound_chain_fills_its_media_columns_from_its_captures(tmp_path: Path):
+    """Vert.x spec §3g item 2: the media a chain declares are the inbound row's
+    `consumes`/`produces`, the same JSON text a combinator row and a Spring row carry.
+    Only the media the chain captured are filled; the other column stays NULL."""
+    facts = _adapter(
+        ("produces", [CallArgument(kind="string", value="application/json")]),
+        ("consumes", [CallArgument(kind="string", value="text/xml")]),
+    )
+    workspace = _run(tmp_path, facts, _catalog(_MEDIA_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["consumes"], row["produces"]) == ('["text/xml"]', '["application/json"]')
+
+
+def test_an_outbound_chain_keeps_its_media_columns_null(tmp_path: Path):
+    """Outbound rows are unchanged: a request's media are not a served contract."""
+    facts = _adapter(("produces", [CallArgument(kind="string", value="application/json")]))
+    workspace = _run(tmp_path, facts, _catalog(_MEDIA_MATCHES, direction="outbound"))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["consumes"], row["produces"]) == (None, None)
