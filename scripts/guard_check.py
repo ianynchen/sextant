@@ -1028,6 +1028,54 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "stitch.an-UNCALLED-report-skips-pattern-and-named-hole-rows": Guard(
+        what="`uncalled` leaves out pattern paths and paths holding a named hole",
+        why="the linker refuses to match them, so no call can reach them in this analysis; "
+        "reporting them uncalled states a finding nobody read",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(row["path"])):\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-link-marks-only-the-any-method-row-reached": Guard(
+        what="a link served by an any-method row does not mark a plain NULL-method row reached",
+        why="`to_method` NULL names both rows; marking the plain one hides an uncalled route "
+        "behind a call that never reached it",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="            if not link.to_any_method:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-link-states-no-method": Guard(
+        what="a link whose only server is an any-method row states a NULL method",
+        why="the link would name a method no inbound row has, and the join on "
+        "(participant, method, path) would find nothing",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        return verb if participant in exact else None\n",
+                replace="        return verb  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-row-is-reached-through-a-by-name-link-on-its-path": Guard(
+        what="an any-method row is reached by a link at a verb it was served by name",
+        why="otherwise the any-method row beside a GET row is reported uncalled while the call "
+        "to the path was linked: a false finding",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("method_kind") == ANY_METHOD and key[:2] + key[3:] in reached_by_path:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "paths.a-PATTERN-path-is-never-canonicalised": Guard(
         what="canonical_http_path returns a pattern path untouched",
         why="a regular expression given a leading slash is a different expression, so the "

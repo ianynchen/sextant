@@ -71,6 +71,10 @@ class Link:
     # and join on (participant, method, path) and, for the caller, its symbol.
     to_conditions: tuple[tuple[str, str], ...] = ()
     from_conditions: tuple[tuple[str, str], ...] = ()
+    # True where the inbound end is an any-method row, which `to_method` NULL alone cannot say
+    # (a plain NULL-method row also has a NULL method). Not a column of `links`: it only lets
+    # `uncalled` mark the any-method row reached and no other.
+    to_any_method: bool = False
 
     def row(self) -> dict[str, object]:
         return {
@@ -263,6 +267,9 @@ def _one(
         # serves it by name, NULL where only an any-method row does.
         return verb if participant in exact else None
 
+    def served_any(participant: str) -> bool:
+        return participant not in exact
+
     if peer is not None:
         target = by_name.get(peer)
         if target is _AMBIGUOUS:
@@ -300,6 +307,7 @@ def _one(
                 to_participant=named_participant.name,
                 to_protocol=protocol,
                 to_method=served_method(named_participant.name),
+                to_any_method=served_any(named_participant.name),
                 to_path=path,
                 evidence=DECLARED,
             ),
@@ -325,6 +333,7 @@ def _one(
                 to_participant=min(candidates),
                 to_protocol=protocol,
                 to_method=served_method(min(candidates)),
+                to_any_method=served_any(min(candidates)),
                 to_path=path,
                 resolution=str(Resolution.NARROWED),
                 candidates=tuple(sorted(candidates)),
@@ -342,6 +351,7 @@ def _one(
             to_participant=only,
             to_protocol=protocol,
             to_method=served_method(only),
+            to_any_method=served_any(only),
             to_path=path,
         ),
         None,
@@ -354,7 +364,9 @@ def _verb(row: "dict[str, object]") -> str | None:
     Carried through comparisons as-is rather than defaulted: a verbless row is one whose verb
     nobody read, and treating that as equal to every verb would link a call to routes it
     cannot reach. Two verbless rows on one path do compare equal, which is the same NULL-safe
-    reading `endpoints`' own dedup key takes.
+    reading `endpoints`' own dedup key takes. An any-method row (`method_kind`) is the one
+    exception, handled where the index is built: it serves every verb, so a call of any verb,
+    unread included, reaches it without that being a guess.
     """
     return None if row.get("method") is None else str(row["method"])
 
@@ -386,6 +398,11 @@ def uncalled(
     finding about a dependency this analysis did read. So a participant named by any link
     has none of its endpoints reported here.
 
+    **A pattern path or a path holding a named hole is never reported.** The linker refuses to
+    match them by path, so no call could ever reach them in this analysis: "nobody calls this"
+    would be a finding the analysis never read, as false as calling a gateway's routes
+    uncalled. They are left out, not claimed dead.
+
     Ordered for NFR-1, and deduplicated: two catalogs describing one handler produce one
     endpoint row each only if they differ, and a finding stated twice is noise.
     """
@@ -396,11 +413,18 @@ def uncalled(
         if link.to_path is None:
             whole.add(link.to_participant)
         else:
-            reached.add((link.to_participant, str(link.to_protocol), link.to_method, link.to_path))
+            # An any-method end marks the any-method row (below), never a plain NULL-method row
+            # on the same path, which `to_method` NULL alone would also name.
+            if not link.to_any_method:
+                reached.add(
+                    (link.to_participant, str(link.to_protocol), link.to_method, link.to_path)
+                )
             reached_by_path.add((link.to_participant, str(link.to_protocol), link.to_path))
     out = set()
     for row in endpoints:
         if str(row["direction"]) != "inbound" or row["path"] is None:
+            continue
+        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(row["path"])):
             continue
         participant = str(row["participant"])
         if participant in whole:

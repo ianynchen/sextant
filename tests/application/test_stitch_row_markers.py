@@ -119,3 +119,52 @@ def test_a_path_with_an_ordinary_template_variable_still_links():
         [_inbound("b", "GET", "/orders/{id}"), _outbound("a", "GET", "/orders/{id}")],
     )
     assert [l.to_path for l in links] == ["/orders/{id}"]
+
+
+@pytest.mark.pins("stitch.an-UNCALLED-report-skips-pattern-and-named-hole-rows")
+def test_a_pattern_or_named_hole_row_is_never_reported_uncalled():
+    endpoints = [
+        _inbound("b", "GET", "/files/.+", path_kind=PATH_KIND_PATTERN),
+        _inbound("b", "GET", "<prefix>/status"),
+        _inbound("b", "GET", "/plain"),
+    ]
+    assert [u.path for u in uncalled(endpoints, ())] == ["/plain"]
+
+
+@pytest.mark.pins("stitch.an-ANY-METHOD-link-marks-only-the-any-method-row-reached")
+def test_an_any_method_link_marks_only_the_any_method_row_reached():
+    inbound = [_inbound("b", None, "/p"), _inbound("b", None, "/p", method_kind=ANY_METHOD)]
+    links, _ = match(_people("a", "b"), [*inbound, _outbound("a", "GET", "/p")])
+    # Only the any-method row serves GET; the plain NULL-method row was not reached.
+    assert [(u.method, u.path) for u in uncalled(inbound, links)] == [(None, "/p")]
+    assert links[0].to_any_method
+
+
+@pytest.mark.pins("stitch.an-ANY-METHOD-link-states-no-method")
+def test_a_link_to_an_any_method_row_states_no_method_and_one_by_name_states_it():
+    links, _ = match(
+        _people("a", "b"),
+        [_inbound("b", None, "/p", method_kind=ANY_METHOD), _outbound("a", "PUT", "/p")],
+    )
+    assert (links[0].to_method, links[0].to_any_method) == (None, True)
+    links, _ = match(_people("a", "b"), [_inbound("b", "PUT", "/p"), _outbound("a", "PUT", "/p")])
+    assert (links[0].to_method, links[0].to_any_method) == ("PUT", False)
+
+
+@pytest.mark.pins("stitch.an-ANY-METHOD-row-is-reached-through-a-by-name-link-on-its-path")
+def test_an_any_method_row_beside_a_by_name_row_is_reached_by_the_by_name_link():
+    # The first test above covers this through `uncalled`; here the any-method row is
+    # asserted reached on its own, with the exact-verb row also present.
+    inbound = [_inbound("b", "GET", "/x"), _inbound("b", None, "/x", method_kind=ANY_METHOD)]
+    links, _ = match(_people("a", "b"), [*inbound, _outbound("a", "GET", "/x")])
+    assert uncalled(inbound, links) == ()
+
+
+@pytest.mark.pins("stitch.an-ANY-METHOD-row-links-an-outbound-call-of-any-verb")
+def test_an_outbound_call_with_no_verb_links_an_any_method_row():
+    links, unmatched = match(
+        _people("a", "b"),
+        [_inbound("b", None, "/p", method_kind=ANY_METHOD), _outbound("a", None, "/p")],
+    )
+    assert unmatched == ()
+    assert [(l.from_method, l.to_participant, l.to_method) for l in links] == [(None, "b", None)]
