@@ -1337,6 +1337,22 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"registered by {candidate['caller']} ({handler}); the framework refuses a path "
             f"that is empty or lacks a leading `/`, so it serves nothing for it"
         )
+    if question == "handler_pass_through":
+        # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
+        # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
+        # own `candidates` line. The sentence names the handler and the unread code, which
+        # are what a reader opens; an object built where nothing is read names no call.
+        handler = candidate["handler"] or "a handler object"
+        unread = cast(list[str], candidate["unread"])
+        where = (
+            f"hands the request to {', '.join(unread)}, whose body is not read here"
+            if unread
+            else "is built where no body is read here"
+        )
+        return (
+            f"{handler} (registered by {candidate['caller']}) {where}, so whether it passes "
+            f"the request on is not known"
+        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

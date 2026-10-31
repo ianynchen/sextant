@@ -2084,6 +2084,24 @@ where another repairs it. A fully read path of that shape derives no row, is nev
 `canonical_http_path`, and is filed as a `refused_registration` open question (D01). Absent, the
 leading-slash repair applies as before. A value that is not a boolean is refused at load.
 
+**`matches.passes_on: [{owner, method}, …]`** (Vert.x spec §3b) declares the calls that pass a
+request ON to the next handler — Vert.x's `RoutingContext.next()`, one entry per owner. A route
+chain's handlers run in order and the row names the FIRST that does not pass on: a handler
+passes on where a declared call is reached on the context it received (in its own body, in a
+module method it hands the context to, or in a lambda that captured it), answers where its body
+is in the module and none is, and is not readable here where it hands the context to a method
+whose body is not read — its row is then `partial`, with a `handler_pass_through` open question
+(D01) naming that method. A chain whose every handler passes on derives no row. Beside it,
+**`framework_handlers: [<package>, …]`** names the packages (and their subpackages) whose
+handler OBJECTS pass on by the framework's contract, and **`handler_methods: [<name>, …]`** the
+method the framework calls on a handler object (`handle`), so `new X(…)` runs `X.handle`; an
+object of any other type built where nothing is read is not readable here. Routes on one verb
+and path are then ordered as the framework tries them: within one method by their root calls'
+order, by literal **`order: argN`** captures, after every other for **`order: last`**; candidates
+in no known order are each a row, `narrowed`. Absent, every handler answers and a chain's row
+names its first. A malformed entry, or `framework_handlers`/`handler_methods` without
+`passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own

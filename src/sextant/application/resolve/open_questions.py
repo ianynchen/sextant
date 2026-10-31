@@ -141,6 +141,18 @@ QUESTIONS = (
     # framework that a person resolves. Repairing the path instead would publish an address
     # the framework never serves, which DR-5's linking would then match against real ones.
     "refused_registration",
+    # Vert.x spec §3b. An inbound row whose handler is not readable here: it hands the
+    # request's context to a method whose body is in another jar (Hono's
+    # `HttpUtils.nextRoute`), or it is an object another jar builds and not one of the
+    # framework's own handlers. The handler's identity is read, whether it passes the request
+    # on is not, so the row is `partial` and this question names the code that decides it.
+    # Candidates: one per row of the identity, the handler, the registering method and the
+    # unread code (`unread`, empty where no call names it).
+    #
+    # The row's own reason, filed against its wire identity: no endpoint column carries a
+    # reason (`evidence` is a provenance tier), and a partial address explains itself in its
+    # path while a partial dispatch outcome has nothing on the row to say it.
+    "handler_pass_through",
 )
 
 

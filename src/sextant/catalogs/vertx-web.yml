@@ -193,19 +193,26 @@ matches:
         poisons: [serves], returns_receiver: true }
     # THE REGISTRATION STEPS, named again in `terminal` below: a route serves once it is
     # given a handler. Every handler is kept, in call order (`.handler(auth).handler(h)` is
-    # two handlers on one route); until the answering one is chosen the row names the
-    # first. `blockingHandler` has two overloads, both with the handler at argument 0.
+    # two handlers on one route), and the row names the one that answers (`passes_on`
+    # below). `blockingHandler` has two overloads, both with the handler at argument 0.
     - { owner: io.vertx.ext.web.Route, method: handler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Route;",
         captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: blockingHandler,
         captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: respond, descriptor: "(Ljava/util/function/Function;)Lio/vertx/ext/web/Route;",
         captures: { handler: arg0 }, repeats: [handler], returns_receiver: true }
-    # Self-returning and carrying nothing a row reads (yet): `order`/`last` decide which of
-    # several routes answers first, `subRouter` mounts a router (both later tasks), and
-    # `failureHandler` answers only a failed request, so it registers no route of its own.
-    - { owner: io.vertx.ext.web.Route, method: order, descriptor: "(I)Lio/vertx/ext/web/Route;", returns_receiver: true }
-    - { owner: io.vertx.ext.web.Route, method: last, descriptor: "()Lio/vertx/ext/web/Route;", returns_receiver: true }
+    # `order(int)` and `last()` decide which of several routes on one verb and path is tried
+    # first (spec §3b): Vert.x sorts its routes by order, a route's own order being the
+    # router's count when it was made (row 116: `incrementOrderSequence` in every root) until
+    # `order(int)` sets one. `last()` calls a self-returning method of its own class (row
+    # 101), `order(Integer.MAX_VALUE)`, so the later of the two calls wins.
+    - { owner: io.vertx.ext.web.Route, method: order, descriptor: "(I)Lio/vertx/ext/web/Route;",
+        captures: { order: arg0 }, returns_receiver: true }
+    - { owner: io.vertx.ext.web.Route, method: last, descriptor: "()Lio/vertx/ext/web/Route;",
+        captures: { order: last }, returns_receiver: true }
+    # Self-returning and carrying nothing a row reads (yet): `subRouter` mounts a router (a
+    # later task), and `failureHandler` answers only a failed request, so it registers no
+    # route of its own.
     - { owner: io.vertx.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/ext/web/Router;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: failureHandler, descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/ext/web/Route;", returns_receiver: true }
     - { owner: io.vertx.ext.web.Route, method: setName, descriptor: "(Ljava/lang/String;)Lio/vertx/ext/web/Route;", returns_receiver: true }
@@ -216,6 +223,22 @@ matches:
   # A route given no handler serves nothing and derives nothing: `route("/api/*").subRouter(
   # api)` and a route built and configured but never handed one.
   terminal: [handler, blockingHandler, respond]
+
+  # WHICH HANDLER ANSWERS (spec §3b). Vert.x calls a route's handlers in order, then the next
+  # matching route's, for as long as each calls `next()` on the `RoutingContext` it was
+  # handed: a handler that does is middleware, and the row names the first that does not. A
+  # chain whose every handler passes on is no row (`router.route().handler(BodyHandler.
+  # create())`).
+  passes_on:
+    - { owner: io.vertx.ext.web.RoutingContext, method: next }
+  # The framework's own handlers (`BodyHandler`, `CorsHandler`, `AuthenticationHandler` and
+  # every other type of this package) carry the request on or fail it, by Vert.x's contract,
+  # so a handler object of one passes on without its body being read. One package and its
+  # subpackages; a handler of another type the module does not build is not readable here.
+  framework_handlers: [io.vertx.ext.web.handler]
+  # What Vert.x calls on a handler OBJECT (`Handler<RoutingContext>.handle`): a route given
+  # `new X(…)` runs `X.handle` (user ruling 2026-10-30).
+  handler_methods: [handle]
 
   # HANDLER-BODY READS (spec §3a), the mechanism `javalin.yml` ships: what the handler body
   # reads off its `RoutingContext`, one `endpoint_metadata` row per read, matched against
@@ -232,10 +255,13 @@ matches:
         kind: header }
 
 # BOUNDARIES, stated rather than discovered:
-#   * WHICH HANDLER ANSWERS. A route's handlers run in order until one does not call
-#     `RoutingContext.next()`; middleware (`BodyHandler`, an auth handler) passes on. Until
-#     that rule is built, a chain's row names its FIRST handler, and a middleware-only route
-#     is a row.
+#   * WHICH HANDLER ANSWERS, where the module cannot read it: a handler that hands its
+#     context to a method of another jar (Hono's `HttpUtils.nextRoute`), or is an object
+#     another jar builds, gives its row at `partial`, with a `handler_pass_through` question
+#     naming that method. A handler that calls `next()` on one branch is middleware.
+#   * A CONTEXT CAPTURED BY AN ANONYMOUS CLASS. javac stores it in a synthetic field the
+#     class's constructor writes, and `next()` is then called on a `getfield` of it, which the
+#     facts do not name: such a `next()` is not followed back to the handler.
 #   * SUB-ROUTERS. A route registered on a router mounted under a prefix is published
 #     without the prefix until mounts are joined.
 #   * THE RXJAVA 3 AND MUTINY WRAPPERS (`io.vertx.rxjava3.ext.web.*`,

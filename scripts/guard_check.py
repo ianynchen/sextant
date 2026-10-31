@@ -146,6 +146,8 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+# Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
+_PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
@@ -1382,15 +1384,239 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "fluent.a-handler-tuple-answers-with-its-first": Guard(
-        what="an inbound `fluent` row whose chain accumulated several handlers carries the "
-        "first one registered (Vert.x plan, Task 5, until the answering handler is chosen)",
+        what="an inbound `fluent` row whose chain accumulated several handlers, in a catalog "
+        "declaring no `passes_on`, carries the first one registered: none passes the request "
+        "on, so the first answers (Vert.x plan, Tasks 5 and 10)",
         why="without it a route with two handlers read no handler at all, and a route "
         "nothing could be followed from looked like a route with no consumer",
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        argument = argument[0] if argument else None\n",
-                replace="        argument = None  # guard disabled by scripts/guard_check.py\n",
+                find="        first = arguments[0] if arguments else None\n",
+                replace="        first = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-first-handler-that-does-not-pass-on-answers": Guard(
+        what="a route chain's row names the first of its handlers, in call order, that does "
+        "not pass the request on (Vert.x plan, Task 10; spec §3b)",
+        why="without it the row names a handler Vert.x never runs, since the one before it "
+        "answered",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    for argument in arguments:\n        judged = context.judged.get(",
+                replace="    for argument in reversed(arguments):  # guard disabled by "
+                "scripts/guard_check.py\n        judged = context.judged.get(",
+            ),
+        ),
+    ),
+    "fluent.a-chain-whose-every-handler-passes-on-is-no-row": Guard(
+        what="a route chain whose every handler passes the request on derives no row: it is "
+        "middleware (Vert.x plan, Task 10; spec §3b)",
+        why="without it `router.route().handler(BodyHandler.create())` and an auth-only route "
+        "publish rows no handler of the module answers",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            return judged\n    return None\n",
+                replace="            return judged\n    return _Judged(None, ANSWERS)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unreadable-handler-gives-a-partial-row": Guard(
+        what="a row whose answering handler is not readable here is `partial` (Vert.x plan, "
+        "Task 10; spec §3b)",
+        why="without it a handler handing its context to another jar's `nextRoute` is published "
+        "`resolved`, asserting a dispatch outcome nothing read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if unreadable and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-route-chain-in-one-method-runs-in-root-order": Guard(
+        what="of two routes on one verb and path registered in one method, the first root call "
+        "answers and the second never runs (Vert.x plan, Task 10; spec §3b)",
+        why="without it two answering routes in one method are each a `narrowed` row, though "
+        "Vert.x numbers its routes as they are made and the order is exact",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    return first.registered[0] == then.registered[0] and "
+                "first.registered[1] < then.registered[1]\n",
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.route-chains-in-different-methods-are-narrowed": Guard(
+        what="routes on one verb and path in no known order, with different handlers, are each "
+        "a row at `narrowed` (Vert.x plan, Task 10; spec §3b)",
+        why="without it each is `resolved`, two rows each claiming to be the one that answers",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if len(kept) > 1 and row["resolution"] == '
+                "str(Resolution.RESOLVED):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-literal-route-order-decides": Guard(
+        what="literal `order(int)` values order routes on one verb and path, wherever they were "
+        "registered (Vert.x plan, Task 10; spec §3b)",
+        why="without it two ordered routes in two methods are each `narrowed`, though Vert.x "
+        "tries the lower order first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        return first.order < then.order\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-last-route-runs-after-the-rest": Guard(
+        what="a route given `last()` is tried after every route not given it (Vert.x plan, "
+        "Task 10; spec §3b)",
+        why="without it a `last()` route and another are in no known order and both rows are "
+        "`narrowed`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        return then.order == _LAST\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-order-capture-reads-an-argument-or-last": Guard(
+        what="an `order` capture that is neither `argN` nor `last` is refused at load (Vert.x "
+        "plan, Task 10)",
+        why="without it a misspelt order loads, reads as an unread order and leaves routes the "
+        "catalog meant to order unordered",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            captures[_ORDER] == _LAST or "
+                "_ARG_REFERENCE.match(str(captures[_ORDER]))\n",
+                replace="            True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-next-reached-on-the-received-context-passes-on": Guard(
+        what="a handler passes the request on where a `passes_on` call's receiver walks back to "
+        "the context it received, through its own body, a module helper or a lambda's capture "
+        "(Vert.x plan, Task 10; spec §3b)",
+        why="without it every middleware handler answers and every route's row names its "
+        "first handler, auth and body parsers included",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        if reached & ended:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-outside-the-module-is-unreadable": Guard(
+        what="a handler that hands its context to a method whose body is not read is not "
+        "readable here (Vert.x plan, Task 10; spec §3b)",
+        why="without it a handler whose pass-through is decided in another jar answers, and its "
+        "row is published `resolved`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        elif outside:\n",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.only-an-argument-is-a-hand-off": Guard(
+        what="a call ON the context (`ctx.response()`, `ctx.fail(…)`) is not a hand-off: only "
+        "the context passed as an argument is (Vert.x plan, Task 10; spec §3b)",
+        why="without it every handler calling the framework's own API on its context is not "
+        "readable here, and every route is `partial`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            for slot, argument in enumerate(site.get("arguments") or ()):\n',
+                replace='            for slot, argument in enumerate([*(site.get("arguments") or ()), '
+                '{"kind": "parameter", "value": site.get("receiver_parameter")}]):'
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-to-another-handler-follows-it": Guard(
+        what="the context a handler hands to a module method is followed to that method's "
+        "parameter, so a handler calling another handler that passes on passes on too "
+        "(Vert.x plan, Task 10; spec §3b)",
+        why="without it the walk back from the second handler's `next()` stops at its own "
+        "parameter and the first handler, which passes on through it, answers",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                        reached.add(target)\n"
+                "                        stack.append(target)\n",
+                replace="                        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-framework-handler-object-passes-on": Guard(
+        what="a handler object of a `framework_handlers` package, or a subpackage, passes on "
+        "by the framework's contract (Vert.x plan, Task 10; spec §3b)",
+        why="without it `BodyHandler.create()` and a CORS factory's `CorsHandler` are not "
+        "readable here and their routes publish `partial` rows nothing in the module answers",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                return Handler(outcome=PASSES_ON)\n",
+                replace="                return Handler(outcome=UNREADABLE)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-bridge-hands-the-context-to-the-method-the-row-names": Guard(
+        what="of a handler class's two `handle` methods, the row names the one javac's bridge "
+        "hands the context to (Vert.x plan, Task 10)",
+        why="without it the row names whichever sorts first, half the time the synthetic "
+        "bridge `handle(Object)`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                return Handler((*stands_for, *(m for m in methods if m not "
+                "in stands_for)))\n",
+                replace="                return Handler(tuple(methods))  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-malformed-word-is-refused": Guard(
+        what="a malformed `passes_on`, `framework_handlers` or `handler_methods`, or either of "
+        "the last two without `passes_on`, is refused at load (Vert.x plan, Task 10)",
+        why="without it a misspelt word loads and silently reads every handler as answering, "
+        "or as the framework's",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                raise CatalogError(f"{where} `{word}` is read only beside '
+                '`passes_on`")\n',
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='        raise CatalogError(f"{where} `passes_on` is a non-empty list of '
+                '{{owner, method}}")\n',
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='            raise CatalogError(\n                f"{where} a `passes_on` '
+                'entry is {{owner, method}}, each a name; got {entry!r}"\n            )\n',
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='            raise CatalogError(f"{where} `{word}` is a list of names; got '
+                '{value!r}")\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7364,6 +7590,10 @@ def copy_tree(destination: Path) -> Path:
         # 3): which dispatcher serves a row is read off the catalog that derived it, so the
         # guard that keeps the servlet path off a plain servlet is pinned on real facts.
         "orders-contextpath",
+        # Vert.x Web (spec 2026-10-30 §3b): whether a handler hands its context to a method of
+        # the base jar is read off real facts, so the guard keeping such a row `partial` is
+        # pinned on the e2e test of this module.
+        "orders-vertx-web",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

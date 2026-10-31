@@ -377,10 +377,10 @@ def test_a_refused_verb_root_given_another_verb_keeps_the_roots_verb(tmp_path: P
     assert [(q["method"], q["path"]) for q in questions] == [("GET", "bad")]
 
 
-@pytest.mark.pins("fluent.a-handler-tuple-answers-with-its-first")
+@pytest.mark.pins("fluent.the-first-handler-that-does-not-pass-on-answers")
 def test_a_route_with_two_handlers_names_its_first(tmp_path: Path):
-    """`get("/two").handler(this::a).handler(this::b)`: until the answering handler is
-    chosen, the row names the first one registered (Vert.x plan, Task 8 brief)."""
+    """`get("/two").handler(this::a).handler(this::b)`, both answering: Vert.x stops at the
+    first, so the row names it (spec §3b; Vert.x plan, Tasks 8 and 10)."""
     body = _Body()
     body.chain(("get", _PATH, [_string("/two")]), _h("first"), _h("second"))
     rows, _ = _derived(tmp_path, body, "first", "second")

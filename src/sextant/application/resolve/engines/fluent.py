@@ -15,7 +15,7 @@ positional slot.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import product
 from typing import Any
@@ -24,6 +24,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
+    _CAPTURED_AT,
     QUERY_KIND,
     CallFacts,
     CarrierRules,
@@ -47,6 +48,7 @@ from sextant.application.resolve.shapes.arguments import (
     with_authority,
 )
 from sextant.application.resolve.shapes.chains import (
+    _ARG_REFERENCE,
     _COLLECTED,
     _COMPOSE,
     _DIRECTION,
@@ -76,6 +78,17 @@ from sextant.application.resolve.shapes.member_values import (
     member_table,
     names_members,
     static_field_value,
+)
+from sextant.application.resolve.shapes.pass_through import (
+    ANSWERS,
+    PASSES_ON,
+    UNREADABLE,
+    HandlerReader,
+    PassThroughRule,
+    file_unread,
+    handler_outcomes,
+    pass_through_of,
+    unread_rows,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
@@ -133,6 +146,12 @@ _URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None}
 # step declaring `serves: false` (`disable()`) makes the chain derive nothing until a later
 # step declares `serves: true`. A `poisons: [serves]` step ends it for good.
 _SERVES = "serves"
+# Which of several routes on one verb and path is tried first (Vert.x spec §3b): `order: argN`
+# reads the literal order a route was given, `order: last` says it goes after every other.
+_ORDER = "order"
+_LAST = "last"
+# An order the chain set that could not be read: it orders against nothing.
+_UNREAD_ORDER = "unread"
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -173,6 +192,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     verbless_serves = _verbless_serves(matches, catalog)
     pathless_serves = _pathless_serves(matches, catalog)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
+    pass_through = pass_through_of(matches, catalog.source)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -221,8 +241,20 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # DR-6: the declarations the framework would raise on, accumulated across every caller
     # and filed once, the `rows`/`metadata` discipline.
     refusals: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    # Spec §3b: which handler on a chain answers, judged once for every handler the chains
+    # name, before any row is derived — the chains are read whole first, because each
+    # handler's outcome is one backward walk per `passes_on` call over the whole module.
+    ends: Iterable[ChainEnd] = chain_ends(workspace, catalog)
+    judged: dict[Any, _Judged] | None = None
+    candidates: list[_Candidate] | None = None
+    unread: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    if pass_through is not None:
+        read_whole = list(ends)
+        judged = _judge(read_whole, pass_through, walk_index, method_symbols)
+        ends = read_whole
+        candidates = []
     context: _DeriveContext | None = None
-    for end in chain_ends(workspace, catalog):
+    for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
         # caller, as the walk builds its own.
         if context is None or context.caller != end.caller:
@@ -256,10 +288,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 roots=roots,
                 verbless_serves=verbless_serves,
                 pathless_serves=pathless_serves,
+                judged=judged,
+                candidates=candidates,
+                unread=unread,
             )
         # A chain walked back across methods is read on the path it took (ruling 5).
         _derive(end, context if end.path is None else replace(context, path=end.path))
 
+    if candidates is not None:
+        _settle(candidates, rows, metadata, unread)
     workspace.derive("call_endpoints", rows=rows)
     if bindings:
         workspace.derive("channel_bindings_insert", rows=bindings)
@@ -271,7 +308,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
     # The ledger's reset is the pipeline's, for the `open_questions` reason above.
-    record_open_questions(workspace, refusal_rows(refusals))
+    record_open_questions(workspace, [*refusal_rows(refusals), *unread_rows(unread)])
 
 
 @dataclass(frozen=True)
@@ -334,6 +371,14 @@ class _DeriveContext:
     # ruling 5, spec 2026-10-30): its captures are read on that path alone, so each caller
     # of a shared helper reads its own arguments. None for a chain walked from its root.
     path: Path | None = None
+    # Vert.x spec §3b, for a catalog declaring `passes_on`: each handler argument's outcome
+    # (`_judge`), the inbound rows held back until every chain is read so that the routes on
+    # one verb and path are ordered (`_settle`), and the `handler_pass_through` questions of
+    # the rows whose handler is not readable here. None, None and None for every other
+    # catalog, whose rows are written as they are derived, the first handler answering.
+    judged: "dict[Any, _Judged] | None" = None
+    candidates: "list[_Candidate] | None" = None
+    unread: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -382,7 +427,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # and never `read_by(a, h)` in its place. A link AFTER the handler
     # (`_LINK_SENDER`) is that handler's output, `sends_to`, the wire
     # branch's own edge written here too.
-    last_handler = _handler_symbol(captures.get("handler"), context.method_symbols)
+    # Spec §3b: the chain's handlers run in order until one does not pass the request on; that
+    # one names the row. None where every one passes on: middleware, no row.
+    answering = _answering(captures.get("handler"), context)
+    last_handler = answering.symbol if answering is not None else None
     reads_link = _READS_LINK in captures
     read = _string_value(captures[_READS_LINK]) if reads_link else None
     sourced = "channel_source" in captures
@@ -398,7 +446,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                     _edge(_READ_BY, read, last_handler, context, "inbound", protocol=None)
                 )
             sender = (
-                _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+                _answering_symbol(captures[_LINK_SENDER], context)
                 if _LINK_SENDER in captures
                 else None
             )
@@ -523,7 +571,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     link_after_handler = _LINK_SENDER in captures
     handler = (
         (
-            _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+            _answering_symbol(captures[_LINK_SENDER], context)
             if link_after_handler
             else None
             if reads_link
@@ -581,6 +629,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # framework raises when the route is made, before any `disable()` could run.
         if not serving:
             continue
+        # Every handler passes the request on (spec §3b): middleware serves nothing of its own.
+        # Below a refusal too, which the framework raises before any handler runs.
+        if answering is None:
+            continue
         # **The query string is not part of the address** (`OI-151`), and it comes off HERE —
         # after the canonicaliser and before the dedup key below, which is built from the
         # path and must be built from the one the row publishes. `single_call` makes the same
@@ -625,7 +677,22 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             if captures_read and url_resolution != str(Resolution.UNRESOLVED)
             else str(Resolution.UNRESOLVED)
         )
-        if path is not None and (verb is not None or verbless):
+        # A handler not readable here (spec §3b): its identity is read, whether it passes the
+        # request on is decided in code this analysis does not read, so the row is `partial`
+        # and a `handler_pass_through` question names that code.
+        unreadable = answering.outcome == UNREADABLE
+        if unreadable and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.PARTIAL)
+        # An inbound row of a catalog declaring `passes_on` is held back (`_settle`): which of
+        # the routes on its verb and path answers is decided once every chain is read, and the
+        # dedup key below is applied there, among the routes that answer.
+        ranked = (
+            context.candidates is not None
+            and direction == "inbound"
+            and path is not None
+            and (verb is not None or verbless)
+        )
+        if path is not None and (verb is not None or verbless) and not ranked:
             # `verb or ""` — single_call's own dedup key (`_matching_method`'s
             # caller): a verbless row has no method to distinguish it by, so
             # every verbless resolved identity collapses to `(protocol,
@@ -667,14 +734,15 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             if key in context.seen:
                 continue
             context.seen.add(key)
+        metadata: list[dict[str, Any]] = [] if ranked else context.metadata
         for entry in captures.get(_COLLECTED) or ():
-            context.metadata.append(_metadata_row(entry, context, direction, verb, path))
+            metadata.append(_metadata_row(entry, context, direction, verb, path))
         # Below the dedup `continue` on purpose: a row the key already saw writes no second
         # copy of its own query parameters either. Through `_metadata_row` like every other
         # entry this engine writes, so the value is masked by the same redactor on the same
         # rule — a query parameter named `access_token` is exactly the shape that matters.
         for name, value in query:
-            context.metadata.append(
+            metadata.append(
                 _metadata_row(
                     {
                         "kind": QUERY_KIND,
@@ -727,32 +795,44 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             )
             if direction == "inbound":
                 continue
-        context.rows.append(
-            {
-                "protocol": context.catalog.protocol,
-                "direction": direction,
-                # Not `str(verb)`: a verbless chain's `verb` is genuinely None
-                # (no root ever declared `http_method`), and `str(None)` would
-                # write the literal text "None" into a column NULL is supposed
-                # to mean "no verb" — single_call's own `method: verb` (never
-                # stringified) is the same answer for the same reason.
-                "method": verb,
-                "path": path,
-                "handler": handler,
-                "caller": context.caller,
-                "peer": peer,
-                "handler_signature": None,
-                "resolution": resolution,
-                "evidence": "compiler",
-                "catalog_id": context.catalog.id,
-                "request_shape": request_shape,
-                "response_shape": response_shape,
-                "consumes": consumes,
-                "produces": produces,
-                "path_kind": path_kind if path is not None else None,
-                "method_kind": method_kind,
-            }
-        )
+        row = {
+            "protocol": context.catalog.protocol,
+            "direction": direction,
+            # Not `str(verb)`: a verbless chain's `verb` is genuinely None
+            # (no root ever declared `http_method`), and `str(None)` would
+            # write the literal text "None" into a column NULL is supposed
+            # to mean "no verb" — single_call's own `method: verb` (never
+            # stringified) is the same answer for the same reason.
+            "method": verb,
+            "path": path,
+            "handler": handler,
+            "caller": context.caller,
+            "peer": peer,
+            "handler_signature": None,
+            "resolution": resolution,
+            "evidence": "compiler",
+            "catalog_id": context.catalog.id,
+            "request_shape": request_shape,
+            "response_shape": response_shape,
+            "consumes": consumes,
+            "produces": produces,
+            "path_kind": path_kind if path is not None else None,
+            "method_kind": method_kind,
+        }
+        if ranked and context.candidates is not None:
+            context.candidates.append(
+                _Candidate(
+                    row=row,
+                    metadata=metadata,
+                    registered=_registered_at(end),
+                    order=_order_of(captures.get(_ORDER)),
+                    unread=answering.unread if unreadable else None,
+                )
+            )
+            continue
+        context.rows.append(row)
+        if unreadable and context.unread is not None:
+            file_unread(context.unread, row, answering.unread)
 
 
 def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
@@ -772,6 +852,165 @@ def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:
     if isinstance(argument, str):
         return argument
     return _string_value(argument) or static_field_value(argument, context.verb_fields)
+
+
+@dataclass(frozen=True)
+class _Judged:
+    """One handler argument's outcome (Vert.x spec §3b) and the handler a row names for it:
+    the method the framework runs, or None for an object nothing in the module runs."""
+
+    symbol: str | None
+    outcome: str
+    # The code outside the module an `unreadable` handler depends on, for its question.
+    unread: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """An inbound row held back until every chain is read (`_settle`), with what orders it
+    against the other routes on its verb and path."""
+
+    row: dict[str, Any]
+    metadata: list[dict[str, Any]]
+    # The root call that made the route, `(method, ordinal)`: Vert.x numbers its routes as
+    # they are made, so within one method the ordinal order IS the registration order.
+    registered: tuple[str, int]
+    # The order the chain set (`_order_of`), or None for the registration order.
+    order: int | str | None
+    unread: tuple[str, ...] | None
+
+
+def _judge(
+    ends: Sequence[ChainEnd],
+    rule: PassThroughRule,
+    index: ValueIndex,
+    method_symbols: dict[str, str],
+) -> dict[Any, _Judged]:
+    """Every handler argument the chains name, judged once (Vert.x spec §3b): what it runs
+    (`HandlerReader`, one producer read per argument that is not a lambda) and then whether
+    that passes the request on (`handler_outcomes`, one backward walk per `passes_on` call)."""
+    arguments: dict[Any, dict[str, Any]] = {}
+    for end in ends:
+        captured = end.captures.get("handler")
+        for argument in captured if isinstance(captured, tuple) else (captured,):
+            if isinstance(argument, dict):
+                arguments.setdefault(_handler_key(argument), argument)
+    # A module with the framework on its classpath and no route reads nothing more.
+    if not arguments:
+        return {}
+    reader = HandlerReader(index, rule, method_symbols)
+    read = {
+        key: reader.of(argument, argument.get(_CAPTURED_AT)) for key, argument in arguments.items()
+    }
+    contexts = {symbol: handler.context for handler in read.values() for symbol in handler.symbols}
+    outcomes, unread = handler_outcomes(index, rule.calls, contexts)
+    judged: dict[Any, _Judged] = {}
+    for key, handler in read.items():
+        if handler.outcome is not None:
+            judged[key] = _Judged(
+                None, handler.outcome, (handler.unread,) if handler.unread else ()
+            )
+            continue
+        found = {outcomes[symbol] for symbol in handler.symbols}
+        judged[key] = _Judged(
+            handler.symbols[0],
+            next(o for o in (PASSES_ON, UNREADABLE, ANSWERS) if o in found),
+            tuple(sorted({name for symbol in handler.symbols for name in unread.get(symbol, ())})),
+        )
+    return judged
+
+
+def _handler_key(argument: dict[str, Any]) -> tuple[Any, ...]:
+    """A handler argument's identity: what it names and the site and slot it was read at."""
+    return (argument.get("kind"), str(argument.get("symbol")), argument.get(_CAPTURED_AT))
+
+
+def _answering(captured: Any, context: "_DeriveContext") -> _Judged | None:
+    """The handler a chain's row names (Vert.x spec §3b): the first of its handlers, in call
+    order, that does not pass the request on, or None where every one does. A catalog
+    declaring no `passes_on` has none that passes on, so its first handler answers."""
+    arguments = captured if isinstance(captured, tuple) else (captured,)
+    if context.judged is None:
+        first = arguments[0] if arguments else None
+        return _Judged(_handler_symbol(first, context.method_symbols), ANSWERS)
+    for argument in arguments:
+        judged = context.judged.get(_handler_key(argument)) if isinstance(argument, dict) else None
+        if judged is None:
+            return _Judged(_handler_symbol(argument, context.method_symbols), ANSWERS)
+        if judged.outcome != PASSES_ON:
+            return judged
+    return None
+
+
+def _answering_symbol(captured: Any, context: "_DeriveContext") -> str | None:
+    answering = _answering(captured, context)
+    return answering.symbol if answering is not None else None
+
+
+def _registered_at(end: ChainEnd) -> tuple[str, int]:
+    root = end.root
+    return (str(root["caller"]), int(str(root["ordinal"]))) if root else (end.caller, -1)
+
+
+def _order_of(captured: Any) -> int | str | None:
+    """The order a chain set (`order: argN` or `order: last`, last call wins): a literal
+    integer, `last`, None where none was set, or `_UNREAD_ORDER` where the argument is not a
+    literal."""
+    if captured is None:
+        return None
+    if captured == _LAST:
+        return _LAST
+    if isinstance(captured, dict) and isinstance(captured.get("value"), int):
+        return int(captured["value"])
+    return _UNREAD_ORDER
+
+
+def _runs_before(first: _Candidate, then: _Candidate) -> bool:
+    """Whether Vert.x certainly tries `first` before `then` (spec §3b). Routes run by order;
+    a route's own order is the router's count when it was made, so two routes nobody ordered
+    are in root-call order within one method and in no known order across two. A literal
+    `order(int)` orders against another literal, `last()` puts a route after every route not
+    last, and equal orders fall back to registration. A route with an unread order, or one
+    ordered against an unordered one, is in no known order."""
+    if _UNREAD_ORDER in (first.order, then.order):
+        return False
+    if (first.order == _LAST) != (then.order == _LAST):
+        return then.order == _LAST
+    if isinstance(first.order, int) and isinstance(then.order, int) and first.order != then.order:
+        return first.order < then.order
+    if (first.order is None) != (then.order is None):
+        return False
+    return first.registered[0] == then.registered[0] and first.registered[1] < then.registered[1]
+
+
+def _settle(
+    candidates: list[_Candidate],
+    rows: list[dict[str, Any]],
+    metadata: list[dict[str, Any]],
+    unread: dict[tuple[str, str | None, str], dict[str, Any]],
+) -> None:
+    """The held-back inbound rows that answer (Vert.x spec §3b), written once every chain is
+    read. Routes on one verb and path are one wire identity, tried in order: a route some
+    other route certainly precedes never runs, since the one before it answers. Of those
+    left, one handler is one row (Task 6's key, `resolved`); several handlers are each a row,
+    `narrowed` — one of them answers, the code does not say which."""
+    groups: dict[tuple[Any, ...], list[_Candidate]] = {}
+    for candidate in candidates:
+        row = candidate.row
+        groups.setdefault((row["protocol"], row["method"] or "", row["path"]), []).append(candidate)
+    for group in groups.values():
+        kept: dict[str | None, _Candidate] = {}
+        for candidate in group:
+            if not any(_runs_before(other, candidate) for other in group if other is not candidate):
+                kept.setdefault(candidate.row["handler"], candidate)
+        for candidate in kept.values():
+            row = candidate.row
+            if len(kept) > 1 and row["resolution"] == str(Resolution.RESOLVED):
+                row = {**row, "resolution": str(Resolution.NARROWED)}
+            rows.append(row)
+            metadata.extend(candidate.metadata)
+            if candidate.unread is not None:
+                file_unread(unread, row, candidate.unread)
 
 
 def _edge(
@@ -1219,10 +1458,6 @@ def _handler_symbol(argument: Any, method_symbols: dict[str, str]) -> str | None
     follow is no handler. `combinator._handler_of`, restated for a capture
     rather than a position. Everything else reads None and moves nothing (the
     `_derive` docstring)."""
-    if isinstance(argument, tuple):
-        # An accumulated capture (`repeats`): until the route's answering handler is
-        # chosen, the row carries the first one registered.
-        argument = argument[0] if argument else None
     if not isinstance(argument, dict) or argument.get("kind") != "lambda":
         return None
     symbol = argument.get("symbol")
@@ -1374,6 +1609,14 @@ def _validate_route_captures(entries: list[dict[str, Any]], catalog: Catalog) ->
                 f"loading catalog {catalog.source}: `{entry['method']}` captures "
                 f"`url_is: {captures['url_is']!r}`, which is one of "
                 f"{', '.join(sorted(_URL_IS))} (D02 §2's `fluent` style)"
+            )
+        if _ORDER in captures and not (
+            captures[_ORDER] == _LAST or _ARG_REFERENCE.match(str(captures[_ORDER]))
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                f"`order: {captures[_ORDER]!r}`, which reads `argN` or is `{_LAST}` (D02 §2's "
+                f"`fluent` style)"
             )
         if _SERVES in captures and not isinstance(captures[_SERVES], bool):
             raise CatalogError(

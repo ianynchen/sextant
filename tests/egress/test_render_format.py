@@ -906,6 +906,40 @@ def test_a_refused_registration_question_names_the_registering_method_and_handle
     ) in text
 
 
+def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
+    """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread`) matches what
+    `pass_through.unread_rows` writes: one names the out-of-module method the handler hands
+    its context to, one is an object built where nothing is read and names no call."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "PUT",
+            "path": "/u2/:id",
+            "question": "handler_pass_through",
+            "candidates": json.dumps(
+                [
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": "com/acme/Routes#check().",
+                        "unread": ["com/acme/base/HttpUtils#nextRoute()."],
+                    },
+                    {"caller": "com/acme/Routes#wire().", "handler": None, "unread": []},
+                ]
+            ),
+            "evidence": "com/acme/Routes#check().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `PUT /u2/:id` — handler_pass_through: com/acme/Routes#check(). (registered by "
+        "com/acme/Routes#wire().) hands the request to com/acme/base/HttpUtils#nextRoute()., "
+        "whose body is not read here, so whether it passes the request on is not known; "
+        "a handler object (registered by com/acme/Routes#wire().) is built where no body is "
+        "read here, so whether it passes the request on is not known"
+    ) in text
+
+
 def test_a_web_stack_question_names_each_stack_and_the_keys_it_would_apply():
     """Ruling 3's arm, for the reason every arm here has a test. Candidate shape (`stack`,
     `keys`) matches what `path_prefix._ask_web_stack` writes; both identity halves are NULL

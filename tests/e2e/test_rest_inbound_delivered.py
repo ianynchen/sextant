@@ -2104,15 +2104,15 @@ def _is_pattern(row: dict) -> bool:
 
 
 def _reason_of(row: dict, tables: dict[str, list[dict]]) -> str:
-    """Why a `partial` row is partial, in words. No carrier for a partial endpoint's reason
-    exists today (`endpoints.evidence` is a provenance enum, and `open_questions` is a closed
-    set of kinds whose writer refuses any other). Task 10 must add one (a new `open_questions`
-    kind or an `endpoint_metadata` entry) and adjust this body. Until then it reads the
-    `open_questions` rows keyed by the row's wire identity, which finds nothing."""
+    """Why a `partial` row is partial, in words: the `handler_pass_through` open question
+    filed against the row's wire identity (Vert.x Task 10), its candidates and its evidence.
+    The ledger carries it because no endpoint column carries a reason (`endpoints.evidence`
+    is a provenance tier)."""
     return " ".join(
-        f"{q['question']} {q['evidence']}"
+        f"{q['question']} {q['candidates']} {q['evidence']}"
         for q in tables["open_questions"]
-        if (q["protocol"], q["method"], q["path"]) == (row["protocol"], row["method"], row["path"])
+        if q["question"] == "handler_pass_through"
+        and (q["protocol"], q["method"], q["path"]) == (row["protocol"], row["method"], row["path"])
     )
 
 
@@ -2246,7 +2246,6 @@ def test_vertx_handler_reads_and_a_virtual_host_reach_endpoint_metadata(vertx_ta
 # Task 10: which handler answers ------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="Task 10")
 def test_vertx_the_first_answering_handler_names_the_row(vertx_inbound):
     """Vert.x runs a chain's handlers in order and stops at the first that does not pass on
     (spec §3b). `.handler(this::a).handler(this::b)` with both answering is handler `a`.
@@ -2260,7 +2259,6 @@ def test_vertx_the_first_answering_handler_names_the_row(vertx_inbound):
     assert events == {("POST", "/events", "PassThroughRoutes#ingest", "resolved")}, events
 
 
-@pytest.mark.xfail(strict=True, reason="Task 10")
 def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inbound):
     """The same `(verb, path)` registered in two methods, both answering: the order is not
     in the code, so each is a row and each is `narrowed` (one of them answers)."""
@@ -2271,7 +2269,6 @@ def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inb
     }, telemetry
 
 
-@pytest.mark.xfail(strict=True, reason="Task 10")
 def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
     """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
     So is a `next()` inside a lambda that captured the context (`onSuccess(u ->
@@ -2283,7 +2280,6 @@ def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
     assert "/reply" in paths
 
 
-@pytest.mark.xfail(strict=True, reason="Task 10")
 def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
     """`extractJson` hands `ctx` to an in-module helper that calls `ctx.next()`: it passes
     on, so the row is `updateU`, `resolved`. An answering handler that hands `ctx` to an
@@ -2293,7 +2289,7 @@ def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
     assert ("GET", "/reply", "PassThroughRoutes#viaHelper", "resolved") in rows
 
 
-@pytest.mark.xfail(strict=True, reason="Task 10")
+@pytest.mark.pins("fluent.an-unreadable-handler-gives-a-partial-row")
 def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vertx_tables):
     """`check` hands `ctx` to the base jar's `HttpUtils.nextRoute`, whose body is outside the
     module: the handler's identity is read, its outcome is not, so the row is `check`,
@@ -2314,6 +2310,36 @@ def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vert
     plain = [r for r in rows if r["path"] == "/plain"]
     assert [r["resolution"] for r in plain] == ["partial"], plain
     assert not [r for r in rows if r["path"] == "/cors"]
+
+
+def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):
+    """An anonymous class passed as the handler is the object Vert.x calls `handle` on: the
+    row names that `handle`, `resolved` — the one taking a `RoutingContext`, which javac's
+    bridge `handle(Object)` hands the context to, never the bridge."""
+    rows = [r for r in vertx_inbound if r["path"] == "/anon"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in rows] == [
+        ("GET", "AnonymousRoutes$1#handle", "resolved")
+    ], rows
+    # The same descriptor as every other `(RoutingContext)V` handler of the fixture.
+    after = next(r for r in vertx_inbound if _vertx_handler(r) == "PassThroughRoutes#ingest")
+    assert rows[0]["handler"].rsplit("(", 1)[1] == after["handler"].rsplit("(", 1)[1], rows[0]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a context captured by an anonymous class is held in a synthetic field, and "
+    "`next()` is called on a `getfield` of it, which no fact names: the receiver walk "
+    "answers `not_readable` (Vert.x Task 10 report)",
+)
+def test_vertx_a_context_captured_by_an_anonymous_callback_passes_on(vertx_inbound):
+    """`onSuccess(new Handler<String>() { … ctx.next(); })` inside a handler passes the
+    request on, so `/anon-next` is answered by the handler after it."""
+    rows = {
+        (r["method"], _vertx_handler(r), r["resolution"])
+        for r in vertx_inbound
+        if r["path"] == "/anon-next"
+    }
+    assert rows == {("GET", "AnonymousRoutes#after", "resolved")}, rows
 
 
 # Task 11: mounts -------------------------------------------------------------------------

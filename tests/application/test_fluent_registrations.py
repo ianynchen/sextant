@@ -3326,8 +3326,9 @@ def test_repeats_on_a_root_is_refused(tmp_path: Path):
 
 @pytest.mark.pins("fluent.a-handler-tuple-answers-with-its-first")
 def test_an_inbound_row_takes_the_first_handler_of_several(tmp_path: Path):
-    """Which handler of a route's several answers is decided later; until then the row
-    carries the first one registered, and a chain with one handler is unchanged."""
+    """A catalog declaring no `passes_on` has no handler that passes the request on, so of a
+    route's several handlers the first registered answers, and a chain with one handler is
+    unchanged."""
     second_body = "com/acme/streams/Wiring#lambda$inbound$1(Lcom/acme/streams/Message;)V."
     second = CallArgument(kind="lambda", source=10, symbol=second_body)
     facts = [

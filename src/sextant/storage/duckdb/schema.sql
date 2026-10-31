@@ -179,8 +179,9 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- `channel_destination`, `service_identity`, `environment_divergence`,
     -- `binder_protocol`, `unselected_binding`, `handler_protocol`,
     -- `registration_activation`, `self_exchange`, `routing_conflict`,
-    -- `routing_depth`, `web_stack`, `prefix_not_measured` and
-    -- `refused_registration` - checked in `resolve/open_questions.py`, which
+    -- `routing_depth`, `web_stack`, `prefix_not_measured`,
+    -- `refused_registration` and `handler_pass_through` - checked in
+    -- `resolve/open_questions.py`, which
     -- owns the set (its `QUESTIONS`, with each kind's reason) and refuses
     -- anything outside it. This list is kept equal to that tuple.
     question   TEXT,
