@@ -2094,6 +2094,32 @@ where another repairs it. A fully read path of that shape derives no row, is nev
 `canonical_http_path`, and is filed as a `refused_registration` open question (D01). Absent, the
 leading-slash repair applies as before. A value that is not a boolean is refused at load.
 
+**Route words** (Vert.x spec §3a, §3f; `vertx-web.yml`). Each names no framework type:
+- **`matches.verbless_serves: any`** is the `annotation_driven` word of the same name (§2's
+  `annotation_driven`): an inbound chain that never captured `http_method` serves every method,
+  so its one row carries `method` NULL and `method_kind = any`. Absent, a NULL method still
+  means nobody read the verb.
+- **`matches.pathless_serves: <path>`** is the path, in the framework's own spelling, that an
+  inbound chain naming no address serves (Vert.x's `/*`), `resolved`: the framework stores no
+  path, and that is exact. Anything but a non-empty string is refused at load.
+- **`url_is: pattern | address`**, a literal capture beside `url`, says what the captured
+  address IS, last wins: `pattern` is a regular expression the framework matches, published
+  verbatim with `path_kind = pattern`, never refused as unrooted, canonicalised or linked by
+  path, and a mount prefix goes in front of it as written, with no `path_join`; `address`, the
+  default, lets a later step undo an earlier pattern. (`annotation_driven` spells the same marker `pattern_from`, an attribute list; the
+  column is `path_kind`.) Any other value is refused at load.
+- **`serves: true | false`**, a literal capture, says whether the chain derives a row. On an
+  inbound route it is whether the framework serves it: `serves: false` (`disable()`) derives
+  nothing until a later `serves: true` (`enable()`), and a `poisons: [serves]` step ends it for
+  good. On an outbound root it says whether the root alone names an address: `serves: false`
+  (`request(m, RequestOptions)`) derives nothing until a uri is read, from a later `uri(…)` or
+  the options object (`options: argN`, below). Anything but a boolean is refused at load.
+- **A step's `repeats: [<field>, …]`** makes the step ADD to a capture rather than overwrite it
+  (spec §3g item 1): `method(GET).method(DELETE)` accumulates both verbs, one row each in call
+  order, a repeated verb once; `handler(a).handler(b)` keeps both handlers in order for
+  `passes_on`. Each name must be a field the same step captures from an `argN` position; a root
+  may not declare it, since a root starts the chain. Anything else is refused at load.
+
 **`matches.passes_on: [{owner, method}, …]`** (Vert.x spec §3b) declares the calls that pass a
 request ON to the next handler — Vert.x's `RoutingContext.next()`, one entry per owner. A route
 chain's handlers run in order and the row names the FIRST that does not pass on: a handler
