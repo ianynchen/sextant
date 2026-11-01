@@ -1463,7 +1463,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if len(kept) > 1 and row["resolution"] == '
+                find='            if key in rivalled and row["resolution"] == '
                 "str(Resolution.RESOLVED):\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2247,9 +2247,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="                kept.setdefault(handler if handler is not None else "
-                "candidate.registered, candidate)\n",
-                replace="                kept.setdefault(handler, candidate)  # guard disabled by scripts/guard_check.py\n",
+                find="    return handler if handler is not None else candidate.registered\n",
+                replace="    return handler  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3828,6 +3827,56 @@ GUARDS: dict[str, Guard] = {
                 find='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT, _PARAMETER):\n',
                 replace='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT,):'
                 "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.routes-on-different-routers-are-not-ordered-against-each-other": Guard(
+        what="routes on one verb and path whose routers are two different calls neither "
+        "precede nor narrow each other: Vert.x orders routes within one router",
+        why="without it every example server in vertx-examples' web-examples, each with its "
+        "own router, narrowed the others' routes on a shared path (34 of 46 rows, `OI-263`), "
+        "and two routers' routes in one method dropped the second as if the first ran before it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if None not in (first.routers, then.routers) and first.routers != "
+                "then.routers:\n        return False\n",
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="    return first.routers is None or then.routers is None or "
+                "bool(first.routers & then.routers)\n",
+                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.routes-made-on-one-router-are-rivals": Guard(
+        what="two routes whose known routers share a making call can be on one router, so "
+        "two handlers there are each `narrowed`",
+        why="without it a router made once and handed to two methods that each give one path "
+        "a handler publishes both handlers `resolved`, two answers to one request",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    return first.routers is None or then.routers is None or "
+                "bool(first.routers & then.routers)\n",
+                replace="    return first.routers is None or then.routers is None or False"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-router-handed-in-from-outside-may-be-any-router": Guard(
+        what="a route whose router arrived as a parameter nothing in the module binds has no "
+        "known router, so it is ordered against every route on its verb and path",
+        why="two such parameters are two names, not two objects: the caller outside the module "
+        "may hand both the same router. Read as two routers, two methods giving one path a "
+        "handler each publish both `resolved`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find='            if made is None or made[0] != "call":\n',
+                replace="            if made is None:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

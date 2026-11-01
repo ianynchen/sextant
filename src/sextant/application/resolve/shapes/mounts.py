@@ -352,6 +352,24 @@ class MountReader:
                 found.extend(self._served(producer, joined, frozenset()))
         return tuple(dict.fromkeys(found)) if ended else (ROOT,)
 
+    def routers_of(
+        self, root: Mapping[str, Any], within: Path | None
+    ) -> frozenset[tuple[str, str, int]] | None:
+        """The routers a route whose root call is `root` is made on: the call that made its
+        receiver, on every path the walk takes (and within `within`), as `_identity` names it.
+        None where any way ends at anything but such a call — a router handed in from outside,
+        or nothing read — since that router may be any router. Vert.x orders routes within one
+        router only (`OI-263`), so two routes whose routers are two calls never meet."""
+        found: set[tuple[str, str, int]] = set()
+        for producer, path in self._producers_of(root, RECEIVER):
+            if within is not None and path.joined(within) is None:
+                continue
+            made = _identity(producer)
+            if made is None or made[0] != "call":
+                return None
+            found.add(made)
+        return frozenset(found) or None
+
     def refusals(self, mount: Mount) -> tuple[tuple[int, str, str], ...]:
         """`(way, mount path, reason)` for every way the framework refuses `mount`, `way`
         being the index of the `MountPath` it was reached by, each path read on every path

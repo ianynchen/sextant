@@ -316,6 +316,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         mounts, mounted, ways = _mounts(
             read_whole, mount_rules, walk_index, workspace, refuses_unrooted, catalog
         )
+    # Which router each held-back route is made on (`_settle`): the mount reader's own reads
+    # where the module mounts, one with no mounts where it does not.
+    routers = mounts
+    if routers is None and candidates is not None and mount_rules is not None:
+        routers = _router_reader(walk_index, workspace, mount_rules, [], refuses_unrooted, catalog)
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -355,6 +360,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 candidates=candidates,
                 unread=unread,
                 mounts=mounts,
+                routers=routers,
                 unread_prefixes=unread_prefixes,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
@@ -497,6 +503,10 @@ class _DeriveContext:
     # served under (`shapes.mounts`). None for every other catalog, and for a module with no
     # mount, whose routes serve at their root as read.
     mounts: MountReader | None = None
+    # Which router a held-back route is made on (`MountReader.routers_of`), for `_settle`: the
+    # mount reader where there is one, one reading routers alone otherwise. None for a
+    # catalog declaring no `mount`, whose routes are ordered as if on one router.
+    routers: MountReader | None = None
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
     # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
     # is that call's receiver (`client_arg: receiver`, Vert.x spec §3d). None otherwise.
@@ -989,6 +999,11 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                         registered=_registered_at(end),
                         order=_order_of(captures.get(_ORDER)),
                         unread=variant_unread,
+                        routers=(
+                            context.routers.routers_of(end.root, end.path)
+                            if context.routers is not None and end.root
+                            else None
+                        ),
                     )
                 )
                 continue
@@ -1047,6 +1062,9 @@ class _Candidate:
     # The order the chain set (`_order_of`), or None for the registration order.
     order: int | str | None
     unread: tuple[tuple[str, str], ...] | None
+    # The calls that made the router the route is on (`MountReader.routers_of`), or None where
+    # that router may be any: Vert.x orders routes within one router only (`OI-263`).
+    routers: frozenset[tuple[str, str, int]] | None = None
 
 
 def _judge(
@@ -1142,14 +1160,26 @@ def _mounts(
     if not found:
         return None, {}, {}
     mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
+    reader = _router_reader(
+        index, workspace, rules, list(mounts.values()), refuses_unrooted, catalog
+    )
+    return reader, mounts, ways
+
+
+def _router_reader(
+    index: ValueIndex,
+    workspace: Workspace,
+    rules: MountRules,
+    mounts: Sequence[Mount],
+    refuses_unrooted: bool,
+    catalog: Catalog,
+) -> MountReader:
+    """The reader of which router a route is made on and what serves it, over `mounts`."""
     configuring = configuring_calls(catalog, index.sites.values())
     declared = router_producers(
         index, rules.router_types, workspace.once(dispatch_of).ancestors, configuring
     )
-    reader = MountReader(
-        workspace, index, rules, declared, list(mounts.values()), refuses_unrooted, configuring
-    )
-    return reader, mounts, ways
+    return MountReader(workspace, index, rules, declared, mounts, refuses_unrooted, configuring)
 
 
 def _judged_of(
@@ -1261,7 +1291,10 @@ def _runs_before(first: _Candidate, then: _Candidate) -> bool:
     are in root-call order within one method and in no known order across two. A literal
     `order(int)` orders against another literal, `last()` puts a route after every route not
     last, and equal orders fall back to registration. A route with an unread order, or one
-    ordered against an unordered one, is in no known order."""
+    ordered against an unordered one, is in no known order. Neither is a route on a router
+    the other is not certainly on: a router orders its own routes alone."""
+    if None not in (first.routers, then.routers) and first.routers != then.routers:
+        return False
     if _UNREAD_ORDER in (first.order, then.order):
         return False
     if (first.order == _LAST) != (then.order == _LAST):
@@ -1283,7 +1316,9 @@ def _settle(
     read. Routes on one verb and path are one wire identity, tried in order: a route some
     other route certainly precedes never runs, since the one before it answers. Of those
     left, one handler is one row (Task 6's key, `resolved`); several handlers are each a row,
-    `narrowed` — one of them answers, the code does not say which."""
+    `narrowed` — one of them answers, the code does not say which. Only where they can be on
+    one router (`_may_share_router`): each router answers its own requests, so two routers'
+    routes on one verb and path are each their router's answer (`OI-263`)."""
     groups: dict[tuple[Any, ...], list[_Candidate]] = {}
     for candidate in candidates:
         row = candidate.row
@@ -1291,19 +1326,40 @@ def _settle(
     for group in groups.values():
         # One handler is one row; two handler objects nothing names (handler NULL) are two
         # registrations, each with its own reason, never merged on the NULL.
+        standing = [
+            candidate
+            for candidate in group
+            if not any(_runs_before(other, candidate) for other in group if other is not candidate)
+        ]
         kept: dict[Any, _Candidate] = {}
-        for candidate in group:
-            if not any(_runs_before(other, candidate) for other in group if other is not candidate):
-                handler = candidate.row["handler"]
-                kept.setdefault(handler if handler is not None else candidate.registered, candidate)
-        for candidate in kept.values():
+        rivalled: set[Any] = set()
+        for candidate in standing:
+            key = _row_key(candidate)
+            kept.setdefault(key, candidate)
+            if any(
+                _row_key(other) != key and _may_share_router(other, candidate) for other in standing
+            ):
+                rivalled.add(key)
+        for key, candidate in kept.items():
             row = candidate.row
-            if len(kept) > 1 and row["resolution"] == str(Resolution.RESOLVED):
+            if key in rivalled and row["resolution"] == str(Resolution.RESOLVED):
                 row = {**row, "resolution": str(Resolution.NARROWED)}
             rows.append(row)
             metadata.extend(candidate.metadata)
             if candidate.unread is not None:
                 file_unread(unread, row, candidate.unread)
+
+
+def _row_key(candidate: _Candidate) -> Any:
+    """`_settle`'s row key: the handler, or the registration for a handler nothing names."""
+    handler = candidate.row["handler"]
+    return handler if handler is not None else candidate.registered
+
+
+def _may_share_router(first: _Candidate, then: _Candidate) -> bool:
+    """Whether two routes can be on one router: unless both routers are known and no call made
+    both (`MountReader.routers_of`)."""
+    return first.routers is None or then.routers is None or bool(first.routers & then.routers)
 
 
 def _edge(

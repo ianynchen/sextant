@@ -305,7 +305,13 @@ rule, not ours.)
   - where the candidate chains are registered in **different methods** and no `order(int)`
     settles them, the order is not in the code: each candidate is a row, `narrowed` (one of
     them answers; we cannot say which — the word's proper use);
-  - `order(int)` with literal values orders the chains by value, as Vert.x does.
+  - `order(int)` with literal values orders the chains by value, as Vert.x does;
+  - all of the above holds **within one router**: Vert.x orders a router's own routes and no
+    others, so chains whose routers are made by two different calls (the producer reached
+    along the root's receiver, as §3c's mount identity reads it) never precede or narrow each
+    other — each router's first answering chain is its own row. A router handed in from
+    outside the module may be any router and is ordered as before [OI-263, fixed
+    2026-10-31].
 - **The row's resolution.** An answering handler gives `resolved`. A **not-readable-here**
   handler gives `partial`, with the reason naming the out-of-module method or producer
   ("whether `HttpUtils.nextRoute` passes on is decided in a module this analysis does not
@@ -481,6 +487,7 @@ router built and handed in — so the fixture fails where Hono does.
 | `router.get("/health").respond(ctx -> Future.succeededFuture(status))` | one row |
 | Hono's pair: `router.post(EVENTS).handler(auth).handler(BodyHandler.create())` then `router.post(EVENTS).handler(this::ingest)`, same method | one row, handler `ingest`, `resolved` |
 | The same pair registered in two different methods, both answering | two rows, each `narrowed` |
+| One verb and path on two routers made by two calls (two example servers, or two routers in one method), both answering | two rows, each `resolved` |
 | `.handler(this::a).handler(this::b)` where both answer | one row, handler `a` |
 | An in-module `assertTenant` that calls `ctx.next()`, as the only handler of a `route("/t/*")` | no row |
 | `put(p).handler(this::extractJson).handler(this::update)`, where `extractJson` hands `ctx` to an in-module helper that calls `ctx.next()` | one row, handler `update`, `resolved` |

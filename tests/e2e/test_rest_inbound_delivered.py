@@ -2259,6 +2259,7 @@ def test_vertx_the_first_answering_handler_names_the_row(vertx_inbound):
     assert events == {("POST", "/events", "PassThroughRoutes#ingest", "resolved")}, events
 
 
+@pytest.mark.pins("mounts.a-router-handed-in-from-outside-may-be-any-router")
 def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inbound):
     """The same `(verb, path)` registered in two methods, both answering: the order is not
     in the code, so each is a row and each is `narrowed` (one of them answers)."""
@@ -2290,6 +2291,33 @@ def test_vertx_a_path_handed_in_as_a_capture_or_a_parameter_is_read(vertx_inboun
     assert _served(vertx_inbound, "CapturedPaths") == {
         ("GET", "/reports", "CapturedPaths#reports", "resolved"),
         ("GET", "/audits", "CapturedPaths#audits", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-on-different-routers-are-not-ordered-against-each-other")
+def test_vertx_one_verb_and_path_on_different_routers_is_each_routers_own_row(vertx_inbound):
+    """`OI-263`: Vert.x orders routes within one router. `GET /ping` on three routers — two
+    made in one method, one in another class — is three answering routes, each `resolved`.
+    They were `narrowed` against each other across classes (34 of vertx-examples
+    web-examples' 46 rows), and in one method the second router's route was dropped as if
+    the first one's ran before it."""
+    pings = [r for r in vertx_inbound if r["path"] == "/ping"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in pings} == {
+        ("GET", "TwoRouters#adminPing", "resolved"),
+        ("GET", "TwoRouters#apiPing", "resolved"),
+        ("GET", "PingServer#ping", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-made-on-one-router-are-rivals")
+def test_vertx_two_handlers_on_one_router_from_two_methods_stay_narrowed(vertx_inbound):
+    """One router made in `start` and handed to two methods, each giving `GET /same-router` a
+    handler: one router, no order the code states, so each row is `narrowed`. A router
+    identity read wrongly as two would make both `resolved`."""
+    shared = [r for r in vertx_inbound if r["path"] == "/same-router"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in shared} == {
+        ("GET", "TwoRouters#firstShared", "narrowed"),
+        ("GET", "TwoRouters#secondShared", "narrowed"),
     }
 
 
