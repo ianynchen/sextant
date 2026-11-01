@@ -311,7 +311,16 @@ rule, not ours.)
     along the root's receiver, as §3c's mount identity reads it) never precede or narrow each
     other — each router's first answering chain is its own row. A router handed in from
     outside the module may be any router and is ordered as before [OI-263, fixed
-    2026-10-31].
+    2026-10-31]. **A mounted router is served from its parent** (§3c): the parent tries its
+    own routes and the mount route in their order, so a route on the mounted router competes
+    with the parent's routes at the **mount route's** place on the parent. `parent.get("/api/x")`
+    and `sub.get("/x")` under `parent.route("/api/*").subRouter(sub)` are one request:
+    whichever of the parent route and the mount route comes first by the rules above (ordinal
+    order within one method, `order(int)`, `last()`) answers, and the other gives no row.
+    Where that order is not in the code (two methods, no `order`), each is a row, `narrowed`.
+    Nested mounts compose, each level at its own mount route's place; routes on routers
+    neither mounted on the other nor served from one common router stay apart, each
+    `resolved` [review of OI-263, fixed 2026-10-31].
 - **The row's resolution.** An answering handler gives `resolved`. A **not-readable-here**
   handler gives `partial`, with the reason naming the out-of-module method or producer
   ("whether `HttpUtils.nextRoute` passes on is decided in a module this analysis does not
@@ -801,7 +810,9 @@ the corpora still present (the two deleted checkouts below were skipped):
 
 OI-265 was not the capture fold: `fluent` asked the walk only for an assembled `url`, so a
 `parameter` url, whether a caller's argument or a captured local, was never walked. It is now
-asked the same no-identity walk. OI-263's fix groups the candidates by router identity:
+asked the same no-identity walk. As the concat arm already does, a url walked through a method
+parameter publishes the one resolved literal the walk reaches, even where sibling callers hand
+that parameter values the walk does not read. OI-263's fix groups the candidates by router identity:
 the calls that made the router along the root's receiver, as §3c's mount identity reads them
 (§3b). No pinned field corpus moved.
 

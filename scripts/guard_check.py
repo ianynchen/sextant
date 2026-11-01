@@ -1450,8 +1450,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    return first.registered[0] == then.registered[0] and "
-                "first.registered[1] < then.registered[1]\n",
+                find="    return registered[0] == then_registered[0] and "
+                "registered[1] < then_registered[1]\n",
                 replace="    return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1477,7 +1477,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        return first.order < then.order\n",
+                find="        return order < then_order\n",
                 replace="        return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1490,7 +1490,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        return then.order == _LAST\n",
+                find="        return then_order == _LAST\n",
                 replace="        return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -3839,15 +3839,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if None not in (first.routers, then.routers) and first.routers != "
-                "then.routers:\n        return False\n",
-                replace="    pass  # guard disabled by scripts/guard_check.py\n",
-            ),
-            Edit(
-                path=_FLUENT,
-                find="    return first.routers is None or then.routers is None or "
-                "bool(first.routers & then.routers)\n",
-                replace="    return True  # guard disabled by scripts/guard_check.py\n",
+                find="        if None not in (router, other) and router != other:\n"
+                "            return None\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3859,9 +3853,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    return first.routers is None or then.routers is None or "
-                "bool(first.routers & then.routers)\n",
-                replace="    return first.routers is None or then.routers is None or False"
+                find="    return any(_meets(one, other) is not None for one in first.places for "
+                "other in then.places)\n",
+                replace="    return any(_meets(one, other) is not None and None in (one[-1][0], "
+                "other[-1][0]) for one in first.places for other in then.places)"
                 "  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -3875,8 +3870,23 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find='            if made is None or made[0] != "call":\n',
-                replace="            if made is None:  # guard disabled by scripts/guard_check.py\n",
+                find='    return made if made[0] == "call" else None\n',
+                replace="    return made  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent": Guard(
+        what="a route on a mounted router stands at the mount route's place on the parent "
+        "router, so it is ordered against the parent's own routes on its verb and path, "
+        "nested mounts each a step",
+        why="without it a parent route and a mounted router's route on one verb and path are "
+        "read as two routers' answers and both published `resolved`, though Vert.x tries the "
+        "parent's own routes and the mount route in order and only one ever runs",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="            (*place[:-1], (place[-1][0], mount), (_router(made), None))\n",
+                replace="            ((_router(made), None),)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

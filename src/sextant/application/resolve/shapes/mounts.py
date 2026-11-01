@@ -41,7 +41,7 @@ from the mount paths already read and the callers that take a helper's router ba
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sextant.application.ports.catalogs import CatalogError
@@ -150,6 +150,9 @@ class MountPath:
     within: Path | None = None
     # A mount path the walk captured without a position to read it at: not read.
     unread: bool = False
+    # The order the mount route was given, as the engine reads a route's order, or None for
+    # its registration order: where the mount stands among the parent's own routes.
+    order: Any = None
 
 
 @dataclass(frozen=True)
@@ -179,14 +182,25 @@ class UnreadPrefix:
     read: str
 
 
+# Where a route is served under a prefix: one `(router, mount)` step per router, the
+# outermost first, `router` the call that made it (`_identity`) or None for a router that may
+# be any, and `mount` the place `((method, ordinal), order)` on that router of the mount route
+# that serves the next one; None on the last step, the router the route itself is on.
+Place = tuple[tuple[tuple[str, str, int] | None, tuple[tuple[str, int], Any] | None], ...]
+# The place of a route on a router nothing names.
+ANY_ROUTER: Place = ((None, None),)
+
+
 @dataclass(frozen=True)
 class Prefix:
     """A prefix a route serves under, or None for the router's root, with its own word, and
-    the mounts whose prefix in it was not read."""
+    the mounts whose prefix in it was not read. `places` says on which routers, through which
+    mounts (`Place`), and is not part of what the prefix is: empty where nothing was read."""
 
     text: str | None
     resolution: str
     unread: tuple[UnreadPrefix, ...] = ()
+    places: frozenset[Place] = field(default=frozenset(), compare=False)
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -342,33 +356,22 @@ class MountReader:
         receiver followed to the router's producer, on every path the walk takes (and within
         `within`, the path the chain walk took to the root, where it took one). Empty where
         every way the router is reached runs through a mount the framework refuses: nothing
-        serves the route. The root alone where the walk reaches no end at all."""
-        found: list[Prefix] = []
+        serves the route. The root alone where the walk reaches no end at all. A prefix
+        reached several ways is one, holding every way's `places`."""
+        found: dict[Prefix, Prefix] = {}
         ended = False
         for producer, path in self._producers_of(root, RECEIVER):
             joined = path if within is None else path.joined(within)
             if joined is not None:
                 ended = True
-                found.extend(self._served(producer, joined, frozenset()))
-        return tuple(dict.fromkeys(found)) if ended else (ROOT,)
-
-    def routers_of(
-        self, root: Mapping[str, Any], within: Path | None
-    ) -> frozenset[tuple[str, str, int]] | None:
-        """The routers a route whose root call is `root` is made on: the call that made its
-        receiver, on every path the walk takes (and within `within`), as `_identity` names it.
-        None where any way ends at anything but such a call — a router handed in from outside,
-        or nothing read — since that router may be any router. Vert.x orders routes within one
-        router only (`OI-263`), so two routes whose routers are two calls never meet."""
-        found: set[tuple[str, str, int]] = set()
-        for producer, path in self._producers_of(root, RECEIVER):
-            if within is not None and path.joined(within) is None:
-                continue
-            made = _identity(producer)
-            if made is None or made[0] != "call":
-                return None
-            found.add(made)
-        return frozenset(found) or None
+                for prefix in self._served(producer, joined, frozenset()):
+                    kept = found.get(prefix)
+                    found[prefix] = (
+                        prefix
+                        if kept is None
+                        else replace(kept, places=kept.places | prefix.places)
+                    )
+        return tuple(found.values()) if ended else (ROOT,)
 
     def refusals(self, mount: Mount) -> tuple[tuple[int, str, str], ...]:
         """`(way, mount path, reason)` for every way the framework refuses `mount`, `way`
@@ -410,7 +413,7 @@ class MountReader:
         object."""
         made = _identity(producer)
         if made is None:
-            return [ROOT]
+            return [replace(ROOT, places=frozenset({ANY_ROUTER}))]
         found: list[Prefix] = []
         reached: list[Path] = []
         for mount in self._mounts:
@@ -428,9 +431,9 @@ class MountReader:
                     reached.append(joined)
                     for own in self._prefixes(mount, way, joined):
                         for parent in self._parents(at, joined, mounting | {mount.key}):
-                            found.append(self._behind(parent, own))
+                            found.append(self._behind(parent, own, at, made))
         if self._unmounted(path, made[1], reached, frozenset()):
-            found.append(ROOT)
+            found.append(replace(ROOT, places=frozenset({((_router(made), None),)})))
         return found
 
     def _unmounted(
@@ -563,15 +566,32 @@ class MountReader:
             return WILDCARD_MOUNT_POINT
         return None
 
-    def _behind(self, parent: Prefix, own: Prefix) -> Prefix:
-        """`own` joined behind `parent`, at the weaker of their two words."""
+    def _behind(
+        self, parent: Prefix, own: Prefix, at: MountPath, made: tuple[str, str, int]
+    ) -> Prefix:
+        """`own` joined behind `parent`, at the weaker of their two words. The router `made`
+        is served from the parent's, at the mount route's place there (`Place`): the parent
+        tries its own routes and the mount route in their order, so a mounted router's routes
+        compete with the parent's own at that one place, nested mounts each a step."""
         text = (
             own.text
             if parent.text is None or own.text is None
             else join_prefix(parent.text, own.text, self._rules.path_join)
         )
+        mount = (
+            ((str(at.parent["caller"]), int(str(at.parent["ordinal"]))), at.order)
+            if at.parent is not None
+            else None
+        )
+        places = frozenset(
+            (*place[:-1], (place[-1][0], mount), (_router(made), None))
+            for place in parent.places or (ANY_ROUTER,)
+        )
         return Prefix(
-            text, weaker(parent.resolution, own.resolution), (*parent.unread, *own.unread)
+            text,
+            weaker(parent.resolution, own.resolution),
+            (*parent.unread, *own.unread),
+            places,
         )
 
     def joined(self, prefix: Prefix, path: str, pattern: bool) -> str:
@@ -671,6 +691,13 @@ def _text_of(answer: Answer) -> tuple[str, bool] | None:
     if answer.kind == EXPRESSION and isinstance(answer.value, str):
         return answer.value, False
     return None
+
+
+def _router(made: tuple[str, str, int]) -> tuple[str, str, int] | None:
+    """A router as a `Place` names it: the call that made it, or None for one handed in from
+    outside — two such parameters are two names, and the caller outside the module may hand
+    both the same router, so it may be any router (`OI-263`)."""
+    return made if made[0] == "call" else None
 
 
 def _identity(producer: Producer) -> tuple[str, str, int] | None:

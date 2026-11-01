@@ -2321,6 +2321,77 @@ def test_vertx_two_handlers_on_one_router_from_two_methods_stay_narrowed(vertx_i
     }
 
 
+def _mount_order(rows: list[dict], case: str) -> set[tuple]:
+    """`(method, handler, resolution)` of every row on `MountOrder`'s `case` path."""
+    return {
+        (r["method"], _vertx_handler(r), r["resolution"])
+        for r in rows
+        if r["path"] == f"/mount-order/{case}/x"
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_parent_route_before_the_mount_answers_and_the_mounted_one_never_runs(
+    vertx_inbound,
+):
+    """A mounted router is served from its parent, at the mount route's place: the parent's
+    own `GET /mount-order/parent-first/x`, made before `route(".../*").subRouter(sub)` in one
+    method, answers, and `sub.get("/x")` never runs. Both were `resolved`, two answers to one
+    request, because the two routes are on two routers."""
+    assert _mount_order(vertx_inbound, "parent-first") == {
+        ("GET", "MountOrder#parentFirstOwn", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_mount_before_the_parent_route_answers_through_the_mounted_router(
+    vertx_inbound,
+):
+    """The mount made first: the mounted router's route answers, the parent's own never
+    runs."""
+    assert _mount_order(vertx_inbound, "mount-first") == {
+        ("GET", "MountOrder#subOfMountFirst", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_mount_route_is_ordered_by_its_own_order(vertx_inbound):
+    """`order(1)` on the mount route against `order(5)` on the parent's own: the mount is tried
+    first though it was made after."""
+    assert _mount_order(vertx_inbound, "ordered") == {
+        ("GET", "MountOrder#subOfOrdered", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_nested_mounts_are_ordered_at_the_outermost_mount(vertx_inbound):
+    """`inner` mounted on `middle`, `middle` on `parent`, the parent's own route made after
+    `middle`'s mount: the innermost router's route answers."""
+    assert _mount_order(vertx_inbound, "nested/inner") == {
+        ("GET", "MountOrder#innerOfNested", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_parent_route_and_a_mount_made_in_two_methods_are_narrowed(vertx_inbound):
+    """The parent's own route and the mount on it made in two methods: the order is not in the
+    code, so each is a row and each is `narrowed`."""
+    assert _mount_order(vertx_inbound, "two-methods") == {
+        ("GET", "MountOrder#twoMethodsOwn", "narrowed"),
+        ("GET", "MountOrder#subOfTwoMethods", "narrowed"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-on-different-routers-are-not-ordered-against-each-other")
+def test_vertx_a_route_and_a_mount_on_unrelated_routers_are_each_resolved(vertx_inbound):
+    """A route on one router and a router mounted on another, unrelated one: neither is served
+    from the other, so each is its own router's answer, `resolved`."""
+    assert _mount_order(vertx_inbound, "unrelated") == {
+        ("GET", "MountOrder#unrelatedOwn", "resolved"),
+        ("GET", "MountOrder#subOfUnrelated", "resolved"),
+    }
+
+
 def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
     """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
     So is a `next()` inside a lambda that captured the context (`onSuccess(u ->

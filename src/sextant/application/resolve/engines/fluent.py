@@ -94,12 +94,14 @@ from sextant.application.resolve.shapes.member_values import (
     static_field_value,
 )
 from sextant.application.resolve.shapes.mounts import (
+    ANY_ROUTER,
     ROOT,
     Mount,
     MountPath,
     MountReader,
     MountRule,
     MountRules,
+    Place,
     Prefix,
     file_unread_prefix,
     mount_rules_of,
@@ -503,9 +505,10 @@ class _DeriveContext:
     # served under (`shapes.mounts`). None for every other catalog, and for a module with no
     # mount, whose routes serve at their root as read.
     mounts: MountReader | None = None
-    # Which router a held-back route is made on (`MountReader.routers_of`), for `_settle`: the
-    # mount reader where there is one, one reading routers alone otherwise. None for a
-    # catalog declaring no `mount`, whose routes are ordered as if on one router.
+    # Which router a held-back route is made on and through which mounts it is served
+    # (`Prefix.places`), for `_settle`: the mount reader where there is one, one reading
+    # routers alone otherwise. None for a catalog declaring no `mount`, whose routes are
+    # ordered as if on one router.
     routers: MountReader | None = None
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
     # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
@@ -726,10 +729,11 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     # add (`file_refusal` keeps one row per address).
     refused_verb = _root_verb(end, context) if context.refuses_unrooted else None
     # Spec §3c: every prefix the route's router is served under, one row each; the root alone
-    # where no mount received it.
+    # where no mount received it. Read by the router reader of a module that mounts nothing
+    # too, for the router each prefix places the route on (`_settle`).
     prefixes: tuple[Prefix, ...] = (ROOT,)
-    if context.mounts is not None and direction == "inbound" and end.root:
-        prefixes = context.mounts.of_route(end.root, end.path)
+    if context.routers is not None and direction == "inbound" and end.root:
+        prefixes = context.routers.of_route(end.root, end.path)
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
@@ -997,12 +1001,9 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                         row=variant_row,
                         metadata=metadata if position == 0 else [],
                         registered=_registered_at(end),
-                        order=_order_of(captures.get(_ORDER)),
                         unread=variant_unread,
-                        routers=(
-                            context.routers.routers_of(end.root, end.path)
-                            if context.routers is not None and end.root
-                            else None
+                        places=_placed(
+                            prefix, _registered_at(end), _order_of(captures.get(_ORDER))
                         ),
                     )
                 )
@@ -1059,12 +1060,11 @@ class _Candidate:
     # The root call that made the route, `(method, ordinal)`: Vert.x numbers its routes as
     # they are made, so within one method the ordinal order IS the registration order.
     registered: tuple[str, int]
-    # The order the chain set (`_order_of`), or None for the registration order.
-    order: int | str | None
     unread: tuple[tuple[str, str], ...] | None
-    # The calls that made the router the route is on (`MountReader.routers_of`), or None where
-    # that router may be any: Vert.x orders routes within one router only (`OI-263`).
-    routers: frozenset[tuple[str, str, int]] | None = None
+    # Where the route stands (`Place`): each router it is served from, outermost first, with
+    # the mount route's place there, and its own `(registered, order)` last. Vert.x orders
+    # routes within one router only (`OI-263`), and a mounted router's at its mount route.
+    places: frozenset[Place] = frozenset({ANY_ROUTER})
 
 
 def _judge(
@@ -1146,6 +1146,7 @@ def _mounts(
             pattern=_URL_IS.get(str(end.captures.get("url_is"))) == PATH_KIND_PATTERN,
             within=end.path,
             unread="url" in end.captures and read is None,
+            order=_order_of(end.captures.get(_ORDER)),
         )
         paths = found.setdefault(_site_key(terminal), (rule, terminal, []))[2]
         if way not in paths:
@@ -1285,25 +1286,63 @@ def _order_of(captured: Any) -> int | str | None:
     return _UNREAD_ORDER
 
 
+def _placed(
+    prefix: Prefix, registered: tuple[str, int], order: int | str | None
+) -> frozenset[Place]:
+    """Where a route stands (`_Candidate.places`): the places its prefix was reached on, or a
+    router nothing names, each ending with the route's own registration and order."""
+    return frozenset(
+        (*place[:-1], (place[-1][0], (registered, order)))
+        for place in prefix.places or (ANY_ROUTER,)
+    )
+
+
 def _runs_before(first: _Candidate, then: _Candidate) -> bool:
-    """Whether Vert.x certainly tries `first` before `then` (spec §3b). Routes run by order;
-    a route's own order is the router's count when it was made, so two routes nobody ordered
-    are in root-call order within one method and in no known order across two. A literal
-    `order(int)` orders against another literal, `last()` puts a route after every route not
-    last, and equal orders fall back to registration. A route with an unread order, or one
-    ordered against an unordered one, is in no known order. Neither is a route on a router
-    the other is not certainly on: a router orders its own routes alone."""
-    if None not in (first.routers, then.routers) and first.routers != then.routers:
+    """Whether Vert.x certainly tries `first` before `then` (spec §3b): wherever either
+    stands, the other stands on a router it meets, and every meeting tries `first` first
+    (`_meets`). A router orders its own routes alone; a route on a router the other is not
+    certainly on is in no known order against it."""
+    met = [[_meets(one, other) for other in then.places] for one in first.places]
+    return (
+        all(any(meeting is not None for meeting in row) for row in met)
+        and all(any(meeting is not None for meeting in column) for column in zip(*met))
+        and all(meeting is not False for row in met for meeting in row)
+    )
+
+
+def _meets(first: Place, then: Place) -> bool | None:
+    """Where two routes' places meet, whether `first` is certainly tried there before `then`;
+    None where they never do — two routers made by two calls. A route served through a mount
+    competes with the parent's own routes at the mount route's place, so they meet on the
+    outermost router both are served from, and through one mount route on the next."""
+    for (router, at), (other, other_at) in zip(first, then):
+        if None not in (router, other) and router != other:
+            return None
+        if at != other_at:
+            return at is not None and other_at is not None and _tried_before(at, other_at)
+    return False
+
+
+def _tried_before(
+    first: tuple[tuple[str, int], int | str | None], then: tuple[tuple[str, int], int | str | None]
+) -> bool:
+    """Whether one router certainly tries the route at `first` before the one at `then`, each
+    `(registered, order)`. Routes run by order; a route's own order is the router's count when
+    it was made, so two routes nobody ordered are in root-call order within one method and in
+    no known order across two. A literal `order(int)` orders against another literal, `last()`
+    puts a route after every route not last, and equal orders fall back to registration. A
+    route with an unread order, or one ordered against an unordered one, is in no known
+    order."""
+    (registered, order), (then_registered, then_order) = first, then
+    if _UNREAD_ORDER in (order, then_order):
         return False
-    if _UNREAD_ORDER in (first.order, then.order):
+    if (order == _LAST) != (then_order == _LAST):
+        return then_order == _LAST
+    if isinstance(order, int) and isinstance(then_order, int) and order != then_order:
+        return order < then_order
+    if (order is None) != (then_order is None):
         return False
-    if (first.order == _LAST) != (then.order == _LAST):
-        return then.order == _LAST
-    if isinstance(first.order, int) and isinstance(then.order, int) and first.order != then.order:
-        return first.order < then.order
-    if (first.order is None) != (then.order is None):
-        return False
-    return first.registered[0] == then.registered[0] and first.registered[1] < then.registered[1]
+    return registered[0] == then_registered[0] and registered[1] < then_registered[1]
 
 
 def _settle(
@@ -1357,9 +1396,9 @@ def _row_key(candidate: _Candidate) -> Any:
 
 
 def _may_share_router(first: _Candidate, then: _Candidate) -> bool:
-    """Whether two routes can be on one router: unless both routers are known and no call made
-    both (`MountReader.routers_of`)."""
-    return first.routers is None or then.routers is None or bool(first.routers & then.routers)
+    """Whether two routes can meet on one router (`_meets`): unless every place of each is on
+    routers made by other calls than the other's."""
+    return any(_meets(one, other) is not None for one in first.places for other in then.places)
 
 
 def _edge(
