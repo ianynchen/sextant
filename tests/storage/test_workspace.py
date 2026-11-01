@@ -705,6 +705,54 @@ def test_a_resolved_row_with_no_path_and_no_peer_is_not_inserted(tmp_path: Path)
     ]
 
 
+@pytest.mark.pins(
+    "derive_call_endpoints.an-inbound-row-of-another-handler-is-kept",
+    "derive_call_endpoints.an-inbound-row-ignores-its-registering-method",
+)
+def test_one_route_from_two_callers_is_one_row_per_handler(tmp_path: Path):
+    """`derive_call_endpoints.sql`'s inbound match on `handler` (Vert.x plan, Task 6; final
+    review M8), pinned at its own seam because it guards every engine's inbound rows. One route
+    registered by a second method with the SAME handler is the row already there, not a second
+    one; with a DIFFERENT handler, from a different caller, it is a row of its own, both kept."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    def _row(handler: str, caller: str) -> dict:
+        return {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/orders",
+            "handler": f"com/acme/routes/Handlers#{handler}(sig_1a2b3c4d).",
+            "caller": f"com/acme/routes/Routes#{caller}(sig_1a2b3c4d).",
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "request_shape": None,
+            "response_shape": None,
+            "catalog_id": "cat-in",
+        }
+
+    workspace.derive("call_endpoints", rows=[_row("list", "first")])
+    workspace.derive("call_endpoints", rows=[_row("list", "second")])
+    workspace.derive("call_endpoints", rows=[_row("search", "third")])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert sorted((str(r["handler"]), str(r["caller"])) for r in rows) == [
+        (
+            "com/acme/routes/Handlers#list(sig_1a2b3c4d).",
+            "com/acme/routes/Routes#first(sig_1a2b3c4d).",
+        ),
+        (
+            "com/acme/routes/Handlers#search(sig_1a2b3c4d).",
+            "com/acme/routes/Routes#third(sig_1a2b3c4d).",
+        ),
+    ]
+
+
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
     _fixture_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")

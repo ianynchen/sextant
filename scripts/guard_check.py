@@ -5936,6 +5936,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_call_endpoints.an-inbound-row-of-another-handler-is-kept": Guard(
+        what="an inbound call-site row on a route already in the table is kept where its "
+        "handler and its caller both differ (Vert.x plan, Task 6; final review M8)",
+        why="the handler match stands for every engine's inbound rows: matched on the route "
+        "alone, a second handler registered on one path by another method would vanish with "
+        "no gap row saying so",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/derive_call_endpoints.sql",
+                find="           OR (r.direction = 'inbound' AND existing.handler = r.handler))\n",
+                replace="           OR (r.direction = 'inbound'))\n",
+            ),
+        ),
+    ),
     # --- guards that live in a shipped CATALOG rather than in an engine ----
     #
     # A conjunct a catalog states is a guard exactly as an engine's `if` is:
