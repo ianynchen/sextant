@@ -3815,6 +3815,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with": Guard(
+        what="a lambda body's parameter i is the capture site's argument i plus the arguments "
+        "ahead of the captures — `this` for an instance body — never argument i",
+        why="javac's capture site for an instance lambda hands `this` first, and `this` becomes "
+        "the body's receiver (D00's `captures` is the argument count minus one for it). Binding "
+        "argument i to parameter i read every value such a lambda closed over as its "
+        "neighbour's: vertx-examples' `sqlclient` published `POST /products` as answered by "
+        "`handleGetProduct` at `resolved` (`OI-266`). Any value read through an instance "
+        "lambda's captures — a topic, a path, a handler — is affected",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                receiver = max(len(bound) - count, 0)\n",
+                replace="                receiver = 0  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-binding-written-from-a-CONSTANT-answers-that-constant": Guard(
         what="a field written from a constant resolves to that constant, with no crossing — "
         "the value is in the fact",

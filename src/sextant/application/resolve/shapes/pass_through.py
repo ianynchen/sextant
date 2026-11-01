@@ -295,10 +295,10 @@ class HandlerReader:
             if found is not None:
                 return [found]
             handed: list[Handler] = []
-            for caller, ordinal in self._index.callers.get((method, position), ()):
+            for caller, ordinal, slot in self._index.callers.get((method, position), ()):
                 bound = (self._index.sites.get((caller, ordinal)) or {}).get("arguments") or ()
-                if position < len(bound):
-                    handed.extend(self._declared_type(caller, bound[position], seen))
+                if slot < len(bound):
+                    handed.extend(self._declared_type(caller, bound[slot], seen))
             return handed or [
                 Handler(
                     outcome=UNREADABLE,
@@ -362,7 +362,7 @@ class HandlerReader:
                 stands_for = [
                     m
                     for m in methods
-                    if any(c in methods for c, _ in self._index.callers.get((m, 0), ()))
+                    if any(c in methods for c, _, _ in self._index.callers.get((m, 0), ()))
                 ]
                 return self._runs(
                     (*stands_for, *(m for m in methods if m not in stands_for)),
@@ -424,10 +424,10 @@ def handler_outcomes(
             for end in producers_of(index, site, RECEIVER, frozenset(), stop_at_parameters_of=stop):
                 if end.parameter is not None:
                     ended.add(end.parameter)
-    handed: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    handed: dict[tuple[str, int], list[tuple[tuple[str, int], int]]] = {}
     for parameter, binders in index.callers.items():
-        for binder in binders:
-            handed.setdefault(binder, []).append(parameter)
+        for caller, ordinal, slot in binders:
+            handed.setdefault((caller, ordinal), []).append((parameter, slot))
     # A parameter written into a field (`written_by`): a context stored there is read back by
     # a `getfield` no fact names, so the walk cannot follow it to a `next()`.
     stored: dict[tuple[str, int], list[str]] = {}
@@ -451,7 +451,7 @@ def handler_outcomes(
 def _handed_on(
     index: ValueIndex,
     by_method: Mapping[str, list[Mapping[str, Any]]],
-    handed: Mapping[tuple[str, int], list[tuple[str, int]]],
+    handed: Mapping[tuple[str, int], list[tuple[tuple[str, int], int]]],
     stored: Mapping[tuple[str, int], list[str]],
     start: tuple[str, int],
 ) -> tuple[set[tuple[str, int]], tuple[Unread, ...]]:
@@ -475,7 +475,7 @@ def _handed_on(
                     and argument.get("value") == parameter
                 ):
                     continue
-                targets = [target for target in handed.get(key, ()) if target[1] == slot]
+                targets = [target for target, at in handed.get(key, ()) if at == slot]
                 for target in targets:
                     if target not in reached:
                         reached.add(target)

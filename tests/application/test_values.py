@@ -76,6 +76,7 @@ _MANY = "([Ljava/lang/String;)V"
 _MAKES_STRING = "()Ljava/lang/String;"
 _MAKES_OBJECT = "()Ljava/lang/Object;"
 _TAKES_STRING = "(Ljava/lang/String;)V"
+_TAKES_TWO_STRINGS = "(Ljava/lang/String;Ljava/lang/String;)V"
 
 _REGISTRAR = _PKG + "Registrar#"
 _CALLER = _PKG + "Caller#"
@@ -840,6 +841,130 @@ def _facts() -> list[Fact]:
         _void(_CLOSING, "body", _TAKES_STRING),
         _site(
             _symbol(_CLOSING, "body", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        # The capture's three shapes javac emits (`OI-266`). An INSTANCE lambda — one that
+        # reads `this` — is created by a capture site whose FIRST argument is `this`, which
+        # becomes the body's receiver and not its parameter 0 (D00, the `lambda` row:
+        # `captures` is the site's argument count minus one for an instance body). Here
+        # `installOnThis` closes over two literals beside `this`.
+        _declared(_CLOSING, "installOnThis", "()V"),
+        _site(
+            _symbol(_CLOSING, "installOnThis", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "test", _MAKES_OBJECT),
+            arguments=[
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="string", value="first"),
+                CallArgument(kind="string", value="second"),
+            ],
+            result=6,
+        ),
+        _site(
+            _symbol(_CLOSING, "installOnThis", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+                    captures=2,
+                    source=6,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+        _void(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+        _site(
+            _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        # A STATIC lambda closing over two values: the capture site's arguments are exactly
+        # the captures, so body parameter i is argument i.
+        _declared(_CLOSING, "installStatic", "()V"),
+        _site(
+            _symbol(_CLOSING, "installStatic", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "test", _MAKES_OBJECT),
+            arguments=[
+                CallArgument(kind="string", value="one"),
+                CallArgument(kind="string", value="two"),
+            ],
+            result=4,
+        ),
+        _site(
+            _symbol(_CLOSING, "installStatic", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+                    captures=2,
+                    source=4,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+        _void(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+        _site(
+            _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        # A method reference BOUND to a receiver — `named::target`: the capture site's one
+        # argument is the receiver, `captures` is 0, and `target`'s parameter 0 is the
+        # interface's own argument, handed in by whoever invokes the function.
+        _declared(_CLOSING, "bindReference", "()V"),
+        _site(
+            _symbol(_CLOSING, "bindReference", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "accept", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="string", value="the-receiver")],
+            result=3,
+        ),
+        _site(
+            _symbol(_CLOSING, "bindReference", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "target", _TAKES_STRING),
+                    captures=0,
+                    source=3,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "target", _TAKES_STRING),
+        _void(_CLOSING, "target", _TAKES_STRING),
+        _site(
+            _symbol(_CLOSING, "target", _TAKES_STRING),
             0,
             _ONE_TARGET,
             kind="virtual",
@@ -2126,6 +2251,41 @@ def test_a_lambda_body_reaches_the_value_it_closed_over(walked):
     """
     bindings = _bindings(walked, _symbol(_CLOSING, "body", _TAKES_STRING), 0)
     assert [binding.slots[0].value for binding in bindings] == ["closed-over"]
+
+
+@pytest.mark.pins("values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with")
+def test_an_instance_lambda_binds_each_capture_to_its_own_parameter(walked):
+    """**`OI-266`, Critical on real input.** An instance lambda's capture site hands `this`
+    FIRST, and `this` becomes the body's receiver, so the body's parameter i is the site's
+    argument i + 1. Binding argument i to parameter i read every captured value one
+    position off: vertx-examples' `sqlclient` published `POST /products` as answered by
+    `handleGetProduct`, at `resolved`, because three captured handlers each took their
+    neighbour's value.
+
+    `installOnThis` closes over `first` and `second` beside `this`; each body parameter
+    reads its own literal, not `this` and not the neighbour.
+    """
+    body = _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS)
+    assert [b.slots[0].value for b in _bindings(walked, body, 0)] == ["first"]
+    assert [b.slots[0].value for b in _bindings(walked, body, 1)] == ["second"]
+
+
+@pytest.mark.pins("values.a-lambda-body-reaches-the-values-it-CAPTURED")
+def test_a_static_lambda_binds_each_capture_to_the_same_position(walked):
+    """A static lambda's capture site hands the captures and nothing else, so nothing is
+    skipped: parameter i is argument i. Skipping a receiver the site does not have would
+    read `two` for parameter 0 and nothing for parameter 1."""
+    body = _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS)
+    assert [b.slots[0].value for b in _bindings(walked, body, 0)] == ["one"]
+    assert [b.slots[0].value for b in _bindings(walked, body, 1)] == ["two"]
+
+
+def test_a_bound_method_reference_binds_no_parameter_to_its_receiver(walked):
+    """`named::target` captures only its receiver (`captures` 0): `target`'s parameter 0 is
+    the function's own argument, handed in by whoever calls it, so it is `external` — never
+    the receiver the capture site was given."""
+    bindings = _bindings(walked, _symbol(_CLOSING, "target", _TAKES_STRING), 0)
+    assert _reasons(bindings) == ["external"]
 
 
 @pytest.mark.pins("values.an-UNREADABLE-constant-answers-not_readable-never-nothing")

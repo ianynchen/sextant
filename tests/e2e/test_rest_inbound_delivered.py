@@ -2269,6 +2269,19 @@ def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inb
     }, telemetry
 
 
+@pytest.mark.pins("values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with")
+def test_vertx_handlers_an_instance_lambda_captured_name_their_own_rows(vertx_inbound):
+    """vertx-examples' `sqlclient` shape (`OI-266`): three handler locals captured by a
+    `compose(v -> …)` lambda that also reads `this.vertx`. javac hands that lambda `this`
+    first, so reading capture i as argument i published `POST /products` as answered by
+    `handleGetProduct`, at `resolved`. Each row names its own handler."""
+    assert _served(vertx_inbound, "CapturedRoutes") == {
+        ("GET", "/products/:productID", "CapturedRoutes#handleGetProduct", "resolved"),
+        ("POST", "/products", "CapturedRoutes#handleAddProduct", "resolved"),
+        ("GET", "/products", "CapturedRoutes#handleListProducts", "resolved"),
+    }
+
+
 def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
     """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
     So is a `next()` inside a lambda that captured the context (`onSuccess(u ->

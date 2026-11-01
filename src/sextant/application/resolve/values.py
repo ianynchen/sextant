@@ -442,7 +442,10 @@ class ValueIndex:
     # captured them (`value_index`, and `OI-150` for what it cost to be missing). The walk
     # treats the two identically because they ARE identical to it — a parameter, and the
     # sites that hand it a value — and a capture is one calling context like any other.
-    callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
+    # Each entry is `(caller, ordinal, argument)`: the site and WHICH of its arguments is
+    # the parameter. For a call that is the parameter's own index; for an instance lambda's
+    # capture it is one past it, the site's first argument being the body's `this` (`OI-266`).
+    callers: dict[tuple[str, int], tuple[tuple[str, int, int], ...]]
     # Every method's declared PARAMETER NAMES, by symbol — what a hole in a template is
     # named after (`_joined`). The compiler records them (`local_variable_names`), the
     # signature carries them, and a position with no recorded name is `None` rather than a
@@ -592,7 +595,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
 
     producers: dict[tuple[str, int], list[int]] = {}
     returns: dict[tuple[str, int], list[tuple[int, str]]] = {}
-    callers: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    callers: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
     writers: dict[str, list[tuple[str, int]]] = {}
     for edge in workspace.query("value_edges"):
         kind = str(edge["kind"])
@@ -612,7 +615,9 @@ def value_index(workspace: Workspace) -> ValueIndex:
             )
         elif kind == "bound_to_parameter":
             parameter = (str(edge["to_symbol"]), int(str(edge["to_index"])))
-            callers.setdefault(parameter, []).append((method, int(str(edge["to_ordinal"]))))
+            callers.setdefault(parameter, []).append(
+                (method, int(str(edge["to_ordinal"])), parameter[1])
+            )
         elif kind == "written_by":
             # The sixth edge: `binding -> (writing method, its parameter N)`. Several
             # writers of one binding are several entries, which is what the walk then
@@ -636,13 +641,19 @@ def value_index(workspace: Workspace) -> ValueIndex:
     # The facts carry the whole edge already, which is why this is a fold and not a schema
     # change: a `lambda` entry of the argument grammar names its body and how many values it
     # captured, and the value it came from was PRODUCED by the capture site, whose arguments
-    # are those values in order. So body parameter *i* is argument *i* of the capture site —
-    # identity, measured on four shapes, and `captures` corroborates the count rather than
-    # being trusted alone.
+    # are those values in order. **The captures are the site's LAST `captures` arguments**
+    # (`OI-266`): an instance body's capture site hands `this` first, and `this` becomes the
+    # body's receiver rather than its parameter 0 — D00's `captures` is the site's argument
+    # count minus one for exactly that body. So body parameter *i* is argument
+    # *i + (arguments - captures)*: *i* for a static body, *i + 1* for an instance one. Taking
+    # *i* for both bound every value an instance lambda closed over to its neighbour's
+    # parameter; vertx-examples' `sqlclient` published `POST /products` as answered by
+    # `handleGetProduct`, at `resolved`.
     #
     # Parameters at or past the capture count are NOT bound here and must not be: those are
     # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
-    # answer for them.
+    # answer for them. A bound method reference (`captures` 0) binds none: its one argument
+    # is the receiver.
     for (method, _), site in sites.items():
         for captured in _captures(site["arguments"]):
             # The entry names its body BARE, and every index here is keyed on full symbols.
@@ -652,12 +663,15 @@ def value_index(workspace: Workspace) -> ValueIndex:
             body = with_descriptor(method, str(captured["symbol"]))
             count = int(str(captured["captures"]))
             source = captured.get("source")
-            if not count or source is None:
+            if count <= 0 or source is None:
                 continue
             for maker in producers.get((method, int(str(source))), ()):
                 bound = (sites.get((method, maker)) or {}).get("arguments") or []
+                receiver = max(len(bound) - count, 0)
                 for position in range(min(count, len(bound))):
-                    callers.setdefault((body, position), []).append((method, maker))
+                    callers.setdefault((body, position), []).append(
+                        (method, maker, receiver + position)
+                    )
 
     parameters: dict[str, tuple[str | None, ...]] = {}
     for row in workspace.query("method_declarations"):
@@ -2719,14 +2733,14 @@ class _Walk:
         if not callers:
             return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
         reached: list[_Reached] = []
-        for caller, ordinal in callers:
+        for caller, ordinal, argument in callers:
             step = _Step((_CALLER_OF, method), f"{caller}@{ordinal}")
             merged = _combine(trail, (step,))
             if merged is None:
                 # This path already crossed out of `method` through a different call, so
                 # this caller is not on it. Another slot's path holds that caller.
                 continue
-            reached.extend(self._resolve((_SLOT, caller, ordinal, index), merged, frames))
+            reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         return tuple(reached)
 
     def _binding(
