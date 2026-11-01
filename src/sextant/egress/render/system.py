@@ -17,7 +17,7 @@ machinery for a shape it does not have yet.
 from collections.abc import Sequence
 
 from sextant.application.stitch import Link, Participant, Refusal, Uncalled, Unmatched
-from sextant.domain.closed_sets import Resolution
+from sextant.domain.closed_sets import ANY_METHOD, Resolution
 from sextant.domain.redaction import Redactor
 
 
@@ -110,7 +110,8 @@ def _links(links: "Sequence[Link]", redactor: Redactor) -> list[str]:
         endpoint = (
             "*the participant, no route*"
             if link.to_path is None
-            else f"{link.to_method or ''} `{redactor.redact_text(link.to_path)}`".strip()
+            else f"{_verb(link.to_method, link.to_any_method)} "
+            f"`{redactor.redact_text(link.to_path)}`".strip()
         )
         if link.to_conditions:
             # The inbound endpoint exists in some environments only (spec 2026-10-21-
@@ -226,9 +227,19 @@ def _uncalled(uncalled_endpoints: "Sequence[Uncalled]", redactor: Redactor) -> l
     ]
     for u in uncalled_endpoints:
         path = redactor.redact_text(u.path)
-        lines.append(f"| `{u.participant}` | {u.method or ''} `{path}` |".replace("|  ", "| "))
+        verb = _verb(u.method, u.any_method)
+        lines.append(f"| `{u.participant}` | {verb} `{path}` |".replace("|  ", "| "))
     lines.append("")
     return lines
+
+
+def _verb(method: str | None, any_method: bool) -> str:
+    """An inbound end's verb as the Endpoint cell prints it. A row serving every verb
+    (`method_kind = any`, Vert.x spec §3a) says `any`, the module document's word, rather
+    than the empty cell its NULL method would leave, which reads as missing data."""
+    if method is None and any_method:
+        return ANY_METHOD
+    return method or ""
 
 
 def _link_order(link: "Link") -> tuple[str, str, str, str]:

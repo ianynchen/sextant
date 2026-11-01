@@ -2,7 +2,7 @@
 
 import pytest
 
-from sextant.application.stitch import Link, Refusal, Unmatched
+from sextant.application.stitch import Link, Refusal, Uncalled, Unmatched
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.system import render_system_document
 
@@ -73,6 +73,53 @@ def _link(**sides: tuple[tuple[str, str], ...]) -> Link:
         to_path="/owners",
         **sides,
     )
+
+
+@pytest.mark.pins("render.the-system-document-says-ANY-for-an-any-method-end")
+def test_a_link_landing_on_an_any_method_row_says_any_in_the_endpoint_cell():
+    """Vert.x spec §3a, final review C1: a call reaching a verbless `router.route("/x")`
+    links with `to_method` NULL and `to_any_method` set. The Endpoint cell printed an empty
+    verb there, which reads as data that is missing rather than every verb served."""
+    row = _link_row(
+        Link(
+            from_participant="web",
+            from_protocol="http",
+            from_method="GET",
+            from_path="/x",
+            from_caller="C#c().",
+            to_participant="api",
+            to_protocol="http",
+            to_method=None,
+            to_path="/x",
+            to_any_method=True,
+        )
+    )
+    assert "| any `/x` |" in row
+
+
+@pytest.mark.pins("render.the-system-document-says-ANY-for-an-uncalled-any-method-row")
+def test_an_uncalled_any_method_row_says_any_in_the_endpoint_cell():
+    """The same row, uncalled: `uncalled` reports it with its NULL verb, and the cell must
+    say every verb is served rather than print nothing."""
+    document = render_system_document(
+        participants=(),
+        links=(),
+        unmatched=(),
+        uncalled_endpoints=(
+            Uncalled(
+                participant="api",
+                protocol="http",
+                method=None,
+                path="/x",
+                handler="H#h().",
+                any_method=True,
+            ),
+        ),
+        route_refusals=(),
+        environment="default",
+        redactor=Redactor.from_rules(RedactionRules()),
+    )
+    assert "| `api` | any `/x` |" in document
 
 
 def test_a_link_whose_endpoint_is_open_in_every_environment_says_so_in_each():

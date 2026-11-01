@@ -385,6 +385,9 @@ class Uncalled:
     method: str | None
     path: str
     handler: str | None
+    # True where the row serves every verb (`method_kind = any`), which `method` NULL alone
+    # cannot say; the system document prints `any` for it.
+    any_method: bool = False
 
 
 def uncalled(
@@ -443,6 +446,7 @@ def uncalled(
                 method=_verb(row),
                 path=str(row["path"]),
                 handler=None if row.get("handler") is None else str(row["handler"]),
+                any_method=row.get("method_kind") == ANY_METHOD,
             )
         )
     return tuple(

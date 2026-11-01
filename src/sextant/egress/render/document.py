@@ -50,7 +50,14 @@ from sextant.application.resolve.resolved_schedules import redact_schedule_value
 # addresses that reach it was made in `resolve/roots.py`, and re-making it here
 # is the derivation "Egress is read-only" exists to forbid.
 from sextant.application.resolve.roots import Root
-from sextant.domain.closed_sets import Anchor, Protocol, Resolution, TraceStop
+from sextant.domain.closed_sets import (
+    ANY_METHOD,
+    PATH_KIND_PATTERN,
+    Anchor,
+    Protocol,
+    Resolution,
+    TraceStop,
+)
 from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
@@ -535,7 +542,14 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     address therefore come out of one function — two would be two answers to
     "what is this endpoint called" in one document.
     """
-    return _wire_address(endpoint["protocol"], endpoint["method"], endpoint["path"], redactor)
+    return _wire_address(
+        endpoint["protocol"],
+        endpoint["method"],
+        endpoint["path"],
+        redactor,
+        any_method=endpoint.get("method_kind") == ANY_METHOD,
+        pattern=endpoint.get("path_kind") == PATH_KIND_PATTERN,
+    )
 
 
 # The ledger questions whose NULL verb is an ABSENCE rather than a verb the
@@ -559,7 +573,13 @@ def _question_identity(row: dict[str, object], redactor: Redactor) -> str:
 
 
 def _wire_address(
-    protocol_value: object, method_value: object, path_value: object, redactor: Redactor
+    protocol_value: object,
+    method_value: object,
+    path_value: object,
+    redactor: Redactor,
+    *,
+    any_method: bool = False,
+    pattern: bool = False,
 ) -> str:
     """A wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
@@ -573,9 +593,17 @@ def _wire_address(
     redactor: `https://user:pass@host/x` renders with its userinfo stripped,
     and a repo value pattern masks whatever else it names. A `${...}`
     expression passes through whole — it is a reference to a value, not the
-    value."""
+    value.
+
+    `any_method` and `pattern` are the row's own `method_kind` and `path_kind` (Vert.x spec
+    §3a), which only an `endpoints` row carries: a row serving every verb renders `any`, the
+    word `_question_identity` already uses, never the `(unresolved)` its NULL method would
+    otherwise print; a path the framework matches as a regular expression is followed by
+    `(pattern)`, so it never reads as a URL someone could call."""
     protocol = "" if protocol_value is None else str(protocol_value)
     rendered_path = "(unresolved)" if path_value is None else redactor.redact_text(str(path_value))
+    if pattern and path_value is not None:
+        rendered_path = f"{rendered_path} (pattern)"
     # NO protocol at all — the address alone, with no verb and no prefix
     # (OI-1). Only an `open_questions` row reaches this: an `endpoints` row
     # always carries one (`resolve/endpoints.py` refuses a catalog that mints
@@ -589,7 +617,7 @@ def _wire_address(
         return rendered_path
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
-    method = method_value
+    method = ANY_METHOD if method_value is None and any_method else method_value
     # A verbed protocol whose row carries no verb *by design*
     # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
     # would report a gap that does not exist. Every other verbed protocol —

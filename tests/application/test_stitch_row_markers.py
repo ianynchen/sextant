@@ -168,3 +168,14 @@ def test_an_outbound_call_with_no_verb_links_an_any_method_row():
     )
     assert unmatched == ()
     assert [(l.from_method, l.to_participant, l.to_method) for l in links] == [(None, "b", None)]
+
+
+@pytest.mark.pins("stitch.an-uncalled-ANY-METHOD-row-says-so")
+def test_an_uncalled_any_method_row_carries_its_marker_and_a_plain_one_does_not():
+    # The system document prints `any` off this flag (final review C1); the NULL method alone
+    # cannot tell the two rows apart.
+    inbound = [_inbound("b", None, "/p"), _inbound("b", None, "/q", method_kind=ANY_METHOD)]
+    assert [(u.path, u.any_method) for u in uncalled(inbound, ())] == [
+        ("/p", False),
+        ("/q", True),
+    ]

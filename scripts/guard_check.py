@@ -3230,6 +3230,69 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render.an-ANY-METHOD-row-says-any-not-unresolved": Guard(
+        what="the module document renders a `method_kind = any` row's verb as `any` (Vert.x "
+        "spec §3a; final review C1)",
+        why="without it every verbless Vert.x route and every Quarkus `@Route` naming no "
+        "`methods` reads `(unresolved) /path`, a verb reported unread that serves every verb",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        any_method=endpoint.get("method_kind") == ANY_METHOD,\n',
+                replace="        any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render.a-PATTERN-path-is-marked-a-pattern": Guard(
+        what="the module document follows a `path_kind = pattern` path with `(pattern)` (Vert.x "
+        "spec §3a; final review C1)",
+        why="without it a regular expression the framework matches reads as a URL someone "
+        "could call",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        pattern=endpoint.get("path_kind") == PATH_KIND_PATTERN,\n',
+                replace="        pattern=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render.the-system-document-says-ANY-for-an-any-method-end": Guard(
+        what="the system document's Endpoint cell says `any` for a link landing on an "
+        "any-method row (Vert.x spec §3a; final review C1)",
+        why="without it the cell prints an empty verb, which reads as missing data",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find="_verb(link.to_method, link.to_any_method)",
+                replace="_verb(link.to_method, False)",
+            ),
+        ),
+    ),
+    "render.the-system-document-says-ANY-for-an-uncalled-any-method-row": Guard(
+        what="the system document's uncalled Endpoint cell says `any` for an any-method row "
+        "(Vert.x spec §3a; final review C1)",
+        why="without it an uncalled verbless route prints an empty verb",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find="_verb(u.method, u.any_method)",
+                replace="_verb(u.method, False)",
+            ),
+        ),
+    ),
+    "stitch.an-uncalled-ANY-METHOD-row-says-so": Guard(
+        what="`uncalled` carries a row's `method_kind = any` on `Uncalled.any_method` (final "
+        "review C1)",
+        why="without it the system document cannot tell an uncalled any-method row from one "
+        "whose verb is NULL",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='                any_method=row.get("method_kind") == ANY_METHOD,\n',
+                replace="                any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
     "stitch.the-LINKS-legend-says-what-not-evaluated-means-once": Guard(
         what='where any link end renders "not evaluated", the Links section carries one fixed '
         "sentence saying what it means and that the participant's module document says why",
