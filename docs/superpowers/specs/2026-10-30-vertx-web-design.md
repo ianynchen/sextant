@@ -746,8 +746,8 @@ deletion recorded below.
   answering handler is `TemplateHandler`, a library handler (§4). The rxjava hello worlds §2b
   counted are in other modules. SockJS mounts (`chat`, `realtime`, `angular_realtime`) and the
   OpenAPI examples add no inbound row, as predicted. Differences:
-  - **Wrong handlers on `sqlclient/Server` — Critical, OI-266, routed to the controller, not
-    fixed here.** `POST /products` names `handleGetProduct` and `GET /products` names
+  - **Wrong handlers on `sqlclient/Server` — Critical, OI-266, routed to the controller at
+    Task 16 and fixed later on this branch (below).** `POST /products` names `handleGetProduct` and `GET /products` names
     `handleAddProduct`, both `resolved`; `GET /products/:productID` is `partial`. The three
     handlers are locals captured by an instance lambda (`compose(v -> { … })`, which also uses
     `this.vertx`). The capture fold (`values.py`, "the seventh edge") binds body parameter *i*
@@ -755,7 +755,8 @@ deletion recorded below.
     first, and `this` is the body's receiver, not a parameter. Reproduced in a scratch module:
     the same three routes in an instance lambda come out one handler off; in a static lambda,
     right. Not Vert.x code: every value read through an instance lambda's captures is affected.
-  - **`narrowed` across different routers — Minor, OI-263.** 34 of the 46 rows are `narrowed`,
+  - **`narrowed` across different routers — Major (the ledger's ruling), OI-263, fixed later
+    on this branch (below).** 34 of the 46 rows are `narrowed`,
     every one because separate example servers in one module register the same verb and path
     on their own routers (`GET /api/newToken` in `jwt`, `authorisation`, `custom_authorisation`).
     Vert.x compares routes only within one router, so each is in fact the answering handler.
@@ -822,8 +823,8 @@ moved.
 **A deletion during this task.** The re-timing script was called with its two arguments joined
 into one word, and its unquoted `rm -rf` removed `examples/hono/adapters/http-base` and
 `examples/quarkus-quickstarts/reactive-routes-quickstart` from their checkouts, after both had
-been measured. Restoring them (`git checkout` in each corpus, then a rebuild) was not done here;
-the three-run re-timing (`docs/performance.md`) waits on it.
+been measured. Both were later restored (`git checkout` in each corpus, then a rebuild) and the
+three-run re-timing is in `docs/performance.md`, "After the Vert.x catalogs, re-timed".
 
 ### Rulings taken under the 2026-10-31 delegation, for the user's review
 

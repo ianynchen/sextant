@@ -614,6 +614,10 @@ might read the poms; none is installed, and downloading one was not part of this
 
 ## After the Vert.x catalogs (Task 16, 2026-10-31) — re-timing incomplete
 
+**Superseded** by "After the Vert.x catalogs, re-timed (CP-56, 2026-10-31)" below, which
+restored both folders and took the three-run figures this section owed. Kept as the record of
+what was measured at the time.
+
 Same machine and JDK as the baseline above. **The three-run re-timing of the two baseline modules
 was not done.** The timing script was run with its two arguments joined into one word, and its
 unquoted `rm -rf` then removed `examples/hono/adapters/http-base` and
