@@ -69,9 +69,11 @@ the only remaining gaps are in languages this target does not cover. **gRPC left
 §2b cell is the Java/Kotlin row's, and it reads `✅`.
 
 **REST inbound joined this block on 2026-10-22**, when `conditional-controllers` — its last open
-id — closed. The cell still reads `◐ (1B 3C)` for four §5.1 rows that were never on this
-register: Vert.x Web (`B`) and Akka HTTP (`C`) are frameworks outside the Spring Boot target;
-Spring Data REST's *projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers,
+id — closed. The cell still reads `◐ (3C)` for three §5.1 rows that were never on this
+register: Akka HTTP (`C`) is a framework outside the Spring Boot target, and Vert.x Web, the
+fourth such row, shipped on 2026-10-31 (spec `docs/superpowers/specs/2026-10-30-vertx-web-design.md`,
+COVERAGE §5.1 and §5.2: Vert.x Web and Vert.x WebClient `✅`, with fifteen stated boundaries
+between them); Spring Data REST's *projections, excerpts, HAL affordances, `@CrossOrigin`, event handlers,
 QueryDSL web support* row and the Servlet *`@WebServlet`'s other attributes, `@WebFilter` /
 `@WebListener`* row are boundaries their own designs STATE at `C` (2O design §2c; CP-9), not
 open work. Every Spring Boot REST inbound row that was work is shipped.
@@ -425,7 +427,7 @@ shipped on the delivery branch (`javalin-routing`, `jaxws-public-final`,
 `jaxws-inherited-unannotated`, `G-31`, `alpakka-pekko`, `micronaut-sqs`, `G-44`) passed their
 intention tests in CI run 34703991222 and are in ```closed; their rows below say so.
 
-### REST inbound — DELIVERED (`conditional-controllers`, the last open id, closed 2026-10-22; the matrix cell stays `◐ (1B 3C)` for four rows that were never on this register — the ```scoped-out block names them)
+### REST inbound — DELIVERED (`conditional-controllers`, the last open id, closed 2026-10-22; the matrix cell stays `◐ (3C)` for three rows that were never on this register, Vert.x Web's having shipped 2026-10-31 — the ```scoped-out block names them)
 
 | # | issue | what it costs |
 |---|---|---|
@@ -650,7 +652,8 @@ Rust, Swift), so its cell reads `◐` correctly and forever — the ```scoped-ou
 ---
 
 **Order of work (ruled 2026-10-26).** The Java/Kotlin frameworks still open are taken in this
-order: Ktor, Quartz, Vert.x, Akka / Pekko. Helidon SE, Play Framework, Spark Java and GraphQL
+order: Ktor, Quartz, Vert.x, Akka / Pekko. Ktor shipped 2026-10-26, Quartz 2026-10-29 and Vert.x
+(Web and WebClient) 2026-10-31. Helidon SE, Play Framework, Spark Java and GraphQL
 Kotlin are dropped, and Apache Camel is out of scope. The full order, languages included, is in
 `docs/COVERAGE.md`, "Priority order".
 

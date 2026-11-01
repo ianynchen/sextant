@@ -1,6 +1,7 @@
 # Vert.x Web and WebClient — design
 
-**Status: DRAFT 2026-10-30; reviewed 2026-10-30 (three user rulings: §3a item 5, §3b, §3c);
+**Status: BUILT 2026-10-31** (branch `cov/vertx`, "As built" at the end, with the corpus
+measurements and every ruling taken under the delegation). DRAFT 2026-10-30; reviewed 2026-10-30 (three user rulings: §3a item 5, §3b, §3c);
 self- and adversarial review 2026-10-31 (§8), every finding resolved below.** On
 2026-10-31 the user delegated the remaining rulings for Vert.x only: *"fix the issues
 yourself … continue on with the spec, plan and subagent driven execution. but only for
@@ -657,3 +658,227 @@ review after Vert.x:
 Logged, not built: **OI-253** (read a sibling module's bytecode: Mesh's wrapper, Hono's
 `service-base`); **OI-254**, the stale "the chain walk is per method body" note in
 `vertx-eventbus-chain.yml`, which predates ruling 5 (incidental).
+
+## As built (2026-10-31)
+
+Built on branch `cov/vertx` in sixteen tasks (`c441d83a`..this section's commit), plan
+`docs/superpowers/plans/2026-10-31-vertx-web.md`. Every task went through review; the minor
+findings each review left are in the plan's ledger.
+
+### What was built
+
+- **Probe CP-56** (`scripts/probes/cp56_vertx_web.md`): `javap` over vertx-web, vertx-web-client
+  and vertx-core 4.5.10, 5.0.0 and 5.2.1, vertx-rx-java3 at the same three, and
+  smallrye-mutiny-vertx-web(-client) 3.23.1 and 4.0.2. §2a was corrected to it.
+- **Catalogs.** `vertx-web.yml` (inbound, `fluent`), `vertx-webclient.yml` (outbound, `fluent`)
+  and `client-models/vertx-web.yml` (the options-object rung); the RxJava 3 and Mutiny wrappers
+  are owners in the same two files. `vertx-eventbus-chain.yml` gained its `returns_receiver`
+  flags. `quarkus-reactive-routes.yml` moved to one any-method row for a verbless `@Route` and a
+  pattern row for `@Route(regex)`.
+- **Engine changes (§3g), each named for what it does:**
+  1. per-capture accumulation (`repeats: [...]`), so verbs, media and handlers add up along a
+     chain;
+  2. the combinator's media columns and `leading_slash` join moved to a shared module, called by
+     both engines;
+  3. two row markers, `endpoints.path_kind` (`pattern`) and `endpoints.method_kind` (`any`),
+     `GRAPH_SCHEMA_VERSION` 13;
+  4. `passes_on`, `handler_methods` and `framework_handlers`, the three outcomes, ordering within
+     a chain and across chains, and the reader extension: a producer walk that stops at a
+     parameter names the method and the parameter index;
+  5. `router_type` and `mount`: a router identified by its producer on its call path, nested
+     mounts, the named hole `<prefix>` and a new `open_questions` kind `mount_prefix`;
+  6. `host` and `port` captures composed into one peer;
+  7. the options-object `client_base` rung with Vert.x's default join (`fill_authority`), and
+     two additive extractor keys, `receiver_field` and `receiver_field_kind`, naming the field
+     behind a receiver read off `this`;
+  8. linking: an any-method row matches any verb, and a pattern path or a named-hole path is
+     never linked by path;
+  9. the inbound dedup key `(protocol, verb, path, handler)` for every inbound fluent row, and
+     its SQL twin;
+  10. a refused path recorded, never repaired.
+- **Fixture** `fixtures/orders-vertx-web` (Vert.x 5.0.0) with its dependency jar
+  `orders-vertx-web-base`, holding Hono's out-of-module shapes; pinned by the `test_vertx_*`
+  tests in `tests/e2e/test_rest_inbound_delivered.py`.
+- **COVERAGE:** §5.1 Vert.x Web `✅ full 2/2, 12 stated boundaries`; §5.2 Vert.x WebClient
+  `✅ full 1/1, 3 stated boundaries`; §2c's Vert.x family row `✅ | ✅ | … | ✅`. The Java/Kotlin
+  REST-in cell went `◐ (1B 3C)` → `◐ (3C)`.
+
+### The real corpora (Task 16)
+
+Each module was built in place with its own build, offline first, then online once (no
+dependency was cached for any of them), and analysed with `sextant module analyze` into a
+scratchpad workspace. Nothing was written inside `examples/` except build output, apart from the
+deletion recorded below.
+
+| Corpus | Commit | Module | Rows |
+|---|---|---|---|
+| vertx-examples | `091b03f` | `web-examples` | 46 inbound (7 `resolved`, 34 `narrowed`, 5 `partial`), 4 outbound (below) |
+| Hono | `e1c98be` | `adapters/http-base` | 7 inbound: `* /*` (the match-all lambda), `POST /telemetry`, `POST /event` (both `handlePostTelemetry`), `PUT \/telemetry\/.+` and `PUT \/event\/.+` (pattern rows, `handlePutTelemetry`), `PUT /command/res/*` (`handlePutCommandResponse`), and `POST` with no path (`handlePostCommandResponse`, a `String.format` path, `unresolved`). The other six are `partial`, each with a `handler_pass_through` question naming the `adapter-base` or `service-base` method its handler hands the context to |
+| Hono | `e1c98be` | `services/device-registry-base` | 17 inbound, every one with no path (`unresolved`): all its paths are `String.format(…)`. Handlers named; the inherited `extract…`/`extractIfMatchVersionParam` method references appear as their `lambda$addRoutes$N` bridges. No CORS row |
+| Hono | `e1c98be` | `adapter-base` | 1 outbound: `POST /api/v1/query`, peer NULL, `resolved`, `query` and `timeout` query parameters |
+| Strimzi bridge | `d55d42b` | (root) | no inbound HTTP row; 4 Kafka rows |
+| Mesh | `315fc22` | `core` | **not measured**: Maven 3.10.0 refuses the reactor (`mesh-bom` declared twice), as in Task 1 |
+| quarkus-quickstarts | — | `reactive-routes-quickstart` | `GET /my-route` (the `@Observes Router` route, `vertx-web`), `resolved`; `GET /` and `GET /hello` (`@Route`) |
+| quarkus-quickstarts | — | `vertx-quickstart` (Mutiny only) | 2 outbound: `GET /api/people/{id}` at `swapi.tech:443`, `GET /w/api.php` at `en.wikipedia.org`, both `resolved` |
+
+**Against §6:**
+- **vertx-examples `web-examples`.** Every `router.verb(…).handler(…)` with an in-module handler
+  is a row, except where a finding below says otherwise. The hello-world shapes in this module
+  are `helloworld`, `blockinghandler` and `sessions` (one `/*` row each), plus the `GET /*`
+  rows of four template servers and `proxy`'s `respond`. `templating/rocker` gives none: its
+  answering handler is `TemplateHandler`, a library handler (§4). The rxjava hello worlds §2b
+  counted are in other modules. SockJS mounts (`chat`, `realtime`, `angular_realtime`) and the
+  OpenAPI examples add no inbound row, as predicted. Differences:
+  - **Wrong handlers on `sqlclient/Server` — Critical, OI-266, routed to the controller, not
+    fixed here.** `POST /products` names `handleGetProduct` and `GET /products` names
+    `handleAddProduct`, both `resolved`; `GET /products/:productID` is `partial`. The three
+    handlers are locals captured by an instance lambda (`compose(v -> { … })`, which also uses
+    `this.vertx`). The capture fold (`values.py`, "the seventh edge") binds body parameter *i*
+    to argument *i* of the capture site, but an instance lambda's capture site passes `this`
+    first, and `this` is the body's receiver, not a parameter. Reproduced in a scratch module:
+    the same three routes in an instance lambda come out one handler off; in a static lambda,
+    right. Not Vert.x code: every value read through an instance lambda's captures is affected.
+  - **`narrowed` across different routers — Minor, OI-263.** 34 of the 46 rows are `narrowed`,
+    every one because separate example servers in one module register the same verb and path
+    on their own routers (`GET /api/newToken` in `jwt`, `authorisation`, `custom_authorisation`).
+    Vert.x compares routes only within one router, so each is in fact the answering handler.
+  - **Handlers outside `io.vertx.ext.web.handler` — Minor, OI-261.** `validation`'s two routes
+    are `partial` with no handler named: the `ValidationHandler` before the answering lambda is
+    an object another jar builds. `proxy`'s `GET /foo` and `GET /private`, served by
+    `ProxyHandler`, are `partial` rows rather than the no-row §4 described; §4's row is
+    corrected in COVERAGE.
+  - Outbound: `oauth2`'s `GET /user/emails` at `api.github.com`; the `openapi_router` examples'
+    three self-calls (`localhost`, port `server.actualPort()` unread) at `partial`, peer NULL.
+- **Hono `adapters/http-base`.** As predicted: `POST /telemetry`, `POST /event`, the command
+  routes, the two `putWithRegex` pattern rows and the match-all `/*` at `partial`; no CORS-only
+  or auth-only row. The difference: every row is `partial`, not only the match-all, because
+  `handlePostTelemetry`, `handlePutTelemetry` and the command handlers all hand the context to
+  `HttpContext.from` (in `adapter-base`) and `HttpUtils` (in `service-base`). The
+  `POST /command/res/:requestId` route has no path (`String.format`, §4).
+- **Hono `services/device-registry-base`.** §6 predicted `partial` rows for the inherited
+  handlers. Measured: the rows are there, with their handlers, but every path is a
+  `String.format` (§4's row, ruled under the delegation), so all 17 are `unresolved` with no
+  path. No CORS-only row, as predicted. Logged as OI-260 with this count, for the review of that
+  ruling.
+- **Hono `adapter-base`.** One row, as predicted, but the peer is NULL, not the config value or
+  key. Two causes, either sufficient: the host getter `getHost()` is declared in
+  `clients/amqp-connection`, another module; and the loader stores the client as
+  `this.client = Objects.requireNonNull(webClient)`, a library call the producer walk does not
+  see through (reproduced in a scratch module: a plain field write and a `super(…)` chain give
+  `prom:9090`, the `requireNonNull` write gives NULL). Logged as OI-262, Minor: on this corpus
+  it changes nothing, but the idiom is common.
+- **Strimzi.** No inbound row, as predicted. The document does not name the OpenAPI boundary:
+  nothing in the rendered `architecture.md` says the HTTP routes are unread. Minor, OI-264.
+- **Mesh `core`.** Not measured (above).
+- **quarkus-quickstarts `reactive-routes-quickstart`.** As predicted: `GET /my-route` at the
+  root, `resolved`.
+- **A Mutiny-only module.** `reactive-routes-quickstart` uses the core `Router`, so
+  `vertx-quickstart`, which declares only `smallrye-mutiny-vertx-web` and
+  `smallrye-mutiny-vertx-web-client`, was measured instead. Both catalogs activate, under the
+  Maven-resolved set (which holds `io.vertx:vertx-web` 4.5.35 transitively) and under the POM
+  fallback (`mvn` taken off `PATH`): `fluent` catalogs are not dependency-gated, so
+  `detect.coordinates` does not decide it. Both of its Mutiny `WebClient` calls are rows.
+- **The field pins** do not move (no pinned corpus has Vert.x Web).
+
+**A deletion during this task.** The re-timing script was called with its two arguments joined
+into one word, and its unquoted `rm -rf` removed `examples/hono/adapters/http-base` and
+`examples/quarkus-quickstarts/reactive-routes-quickstart` from their checkouts, after both had
+been measured. Restoring them (`git checkout` in each corpus, then a rebuild) was not done here;
+the three-run re-timing (`docs/performance.md`) waits on it.
+
+### Rulings taken under the 2026-10-31 delegation, for the user's review
+
+**In this spec's text** (§8's fifteen, then the others marked in the text):
+
+1. A route with no verb is one row, method NULL plus an any-method marker, linked by any verb;
+   Quarkus Reactive Routes moves to the same rule (§3a).
+2. A route with no path is a `/*` row; middleware is kept out by pass-through (§3a).
+3. A regex path is `resolved` and marked as a pattern, never canonicalised or linked by path;
+   `@Route(regex)` gains the same row (§3a).
+4. Pass-through has three outcomes; "not readable here" gives a `partial` row (§3b).
+5. The first answering handler on a chain answers; across chains, ordinal order within one
+   method is exact, different methods are `narrowed` (§3b).
+6. Inbound dedup is `(protocol, verb, path, handler)` for every inbound fluent row (§3b).
+7. A router is identified by its producer, any producer; one from outside the module is served
+   at its root, `resolved`, with the bound stated once (§3c).
+8. A mount whose prefix is unread gives `<prefix>/…` at `partial`, never linked (§3c).
+9. The WebClient's options object is read (a new options-object `client_base` rung), and one
+   call gives one peer, `host[:port]` (§3d).
+10. Every self-returning method is flagged, not a subset (§3a).
+11. A path Vert.x refuses is recorded as refused, never repaired (§3a).
+12. `virtualHost` is a host requirement; `disable`/`remove` derive nothing (§3a).
+13. Request requirements are read through `request_reads` (§3a).
+14. The fixture has a dependency jar holding Hono's out-of-module shapes (§3f).
+15. Camel's removal is its own commit (§6).
+16. The narrowing table of §1: the ✅ is claimed for the shapes Vert.x Web's own API declares,
+    with §4's rows beside it, measured per corpus.
+17. 5.2's `WebClientConfig` is a second owner of the options-object rung (§2a).
+18. `pathParam` is not a request read: a path parameter is part of the address (§3a).
+19. A `Router` method that returns its own receiver is the same router configured, never a
+    second producer (§3c).
+20. A path built by `String.format` is a stated boundary: the row publishes what the
+    structural walk reads (§4; measured cost: OI-260).
+
+**During execution** (the plan's ledger, one line each):
+
+21. Outbound e2e tests live beside the Ktor client tests; the Quarkus fixture gains a verbless
+    and a regex `@Route`.
+22. Candidate chains sharing one handler are one row, `resolved`; `narrowed` only between
+    different handlers.
+23. Unset WebClient defaults (`localhost:80`) are never published, as Ktor's.
+24. The fixture's dependency jar is built by a generalised `fixture_stub`, whose fingerprint
+    hashes a library jar only for fixtures whose POM names it.
+25. A partial row's reason needed a carrier (Task 10 added the `handler_pass_through` question).
+26. An outbound hole from a named variable is published under its name (`/stock/{sku}`).
+27. `uncalled` skips pattern and named-hole rows.
+28. The SQL dedup guard keeps caller/peer matching for other engines and adds the inbound
+    handler match.
+29. `vertx-eventbus-chain.yml` stays measured at 4.5.10 and 5.0.0; the 5.2.1-only `processor`
+    step was dropped.
+30. A `collects` entry's `name` may be a literal.
+31. Producer-reader ends are deduplicated per parameter (`parameters_apart`), in the producer
+    reader only.
+32. `handler_methods: [handle]`.
+33. A handler whose received context is stored where the walk cannot follow (a field write, a
+    constructor argument) is not readable here: `partial` with a question, never an invented
+    answering row.
+34. With no construction reached, a handler object is identified by its declared type: a
+    framework handler passes on, a module class is followed, anything else is not readable.
+35. Two NULL-handler unreadable rows stay `partial`, not `narrowed`.
+36. A bodiless handler reference with several module implementations gives one `narrowed` row
+    per implementation.
+37. `producer_paths`' object-reader mode (`which_object`) is used for routers.
+38. An unread mount prefix files the new `open_questions` kind `mount_prefix`.
+39. A helper router both mounted and served unmounted appears under every way it is served.
+40. A refused mount never falls back to the root; routes reached only through it give no row.
+41. Two external ends at the same parameter on the same path are one object, so the mount join
+    applies.
+42. A mount path whose last piece is read and lacks the wildcard is refused like a literal; a
+    regex mount files a refusal.
+43. The `SocketAddress` overloads read their uri path, peer NULL, with a general "destination
+    not read" word (CP-56 rows 325-326).
+44. Host and port captures are read through the same value walk as the url.
+45. An authority reaching a configuration key publishes the key as the peer (the parts form
+    matches the absolute reader's `${key}:port`).
+46. An unread first piece with a stated host becomes `{}/x`.
+47. The extractor names the field behind a receiver read off `this` (additive D00 keys).
+48. `Properties.getProperty` is not added as a one-off parser; the gap is logged (OI-256).
+49. Every options-type method returning the options type configures it; a mixed ladder is
+    refused; an unreadable default keeps the path and leaves the peer NULL.
+50. Quarkus's verbless check is shared with Vert.x's (`_verbless_serves`), and a prefixed
+    pattern path keeps its kind.
+51. The Mutiny `Consumer`-object handler and the wrapper request reads are stated boundaries
+    (§4), not built.
+
+### Open after this work
+
+- **OI-266, Critical** (wrong handler through an instance lambda's captures): routed to the
+  controller, not fixed in Task 16.
+- Logged, Minor: OI-255 (a null host or negative port is published), OI-256
+  (`Properties.getProperty`), OI-257 (an options object handed to module code), OI-258 (Mutiny
+  `Consumer` objects), OI-259 (wrapper request reads), OI-260 (`String.format` paths, with the
+  Hono count), OI-261 (Vert.x handlers outside `io.vertx.ext.web.handler`), OI-262 (a library
+  call returning its argument ends the producer walk), OI-263 (`narrowed` across routers),
+  OI-264 (no document word for an OpenAPI-routed module), OI-265 (a route path in a
+  lambda-captured local is not read).
+- Carried: OI-253 (a sibling module's bytecode), OI-254.

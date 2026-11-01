@@ -611,3 +611,34 @@ siblings built from source (their versions are `3.3.3-SNAPSHOT`), so building it
 round. `examples/mesh/core/target/classes` does not exist, and `analyze` stops at the scan with
 `--classes must name a directory of class files or a .jar file`. A build under an older Maven (3.9.x)
 might read the poms; none is installed, and downloading one was not part of this task.
+
+## After the Vert.x catalogs (Task 16, 2026-10-31) — re-timing incomplete
+
+Same machine and JDK as the baseline above. **The three-run re-timing of the two baseline modules
+was not done.** The timing script was run with its two arguments joined into one word, and its
+unquoted `rm -rf` then removed `examples/hono/adapters/http-base` and
+`examples/quarkus-quickstarts/reactive-routes-quickstart` from their checkouts. Both must be
+restored from git and rebuilt before they can be timed again. What exists is one analysis of each,
+taken for the corpus measurement just before that, on an otherwise idle machine:
+
+| stage | quarkus `reactive-routes-quickstart`, before → after | hono `http-base`, before → after |
+|---|---|---|
+| scan | 0.1s → 0.1s (46 facts) | 0.1s → 0.1s (1606 facts) |
+| resolve, whole | 0.6s → 0.7s | 0.7s → 0.7s |
+| endpoints | 2 → 3 | 0 → 7 |
+
+These are single runs rounded to 0.1s, so they cannot say whether a stage grew by more than 10%:
+Quarkus's 0.6s → 0.7s is within one rounding step. The three-run figures stay owed.
+
+**Hono `adapter-base` (new, no baseline).** Built with `mvn -pl adapter-base -am compile`, three
+runs: wall 6.22s, 6.01s, 6.01s; scan 2.5–2.6s (28331 facts); resolve 1.9s, of which
+`derive_endpoints` is 1.1s; one endpoint (the WebClient call). The baseline did not time this
+module, so how much of `derive_endpoints` the Vert.x catalogs add is not measured.
+
+**Mesh `core`: still not timed.** Maven 3.10.0 refuses the reactor again (`mesh-bom` declared
+twice in `mesh-server`'s and `mesh-database-tests-common`'s `dependencyManagement`).
+
+**`measure_value_walk.py`, re-run:** index fold 1.25s, walk 0.09s, `resolve_site` 0.36s over 2,312
+distinct positions (2,911 asks) at 1,975 sites. The last recorded run before the Vert.x catalogs read
+1.23s / 0.13s / 0.40s over 1,838 positions: the new catalogs and fixture ask more positions, and the
+time did not grow. The six field pins pass unchanged.
