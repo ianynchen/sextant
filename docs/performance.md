@@ -692,3 +692,32 @@ Vert.x Web routes Sextant now reads.
 **Mesh `core`: still not measured.** Tried again; Maven 3.10.0 offline refuses two poms of the
 reactor (`mesh-bom:pom` declared twice in `dependencyManagement`, line 21 and line 32), so no module
 builds and there is no `target/classes` to analyze.
+builds and there is no `target/classes` to analyze.
+
+## The Vert.x branch on modules with no Vert.x (final review M1, 2026-10-31)
+
+The review asked what `vertx-web.yml` costs where nothing matches: fluent catalogs are not
+dependency-gated, so it runs on every module. Timed on the two largest field-pin corpora, neither
+of which has Vert.x: `apollo-portal` (386 classes, 364 endpoints) and `mall-admin` (157 classes,
+160 endpoints). Branch `cov/vertx` after the final-review fixes, against the merge base `3f1347b6`
+in a git worktree with its own extractor jar built from that commit. Apple M4, JDK 21.0.13, three
+alternating runs each, in-process (`sextant module analyze` through the click entry point, with
+`fluent.run` wrapped to time each catalog). Endpoint counts are identical on both trees.
+
+| module | wall, base (three runs) | wall, branch (three runs) | change (mean) | `derive_endpoints` base → branch |
+|---|---|---|---|---|
+| `apollo-portal` | 3.954s, 3.959s, 3.943s | 4.217s, 4.145s, 4.167s | +0.224s (+5.7%) | 1.1s → 1.3s |
+| `mall-admin` | 4.925s, 5.015s, 5.044s | 5.069s, 5.253s, 5.160s | +0.166s (+3.3%) | 1.9–2.0s → 2.1s |
+
+What the two Vert.x catalogs themselves take (the same in all three runs):
+
+| module | `vertx-web.yml` | `vertx-webclient.yml` | both, share of branch wall |
+|---|---|---|---|
+| `apollo-portal` | 0.029s (0.7%) | 0.055s (1.3%) | 0.084s (2.0%) |
+| `mall-admin` | 0.055s (1.1%) | 0.091s (1.8%) | 0.146s (2.8%) |
+
+`vertx-web.yml`'s passes add under 5% on both modules (0.7% and 1.1%), so the early return the
+review proposes is not forced by this measurement. The whole branch adds more than the two
+catalogs do: on `apollo-portal` 0.224s, of which the Vert.x catalogs are 0.084s; the other
+0.14s is elsewhere in `derive_endpoints` (1.1s → 1.3s) and was not profiled to a pass here.
+That puts the branch as a whole over 5% on `apollo-portal`, which is reported rather than fixed.
