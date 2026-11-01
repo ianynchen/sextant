@@ -692,7 +692,6 @@ Vert.x Web routes Sextant now reads.
 **Mesh `core`: still not measured.** Tried again; Maven 3.10.0 offline refuses two poms of the
 reactor (`mesh-bom:pom` declared twice in `dependencyManagement`, line 21 and line 32), so no module
 builds and there is no `target/classes` to analyze.
-builds and there is no `target/classes` to analyze.
 
 ## The Vert.x branch on modules with no Vert.x (final review M1, 2026-10-31)
 
