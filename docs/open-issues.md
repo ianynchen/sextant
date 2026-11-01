@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-267 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-271 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -270,6 +270,10 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-264 | [SEXTANT-255](https://app.plane.so/portolan/browse/SEXTANT-255/) | A module whose routes come from an OpenAPI file through RouterBuilder gets no word in its document saying so |
 | OI-265 | [SEXTANT-258](https://app.plane.so/portolan/browse/SEXTANT-258/) | A route path held in a local that a lambda captures is not read (fixed on `cov/vertx`) |
 | OI-266 | [SEXTANT-259](https://app.plane.so/portolan/browse/SEXTANT-259/) | An instance lambda's captured values are bound one position off: the capture site's first argument is the receiver, not body parameter 0 (fixed on `cov/vertx`) |
+| OI-267 | [SEXTANT-263](https://app.plane.so/portolan/browse/SEXTANT-263/) | A url assembled by concatenation with a method parameter is published from one caller's literal, even when another caller's value is unread |
+| OI-268 | [SEXTANT-260](https://app.plane.so/portolan/browse/SEXTANT-260/) | A Vert.x route whose router the walk reaches no end for falls back to serving at the root |
+| OI-269 | [SEXTANT-261](https://app.plane.so/portolan/browse/SEXTANT-261/) | A verbless Vert.x route and a verb route on the same path are never ordered against each other |
+| OI-270 | [SEXTANT-262](https://app.plane.so/portolan/browse/SEXTANT-262/) | The pass-through reader does not read a handle method inherited from an interface default (or Kotlin DefaultImpls) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
