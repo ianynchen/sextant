@@ -459,7 +459,9 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
         # One body found exactly on one path and through a branch on another is one row,
         # at the weaker word: that it may not run is the true half.
         rows_by_key[key] = (
-            resolution if key not in rows_by_key else _weaker(rows_by_key[key], resolution)
+            resolution
+            if key not in rows_by_key
+            else _weaker_schedule_word(rows_by_key[key], resolution)
         )
     for (name, trigger, expression, source, handler, untied), resolution in rows_by_key.items():
         yield TriggerEntry(
@@ -613,12 +615,14 @@ def _varies_at(root: Mapping[str, Any], slot: int, context: _Context) -> str | N
     return _source(root, slot, context)
 
 
-# The resolution words from the strongest claim to the weakest.
-_STRENGTH = (_RESOLVED, _UNRESOLVED, _NARROWED, _PARTIAL)
+# The resolution words from the strongest claim to the weakest, in this engine's own §3a
+# reading: `unresolved` is ONE gap (a placeholder), so it is stronger than a branch and than
+# `partial`. Deliberately not `shapes.mounts.weaker`, whose `unresolved` is the weakest word.
+_SCHEDULE_STRENGTH = (_RESOLVED, _UNRESOLVED, _NARROWED, _PARTIAL)
 
 
-def _weaker(one: str, other: str) -> str:
-    return max(one, other, key=_STRENGTH.index)
+def _weaker_schedule_word(one: str, other: str) -> str:
+    return max(one, other, key=_SCHEDULE_STRENGTH.index)
 
 
 def _row_resolution(handler: str | None, narrowed: bool, expression: str) -> str:

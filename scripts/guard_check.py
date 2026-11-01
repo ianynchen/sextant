@@ -508,8 +508,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            resolution if key not in rows_by_key else "
-                "_weaker(rows_by_key[key], resolution)\n",
+                find="            resolution\n            if key not in rows_by_key\n"
+                "            else _weaker_schedule_word(rows_by_key[key], resolution)\n",
                 replace="            resolution  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
