@@ -140,6 +140,9 @@ from sextant.domain.symbols import bare_descriptor
 # D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_argument`
 # treats it as the catalog's own declared position rather than as a hop - see there.
 _CONCAT = "concat"
+# D00 §5's kind for a value the method was HANDED: by a caller, or by the site that created
+# the lambda whose captured value it is. Read in `_url_argument` by the same no-identity walk.
+_PARAMETER = "parameter"
 
 # The `read_by` end of the channel edge (spec 2026-09-21 §3b). The names the channel
 # index already holds under it are read for the bean fold's name rung by
@@ -1824,7 +1827,14 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
     # identity-derived answer would therefore publish an address that never existed.
     # Consulting NO identity keeps this arm to text the code literally states, which is the
     # only thing a join may render. `OI-142` carries the finding and what it blocks.
-    if isinstance(argument, dict) and argument.get("kind") == _CONCAT:
+    #
+    # **A PARAMETER is the same position, one value edge further** (`OI-265`): the catalog
+    # pointed at this slot and the method was handed the value, by a caller or by the site
+    # that created the lambda that captured it. The same no-identity walk crosses that edge
+    # and can only reach what the code states. Before this, `get(path)` in a helper, or on
+    # a path local a lambda captured, published `path` NULL beside a handler that resolved
+    # the same way. A parameter the walk does not read falls on to the `url_via` ladder.
+    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT, _PARAMETER):
         # **Read with the URL reader, which is the whole of `OI-144`.** This arm asked
         # `channel_of_answer` until 2026-10-19, and that reader refuses a template ON
         # PURPOSE: a broker resolves a destination it is GIVEN, and half of one is not a
@@ -1856,7 +1866,8 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
                 address = None if unbranched is None else _one_assembled(unbranched)
             if address is not None:
                 return address
-        return argument
+        if argument.get("kind") == _CONCAT:
+            return argument
     if not forms:
         return argument
     # **The backward walk, in place of the one-hop follow** (spec §2b, Task 9), reached

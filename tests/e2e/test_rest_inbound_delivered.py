@@ -2282,6 +2282,17 @@ def test_vertx_handlers_an_instance_lambda_captured_name_their_own_rows(vertx_in
     }
 
 
+@pytest.mark.pins("fluent.a-url-handed-in-as-a-parameter-is-asked-of-the-walk")
+def test_vertx_a_path_handed_in_as_a_capture_or_a_parameter_is_read(vertx_inbound):
+    """`OI-265`: a path held in a local a lambda captures, and a path a helper is handed as
+    its parameter, are each a literal one value edge away. Both rows carried `path` NULL at
+    `unresolved` while the handler, reached the same way, resolved."""
+    assert _served(vertx_inbound, "CapturedPaths") == {
+        ("GET", "/reports", "CapturedPaths#reports", "resolved"),
+        ("GET", "/audits", "CapturedPaths#audits", "resolved"),
+    }
+
+
 def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
     """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
     So is a `next()` inside a lambda that captured the context (`onSuccess(u ->

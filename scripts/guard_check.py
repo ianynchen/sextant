@@ -3815,6 +3815,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-url-handed-in-as-a-parameter-is-asked-of-the-walk": Guard(
+        what="a `url` capture that is the method's parameter — handed in by a caller or "
+        "captured by a lambda — is read by the no-identity walk the assembled address takes",
+        why="without it `router.get(path)` in a helper, or on a path local a lambda captured, "
+        "publishes `path` NULL at `unresolved` beside a handler reached the same way that "
+        "resolves (`OI-265`). The walk is asked with no identity entries, so it reaches only "
+        "literals the code states and cannot conclude that a producer means the address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT, _PARAMETER):\n',
+                replace='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT,):'
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with": Guard(
         what="a lambda body's parameter i is the capture site's argument i plus the arguments "
         "ahead of the captures — `this` for an instance body — never argument i",
