@@ -3907,6 +3907,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.every-callers-url-is-a-row-of-its-own": Guard(
+        what="a `url` parameter its callers hand several values is one address per value: "
+        "each literal `resolved`, an unread value a row with `path` NULL (final review I2, "
+        "enumerable is exact)",
+        why="without it one literal is published alone, `resolved`, beside a sibling caller "
+        "whose value nobody read, and two literals publish nothing at all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        if assembled is not None and argument.get("kind") == _PARAMETER:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "fluent.routes-on-different-routers-are-not-ordered-against-each-other": Guard(
         what="routes on one verb and path whose routers are two different calls neither "
         "precede nor narrow each other: Vert.x orders routes within one router",

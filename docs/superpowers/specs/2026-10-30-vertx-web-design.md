@@ -810,11 +810,14 @@ the corpora still present (the two deleted checkouts below were skipped):
 
 OI-265 was not the capture fold: `fluent` asked the walk only for an assembled `url`, so a
 `parameter` url, whether a caller's argument or a captured local, was never walked. It is now
-asked the same no-identity walk. As the concat arm already does, a url walked through a method
-parameter publishes the one resolved literal the walk reaches, even where sibling callers hand
-that parameter values the walk does not read. OI-263's fix groups the candidates by router identity:
-the calls that made the router along the root's receiver, as §3c's mount identity reads them
-(§3b). No pinned field corpus moved.
+asked the same no-identity walk. Every caller's value is part of the set (final review I2,
+enumerable is exact): each literal a caller hands the parameter is a row of its own,
+`resolved`, and a value nobody reads is a row with `path` NULL, `unresolved`, so one literal is
+never published as the whole answer. The concat arm still keeps the one resolved literal
+(OI-267). OI-263's fix groups the candidates by router identity: the call that made the router
+along the root's receiver, reached on agreeing paths, as §3c's mount identity reads it, so two
+calls of one factory helper make two routers (final review I1) (§3b). No pinned field corpus
+moved.
 
 **A deletion during this task.** The re-timing script was called with its two arguments joined
 into one word, and its unquoted `rm -rf` removed `examples/hono/adapters/http-base` and

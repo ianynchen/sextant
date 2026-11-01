@@ -140,11 +140,11 @@ from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor
 
-# D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_argument`
+# D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_arguments`
 # treats it as the catalog's own declared position rather than as a hop - see there.
 _CONCAT = "concat"
 # D00 §5's kind for a value the method was HANDED: by a caller, or by the site that created
-# the lambda whose captured value it is. Read in `_url_argument` by the same no-identity walk.
+# the lambda whose captured value it is. Read in `_url_arguments` by the same no-identity walk.
 _PARAMETER = "parameter"
 
 # The `read_by` end of the channel edge (spec 2026-09-21 §3b). The names the channel
@@ -686,7 +686,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # (`pathless_serves`), read in full: the framework stores no path, and that is exact.
         destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]
     else:
-        destinations = [_composed_address(captures, context)]
+        destinations = [
+            _composed_address(captures, context, url_argument)
+            for url_argument in (_url_arguments(captures, context) if "url" in captures else [None])
+        ]
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -1571,10 +1574,11 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
 
 
 def _composed_address(
-    captures: dict[str, Any], context: _DeriveContext
+    captures: dict[str, Any], context: _DeriveContext, url_argument: dict[str, Any] | None
 ) -> tuple[str | None, str | None, str]:
     """One chain's peer/path/resolution from its `base` and `url` captures
-    together (2F design §4's base composition).
+    together (2F design §4's base composition), `url_argument` being one of
+    the addresses `_url_arguments` reads the `url` capture as (None without one).
 
     A chain declaring no `base` at all is exactly what it was before 2F: the
     `url` capture alone, through `url_of` (which answers `unresolved` for a
@@ -1591,7 +1595,6 @@ def _composed_address(
     The composed string is then read by `_address_of`, so a composed absolute
     literal splits by CP-2 exactly as a written one does and a composition
     carrying an expression stays whole."""
-    url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         if context.workspace is None or context.values is None:
             read = url_of(url_argument)
@@ -1689,7 +1692,7 @@ def _stated_part(captures: dict[str, Any], field: str, context: _DeriveContext) 
     """The text of a captured `host` or `port`, read as the `url` capture is: the literal at
     the call (a port is an integer literal, CP-56 row 317), the configuration expression the
     field ladder names (`_address_read`), and otherwise the backward walk the assembled `url`
-    takes (`_url_argument`), with no identity entries and within the chain's path, so a host
+    takes (`_url_arguments`), with no identity entries and within the chain's path, so a host
     handed in as a parameter is the literal its callers pass. None where it was not read
     whole: no answer, several, or one with an unread hole."""
     argument = _address_read(captures.get(field), context)
@@ -1875,8 +1878,11 @@ def _client_of(captures: dict[str, Any], context: _DeriveContext) -> dict[str, A
     return _captured_at(_arg_at(executing["arguments"], slot), executing, slot)
 
 
-def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str, Any] | None:
-    """The `url` capture as the address readers should see it (A2 Task 8, spec §12):
+def _url_arguments(
+    captures: dict[str, Any], context: _DeriveContext
+) -> list[dict[str, Any] | None]:
+    """The `url` capture as the address readers should see it (A2 Task 8, spec §12), one per
+    address it may be (a parameter handed several values, below; one everywhere else):
     the captured argument itself, or — where that argument is not a string literal and
     the entry declared `url_via` — the string the linked call it names was handed, as a
     `string` argument, so `url_of` and the `base` composition read it exactly as a
@@ -1900,7 +1906,7 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
     argument = _address_read(captures.get("url"), context)
     forms = captures.get("url_via") or []
     if _string_value(argument) is not None:
-        return argument
+        return [argument]
     # **An ASSEMBLED address is not a hop, so it needs no `url_via`** (ruling 1,
     # 2026-10-17). `url_via` declares that the address lives on some OTHER call's
     # argument - `URI.create("...")` - and a catalog has to say so because following a
@@ -1942,6 +1948,14 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
         # Two engines, two answers about one piece of evidence, which is the disease the
         # shared walk was built to end (spec 2026-09-22 §0a).
         assembled = _walked_with(argument, context, (), reader=_assembled_text, within=context.path)
+        # **Every caller's value is part of the set** (final review I2, enumerable is exact):
+        # a parameter handed `"/a"` by one caller and a value nobody reads by another is two
+        # addresses, `"/a"` at `resolved` and one whose path is unread. Taking the literal
+        # alone would publish it as the whole answer. The concat arm keeps one address.
+        if assembled is not None and argument.get("kind") == _PARAMETER:
+            several = _each_callers_url(assembled, argument)
+            if several is not None:
+                return several
         if assembled is not None:
             address = _one_assembled(assembled)
             # **Several branch literals are several rows, and this engine carries ONE**
@@ -1961,18 +1975,18 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
                 )
                 address = None if unbranched is None else _one_assembled(unbranched)
             if address is not None:
-                return address
+                return [address]
         if argument.get("kind") == _CONCAT:
-            return argument
+            return [argument]
     if not forms:
-        return argument
+        return [argument]
     # **The backward walk, in place of the one-hop follow** (spec §2b, Task 9), reached
     # through the same `_captured_at` provenance the channel half uses. The order above is
     # untouched: a literal at the capture answers first, and a field-fed address is already
     # a string by the time it arrives (`_address_read`), so neither ever reaches here.
     walked = _walked_channels(argument, context, forms, context.path)
     if walked is None:
-        return argument
+        return [argument]
     # **A URL is ONE string**, which is why `_validate_channel_via_entries` refuses
     # `all_strings` on `url_via` where `channel_via` allows it. The walk can legitimately
     # find SEVERAL — two callers handing different addresses into one chain is several
@@ -1985,8 +1999,32 @@ def _url_argument(captures: dict[str, Any], context: _DeriveContext) -> dict[str
         literal for _, literal, resolution in walked if resolution == "resolved" and literal
     ]
     if len(resolved) != 1:
-        return argument
-    return {"kind": "string", "value": resolved[0]}
+        return [argument]
+    return [{"kind": "string", "value": resolved[0]}]
+
+
+def _each_callers_url(
+    assembled: "Sequence[tuple[str | None, str | None, str]]", argument: dict[str, Any]
+) -> list[dict[str, Any] | None] | None:
+    """A url parameter's addresses, one per value its callers hand it: each literal as a
+    string, each template as the expression `url_of` reads, and the parameter itself, which
+    `url_of` reads as unread, where some caller's value is not read. None where the callers
+    agree on one address (`_one_assembled` answers then) or a value is one branch of several
+    (`NARROWED`, which the caller below reads again unbranched)."""
+    if any(resolution == str(Resolution.NARROWED) for _, _, resolution in assembled):
+        return None
+    found: list[dict[str, Any] | None] = []
+    for _, literal, resolution in assembled:
+        if resolution == str(Resolution.RESOLVED) and literal:
+            found.append({"kind": "string", "value": literal})
+        elif resolution == str(Resolution.PARTIAL) and literal:
+            found.append({"kind": EXPRESSION, "value": literal})
+        else:
+            found.append(argument)
+    distinct = list(
+        {json.dumps(each, sort_keys=True, default=str): each for each in found}.values()
+    )
+    return distinct if len(distinct) > 1 else None
 
 
 def _address_of(composed: str) -> tuple[str | None, str | None, str]:

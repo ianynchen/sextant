@@ -2673,6 +2673,35 @@ def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
     assert _vertx_calls(vertx_outbound, "SearchClient") == {("GET", "/q", "search:9200")}
 
 
+@pytest.mark.pins("fluent.every-callers-url-is-a-row-of-its-own")
+def test_vertx_a_url_parameter_is_one_row_per_callers_value(vertx_outbound):
+    """Final review I2, ruled on enumerable-is-exact: a helper's url parameter is handed
+    `"/param-known"`, `"/param-other"` and a value nobody reads. Each literal is its own row,
+    `resolved`, and the unread value is a row with `path` NULL, `unresolved`. Publishing one
+    literal alone, `resolved`, would claim it was the whole answer."""
+    rows = [
+        r
+        for r in vertx_outbound
+        if r["caller"] is not None and "/ParameterUrls#call(" in str(r["caller"])
+    ]
+    assert {(r["method"], r["path"], r["resolution"]) for r in rows} == {
+        ("GET", "/param-known", "resolved"),
+        ("GET", "/param-other", "resolved"),
+        ("GET", None, "unresolved"),
+    }
+    # The review's own case: one literal caller and one unread. The literal was published
+    # alone, `resolved`, as though it were the only value the helper is ever handed.
+    lone = [
+        r
+        for r in vertx_outbound
+        if r["caller"] is not None and "/ParameterUrls#single(" in str(r["caller"])
+    ]
+    assert {(r["method"], r["path"], r["resolution"]) for r in lone} == {
+        ("DELETE", "/param-lone", "resolved"),
+        ("DELETE", None, "unresolved"),
+    }
+
+
 def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
     """Hono's shape: the options are configured statement by statement from a config object's
     getters (`config.getHost()`, `config.getPort()`), beside calls that set no address, and
