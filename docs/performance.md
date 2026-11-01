@@ -653,3 +653,38 @@ parameters: `not_readable` 399 → 283 (the receiver an instance lambda's captur
 was read as the first capture), `external` 5,231 → 5,591, literals 2,025 → 2,160;
 apollo-portal's widest positions reach 761 paths where they reached 685, and the largest
 binding count is 11,712 (was 11,672). The six field pins pass unchanged.
+
+## After the Vert.x catalogs, re-timed (CP-56, 2026-10-31)
+
+Completes the re-timing the section above left owed. Same machine, JDK and method as the baseline:
+both folders were restored from their own git clones and rebuilt (Quarkus `./mvnw -B -o -DskipTests
+compile`, Hono `mvn -B -o -pl adapters/http-base -am -DskipTests compile`; both built offline, 1s and
+4s), then `sextant module analyze <module> --workspace <fresh dir>` three times each under INFO
+logging.
+
+| module | endpoints, before → after | wall, three runs, before | wall, three runs, after | change (mean) |
+|---|---|---|---|---|
+| `examples/quarkus-quickstarts/reactive-routes-quickstart` | 2 → 3 | 2.15s, 2.17s, 2.12s | 2.23s, 2.20s, 2.21s | +0.07s (+3%) |
+| `examples/hono/adapters/http-base` | 0 → 7 | 2.34s, 2.38s, 2.30s | 2.46s, 2.37s, 2.36s | +0.04s (+2%) |
+| `examples/mesh/core` | — | not measured | not measured | — |
+
+Per stage (all three runs read the same, except Hono's `derive_endpoints` 0.5s in its first run and
+`derive_endpoint_shapes` 0.1s there):
+
+| stage | quarkus, before → after | hono, before → after |
+|---|---|---|
+| scan | 0.1s → 0.1s (46 facts) | 0.1s → 0.1s (1606 facts) |
+| `derive_endpoints` | 0.4s → 0.4s | 0.4s → 0.4s |
+| `derive_endpoint_shapes` | 0.2s → 0.1s | 0.2s → 0.2s |
+| resolve, whole | 0.6s → 0.7s | 0.7s → 0.7s |
+
+Wall time grew 2–3% on both modules, inside the run-to-run spread. The one figure that reads more
+than 10% higher is Quarkus's whole resolve, 0.6s → 0.7s, and it is one rounding step at 0.1s: no
+single pass moved (`derive_endpoints` is 0.4s in both, `derive_endpoint_shapes` fell), every other
+pass prints 0.0s, and the wall time, which has 0.01s resolution, is up 3%. The stage lines cannot place
+the extra 0.1s more finely than that. The extra endpoint (2 → 3) and Hono's 7 new endpoints are
+Vert.x Web routes Sextant now reads.
+
+**Mesh `core`: still not measured.** Tried again; Maven 3.10.0 offline refuses two poms of the
+reactor (`mesh-bom:pom` declared twice in `dependencyManagement`, line 21 and line 32), so no module
+builds and there is no `target/classes` to analyze.
