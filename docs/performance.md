@@ -642,3 +642,14 @@ twice in `mesh-server`'s and `mesh-database-tests-common`'s `dependencyManagemen
 distinct positions (2,911 asks) at 1,975 sites. The last recorded run before the Vert.x catalogs read
 1.23s / 0.13s / 0.40s over 1,838 positions: the new catalogs and fixture ask more positions, and the
 time did not grow. The six field pins pass unchanged.
+
+**After the OI-266, OI-265, OI-263 and OI-261 fixes (same day, `cov/vertx`).** One analysis each,
+rounded to 0.1s: resolve on vertx-examples `web-examples` 0.8s → 0.9s (56 endpoints), Hono
+`device-registry-base` 0.9s → 0.9s, `adapter-base` 2.0s → 2.0s; within one rounding step.
+`measure_value_walk.py`: index fold 1.25s, walk 0.11s, `resolve_site` 0.38s over 2,332 positions
+(2,941 asks) at 1,995 sites, from 1.25 / 0.09 / 0.36s over 2,312. The 20 new positions are the
+fixture's four new classes. The answers moved because captured values now bind to their own
+parameters: `not_readable` 399 → 283 (the receiver an instance lambda's capture site hands first
+was read as the first capture), `external` 5,231 → 5,591, literals 2,025 → 2,160;
+apollo-portal's widest positions reach 761 paths where they reached 685, and the largest
+binding count is 11,712 (was 11,672). The six field pins pass unchanged.

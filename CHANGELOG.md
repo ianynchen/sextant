@@ -17,6 +17,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A value an instance lambda closes over is read as its own, not its neighbour's**
+  (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
+  and the value walk bound capture *i* to the site's argument *i*, so every captured value was
+  one position off. vertx-examples' `sqlclient` published `POST /products` as answered by
+  `handleGetProduct`, at `resolved`. Any catalog reading a value through such a capture was
+  affected. Measured: the six field pins are unchanged.
+- **Vert.x Web: a route path handed in as a parameter is read** (OI-265): a path local a
+  lambda captures, or a helper's path parameter, gave `path` NULL.
+- **Vert.x Web: routes are ordered within their own router** (OI-263). One verb and path on
+  two routers made by two calls are each their router's row, `resolved`; vertx-examples'
+  `web-examples` had 34 of 46 rows `narrowed` against other example servers.
+- **Vert.x Web: vertx-web-validation's `ValidationHandler` passes on** (OI-261), so the
+  handler after it names the row. vertx-web-proxy's `ProxyHandler` answers and stays a stated
+  boundary.
 - **A controller serves the mappings it inherits without overriding** (ruling 8 of the
   2026-10-30 review). `OrderController extends CrudController<Order>`, overriding nothing,
   published no rows at all: the inheritance walk only looked at methods a class declares

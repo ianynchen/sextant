@@ -559,7 +559,8 @@ list. The tier says what closing it would take.
 | **Routes registered through an in-house wrapper library**, and pass-through decided in a sibling module (Mesh's `InternalEndpointRoute`; Hono's `service-base`) | The calls are in another Maven module's jar, which a per-module analysis does not read; pass-through there gives `partial` rows (§3b). OI-253 | C |
 | **A router mounted under a prefix outside the module, or Quarkus's `quarkus.http.root-path`** | §3c's standing bound; such rows are published at the root | B |
 | **Vert.x core `HttpClient`** (`vertx.createHttpClient().request(GET, port, host, uri).compose(req -> req.send())`) | A different API whose send sits inside a lambda passed to `compose`. It shares the address forms and would be a catalog of its own | B |
-| **A path served only by a library handler** (`StaticHandler`, `TemplateHandler`, `ProxyHandler`, the `handler.graphql` and `handler.sockjs` handlers) | §3b: a framework handler is read as passing on; those that answer serve a route no row names | C |
+| **A path served only by a library handler** (`StaticHandler`, `TemplateHandler`, the `handler.graphql` and `handler.sockjs` handlers) | §3b: a framework handler is read as passing on; those that answer serve a route no row names | C |
+| **A route served by vertx-web-proxy's `ProxyHandler`** | It answers (forwards and writes the backend's response), and its package is not a passing-on one, so the route is a `partial` row naming no handler, with a pass-through question [measured on vertx-examples `proxy`; vertx-web-validation's `ValidationHandler` passes on and is read so, OI-261] | C |
 | **A handler that calls `next()` on one branch** | §3b: read as middleware | C |
 | **The request body an inbound handler reads** (`ctx.body().asPojo(T.class)`) | No request contract on a Vert.x row, as on Ktor's and Javalin's rows; `respond`'s `Future<T>` gives a response shape only where the existing shape pass reads a handler's return type | B |
 | **`failureHandler`, `errorHandler(int, …)`** | Error handling, not routes; `error_handlers` has no Vert.x catalog | A |
@@ -787,6 +788,23 @@ deletion recorded below.
   `detect.coordinates` does not decide it. Both of its Mutiny `WebClient` calls are rows.
 - **The field pins** do not move (no pinned corpus has Vert.x Web).
 
+**After the fixes of OI-266, OI-265, OI-263 and OI-261** (2026-10-31, same branch), re-run on
+the corpora still present (the two deleted checkouts below were skipped):
+
+| Module | Before | After |
+|---|---|---|
+| `web-examples` (46 inbound) | 7 `resolved`, 34 `narrowed`, 5 `partial` | 44 `resolved`, 2 `partial` (`proxy`'s `GET /foo` and `GET /private`, served by `ProxyHandler`, a stated boundary) |
+| `web-examples` `sqlclient` | `POST /products` → `handleGetProduct` `resolved`; `GET /products` → `handleAddProduct` `narrowed`; `GET /products/:productID` `partial`, no handler | `POST /products` → `handleAddProduct`, `GET /products` → `handleListProducts`, `GET /products/:productID` → `handleGetProduct`, each `resolved` |
+| `web-examples` `validation` | `POST /hello/:pathParam`, `POST /jsonUploader` `partial`, no handler | both name their lambda, `resolved` |
+| `device-registry-base` | 17 rows | the same 17 rows; two `handler_pass_through` questions no longer name `IntTag#set`, a method the context never reached (the capture slot one off) |
+| `adapter-base` | 1 row | identical |
+
+OI-265 was not the capture fold: `fluent` asked the walk only for an assembled `url`, so a
+`parameter` url, whether a caller's argument or a captured local, was never walked. It is now
+asked the same no-identity walk. OI-263's fix groups the candidates by router identity:
+the calls that made the router along the root's receiver, as §3c's mount identity reads them
+(§3b). No pinned field corpus moved.
+
 **A deletion during this task.** The re-timing script was called with its two arguments joined
 into one word, and its unquoted `rm -rf` removed `examples/hono/adapters/http-base` and
 `examples/quarkus-quickstarts/reactive-routes-quickstart` from their checkouts, after both had
@@ -879,13 +897,13 @@ the three-run re-timing (`docs/performance.md`) waits on it.
 
 ### Open after this work
 
-- **OI-266, Critical** (wrong handler through an instance lambda's captures): routed to the
-  controller, not fixed in Task 16.
+- **Fixed on this branch after Task 16:** OI-266 (Critical, wrong handler through an instance
+  lambda's captures), OI-265 (a path handed in as a parameter), OI-263 (`narrowed` across
+  routers), OI-261 (vertx-web-validation's `ValidationHandler`; `ProxyHandler` stays a stated
+  boundary). Results above.
 - Logged, Minor: OI-255 (a null host or negative port is published), OI-256
   (`Properties.getProperty`), OI-257 (an options object handed to module code), OI-258 (Mutiny
   `Consumer` objects), OI-259 (wrapper request reads), OI-260 (`String.format` paths, with the
-  Hono count), OI-261 (Vert.x handlers outside `io.vertx.ext.web.handler`), OI-262 (a library
-  call returning its argument ends the producer walk), OI-263 (`narrowed` across routers),
-  OI-264 (no document word for an OpenAPI-routed module), OI-265 (a route path in a
-  lambda-captured local is not read).
+  Hono count), OI-262 (a library call returning its argument ends the producer walk), OI-264
+  (no document word for an OpenAPI-routed module).
 - Carried: OI-253 (a sibling module's bytecode), OI-254.
