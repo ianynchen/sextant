@@ -2380,7 +2380,8 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
     workspace._connection.execute(
-        "INSERT INTO roots VALUES (?, 'inbound_endpoint', 'http', 'GET', ?)",
+        "INSERT INTO roots (handler, root_kind, protocol, method, path) "
+        "VALUES (?, 'inbound_endpoint', 'http', 'GET', ?)",
         ["mod com/acme/A#go(sig_1).", secret],
     )
     workspace._connection.execute(
@@ -2592,6 +2593,28 @@ def test_the_address_ordering_masks_its_path_like_the_table_it_reorders(tmp_path
             f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')"
         ).fetchall()
         assert not any("hunter2" in str(cell) for row in rows for cell in row), name
+
+
+@pytest.mark.pins("workspace.the-address-ordering-carries-every-roots-column")
+def test_the_address_ordering_carries_every_column_the_table_it_reorders_does(tmp_path: Path):
+    """The same rows, reordered: a column `roots.parquet` ships and `roots_by_address.parquet`
+    drops gives one bundle two answers about one root. The markers are the case that slipped
+    (final review C1): `any` on one file, a verb nobody read on the other."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace._connection.execute(
+        "INSERT INTO roots (handler, root_kind, protocol, method, path, method_kind, path_kind) "
+        "VALUES ('m a/A#a().', 'inbound_endpoint', 'http', NULL, '/a.+', 'any', 'pattern')"
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    workspace.close()
+
+    files = {
+        name: duckdb.sql(f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')")
+        for name in ("roots", "roots_by_address")
+    }
+    assert files["roots"].columns == files["roots_by_address"].columns
+    assert files["roots"].fetchall() == files["roots_by_address"].fetchall()
 
 
 def test_the_coverage_distributions_group_the_columns_that_already_exist(tmp_path: Path):

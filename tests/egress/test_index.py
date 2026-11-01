@@ -298,6 +298,8 @@ def test_the_address_index_answers_what_a_human_actually_says(tmp_path: Path):
                 "protocol": "http",
                 "method": "GET",
                 "path": "/order/list",
+                "method_kind": None,
+                "path_kind": None,
             }
         ],
     )
@@ -417,6 +419,8 @@ def test_an_address_is_masked_on_the_way_into_the_index(tmp_path: Path):
                 "protocol": "http",
                 "method": "GET",
                 "path": "https://user:hunter2@internal.example.com/orders",
+                "method_kind": None,
+                "path_kind": None,
             }
         ],
         endpoints=[
@@ -453,11 +457,36 @@ def test_a_null_address_stays_null_rather_than_becoming_a_string(tmp_path: Path)
                 "protocol": "",
                 "method": None,
                 "path": None,
+                "method_kind": None,
+                "path_kind": None,
             }
         ],
     )
 
     assert index["addresses"][0]["path"] is None
+
+
+@pytest.mark.pins("index.an-address-carries-its-rows-markers")
+def test_an_address_carries_the_markers_of_the_root_it_names(tmp_path: Path):
+    """Vert.x spec §3a, final review C1: a verbless route's address record has `method` NULL,
+    and only `method_kind` says that is every verb rather than a verb nobody read."""
+    index = _write(
+        tmp_path,
+        roots=[
+            {
+                "handler": _LIST,
+                "root_kind": "inbound_endpoint",
+                "protocol": "http",
+                "method": None,
+                "path": "/any",
+                "method_kind": "any",
+                "path_kind": None,
+            }
+        ],
+    )
+
+    [record] = index["addresses"]
+    assert (record["method"], record["method_kind"], record["path_kind"]) == (None, "any", None)
 
 
 def test_the_file_digest_says_what_a_file_holds_without_opening_it(tmp_path: Path):
@@ -869,6 +898,8 @@ def test_every_index_file_is_written_in_a_stable_order(tmp_path: Path):
             "protocol": "http",
             "method": "POST",
             "path": f"/s{n}/post",
+            "method_kind": None,
+            "path_kind": None,
         }
         for n in range(12)
     ]

@@ -2062,14 +2062,22 @@ VERTX_WEB = FIXTURES / "orders-vertx-web"
 @pytest.fixture(scope="module")
 def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
     """One `module analyze` of the Vert.x fixture — inbound, outbound and the handler-read
-    rows all read it. The base jar it depends on is installed by `fixture_stub`."""
+    rows all read it. The base jar it depends on is installed by `fixture_stub`. The module
+    document one `render` of the same analysis writes rides along (`document`), because the
+    document is the result."""
     workspace_dir = tmp_path_factory.mktemp("vertx")
     tables = _analyzed_tables(VERTX_WEB, workspace_dir)
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
         tables["open_questions"] = [dict(row) for row in workspace.query("open_questions")]
+        tables["roots"] = [dict(row) for row in workspace.query("roots")]
     finally:
         workspace.close()
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(VERTX_WEB), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    tables["document"] = (workspace_dir / "render" / "architecture.md").read_text(encoding="utf-8")
     return tables
 
 
@@ -2181,6 +2189,29 @@ def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
     rows = [r for r in vertx_inbound if r["path"] == "/any"]
     assert len(rows) == 1, rows
     assert _serves_any_method(rows[0]), rows[0]
+
+
+@pytest.mark.pins("roots.a-root-carries-its-rows-markers")
+def test_vertx_a_trace_and_a_question_spell_an_any_method_row_as_the_row_does(vertx_tables):
+    """Final review C1, finished: `roots` and `open_questions` carry the endpoint row's
+    `method_kind`/`path_kind`, so the document's trace headings and open-question lines say
+    `any /any` and `(pattern)` as its endpoint table does — before, both printed
+    `(unresolved) /any`, a verb reported unread on a route serving every verb."""
+    roots = {r["path"]: r for r in vertx_tables["roots"] if r["path"] in ("/any", "\\/files\\/.+")}
+    assert roots["/any"]["method_kind"] == ANY_METHOD, roots
+    assert roots["\\/files\\/.+"]["path_kind"] == PATH_KIND_PATTERN, roots
+    plain = [
+        q
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "handler_pass_through" and q["path"] == "/plain"
+    ]
+    assert [(q["method"], q["method_kind"]) for q in plain] == [(None, ANY_METHOD)], plain
+    document = vertx_tables["document"]
+    assert "(unresolved) /any" not in document
+    assert "(unresolved) /plain" not in document
+    assert "`any /plain` — handler_pass_through" in document
+    assert "`any /any`" in document.split("## Traces", 1)[1]
+    assert "GET \\/files\\/.+ (pattern)" in document.split("## Traces", 1)[1]
 
 
 def test_vertx_a_route_with_no_path_serves_every_path(vertx_inbound):

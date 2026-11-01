@@ -512,6 +512,8 @@ def file_unread(
             "protocol": row["protocol"],
             "method": row["method"],
             "path": row["path"],
+            "method_kind": row.get("method_kind"),
+            "path_kind": row.get("path_kind"),
             "candidates": [],
         },
     )
@@ -539,6 +541,8 @@ def unread_rows(
                 "protocol": key[0],
                 "method": key[1],
                 "path": key[2],
+                "method_kind": questions[key]["method_kind"],
+                "path_kind": questions[key]["path_kind"],
                 "question": HANDLER_PASS_THROUGH,
                 "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
                 "evidence": "; and ".join(_unread_sentence(c) for c in candidates),

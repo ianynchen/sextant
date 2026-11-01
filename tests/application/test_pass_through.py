@@ -524,6 +524,21 @@ def test_a_question_on_a_row_whose_path_is_unread_carries_no_path():
     ]
 
 
+@pytest.mark.pins("pass_through.a-question-carries-its-rows-markers")
+def test_a_question_carries_the_markers_of_the_row_it_is_filed_against():
+    """Vert.x spec §3a, final review C1: a question on a row serving every verb carries the
+    row's `method_kind` (and a pattern row its `path_kind`), so its line reads `any /plain`,
+    never `(unresolved) /plain`."""
+    questions: dict = {}
+    row = {"protocol": "http", "method": None, "path": "/plain", "handler": None, "caller": "c"}
+    file_unread(questions, {**row, "method_kind": "any"}, ((HANDED_TO, "x"),))
+    file_unread(questions, {**row, "path": "/r", "path_kind": "pattern"}, ((HANDED_TO, "y"),))
+    assert [(q["path"], q["method_kind"], q["path_kind"]) for q in unread_rows(questions)] == [
+        ("/plain", "any", None),
+        ("/r", None, "pattern"),
+    ]
+
+
 def test_a_handler_object_built_elsewhere_and_not_the_frameworks_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "instance", "symbol": "com/other/Thing#"}, None)
     assert (handler.outcome, handler.unread) == (UNREADABLE, (OF_TYPE, "com/other/Thing#"))

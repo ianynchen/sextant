@@ -69,6 +69,8 @@ def _scheduled_row() -> dict[str, object]:
         "protocol": None,
         "method": None,
         "path": None,
+        "method_kind": None,
+        "path_kind": None,
     }
 
 
@@ -552,6 +554,30 @@ def test_an_exposed_row_that_names_no_handler_derives_no_root(tmp_path: Path):
     rows = workspace.query("roots")
     workspace.close()
     assert rows == [_scheduled_row()]
+
+
+@pytest.mark.pins("roots.a-root-carries-its-rows-markers")
+def test_a_root_carries_the_markers_of_the_row_that_named_it(tmp_path: Path):
+    """Vert.x spec §3a, final review C1: `method_kind`/`path_kind` say what the address's
+    columns MEAN — a NULL `method` beside `any` serves every verb — so the root carries them
+    with the address, or its trace heading reads `(unresolved) /any`."""
+    workspace = _scheduled_workspace(tmp_path)
+    _staged(
+        workspace,
+        protocol="http",
+        path="\\/f\\/.+",
+        handler=_MODULE + _SWEEP,
+        method_kind="any",
+        path_kind="pattern",
+    )
+    rows = workspace.query("roots")
+    workspace.close()
+    assert [
+        (row["root_kind"], row["method"], row["method_kind"], row["path_kind"]) for row in rows
+    ] == [
+        (str(RootKind.INBOUND_ENDPOINT), None, "any", "pattern"),
+        (str(RootKind.SCHEDULED), None, None, None),
+    ]
 
 
 @pytest.mark.pins("roots.only-a-row-the-module-exposes-is-a-root")

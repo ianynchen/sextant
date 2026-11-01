@@ -565,11 +565,19 @@ _ANY_VERB_QUESTIONS = frozenset({"routing_conflict"})
 
 def _question_identity(row: dict[str, object], redactor: Redactor) -> str:
     """One `open_questions` row's wire identity — `_wire_identity`'s reading,
-    except for the questions above, whose absent verb renders as `any`."""
-    method = row["method"]
-    if method is None and str(row["question"]) in _ANY_VERB_QUESTIONS:
-        method = "any"
-    return _wire_address(row["protocol"], method, row["path"], redactor)
+    markers included, except for the questions above, whose absent verb renders
+    as `any`."""
+    any_method = row.get("method_kind") == ANY_METHOD or (
+        row["method"] is None and str(row["question"]) in _ANY_VERB_QUESTIONS
+    )
+    return _wire_address(
+        row["protocol"],
+        row["method"],
+        row["path"],
+        redactor,
+        any_method=any_method,
+        pattern=row.get("path_kind") == PATH_KIND_PATTERN,
+    )
 
 
 def _wire_address(
@@ -596,7 +604,8 @@ def _wire_address(
     value.
 
     `any_method` and `pattern` are the row's own `method_kind` and `path_kind` (Vert.x spec
-    §3a), which only an `endpoints` row carries: a row serving every verb renders `any`, the
+    §3a), which an `endpoints` row carries and `roots` and `open_questions` carry from it: a
+    row serving every verb renders `any`, the
     word `_question_identity` already uses, never the `(unresolved)` its NULL method would
     otherwise print; a path the framework matches as a regular expression is followed by
     `(pattern)`, so it never reads as a URL someone could call."""
@@ -2298,7 +2307,14 @@ def _root_addresses(root: Root, redactor: Redactor) -> tuple[Run, ...]:
         return _text(_NO_WIRE_ADDRESS)
     return _code(
         "; ".join(
-            _wire_address(identity.protocol, identity.method, identity.path, redactor)
+            _wire_address(
+                identity.protocol,
+                identity.method,
+                identity.path,
+                redactor,
+                any_method=identity.method_kind == ANY_METHOD,
+                pattern=identity.path_kind == PATH_KIND_PATTERN,
+            )
             for identity in root.identities
         )
     )

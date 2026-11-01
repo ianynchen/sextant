@@ -90,11 +90,18 @@ class RootIdentity:
     Any of the three may be NULL, and each NULL means what it means on the row
     it came from: a protocol that declares no verb has no `method`, and an
     address the analysis could not read has no `path`.
+
+    `method_kind` and `path_kind` are that row's own markers (Vert.x spec §3a),
+    carried because they say what the three mean: a NULL `method` beside `any`
+    serves every verb, and a `pattern` path is a regular expression, not an
+    address. None wherever the row carries none.
     """
 
     protocol: str | None
     method: str | None
     path: str | None
+    method_kind: str | None = None
+    path_kind: str | None = None
 
 
 # The address of a root nothing addresses. Named once, so the two places that
@@ -132,9 +139,9 @@ def _text(value: object) -> str | None:
 
 
 def _address_order(
-    identity: tuple[str | None, str | None, str | None],
+    identity: tuple[str | None, ...],
 ) -> tuple[tuple[bool, str], ...]:
-    """A total order over three nullable columns (NFR-1). Each half sorts as
+    """A total order over the address's nullable columns (NFR-1). Each half sorts as
     (present?, value) so a NULL never compares equal to the empty string — two
     rows differing only in that would otherwise tie, and a tie is an order that
     can change between runs."""
@@ -163,13 +170,15 @@ def record_roots(workspace: Workspace) -> None:
             _text(row["protocol"]),
             _text(row["method"]),
             _text(row["path"]),
+            _text(row["method_kind"]),
+            _text(row["path_kind"]),
         )
         for row in workspace.query("endpoints")
         if row["handler"] is not None and str(row["direction"]) != str(Direction.OUTBOUND)
     } | {
         # No address, and none invented: a clock reaches this method, so there
         # is no protocol, verb or path to carry (`RootIdentity`'s own rule).
-        (str(row["handler"]), RootKind.SCHEDULED, None, None, None)
+        (str(row["handler"]), RootKind.SCHEDULED, None, None, None, None, None)
         for row in workspace.query("scheduled_work")
         # A schedule whose job was not found has no handler: there is no code to start a
         # trace at, and a root named "None" would claim one.
@@ -182,8 +191,10 @@ def record_roots(workspace: Workspace) -> None:
             "protocol": protocol,
             "method": method,
             "path": path,
+            "method_kind": method_kind,
+            "path_kind": path_kind,
         }
-        for handler, kind, protocol, method, path in sorted(
+        for handler, kind, protocol, method, path, method_kind, path_kind in sorted(
             found,
             key=lambda entry: (entry[0], str(entry[1]), _address_order(entry[2:])),
         )
@@ -221,6 +232,8 @@ def roots_of(workspace: Workspace) -> list[Root]:
             protocol=_text(row["protocol"]),
             method=_text(row["method"]),
             path=_text(row["path"]),
+            method_kind=_text(row["method_kind"]),
+            path_kind=_text(row["path_kind"]),
         )
         # An all-NULL row is a root nothing addresses, which is an EMPTY
         # `identities` and never a `RootIdentity` of three NULLs: the second

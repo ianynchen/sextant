@@ -689,13 +689,14 @@ _NAMED_QUERIES = {
     # `handler, caller` for exactly this reason), and their order would
     # otherwise be the insert order rather than an ordering. `candidates` is
     # cast to text because it is the answer that differs between two such
-    # rows, and `evidence` is the last tie-break — two rows agreeing on all
-    # six are the same question asked twice and may appear in either order
-    # without changing a byte.
+    # rows, and `evidence` then the two markers are the last tie-breaks — two
+    # rows agreeing on all eight are the same question asked twice and may
+    # appear in either order without changing a byte.
     "open_questions": """
-        SELECT protocol, method, path, question, candidates, evidence
+        SELECT protocol, method, path, question, candidates, evidence, method_kind, path_kind
         FROM open_questions
-        ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence
+        ORDER BY protocol, method, path, question, candidates::VARCHAR, evidence,
+                 method_kind, path_kind
     """,
     # Every symbol that came out of an extracted LIBRARY rather than the
     # module's own output, with the coordinate it came from (D00 §2's
@@ -833,9 +834,9 @@ _NAMED_QUERIES = {
     # root), and an ordering with ties is one that can change between runs
     # (NFR-1) — the `scheduled_work` reasoning, one table on.
     "roots": """
-        SELECT handler, root_kind, protocol, method, path
+        SELECT handler, root_kind, protocol, method, path, method_kind, path_kind
         FROM roots
-        ORDER BY handler, root_kind, protocol, method, path
+        ORDER BY handler, root_kind, protocol, method, path, method_kind, path_kind
     """,
     # F8 §9.4's reachability (W37). The pass that WRITES this table has no need to read it
     # back, so it shipped with an export query and no named one — which meant nothing
@@ -1415,11 +1416,13 @@ _EXPORT_QUERIES = {
     # `candidates` mask by the call the document and the brief make on them.
     "open_questions": f"""
         SELECT o.protocol, o.method, coalesce(a.masked, o.path) AS path, o.question,
-               coalesce(c.masked::JSON, o.candidates) AS candidates, o.evidence
+               coalesce(c.masked::JSON, o.candidates) AS candidates, o.evidence,
+               o.method_kind, o.path_kind
         FROM open_questions o
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = o.path
         LEFT JOIN {_REDACTED_CANDIDATES} c ON c.original = o.candidates::VARCHAR
-        ORDER BY o.protocol, o.method, o.path, o.question, o.candidates::VARCHAR, o.evidence
+        ORDER BY o.protocol, o.method, o.path, o.question, o.candidates::VARCHAR, o.evidence,
+                 o.method_kind, o.path_kind
     """,
     # The live exposure 2K closes: this table's `value` column exported
     # verbatim. Joined on (key, value) rather than key alone because one key
@@ -1532,10 +1535,11 @@ _EXPORT_QUERIES = {
     ),
     "roots_by_address": f"""
         SELECT r.handler, r.root_kind, r.protocol, r.method,
-               coalesce(a.masked, r.path) AS path
+               coalesce(a.masked, r.path) AS path, r.method_kind, r.path_kind
         FROM roots_by_address r
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
-        ORDER BY r.protocol, r.method, r.path, r.handler, r.root_kind
+        ORDER BY r.protocol, r.method, r.path, r.handler, r.root_kind, r.method_kind,
+                 r.path_kind
     """,
     # F8 §9.4 (W37). No masked column: every value is a symbol, an integer or a boolean.
     # The ROOT here is a handler, not an address — `roots` carries the address, and this
@@ -1544,10 +1548,11 @@ _EXPORT_QUERIES = {
     "reachability": _NAMED_QUERIES["reachability"],
     "roots": f"""
         SELECT r.handler, r.root_kind, r.protocol, r.method,
-               coalesce(a.masked, r.path) AS path
+               coalesce(a.masked, r.path) AS path, r.method_kind, r.path_kind
         FROM roots r
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
-        ORDER BY r.handler, r.root_kind, r.protocol, r.method, r.path
+        ORDER BY r.handler, r.root_kind, r.protocol, r.method, r.path, r.method_kind,
+                 r.path_kind
     """,
     # Spec 2026-09-22 §3d/§7a's shadow review list, and its `value` column is masked by
     # the ADDRESS map rather than by the grammar one. That is the map's own rule applied

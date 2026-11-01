@@ -473,6 +473,10 @@ def _address_records(
                 "method": root["method"],
                 # Masked, exactly as `graph/roots.parquet`'s own column is.
                 "path": _address(root["path"], redactor),
+                # The row's own markers (Vert.x spec §3a): a NULL `method` beside `any` serves
+                # every verb, beside NULL nobody read it; a `pattern` path is not an address.
+                "method_kind": root["method_kind"],
+                "path_kind": root["path_kind"],
                 "root_kind": root["root_kind"],
                 "handler": str(root["handler"]),
                 **_at(located, str(root["handler"])),

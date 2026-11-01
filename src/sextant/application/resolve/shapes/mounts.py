@@ -637,13 +637,18 @@ def file_unread_prefix(
     *,
     protocol: str,
     method: str | None,
+    method_kind: str | None,
     path: str,
+    path_kind: str | None,
     prefix: Prefix,
     caller: str,
 ) -> None:
     """Notes why a row's path holds `<prefix>` (`mount_prefix`, D01), one candidate per
     unread mount, against the row's identity; written by `unread_prefix_rows`."""
-    row = unread.setdefault((protocol, method, path), {"candidates": []})
+    row = unread.setdefault(
+        (protocol, method, path),
+        {"method_kind": method_kind, "path_kind": path_kind, "candidates": []},
+    )
     for entry in prefix.unread:
         candidate = {
             "mount": entry.mount,
@@ -675,6 +680,8 @@ def unread_prefix_rows(
                 "protocol": key[0],
                 "method": key[1],
                 "path": key[2],
+                "method_kind": unread[key]["method_kind"],
+                "path_kind": unread[key]["path_kind"],
                 "question": MOUNT_PREFIX,
                 "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
                 "evidence": "; and ".join(sorted({str(c["mount"]) for c in candidates})),

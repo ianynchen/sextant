@@ -234,7 +234,7 @@ needs it.
 | `shape_fields` | Shape, ordinal, **wire name**, **field number**, wire type and format, required, nullable, trust fields, tags, item descriptor |
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields, and `served_by` — the class serving the row (since 12; the subclass for an inherited mapping, NULL from an engine that composes no type with a row), and the row markers `path_kind` (`pattern`: the path is a regular expression, never canonicalised or linked by path) and `method_kind` (`any`: the row serves every method) (since 13) |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
-| `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
+| `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse, and the endpoint row's `method_kind`/`path_kind` where the question is filed against one (since 13) |
 | `endpoint_conditions` | **A VIEW, not a table** (since `GRAPH_SCHEMA_VERSION` 4, spec `2026-10-22-conditional-beans-design.md`): the conditions an endpoint row carries, found by joining it to the bean its code lives in — its code's own bean where the code is one, else the class SERVING the row (`endpoints.served_by`, since 12; the enclosing class where that is NULL) — [Conditional beans](#conditional-beans) below. Columns: PR #61's (`protocol`, `direction`, `method`, `path`, `handler`, `kind`, `expression`, `environment`, `holds`, `resolution`, `evidence`), then `caller`, `via`, `bean_kind`, `bean`. Rows of BOTH directions now (an outbound row's code is its `caller`); condition-less route rows (`kind` NULL) are left out. Structured for a machine; the architecture document is the one verbose rendering. The matcher never reads it — an endpoint is an endpoint — and a link states each end's conditions beside it. Whether the row EXISTS in an environment is `bean_presence`'s answer, never "every row here holds" |
 | `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
 | `channel_bindings` (temp) | One edge between an in-process CHANNEL and a method at one of its ends: `channel`, `role` (`fed_by`, `read_by`, `sends_to`), `symbol`, `protocol`, `direction`, `destination`, `catalog_id`, `resolution`. Working state of one resolve — replaced whole beside `endpoints`, never in a bundle — joined into `endpoints` rows by `resolve/channel_bindings.py` and read by `config_join.gaps` |
@@ -913,7 +913,7 @@ query time** fails with a message naming it, never a shorter answer.
 | Table | Holds |
 |---|---|
 | ~~`findings`~~ | **Never built, and no longer planned as a table Sextant writes** (W51). Kind, subject, severity, evidence sites — for FR-11 … FR-14, which are usage scenarios rather than requirements: Sextant publishes the rows a consumer derives them from, and the judgement is the consumer's |
-| `open_questions` | The endpoint's wire identity, the question kind, the candidate answers, the evidence trail |
+| `open_questions` | The endpoint's wire identity and its `method_kind`/`path_kind` markers, the question kind, the candidate answers, the evidence trail |
 
 `open_questions` is not an error log. It is output: a recorded disagreement a person should
 settle.
@@ -922,7 +922,9 @@ settle.
 programmatic pass could not answer and refused to guess at. Columns: `protocol`, `method`,
 `path` (the wire identity, **carried rather than joined** — the row is an artifact a human
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
-name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
+name nothing outside this run); `question`; `candidates`, a JSON array; `evidence`; and
+`method_kind`/`path_kind`, the endpoint row's own markers where the question is filed against
+one (since 13), so a question on a row serving every verb reads `any`, not an unread verb.
 
 `question` is a **closed SEVENTEEN-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
@@ -1106,7 +1108,7 @@ table nobody walked.
 
 | Table | Holds |
 |---|---|
-| `roots` | One row per (`handler`, `root_kind`, wire address): the method a trace starts at, what starts it, and the address that reaches it |
+| `roots` | One row per (`handler`, `root_kind`, wire address): the method a trace starts at, what starts it, and the address that reaches it, with that endpoint row's `method_kind`/`path_kind` (since 13) |
 
 **Written by `application/resolve/roots.py`** from two tables the catalog-driven half has
 already finished with: every `endpoints` row the module EXPOSES and names a handler for
@@ -1429,7 +1431,7 @@ own cadence.
 | 10 | `scheduled_work` gains `untied`; an `@Scheduled` row's `name` is EMPTY rather than NULL (spec `2026-10-28-quartz-design.md`, "Empty cells", ruled 2026-10-29) | refused by its stamp exactly as at 5 to 9, so every NULL of the older vintage — which could mean any of the three — is re-derived rather than printed as `not in the code` |
 | 11 | `endpoints` and `endpoint_metadata` gain `row_id`: an endpoint row is numbered when it is written, and an entry attached to it is bound to that number when it is written and follows the row through the path prefix and a protocol reclassification (spec `2026-10-30-object-identity-design.md`, ruling 7). The export leaves the id out, so no bundle column changes | refused by its stamp exactly as at 5 to 10, so rows with no id — which no pass could find again — are re-derived rather than read beside numbered ones |
 | 12 | `endpoints` gains `served_by`, the class serving the row: the type its prefix and gate were composed with — the subclass, for a mapping a controller inherits without overriding and for an inherited exposed member. `endpoint_conditions` and the documents find the row's bean there (own symbol first), since Spring reads conditions off the registered class and `@Conditional` is not `@Inherited` (spec `2026-10-30-object-identity-design.md`, ruling 8). The export carries the column | refused by its stamp exactly as at 5 to 11, so an inherited row — whose conditions the older vintage read off the base — is re-derived rather than read beside rows that name their serving class |
-| 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. The export carries both columns | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
+| 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

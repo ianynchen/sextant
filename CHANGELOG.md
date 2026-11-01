@@ -96,8 +96,13 @@ here would restate those documents rather than add anything.
   canonicalised and no call is linked to it by path. A row marked `any` serves every HTTP
   method, so a call of any verb links to it; a NULL method without the marker still links to
   no verb. A path holding a named hole (`<prefix>/status`) is never linked by path either.
-  Vert.x Web's rows and Quarkus Reactive Routes' rows write them (below). The export carries both columns; a workspace of the older
-  vintage is refused and re-analysed.
+  Vert.x Web's rows and Quarkus Reactive Routes' rows write them (below). `roots` and
+  `open_questions` carry the same two markers from the endpoint row they name, so the module
+  document's trace headings and open-question lines say `any /x` and `(pattern)` exactly as
+  its endpoint tables do, never `(unresolved) /x` for a route serving every verb. The export
+  carries them on `endpoints`, `roots`, `roots_by_address` and `open_questions`, and the
+  bundle's `addresses.ndjson` index carries them per address; a workspace of the older vintage
+  is refused and re-analysed.
 - **`GRAPH_SCHEMA_VERSION` 12**: `endpoints` gains `served_by`, the class a row is served by
   (ruling 8). A row's conditions are read off that class's bean — the handler's own where the
   handler is a bean — so a row a conditional controller inherits carries the controller's

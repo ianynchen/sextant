@@ -148,6 +148,7 @@ def file_refusal(
     *,
     protocol: str,
     method: str | None,
+    method_kind: str | None,
     path: str,
     reason: str,
     caller: str,
@@ -161,7 +162,13 @@ def file_refusal(
     sorted (NFR-1) when the rows are built by `refusal_rows`."""
     row = refusals.setdefault(
         (protocol, method, path),
-        {"protocol": protocol, "method": method, "path": path, "candidates": []},
+        {
+            "protocol": protocol,
+            "method": method,
+            "method_kind": method_kind,
+            "path": path,
+            "candidates": [],
+        },
     )
     candidate = {"caller": caller, "handler": handler, "reason": reason}
     if candidate not in row["candidates"]:
@@ -182,6 +189,7 @@ def refusal_rows(
                 "protocol": key[0],
                 "method": key[1],
                 "path": key[2],
+                "method_kind": refusals[key]["method_kind"],
                 "question": REFUSED_REGISTRATION,
                 "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
                 "evidence": "; and ".join(sorted({str(c["caller"]) for c in candidates})),

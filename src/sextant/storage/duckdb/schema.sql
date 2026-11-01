@@ -195,7 +195,17 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- closed evidence tiers — an unanswered question has no tier, and the
     -- reader of this table needs to know where to look, not how much to
     -- trust an answer nobody gave.
-    evidence   TEXT
+    evidence   TEXT,
+    -- The endpoint row's own markers (`endpoints.path_kind`/`method_kind`, Vert.x spec §3a),
+    -- carried with the identity they qualify by the pass that filed the question against
+    -- that row: without them a question on a row serving every verb renders its NULL
+    -- `method` as a verb nobody read, and a pattern path as an address. NULL on a question
+    -- filed against no endpoint row, and on every row whose identity needs no marker. Not
+    -- part of the question's identity (`domain/enrichment.question_identity`): they say
+    -- what the identity's columns mean, not which row it is. Last, so a workspace migrated
+    -- by adding columns has the same column order.
+    method_kind TEXT,
+    path_kind   TEXT
 );
 
 -- The first of the two NON-WIRE tables (2O design §4): work the framework
@@ -492,7 +502,15 @@ CREATE TABLE IF NOT EXISTS roots (
     -- label for it would report a gap where there is none.
     protocol  TEXT,
     method    TEXT,
-    path      TEXT
+    path      TEXT,
+    -- The `endpoints` row's own markers for that address (`path_kind`, `method_kind`,
+    -- Vert.x spec §3a), carried with it for the reason the address is: they are part of
+    -- what the three columns above MEAN — a NULL `method` beside `any` serves every verb,
+    -- beside NULL nobody read it — so the renderer spells the root's address the way the
+    -- endpoint table does. NULL for a scheduled root, as its address is. Last, as on
+    -- `endpoints`.
+    method_kind TEXT,
+    path_kind   TEXT
 );
 
 -- F8 §9.4 (W37): what each root REACHES, materialised.

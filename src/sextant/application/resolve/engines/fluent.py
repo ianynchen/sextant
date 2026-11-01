@@ -379,6 +379,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     refusals,
                     protocol=catalog.protocol,
                     method=_root_verb(end, context),
+                    method_kind=_root_method_kind(end, context),
                     path=path,
                     reason=reason,
                     caller=end.caller,
@@ -408,6 +409,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     refusals,
                     protocol=catalog.protocol,
                     method=None,
+                    method_kind=verbless_serves,
                     path=path,
                     reason=reason,
                     caller=str(mount.site["caller"]),
@@ -768,6 +770,7 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                     context.refusals,
                     protocol=context.catalog.protocol,
                     method=refused_verb,
+                    method_kind=_root_method_kind(end, context),
                     path=path,
                     reason=UNROOTED_PATH,
                     caller=context.caller,
@@ -802,7 +805,9 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                     context.unread_prefixes,
                     protocol=context.catalog.protocol,
                     method=verb,
+                    method_kind=method_kind,
                     path=path,
+                    path_kind=path_kind,
                     prefix=prefix,
                     caller=context.caller,
                 )
@@ -1027,6 +1032,16 @@ def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
         return None
     captured = _resolve_captures({"http_method": root["captures"]["http_method"]}, dict(end.root))
     return _verb_of(captured["http_method"], context)
+
+
+def _root_method_kind(end: ChainEnd, context: "_DeriveContext") -> str | None:
+    """`_root_verb`'s marker (Vert.x spec §3a): `verbless_serves` for a root that names no verb
+    (`route("bad")` answers every verb), None for one that names a verb, read or not, and for
+    a root the catalog's roots do not match, whose verb nobody read."""
+    root = _matching_root(dict(end.root), context.roots) if end.root else None
+    if root is None or "http_method" in root["captures"]:
+        return None
+    return context.verbless_serves
 
 
 def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:

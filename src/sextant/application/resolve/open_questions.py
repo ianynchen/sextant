@@ -190,6 +190,10 @@ def record_open_questions(workspace: Workspace, rows: list[dict[str, Any]]) -> N
     generic shape here would either be empty or wrong. An empty list writes
     nothing rather than a no-op statement.
 
+    A row filed against an `endpoints` row also carries that row's
+    `method_kind` and `path_kind`; a row without them gets NULL, which is what
+    every question filed against no endpoint row means by them.
+
     Raises `ValueError` naming the offending value when `question` is outside
     `QUESTIONS`: the value is bound straight into a published artifact, where
     a typo is indistinguishable from a kind of question nobody implemented.
@@ -202,4 +206,7 @@ def record_open_questions(workspace: Workspace, rows: list[dict[str, Any]]) -> N
                 f"— 2G design §6's question set is closed (NFR-5)"
             )
     if rows:
-        workspace.derive("open_questions_insert", rows=rows)
+        workspace.derive(
+            "open_questions_insert",
+            rows=[{"method_kind": None, "path_kind": None, **row} for row in rows],
+        )

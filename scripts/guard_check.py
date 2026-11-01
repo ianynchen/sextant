@@ -184,6 +184,7 @@ _PIPELINE = "sextant/application/resolve/pipeline.py"
 _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
+_INDEX = "sextant/egress/export/index.py"
 _DOCUMENT = "sextant/egress/render/document.py"
 _VALUES = "sextant/application/resolve/values.py"
 _VOCABULARY = "sextant/application/boundary/vocabulary.py"
@@ -3253,6 +3254,95 @@ GUARDS: dict[str, Guard] = {
                 path=_DOCUMENT,
                 find='        pattern=endpoint.get("path_kind") == PATH_KIND_PATTERN,\n',
                 replace="        pattern=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render.an-ANY-METHOD-question-says-any": Guard(
+        what="an open question filed against a `method_kind = any` row renders its verb as "
+        "`any` (Vert.x spec §3a; final review C1)",
+        why="without it Hono's `/*` pass-through question reads `(unresolved) /*`, a verb "
+        "reported unread on a route serving every verb",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='    any_method = row.get("method_kind") == ANY_METHOD or (\n',
+                replace="    any_method = False or (  # guard disabled\n",
+            ),
+        ),
+    ),
+    "pass_through.a-question-carries-its-rows-markers": Guard(
+        what="a `handler_pass_through` question carries the row's `method_kind`/`path_kind` "
+        "(Vert.x spec §3a; final review C1)",
+        why="without them the question on a verbless route reads `(unresolved) /path`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            "method_kind": row.get("method_kind"),\n',
+                replace='            "method_kind": None,  # guard disabled\n',
+            ),
+        ),
+    ),
+    "workspace.the-address-ordering-carries-every-roots-column": Guard(
+        what="`roots_by_address.parquet` carries every column `roots.parquet` does, the "
+        "markers included (final review C1)",
+        why="without it the two files of one bundle disagree about whether a root serves "
+        "every verb",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="               coalesce(a.masked, r.path) AS path, r.method_kind, r.path_kind\n"
+                "        FROM roots_by_address r\n",
+                replace="               coalesce(a.masked, r.path) AS path, r.method_kind, NULL AS path_kind\n"
+                "        FROM roots_by_address r\n",
+            ),
+        ),
+    ),
+    "index.an-address-carries-its-rows-markers": Guard(
+        what="`addresses.ndjson` carries the root's `method_kind`/`path_kind` (Vert.x spec "
+        "§3a; final review C1)",
+        why="without them a verbless route's address record reads as a verb nobody read",
+        edits=(
+            Edit(
+                path=_INDEX,
+                find='                "method_kind": root["method_kind"],\n',
+                replace='                "method_kind": None,  # guard disabled\n',
+            ),
+        ),
+    ),
+    "render_trace.an-ANY-METHOD-root-says-any": Guard(
+        what="a trace heading renders a `method_kind = any` root's verb as `any` (Vert.x spec "
+        "§3a; final review C1)",
+        why="without it every verbless Vert.x route's trace reads `(unresolved) /path`",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="                any_method=identity.method_kind == ANY_METHOD,\n",
+                replace="                any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render_trace.a-PATTERN-root-is-marked-a-pattern": Guard(
+        what="a trace heading follows a `path_kind = pattern` root's path with `(pattern)` "
+        "(Vert.x spec §3a; final review C1)",
+        why="without it a regular expression reads as a URL in the trace section",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="                pattern=identity.path_kind == PATH_KIND_PATTERN,\n",
+                replace="                pattern=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "roots.a-root-carries-its-rows-markers": Guard(
+        what="`roots` carries the endpoint row's `method_kind`/`path_kind` with the address "
+        "(Vert.x spec §3a; final review C1)",
+        why="without them a root's NULL method reads as a verb nobody read, and its trace "
+        "heading says `(unresolved)` on a route serving every verb",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='            "method_kind": method_kind,\n',
+                replace='            "method_kind": None,  # guard disabled\n',
             ),
         ),
     ),

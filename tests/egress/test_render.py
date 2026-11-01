@@ -1075,6 +1075,40 @@ def test_the_document_strips_url_userinfo_from_both_address_columns():
     assert "| https://billing.internal |" in text
 
 
+@pytest.mark.pins("render.an-ANY-METHOD-question-says-any")
+def test_an_open_question_on_an_any_method_row_says_any_never_an_unread_verb():
+    """Vert.x spec §3a, final review C1: a question filed against a row serving every verb
+    carries the row's `method_kind`, and its line says `any /plain`. Before, Hono's `/*`
+    pass-through question read `(unresolved) /*`. A pattern path is marked as the endpoint
+    table marks it."""
+    questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/plain",
+            "method_kind": "any",
+            "path_kind": None,
+            "question": "handler_pass_through",
+            "candidates": "[]",
+            "evidence": "the handler is built in another jar",
+        },
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "\\/f\\/.+",
+            "method_kind": None,
+            "path_kind": "pattern",
+            "question": "handler_pass_through",
+            "candidates": "[]",
+            "evidence": "the handler is built in another jar",
+        },
+    ]
+    text = render_module_document(MODULE, REPORT, "a3f91c", open_questions=questions)
+    assert "`any /plain` — handler_pass_through" in text
+    assert "`GET \\/f\\/.+ (pattern)` — handler_pass_through" in text
+    assert "(unresolved) /plain" not in text
+
+
 def test_the_document_masks_an_open_questions_candidate_peer():
     """A `self_exchange` question names the called side's peer, and the document printed it
     verbatim — the endpoint table's peer cell was masked and the same peer one section down

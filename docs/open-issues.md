@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-271 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-272 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -274,6 +274,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-268 | [SEXTANT-260](https://app.plane.so/portolan/browse/SEXTANT-260/) | A Vert.x route whose router the walk reaches no end for falls back to serving at the root |
 | OI-269 | [SEXTANT-261](https://app.plane.so/portolan/browse/SEXTANT-261/) | A verbless Vert.x route and a verb route on the same path are never ordered against each other |
 | OI-270 | [SEXTANT-262](https://app.plane.so/portolan/browse/SEXTANT-262/) | The pass-through reader does not read a handle method inherited from an interface default (or Kotlin DefaultImpls) |
+| OI-271 | [SEXTANT-264](https://app.plane.so/portolan/browse/SEXTANT-264/) | A question's method/path markers come from the first registration filed at its identity |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
