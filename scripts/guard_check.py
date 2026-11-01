@@ -8577,8 +8577,21 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VERTX_WEB_CATALOG,
-                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
-                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+            ),
+        ),
+    ),
+    "vertx-web.validation-handlers-pass-on": Guard(
+        what="vertx-web-validation's `ValidationHandler`, and RxJava 3's twin, pass on by "
+        "contract (OI-261; `javap`, `ValidationHandlerImpl.handle` calls `next()`)",
+        why="without it the route after `handler(ValidationHandlerBuilder…build())` names no "
+        "handler and is `partial`, though the module's own handler after it answers",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find=", io.vertx.ext.web.validation, io.vertx.rxjava3.ext.web.validation]",
+                replace="]",
             ),
         ),
     ),
@@ -8588,8 +8601,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VERTX_WEB_CATALOG,
-                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler]",
-                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler]",
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler,",
             ),
         ),
     ),

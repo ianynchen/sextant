@@ -345,6 +345,48 @@ def test_the_wrappers_own_handler_package_passes_on_by_contract(tmp_path: Path, 
     assert questions == []
 
 
+# Vert.x Web's own `Router` and `Route`, beside the wrappers, for the handlers every flavour
+# ships in another artifact (vertx-web-validation's `ValidationHandler`, OI-261).
+CORE = Wrapper(
+    name="core",
+    web="io/vertx/ext/web/",
+    handlers="io/vertx/ext/web/handler/",
+    vertx="Lio/vertx/core/Vertx;",
+    handler="Lio/vertx/core/Handler;",
+    singles="Lio/vertx/core/Future;",
+    sends=("send",),
+)
+
+
+@pytest.mark.pins("vertx-web.validation-handlers-pass-on")
+@pytest.mark.parametrize("wrapper", [CORE, RX3], ids=lambda w: w.name)
+def test_a_validation_handler_passes_on_to_the_handler_after_it(tmp_path: Path, wrapper: Wrapper):
+    """vertx-examples' `validation`: `post(p).handler(ValidationHandlerBuilder.create(…)
+    .build()).handler(rc -> …)`. vertx-web-validation's `ValidationHandlerImpl.handle` calls
+    `next()` once the request validates and `fail` otherwise (`javap`, 4.5.10 and 5.2.1), so
+    the row names the handler after it. Its package was outside `framework_handlers`, so the
+    row was `partial` with handler NULL. RxJava 3's `ValidationHandler` wraps the same."""
+    routes = _Routes(wrapper)
+    validation = wrapper.web + "validation/"
+    builder = f"{validation}builder/ValidationHandlerBuilder#"
+    made = routes.call(
+        builder, "build", f"(){wrapper.jvm(validation + 'ValidationHandler#')}", 50, []
+    )
+    root = routes.root("post", [_string("/hello")])
+    validated = routes.step(
+        root,
+        "handler",
+        f"({wrapper.handler}){routes.route_type()}",
+        [CallArgument(kind="unresolved", source=made)],
+    )
+    routes.handler(validated, "reply")
+
+    rows, questions = _served(tmp_path, routes)
+
+    assert rows == {("POST", "/hello", "reply", "resolved")}
+    assert questions == []
+
+
 @pytest.mark.pins(
     "vertx-wrappers.rxjava3-sub-router-mounts-by-its-route-path",
     "vertx-wrappers.mutiny-sub-router-mounts-by-its-route-path",

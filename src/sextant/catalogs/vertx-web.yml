@@ -323,7 +323,19 @@ matches:
   # vertx-rx-java3 (4.5.10, 5.2.1) and smallrye-mutiny-vertx-web (3.23.1, 4.0.2), each
   # implementing `Handler` (Mutiny's also `Consumer`, `javap`), the same two answering
   # packages among them.
-  framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler]
+  # vertx-web-validation's `ValidationHandler` (`io.vertx.ext.web.validation`) is the only
+  # `Handler` type in its artifact, and passes on too: `ValidationHandlerImpl.handle` calls
+  # `next()` once the request validates and `fail` otherwise (`javap`, vertx-web-validation
+  # 4.5.10, 5.0.0, 5.2.1; OI-261). RxJava 3's `io.vertx.rxjava3.ext.web.validation
+  # .ValidationHandler`, in vertx-rx-java3 at the same three versions, hands the context to it.
+  # Mutiny's twin ships in `smallrye-mutiny-vertx-web-validation`, not measured, so it is not
+  # listed: a Mutiny route behind one is `partial` with a pass-through question.
+  # STATED BOUNDARY (spec §4): vertx-web-proxy's `ProxyHandler` (`io.vertx.ext.web.proxy
+  # .handler`, and RxJava 3's twin) ANSWERS — it forwards the request to the backend and
+  # writes the backend's response — so it is deliberately not listed. A route served by one
+  # is a `partial` row with handler NULL and a pass-through question naming it, rather than
+  # a row naming a module handler that never runs (measured on vertx-examples' `proxy`).
+  framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler, io.vertx.ext.web.validation, io.vertx.rxjava3.ext.web.validation]
   # What Vert.x calls on a handler OBJECT (`Handler<RoutingContext>.handle`): a route given
   # `new X(…)` runs `X.handle` (user ruling 2026-10-30). This is one list for the catalog, not
   # one per owner, and Mutiny's `Route.handler` takes a `Consumer`, which Vert.x calls
