@@ -258,18 +258,18 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-252 | [SEXTANT-245](https://app.plane.so/portolan/browse/SEXTANT-245/) | grpc-java ImplBase path assumes registration: a class extending the generated ImplBase is a handler whether or not anything registers it |
 | OI-253 | [SEXTANT-246](https://app.plane.so/portolan/browse/SEXTANT-246/) | read a sibling Maven module's bytecode: Mesh's route wrapper, Hono's service-base pass-through |
 | OI-254 | [SEXTANT-247](https://app.plane.so/portolan/browse/SEXTANT-247/) | vertx-eventbus-chain.yml still says the chain walk is per method body |
-| OI-255 | not yet in Plane | A WebClient host Vert.x ignores is still published: a null host or a negative port gives inventory:-1 |
-| OI-256 | not yet in Plane | Properties.getProperty(key) is not read as a configuration key: no configuration-read table exists |
-| OI-257 | not yet in Plane | An options object handed to module code as an argument (configure(options)) is not treated as possibly configuring it |
-| OI-258 | not yet in Plane | A Mutiny Vert.x handler that is an object of a module class implementing Consumer is not read: handler_methods is one list per catalog |
-| OI-259 | not yet in Plane | Request reads in an RxJava 3 or Mutiny Vert.x handler's body give no requirement rows |
-| OI-260 | not yet in Plane | A Vert.x route path built by String.format has no path: all 17 rows of Hono's device-registry-base |
-| OI-261 | not yet in Plane | A Vert.x handler outside io.vertx.ext.web.handler (ValidationHandler, ProxyHandler) is read as not readable here, so the row names no handler (fixed on `cov/vertx`; `ProxyHandler` answers and stays a stated boundary) |
-| OI-262 | not yet in Plane | A value stored through a library call that returns its argument (this.client = Objects.requireNonNull(c)) ends the producer walk: the WebClient's base is lost |
-| OI-263 | not yet in Plane | Vert.x routes with one verb and path on two different routers are narrowed against each other (fixed on `cov/vertx`) |
-| OI-264 | not yet in Plane | A module whose routes come from an OpenAPI file through RouterBuilder gets no word in its document saying so |
-| OI-265 | not yet in Plane | A route path held in a local that a lambda captures is not read (fixed on `cov/vertx`) |
-| OI-266 | not yet in Plane | An instance lambda's captured values are bound one position off: the capture site's first argument is the receiver, not body parameter 0 (fixed on `cov/vertx`) |
+| OI-255 | [SEXTANT-248](https://app.plane.so/portolan/browse/SEXTANT-248/) | A WebClient host Vert.x ignores is still published: a null host or a negative port gives inventory:-1 |
+| OI-256 | [SEXTANT-249](https://app.plane.so/portolan/browse/SEXTANT-249/) | Properties.getProperty(key) is not read as a configuration key: no configuration-read table exists |
+| OI-257 | [SEXTANT-250](https://app.plane.so/portolan/browse/SEXTANT-250/) | An options object handed to module code as an argument (configure(options)) is not treated as possibly configuring it |
+| OI-258 | [SEXTANT-251](https://app.plane.so/portolan/browse/SEXTANT-251/) | A Mutiny Vert.x handler that is an object of a module class implementing Consumer is not read: handler_methods is one list per catalog |
+| OI-259 | [SEXTANT-252](https://app.plane.so/portolan/browse/SEXTANT-252/) | Request reads in an RxJava 3 or Mutiny Vert.x handler's body give no requirement rows |
+| OI-260 | [SEXTANT-253](https://app.plane.so/portolan/browse/SEXTANT-253/) | A Vert.x route path built by String.format has no path: all 17 rows of Hono's device-registry-base |
+| OI-261 | [SEXTANT-256](https://app.plane.so/portolan/browse/SEXTANT-256/) | A Vert.x handler outside io.vertx.ext.web.handler (ValidationHandler, ProxyHandler) is read as not readable here, so the row names no handler (fixed on `cov/vertx`; `ProxyHandler` answers and stays a stated boundary) |
+| OI-262 | [SEXTANT-254](https://app.plane.so/portolan/browse/SEXTANT-254/) | A value stored through a library call that returns its argument (this.client = Objects.requireNonNull(c)) ends the producer walk: the WebClient's base is lost |
+| OI-263 | [SEXTANT-257](https://app.plane.so/portolan/browse/SEXTANT-257/) | Vert.x routes with one verb and path on two different routers are narrowed against each other (fixed on `cov/vertx`) |
+| OI-264 | [SEXTANT-255](https://app.plane.so/portolan/browse/SEXTANT-255/) | A module whose routes come from an OpenAPI file through RouterBuilder gets no word in its document saying so |
+| OI-265 | [SEXTANT-258](https://app.plane.so/portolan/browse/SEXTANT-258/) | A route path held in a local that a lambda captures is not read (fixed on `cov/vertx`) |
+| OI-266 | [SEXTANT-259](https://app.plane.so/portolan/browse/SEXTANT-259/) | An instance lambda's captured values are bound one position off: the capture site's first argument is the receiver, not body parameter 0 (fixed on `cov/vertx`) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
