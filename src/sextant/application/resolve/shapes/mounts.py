@@ -183,10 +183,12 @@ class UnreadPrefix:
 
 
 # Where a route is served under a prefix: one `(router, mount)` step per router, the
-# outermost first, `router` the call that made it (`_identity`) or None for a router that may
-# be any, and `mount` the place `((method, ordinal), order)` on that router of the mount route
-# that serves the next one; None on the last step, the router the route itself is on.
-Place = tuple[tuple[tuple[str, str, int] | None, tuple[tuple[str, int], Any] | None], ...]
+# outermost first, `router` the call that made it (`_identity`) with the path it was reached
+# on (`_router`) or None for a router that may be any, and `mount` the place
+# `((method, ordinal), order)` on that router of the mount route that serves the next one;
+# None on the last step, the router the route itself is on.
+Router = tuple[tuple[str, str, int], Path]
+Place = tuple[tuple[Router | None, tuple[tuple[str, int], Any] | None], ...]
 # The place of a route on a router nothing names.
 ANY_ROUTER: Place = ((None, None),)
 
@@ -431,9 +433,9 @@ class MountReader:
                     reached.append(joined)
                     for own in self._prefixes(mount, way, joined):
                         for parent in self._parents(at, joined, mounting | {mount.key}):
-                            found.append(self._behind(parent, own, at, made))
+                            found.append(self._behind(parent, own, at, _router(made, path)))
         if self._unmounted(path, made[1], reached, frozenset()):
-            found.append(replace(ROOT, places=frozenset({((_router(made), None),)})))
+            found.append(replace(ROOT, places=frozenset({((_router(made, path), None),)})))
         return found
 
     def _unmounted(
@@ -566,9 +568,7 @@ class MountReader:
             return WILDCARD_MOUNT_POINT
         return None
 
-    def _behind(
-        self, parent: Prefix, own: Prefix, at: MountPath, made: tuple[str, str, int]
-    ) -> Prefix:
+    def _behind(self, parent: Prefix, own: Prefix, at: MountPath, made: Router | None) -> Prefix:
         """`own` joined behind `parent`, at the weaker of their two words. The router `made`
         is served from the parent's, at the mount route's place there (`Place`): the parent
         tries its own routes and the mount route in their order, so a mounted router's routes
@@ -584,7 +584,7 @@ class MountReader:
             else None
         )
         places = frozenset(
-            (*place[:-1], (place[-1][0], mount), (_router(made), None))
+            (*place[:-1], (place[-1][0], mount), (made, None))
             for place in parent.places or (ANY_ROUTER,)
         )
         return Prefix(
@@ -693,11 +693,20 @@ def _text_of(answer: Answer) -> tuple[str, bool] | None:
     return None
 
 
-def _router(made: tuple[str, str, int]) -> tuple[str, str, int] | None:
-    """A router as a `Place` names it: the call that made it, or None for one handed in from
-    outside — two such parameters are two names, and the caller outside the module may hand
-    both the same router, so it may be any router (`OI-263`)."""
-    return made if made[0] == "call" else None
+def _router(made: tuple[str, str, int], path: Path) -> Router | None:
+    """A router as a `Place` names it: the call that made it and the path it was reached on,
+    or None for one handed in from outside — two such parameters are two names, and the
+    caller outside the module may hand both the same router, so it may be any router
+    (`OI-263`)."""
+    return (made, path) if made[0] == "call" else None
+
+
+def same_router(router: Router, other: Router) -> bool:
+    """Whether two `Place` routers are one object: the same producer reached on agreeing
+    paths (the user's ruling, 2026-10-30; the mount join's own test, `Path.joined`). Two calls
+    of one factory helper run its producer twice, so their paths choose two calls of the
+    helper and the routers are two (final review I1)."""
+    return router[0] == other[0] and router[1].joined(other[1]) is not None
 
 
 def _identity(producer: Producer) -> tuple[str, str, int] | None:

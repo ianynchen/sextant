@@ -2321,6 +2321,33 @@ def test_vertx_two_handlers_on_one_router_from_two_methods_stay_narrowed(vertx_i
     }
 
 
+@pytest.mark.pins("mounts.a-router-is-its-producer-on-its-call-path")
+def test_vertx_two_routers_from_one_factory_helper_are_each_routers_own_row(vertx_inbound):
+    """Final review I1, the user's ruling (2026-10-30): the same object is the same producer
+    reached on the same call path. `a = make(); b = make();` runs `Router.router` twice, so
+    `GET /factory-ping` on each is its router's own answer, both `resolved`. Identified by
+    the making call alone they were one router, and `b`'s route was dropped as if `a`'s ran
+    before it."""
+    pings = [r for r in vertx_inbound if r["path"] == "/factory-ping"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in pings} == {
+        ("GET", "RouterFactory#aPing", "resolved"),
+        ("GET", "RouterFactory#bPing", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-made-on-one-router-are-rivals")
+def test_vertx_one_router_from_a_helper_given_one_path_twice_stays_narrowed(vertx_inbound):
+    """The negative of the above: one call of the helper is one router, given
+    `GET /factory-same` inside the helper and again by its caller. One router, two methods,
+    no order the code states, so each row is `narrowed`. Told apart by their call paths
+    wrongly, both would be `resolved`."""
+    same = [r for r in vertx_inbound if r["path"] == "/factory-same"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in same} == {
+        ("GET", "RouterFactory#helperSame", "narrowed"),
+        ("GET", "RouterFactory#callerSame", "narrowed"),
+    }
+
+
 def _mount_order(rows: list[dict], case: str) -> set[tuple]:
     """`(method, handler, resolution)` of every row on `MountOrder`'s `case` path."""
     return {

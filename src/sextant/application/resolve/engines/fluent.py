@@ -106,6 +106,7 @@ from sextant.application.resolve.shapes.mounts import (
     file_unread_prefix,
     mount_rules_of,
     router_producers,
+    same_router,
     unread_prefix_rows,
     weaker,
 )
@@ -1316,7 +1317,7 @@ def _meets(first: Place, then: Place) -> bool | None:
     competes with the parent's own routes at the mount route's place, so they meet on the
     outermost router both are served from, and through one mount route on the next."""
     for (router, at), (other, other_at) in zip(first, then):
-        if None not in (router, other) and router != other:
+        if router is not None and other is not None and not same_router(router, other):
             return None
         if at != other_at:
             return at is not None and other_at is not None and _tried_before(at, other_at)

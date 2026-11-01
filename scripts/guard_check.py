@@ -3293,6 +3293,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "mounts.a-router-is-its-producer-on-its-call-path": Guard(
+        what="two `Place` routers are one object only where the same producer is reached on "
+        "agreeing paths (the user's ruling, 2026-10-30; final review I1)",
+        why="without it two routers made by two calls of one factory helper are one router, "
+        "and the second's route on the same verb and path is dropped as if the first ran "
+        "before it",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="    return router[0] == other[0] and router[1].joined(other[1]) is not None\n",
+                replace="    return router[0] == other[0]  # guard disabled\n",
+            ),
+        ),
+    ),
     "stitch.the-LINKS-legend-says-what-not-evaluated-means-once": Guard(
         what='where any link end renders "not evaluated", the Links section carries one fixed '
         "sentence saying what it means and that the participant's module document says why",
