@@ -817,6 +817,66 @@ def test_an_unset_or_unread_default_keeps_the_path_with_no_peer(tmp_path: Path):
     ]
 
 
+@pytest.mark.pins("fluent.a-default-set-and-unread-leaves-no-peer")
+def test_a_default_port_set_and_unread_leaves_no_peer(tmp_path: Path):
+    """Final review I3, D02's options-object rung: `setDefaultHost("search")
+    .setDefaultPort(config.port())`. Vert.x sends `get("/q")` to `search:<unread>` and
+    `get("h", "/b")` to `h:<unread>`, so neither peer is known: each row keeps its path and
+    resolution with `peer` NULL, never the host alone at `resolved`."""
+    body = _Client()
+    made = body.options(
+        ("setDefaultHost", _SET_HOST, _string("search")),
+        ("setDefaultPort", _SET_PORT, CallArgument(kind="unresolved")),
+    )
+    client = body.create(CallArgument(kind="unresolved", source=made))
+    body.on(client, ("get", _URI, [_string("/q")]), _send())
+    body.on(client, ("post", _HOST_URI, [_string("h"), _string("/b")]), _send())
+
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", None, "/q", "resolved"),
+        ("POST", None, "/b", "resolved"),
+    ]
+
+
+@pytest.mark.pins("client_base.a-default-the-paths-dispute-is-set-and-unread")
+def test_two_factories_disputing_the_default_port_leave_no_peer(tmp_path: Path):
+    """`this.client` written by two methods whose options name one default host and two
+    default ports: which port a request goes to is not known, so `get("/a")` has no peer —
+    not `same`, the host alone, at `resolved`, as though no port had been set."""
+    owner = "com/acme/vertx/Search#"
+    first = _MODULE + method_descriptor(owner, "first", "()V")
+    second = _MODULE + method_descriptor(owner, "second", "()V")
+    query = _MODULE + method_descriptor(owner, "query", "()V")
+    facts: list = []
+    for method, port in ((first, 9200), (second, 9300)):
+        building = _Client(method)
+        made = building.options(
+            ("setDefaultHost", _SET_HOST, _string("same")),
+            ("setDefaultPort", _SET_PORT, _int(port)),
+        )
+        client = building.create(CallArgument(kind="unresolved", source=made))
+        facts += [
+            *building.sites,
+            FieldWriteFact(
+                document_id="doc_1",
+                field=owner + "client.",
+                value=CallArgument(kind="unresolved", source=client),
+                written_by=method,
+            ),
+        ]
+    sending = _Client(query)
+    request = sending.call(CLIENT, "get", _URI, 3, [_string("/a")])
+    sending.sites[-1] = sending.sites[-1].model_copy(
+        update={"receiver_field": owner + "client.", "receiver_field_kind": "instance"}
+    )
+    sending.call(REQUEST, "send", _SEND, request, [])
+    workspace = _resolve_fluent_walked(tmp_path, [*facts, *sending.sites], _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert _calls(rows) == [("GET", None, "/a", "resolved")]
+
+
 @pytest.mark.pins(
     "fluent.a-request-options-object-is-read-by-the-options-reader",
     "vertx-webclient.a-request-options-form-reads-its-options",

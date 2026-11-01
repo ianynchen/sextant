@@ -690,9 +690,10 @@ def client_defaults(
 
     `client_value` is stamped as `client_base` says (`captured_at`). The client is found by the
     producer reader with every rung a stop, as the block ladder's is; the rung's
-    `options_arg` is then read by `options_parts`. Every path must agree on a part, and a
-    part they disagree on, or an unreached client or options object, is absent: a default
-    that cannot be read is never published (spec §2a)."""
+    `options_arg` is then read by `options_parts`. Every path must agree on a part: one they
+    disagree on is set and not read (None), and one a path does not reach, or an unreached
+    client or options object, is absent. A default that cannot be read is never published
+    (spec §2a)."""
     reader = _options_reader(workspace, values, declared)
     if reader is None:
         return {}
@@ -788,8 +789,8 @@ class _Options:
 
     def defaults_of(self, site: Mapping[str, Any], slot: int | str) -> Parts:
         """The parts of the options every factory call reaching the client at `slot` of `site`
-        was handed; a part on which two paths disagree, or that one path does not reach, is
-        absent."""
+        was handed; a part on which two paths disagree is set and not read (None), and one that
+        one path does not reach is absent."""
         each: list[Parts] = []
         # WHICH factory made the client is the question, so the calls made on it in between
         # — every request it sends, `client.get(…)` — do not make it another client
@@ -852,15 +853,16 @@ class _Options:
 
 
 def _agreed(each: list[Parts]) -> Parts:
-    """The parts every path agrees on; a part one path lacks or reads otherwise is absent, and
-    no path at all is no part."""
+    """The parts every path agrees on; a part every path sets and two read otherwise is set
+    and not read (None, final review I3), a part one path lacks is absent, and no path at all
+    is no part."""
     if not each:
         return {}
     first, *rest = each
     return {
-        part: value
+        part: value if all(other[part] == value for other in rest) else None
         for part, value in first.items()
-        if all(part in other and other[part] == value for other in rest)
+        if all(part in other for other in rest)
     }
 
 

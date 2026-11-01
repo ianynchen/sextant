@@ -2320,13 +2320,15 @@ options argument by the chain reader, every call `configures` names — a call o
 declared to return one of `returns` (an inherited setter returns a supertype) — gathered as the
 object configured rather than escaping (ruling 4). Each setter's value is traced by the value
 walk: a string or integer literal, or a configuration expression; any other answer leaves that
-part set and unread. Every path must agree on a part, and a part one path does not reach is
-absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
+part set and unread. Every path must agree on a part: one every path sets and two read
+otherwise is set and unread too, and a part one path does not reach is absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
 and the port a request names none of, each on its own, and the request's own parts — root
 arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address was not
 read, takes neither. The filled parts compose one peer as stated ones do. A default set and not
 read, or never reached, fills nothing: the row keeps its path and resolution with `peer` NULL,
-since the framework never rewrites the path and an unset default cannot be proven.
+since the framework never rewrites the path and an unset default cannot be proven. That holds
+for a request naming its own host too: with its default port set and unread, its peer is
+NULL, never the host alone.
 
 **An `options: argN` capture** reads an options object a REQUEST is made from (Vert.x's
 `request(m, RequestOptions)`) with the same `setters`: its `uri` part is the `url`, its `host`

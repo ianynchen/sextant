@@ -3921,6 +3921,37 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-default-set-and-unread-leaves-no-peer": Guard(
+        what="a client default a request takes that was set and not read, or disputed, leaves "
+        "the row's peer NULL at its own resolution (D02's options-object rung; final review I3)",
+        why='without it `setDefaultHost("search").setDefaultPort(config.port())` publishes the '
+        "peer `search` at `resolved`, where Vert.x sends to `search:<unread>`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        text = defaults[part]\n        if text is None:\n            return None\n",
+                replace="        text = defaults[part]\n        if text is None:\n"
+                "            continue  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-default-the-paths-dispute-is-set-and-unread": Guard(
+        what="a part every path to the options sets, and two read otherwise, is set and not "
+        "read (None), never absent (final review I3)",
+        why="without it two factories naming two default ports read as no port set, and the "
+        "row publishes the host alone at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        part: value if all(other[part] == value for other in rest) else None\n"
+                "        for part, value in first.items()\n"
+                "        if all(part in other for other in rest)\n",
+                replace="        part: value\n"
+                "        for part, value in first.items()\n"
+                "        if all(part in other and other[part] == value for other in rest)\n",
+            ),
+        ),
+    ),
     "fluent.routes-on-different-routers-are-not-ordered-against-each-other": Guard(
         what="routes on one verb and path whose routers are two different calls neither "
         "precede nor narrow each other: Vert.x orders routes within one router",
@@ -7934,7 +7965,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        if text is not None:\n            filled[part] = _part_argument(text)\n",
+                find="        if text is None:\n            return None\n"
+                "        filled[part] = _part_argument(text)\n",
                 replace="        filled[part] = _UNRESOLVED_ARGUMENT if text is None else "
                 "_part_argument(text)  # guard disabled\n",
             ),
@@ -7997,8 +8029,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="        if all(part in other and other[part] == value for other in rest)\n",
-                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+                find="        part: value if all(other[part] == value for other in rest) else None\n",
+                replace="        part: value  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

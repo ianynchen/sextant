@@ -1619,9 +1619,10 @@ def _composed_address(
         if captures.get(_DESTINATION) == _UNREAD_DESTINATION:
             return None, read[1], read[2]
         if context.client_base is not None and context.client_base["join"] == FILL_AUTHORITY:
-            return _with_stated_authority(
-                read, _with_client_defaults(read, captures, context), context
-            )
+            filled = _with_client_defaults(read, captures, context)
+            composed = _with_stated_authority(read, captures if filled is None else filled, context)
+            # A default the request takes was set and not read: WHO is called is not known.
+            return composed if filled is not None else (None, composed[1], composed[2])
         return _against_client_base(
             _with_stated_authority(read, captures, context), captures, context
         )
@@ -1742,7 +1743,7 @@ def _with_client_defaults(
     address: tuple[str | None, str | None, str],
     captures: dict[str, Any],
     context: _DeriveContext,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """`captures` with the client's default host and port filling the parts the request does
     not name — the `fill_authority` join, Vert.x's (CP-56 row group (e)): `x(uri)` takes both,
     `x(host, uri)` the port only, `x(port, host, uri)` neither, and a `host(…)` or `port(…)`
@@ -1751,10 +1752,11 @@ def _with_client_defaults(
     names no host of its own, since nothing then says it was not absolute.
 
     The defaults are the client's options object's (`client_defaults`). A default that was set
-    and not read, or that no setter reached, fills nothing: the row keeps its path and its
-    resolution with no peer, because Vert.x never rewrites the path and an unset default
-    (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed into one
-    peer by `_with_stated_authority`, as a request's own parts are."""
+    and not read, or that the paths dispute, is one Vert.x sends to: None, and the row keeps its
+    path and its resolution with no peer (D02, final review I3), never the other part alone.
+    One no setter reached fills nothing, because Vert.x never rewrites the path and an unset
+    default (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed
+    into one peer by `_with_stated_authority`, as a request's own parts are."""
     peer, path, _ = address
     if peer is not None or context.workspace is None:
         return captures
@@ -1769,9 +1771,12 @@ def _with_client_defaults(
     defaults = client_defaults(context.workspace, context.values, client, context.client_base or {})
     filled = dict(captures)
     for part in missing:
-        text = defaults.get(part)
-        if text is not None:
-            filled[part] = _part_argument(text)
+        if part not in defaults:
+            continue
+        text = defaults[part]
+        if text is None:
+            return None
+        filled[part] = _part_argument(text)
     return filled
 
 
