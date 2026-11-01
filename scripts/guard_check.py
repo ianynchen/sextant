@@ -3961,7 +3961,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        if None not in (router, other) and router != other:\n"
+                find="        if router is not None and other is not None and not same_router(router, other):\n"
                 "            return None\n",
                 replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -3992,8 +3992,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find='    return made if made[0] == "call" else None\n',
-                replace="    return made  # guard disabled by scripts/guard_check.py\n",
+                find='    return (made, path) if made[0] == "call" else None\n',
+                replace="    return (made, path)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -4007,8 +4007,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="            (*place[:-1], (place[-1][0], mount), (_router(made), None))\n",
-                replace="            ((_router(made), None),)  # guard disabled by scripts/guard_check.py\n",
+                find="            (*place[:-1], (place[-1][0], mount), (made, None))\n",
+                replace="            ((made, None),)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
