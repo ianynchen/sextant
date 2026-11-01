@@ -1,0 +1,29 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-vertx-web</artifactId>
+  <version>1.0.0</version>
+  <!-- Vert.x Web and WebClient 5.0.0 (spec 2026-10-30 §3f), in their own module so the
+       other fixtures' pinned row counts do not move. Compiled, never run. It depends on
+       the sibling jar `orders-vertx-web-base`, which `tests/fixture_stub.py` installs
+       into the local repository before anything compiles: the shapes in that jar are
+       outside this module, and this module's facts must not hold their bodies.
+       Built with JDK 21 (javac 27 renumbers lambdas). -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <!-- Parameter names reach the facts, so a hole built from `sku` is published as `{sku}`. -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>io.vertx</groupId><artifactId>vertx-web</artifactId><version>5.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>io.vertx</groupId><artifactId>vertx-web-client</artifactId><version>5.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.example</groupId><artifactId>orders-vertx-web-base</artifactId><version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>

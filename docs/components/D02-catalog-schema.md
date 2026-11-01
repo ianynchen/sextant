@@ -1079,6 +1079,16 @@ time for a destination that carries no verb.
 - **`all_methods: []` declares a verbless protocol.** A topic has no verb to enumerate, so
   the catalog states an empty set rather than a method list: one row per mapping, `method`
   NULL, and `resolution` untouched by the absence — the destination was read either way.
+- **`verbless_serves: any` says a verbless mapping serves every method of an OPEN set**
+  (spec 2026-10-30 §3a; the word the `fluent` style spells the same). With `all_methods: []`
+  the mapping is ONE row, `method` NULL, marked `method_kind = any`, so the linker joins a
+  call of any verb to it; without the word a NULL method still means "nobody read the verb".
+  A closed enum (Spring's) keeps the fan-out over `all_methods`.
+- **`pattern_from` names attributes whose value is a regular expression, not a path.** A
+  mapping carrying one derives a row whose path is the expression verbatim, `resolved`,
+  `path_kind = pattern`: the type-level prefix is not joined to it, no canonical rule touches
+  it, and the linker never links it by path. It wins over `path_from` (Quarkus's processor
+  reads `regex` first, 3.17.5).
 - **The `reply` block** `{annotation, destination_from, payload: return}` derives one
   additional outbound row per listed reply destination named on the annotation — one row
   per destination, mirroring the multi-valued rule above. The reply row's `caller` is the
@@ -2078,6 +2088,84 @@ the table does not name is no verb: `method` NULL at `unresolved`, never the roo
 `verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
 refused at load.
 
+**`matches.refuses_unrooted_path: true`** (DR-6, Vert.x spec §3a) declares that the framework
+THROWS on an inbound path that is empty or has no leading `/` (Vert.x's `RouteImpl.checkPath`),
+where another repairs it. A fully read path of that shape derives no row, is never passed to
+`canonical_http_path`, and is filed as a `refused_registration` open question (D01). Absent, the
+leading-slash repair applies as before. A value that is not a boolean is refused at load.
+
+**Route words** (Vert.x spec §3a, §3f; `vertx-web.yml`). Each names no framework type:
+- **`matches.verbless_serves: any`** is the `annotation_driven` word of the same name (§2's
+  `annotation_driven`): an inbound chain that never captured `http_method` serves every method,
+  so its one row carries `method` NULL and `method_kind = any`. Absent, a NULL method still
+  means nobody read the verb.
+- **`matches.pathless_serves: <path>`** is the path, in the framework's own spelling, that an
+  inbound chain naming no address serves (Vert.x's `/*`), `resolved`: the framework stores no
+  path, and that is exact. Anything but a non-empty string is refused at load.
+- **`url_is: pattern | address`**, a literal capture beside `url`, says what the captured
+  address IS, last wins: `pattern` is a regular expression the framework matches, published
+  verbatim with `path_kind = pattern`, never refused as unrooted, canonicalised or linked by
+  path, and a mount prefix goes in front of it as written, with no `path_join`; `address`, the
+  default, lets a later step undo an earlier pattern. (`annotation_driven` spells the same marker `pattern_from`, an attribute list; the
+  column is `path_kind`.) Any other value is refused at load.
+- **`serves: true | false`**, a literal capture, says whether the chain derives a row. On an
+  inbound route it is whether the framework serves it: `serves: false` (`disable()`) derives
+  nothing until a later `serves: true` (`enable()`), and a `poisons: [serves]` step ends it for
+  good. On an outbound root it says whether the root alone names an address: `serves: false`
+  (`request(m, RequestOptions)`) derives nothing until a uri is read, from a later `uri(…)` or
+  the options object (`options: argN`, below). Anything but a boolean is refused at load.
+- **A step's `repeats: [<field>, …]`** makes the step ADD to a capture rather than overwrite it
+  (spec §3g item 1): `method(GET).method(DELETE)` accumulates both verbs, one row each in call
+  order, a repeated verb once; `handler(a).handler(b)` keeps both handlers in order for
+  `passes_on`. Each name must be a field the same step captures from an `argN` position; a root
+  may not declare it, since a root starts the chain. Anything else is refused at load.
+
+**`matches.passes_on: [{owner, method}, …]`** (Vert.x spec §3b) declares the calls that pass a
+request ON to the next handler — Vert.x's `RoutingContext.next()`, one entry per owner. A route
+chain's handlers run in order and the row names the FIRST that does not pass on: a handler
+passes on where a declared call is reached on the context it received (in its own body, in a
+module method it hands the context to, or in a lambda that captured it), answers where its body
+is in the module and none is, and is not readable here where it hands the context to a method
+whose body is not read, or stores it in a field or hands it to a constructor — its row is then
+`partial`, with a `handler_pass_through` open question (D01) naming that method, field or
+constructor. A chain whose every handler passes on derives no row. Beside it,
+**`framework_handlers: [<package>, …]`** names the packages (and their subpackages) whose
+handler OBJECTS pass on by the framework's contract, and **`handler_methods: [<name>, …]`** the
+method the framework calls on a handler object (`handle`), so `new X(…)` runs `X.handle`. A
+handler object the producer walk pins to no call is identified by the declared static type of
+the parameter (and, where that says only `Handler`, of what each caller hands it), field or
+factory return it came from; an object of any other type is not readable here. Routes on one verb
+and path are then ordered as the framework tries them: within one method by their root calls'
+order, by literal **`order: argN`** captures, after every other for **`order: last`**; candidates
+in no known order are each a row, `narrowed`. Absent, every handler answers and a chain's row
+names its first. A malformed entry, or `framework_handlers`/`handler_methods` without
+`passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
+
+**`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
+router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, refuses?}, …]`** (Vert.x spec
+§3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
+mount that received that same router — the object one producer made, reached along one call
+path. The producers are derived from the facts by type: every call returning a `router_type`
+whose body the module does not read, and every constructor of a class the hierarchy shows
+implementing one; a module method returning a router is walked into, never a stop. A route's
+root receiver and a mount's `router_arg` are each followed to that producer with the producer
+reader (calls made on the router do not open `escapes`), and where the two paths agree the
+mount's path is read WITHIN the joined path, so a helper that builds and mounts a router per
+call gives each caller's routes that caller's prefix. The prefix is the mount path — the path
+of the route the mount call is made on (`prefix_from: receiver_path`, which must name a
+declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
+`/` before it, joined by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s).
+Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
+and a router no mount received serves at its root, as read. A mount path not read whole gives
+the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by
+path, with a `mount_prefix` open question (D01) naming the mount call and the argument its
+prefix was read at. A route reached only through a refused mount derives no row; a router
+reached on one path through a mount and on another through none serves under both. `refuses` lists what the framework throws on — `exact` (a path with no trailing
+`wildcard`), `pattern` (a pattern path), `wildcard` (a mount point ending in it) — and such a
+mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
+entry, either key without the other, or a `prefix_from` mount that is not a terminal, is
+refused at load.
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own
@@ -2235,6 +2323,45 @@ a position that is not a non-negative integer, an empty ladder, a call naming no
 that is not a list of well-formed entries. The interim word `relative_to_client_base` is folded into this
 key and refused at load.
 
+**The options-object rung** (Vert.x spec 2026-10-30 §3d, §3g item 7; `client-models/vertx-web.yml`)
+is the second shape a ladder may take, for a client configured by an OBJECT handed to its
+factory rather than by a block — `WebClient.create(vertx, options)`:
+
+```yaml
+client_base:
+  client_arg: receiver            # the client is the receiver of the chain's root call
+  ladder:  [{ owner, method, options_arg, descriptor? }]   # the factory, the options argument
+  setters: [{ owner, method, part: host | port | uri, value_arg, descriptor? }]
+  configures: [{ owner, returns: [types] }]   # optional: calls handing back the same object
+  join: fill_authority
+```
+
+One ladder is one shape: a ladder holding any `options_arg` rung is an options ladder, every
+rung must be one, it declares `setters` (never `setter` or `may_set_base`) and the join
+`fill_authority`; a block ladder's join is `replace_last_segment`. `client_arg` may be
+`receiver` here, the root call's receiver (`client.get(…)`), beside an index of the executing
+call. The client is found by the producer reader with every rung a stop, asking which object
+it is (`which_object`: the requests sent on it do not make it another client); the rung's
+options argument by the chain reader, every call `configures` names — a call on an options type
+declared to return one of `returns` (an inherited setter returns a supertype) — gathered as the
+object configured rather than escaping (ruling 4). Each setter's value is traced by the value
+walk: a string or integer literal, or a configuration expression; any other answer leaves that
+part set and unread. Every path must agree on a part: one every path sets and two read
+otherwise is set and unread too, and a part one path does not reach is absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
+and the port a request names none of, each on its own, and the request's own parts — root
+arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address was not
+read, takes neither. The filled parts compose one peer as stated ones do. A default set and not
+read, or never reached, fills nothing: the row keeps its path and resolution with `peer` NULL,
+since the framework never rewrites the path and an unset default cannot be proven. That holds
+for a request naming its own host too: with its default port set and unread, its peer is
+NULL, never the host alone.
+
+**An `options: argN` capture** reads an options object a REQUEST is made from (Vert.x's
+`request(m, RequestOptions)`) with the same `setters`: its `uri` part is the `url`, its `host`
+and `port` the request's own, each only where the chain captured none of that field itself (a
+later step wins), and a read uri sets `serves: true`. Refused at load in a catalog whose
+`client_base` declares no `setters`.
+
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is
 LAST-WINS — a repeated step overwrites its own earlier value — which is right for a url and
@@ -2324,6 +2451,31 @@ NULL**, never the path alone — and a `url` capture that was REACHED and could 
 does the same, for the same reason: half an address presented as the whole one names a URL
 the module never calls. A `url` capture never reached at all is no claim, and the base then
 stands alone as the address.
+
+**A root's or a step's own `captures` may also name `host` and `port`** (Vert.x spec
+2026-10-30 §3d), each an `argN` position: the authority's two parts where a call names them
+apart from its path (`client.get(8080, "inventory", "/stock")`). They compose with the `url`
+into ONE peer, `host` or `host:port` where a port is stated, which is the authority CP-2
+splits an absolute URL into, so that call and `getAbs("http://inventory:8080/stock")` have
+the same peer. Each part replaces only that part of the authority the address already holds,
+last wins (Vert.x applies a request's own `host` and `port` over an absolute URL's, CP-56 row
+130). A port with neither a stated host nor one in the address is no peer: the host is a
+client default, which is never published. Each part is traced to its source as the `url`
+is (the literal, the field ladder, then the backward walk with no identity entries, so a host
+handed in as a parameter is its callers' literal). The parts are then the address the
+absolute form of the same call carries, scheme-relative, read by the reader that reads that
+form, so the two forms publish one row: `get(9200, "${search.host}", "/q")` and
+`getAbs("http://${search.host}:9200/q")` agree. A part captured and not read leaves the peer
+NULL and the row `partial`, the path kept. A uri whose first piece went unread, which `url_of`
+writes `<host>…`, keeps that piece as the hole `{}` once a host is stated. Both count as
+address fields against `channel` (below).
+
+**A root's own `captures` may say `destination: unread`** (Vert.x Task 12 review), the one
+literal the word takes: the framework sends the chain's request to an address the code hands
+it apart from the URL, which is not read here (Vert.x's `SocketAddress` forms; CP-56 rows
+325-326). The row then has no peer, whatever its URL's authority or a later `host`/`port`
+step names, and no client base is joined to it; the path is read as any uri is. It names no
+framework type.
 
 `baseUrl` sits BEFORE the row that roots the chain, so a chain's captures are folded from
 its PRE-ROOT prefix too — the same `result → receiver` link followed backward from the

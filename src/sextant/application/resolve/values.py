@@ -342,6 +342,12 @@ class Answer:
     # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
     # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
     narrowed: bool = False
+    # **Which parameter an `external` answer ended at**, `(method, index)` — set only by
+    # `_Walk._parameter` where nothing in the module binds it, for the producer reader to
+    # hand on (`Producer.parameter`). Not part of what the answer IS, so it is outside
+    # equality: two `external` answers at two parameters are still one answer to every
+    # reader that deduplicates them, exactly as before it existed.
+    parameter: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -376,6 +382,9 @@ class Producer:
     * `ended_at` — the `Answer` itself, where the path ends at a value the code states
       (`literal`, `expression`, `absent`): not a call anyone built, and kept whole so a
       literal end still carries its literal.
+
+    `parameter` says which parameter a path ended at, beside an `external` reason or alone
+    where the reader asked the walk to stop there (`stop_at_parameters_of`).
     """
 
     caller: str | None = None
@@ -394,6 +403,12 @@ class Producer:
     # A branch was passed through on the way (`_Walk._passed_through`): the chain is the
     # shared receiver's, and which of the branch's own calls ran is not known.
     inexact: bool = False
+    # The parameter a path ENDED at, `(method symbol, parameter index)`: one nothing in the
+    # module calls (with `reason` `external`), or one of a method the reader named in
+    # `stop_at_parameters_of` (with no reason — the path ended where it was asked to). After
+    # a lambda's capture crossing, the method named is the CAPTURING method, never the body.
+    # None everywhere else.
+    parameter: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -427,7 +442,10 @@ class ValueIndex:
     # captured them (`value_index`, and `OI-150` for what it cost to be missing). The walk
     # treats the two identically because they ARE identical to it — a parameter, and the
     # sites that hand it a value — and a capture is one calling context like any other.
-    callers: dict[tuple[str, int], tuple[tuple[str, int], ...]]
+    # Each entry is `(caller, ordinal, argument)`: the site and WHICH of its arguments is
+    # the parameter. For a call that is the parameter's own index; for an instance lambda's
+    # capture it is one past it, the site's first argument being the body's `this` (`OI-266`).
+    callers: dict[tuple[str, int], tuple[tuple[str, int, int], ...]]
     # Every method's declared PARAMETER NAMES, by symbol — what a hole in a template is
     # named after (`_joined`). The compiler records them (`local_variable_names`), the
     # signature carries them, and a position with no recorded name is `None` rather than a
@@ -577,7 +595,7 @@ def value_index(workspace: Workspace) -> ValueIndex:
 
     producers: dict[tuple[str, int], list[int]] = {}
     returns: dict[tuple[str, int], list[tuple[int, str]]] = {}
-    callers: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    callers: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
     writers: dict[str, list[tuple[str, int]]] = {}
     for edge in workspace.query("value_edges"):
         kind = str(edge["kind"])
@@ -597,7 +615,9 @@ def value_index(workspace: Workspace) -> ValueIndex:
             )
         elif kind == "bound_to_parameter":
             parameter = (str(edge["to_symbol"]), int(str(edge["to_index"])))
-            callers.setdefault(parameter, []).append((method, int(str(edge["to_ordinal"]))))
+            callers.setdefault(parameter, []).append(
+                (method, int(str(edge["to_ordinal"])), parameter[1])
+            )
         elif kind == "written_by":
             # The sixth edge: `binding -> (writing method, its parameter N)`. Several
             # writers of one binding are several entries, which is what the walk then
@@ -621,13 +641,19 @@ def value_index(workspace: Workspace) -> ValueIndex:
     # The facts carry the whole edge already, which is why this is a fold and not a schema
     # change: a `lambda` entry of the argument grammar names its body and how many values it
     # captured, and the value it came from was PRODUCED by the capture site, whose arguments
-    # are those values in order. So body parameter *i* is argument *i* of the capture site —
-    # identity, measured on four shapes, and `captures` corroborates the count rather than
-    # being trusted alone.
+    # are those values in order. **The captures are the site's LAST `captures` arguments**
+    # (`OI-266`): an instance body's capture site hands `this` first, and `this` becomes the
+    # body's receiver rather than its parameter 0 — D00's `captures` is the site's argument
+    # count minus one for exactly that body. So body parameter *i* is argument
+    # *i + (arguments - captures)*: *i* for a static body, *i + 1* for an instance one. Taking
+    # *i* for both bound every value an instance lambda closed over to its neighbour's
+    # parameter; vertx-examples' `sqlclient` published `POST /products` as answered by
+    # `handleGetProduct`, at `resolved`.
     #
     # Parameters at or past the capture count are NOT bound here and must not be: those are
     # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
-    # answer for them.
+    # answer for them. A bound method reference (`captures` 0) binds none: its one argument
+    # is the receiver.
     for (method, _), site in sites.items():
         for captured in _captures(site["arguments"]):
             # The entry names its body BARE, and every index here is keyed on full symbols.
@@ -637,12 +663,15 @@ def value_index(workspace: Workspace) -> ValueIndex:
             body = with_descriptor(method, str(captured["symbol"]))
             count = int(str(captured["captures"]))
             source = captured.get("source")
-            if not count or source is None:
+            if count <= 0 or source is None:
                 continue
             for maker in producers.get((method, int(str(source))), ()):
                 bound = (sites.get((method, maker)) or {}).get("arguments") or []
+                receiver = max(len(bound) - count, 0)
                 for position in range(min(count, len(bound))):
-                    callers.setdefault((body, position), []).append((method, maker))
+                    callers.setdefault((body, position), []).append(
+                        (method, maker, receiver + position)
+                    )
 
     parameters: dict[str, tuple[str | None, ...]] = {}
     for row in workspace.query("method_declarations"):
@@ -916,6 +945,7 @@ def producers_of(
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
+    stop_at_parameters_of: AbstractSet[str] = frozenset(),
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -965,6 +995,13 @@ def producers_of(
     on its result in turn (`_Walk._configured_on`). A call after the use never joins: the
     window `_Walk._through` reads is the same one.
 
+    **A path that ends at a parameter names it** (Vert.x spec 2026-10-30 §3b):
+    `Producer.parameter` is the `(method, index)` an `external` end reached where nothing in
+    the module binds it. **`stop_at_parameters_of` ends the walk at a parameter of a named
+    method** instead of crossing to its callers, for a reader asking whether a value came
+    from that parameter — a handler's context — rather than from where its callers got it.
+    The stop is one set lookup per parameter crossing; empty, the default, stops nothing.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
@@ -975,6 +1012,8 @@ def producers_of(
         along_receivers=along_receivers,
         past_accessors=past_accessors,
         configuring=configuring,
+        stop_at_parameters_of=stop_at_parameters_of,
+        parameters_apart=True,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -982,7 +1021,7 @@ def producers_of(
         if answer.kind == _PRODUCED:
             found.append(replace(answer.value, inexact=True) if answer.inexact else answer.value)
         elif answer.kind == UNRESOLVED:
-            found.append(Producer(reason=answer.reason))
+            found.append(Producer(reason=answer.reason, parameter=answer.parameter))
         else:
             found.append(Producer(ended_at=answer))
     return tuple(dict.fromkeys(found))
@@ -1003,6 +1042,14 @@ class Path:
         """Both paths as one, or None where they made different choices somewhere."""
         merged = _combine(self.trail, other.trail)
         return None if merged is None else Path(merged, self.entered | other.entered)
+
+    def entering(self, callee: str, caller: str, ordinal: int) -> "Path | None":
+        """This path with one more choice made: that `callee` was run by the call at
+        `(caller, ordinal)` — the step a descent into that call's return writes (`_entered`).
+        None where the path already chose another call of `callee`."""
+        step = _Step((_CALLER_OF, callee), f"{caller}@{ordinal}")
+        merged = _combine(self.trail, (step,))
+        return None if merged is None else Path(merged, self.entered | {step})
 
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
@@ -1029,6 +1076,8 @@ def producer_paths(
     along_receivers: bool = False,
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
+    stop_at_parameters_of: AbstractSet[str] = frozenset(),
+    which_object: bool = False,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1042,13 +1091,24 @@ def producer_paths(
     call the descent came through. A path that descends into ONE helper on two different
     calls cannot be held by one binding, which is the M-1 ruling's own bound; the path
     records which steps were written for an entry (`Path.entered`), so a reader can tell
-    that bound from two paths through different callers (`Path.two_calls_of_one_helper`)."""
+    that bound from two paths through different callers (`Path.two_calls_of_one_helper`).
+
+    **`which_object` is for a reader asking "which object is this"** (Vert.x spec 2026-10-30
+    §3c), the object reader's own switch (`_Walk._objects`): a call made ON the value does not
+    make it another object, so the `escapes` window does not apply — a router given its
+    routes and then mounted is the router its producer made, routes and all. It ignores no
+    call that hands back a DIFFERENT object: that object is the call's result, and a walk
+    from it ends at that call, so the identity ends there. Off, the default, every reader
+    keeps the window it had."""
     walk = _Walk(
         index,
         declared=declared,
         along_receivers=along_receivers,
         past_accessors=past_accessors,
+        which_object=which_object,
         configuring=configuring,
+        stop_at_parameters_of=stop_at_parameters_of,
+        parameters_apart=True,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1056,7 +1116,7 @@ def producer_paths(
         if answer.kind == _PRODUCED:
             producer = replace(answer.value, inexact=True) if answer.inexact else answer.value
         elif answer.kind == UNRESOLVED:
-            producer = Producer(reason=answer.reason)
+            producer = Producer(reason=answer.reason, parameter=answer.parameter)
         else:
             producer = Producer(ended_at=answer)
         entered = _entered(trail, index)
@@ -1185,6 +1245,8 @@ class _Walk:
         which_object: bool = False,
         configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
+        stop_at_parameters_of: AbstractSet[str] = frozenset(),
+        parameters_apart: bool = False,
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -1206,6 +1268,13 @@ class _Walk:
         # the chain reader gathers it into the chain (`_configured_on`). Empty for every other
         # reader.
         self._configuring = frozenset(configuring)
+        # The methods whose parameters END a path (`producers_of(..., stop_at_parameters_of=)`)
+        # rather than cross to their callers. Empty for every other reader.
+        self._stop_at_parameters_of = frozenset(stop_at_parameters_of)
+        # The producer reader (`producers_of`, `producer_paths`): two ends that differ only in
+        # the parameter an `external` answer ended at are two ends (`_distinct`). False for
+        # every other reader, whose answers stay exactly what they were.
+        self._parameters_apart = parameters_apart
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
         self._which_object = which_object
@@ -1303,8 +1372,8 @@ class _Walk:
     ) -> tuple[_Reached, ...]:
         method, ordinal = str(site["caller"]), int(str(site["ordinal"]))
         if slot == RECEIVER:
-            # A receiver read from a static field is that field (D00 §5's
-            # `receiver_field`), resolved as the same field read as an ARGUMENT is: the
+            # A receiver read from a static field, or from a field of `this`, is that field
+            # (D00 §5's `receiver_field`), resolved as the same field read as an ARGUMENT is: the
             # read's own value id names nothing any other fact joins to.
             field = site.get("receiver_field")
             if field is not None:
@@ -2217,6 +2286,13 @@ class _Walk:
                 return _only(trail, _unresolved(NOT_READABLE))
             return self._resolve((_SLOT, method, constructed, slot), trail, frames)
         site = (method, min(producers))
+        # **A call that returns its own receiver hands back that same object** (ruling 4,
+        # spec 2026-10-30), for the reader asking which object a value is (`which_object`):
+        # `router.errorHandler(500, h)` IS `router`, so the walk goes on through its receiver.
+        # The value walk declares no such call and never reaches this.
+        row = self._index.sites.get(site)
+        if self._which_object and row is not None and _call_of(row) in self._configuring:
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).
         # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object
@@ -2613,6 +2689,19 @@ class _Walk:
                 return rule
         return None
 
+    def _distinct(self, reached: list[_Reached]) -> tuple[_Reached, ...]:
+        """`reached` with repeats removed, keeping the first of each. For the producer reader
+        two `external` answers at two parameters are two ends — the parameter is outside the
+        answer's equality (`Answer.parameter`), so it is keyed here too: two field writers
+        nothing calls, `m1(p)` and `m2(q)`, name both. Every other reader dedupes on the
+        answer alone, as before, since `resolve_site` does not dedupe again and two equal
+        `external` answers would be two bindings saying one thing."""
+        if not self._parameters_apart:
+            return tuple(dict.fromkeys(reached))
+        return tuple(
+            {(path, answer, answer.parameter): (path, answer) for path, answer in reached}.values()
+        )
+
     def _parameter(
         self, method: str, index: int, trail: _Trail, frames: "_Frames"
     ) -> tuple[_Reached, ...]:
@@ -2625,23 +2714,33 @@ class _Walk:
 
         No edge at all is `external`: nothing this workspace scanned binds this parameter,
         so whatever it receives comes from outside what was scanned — a framework calling
-        an entry point, or a caller in a dependency nobody read.
+        an entry point, or a caller in a dependency nobody read. The answer carries which
+        parameter it was (`Answer.parameter`), for the producer reader to name.
+
+        A parameter of a method the producer reader named (`stop_at_parameters_of`) is where
+        the path ends, before any caller is read: the reader asked whether the value came
+        from this parameter, and every crossing past it answers a different question. **The
+        frame answers first**: inside a callee the walk entered through its return, the
+        parameter IS the argument at that call — `log(ctx).next()` — and stopping there would
+        name a handler that never received this value.
         """
         frame = self._frame_in(frames, method)
         if frame is not None:
             return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
+        if method in self._stop_at_parameters_of:
+            return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
         callers = self._index.callers.get((method, index), ())
         if not callers:
-            return _only(trail, _unresolved(EXTERNAL))
+            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
         reached: list[_Reached] = []
-        for caller, ordinal in callers:
+        for caller, ordinal, argument in callers:
             step = _Step((_CALLER_OF, method), f"{caller}@{ordinal}")
             merged = _combine(trail, (step,))
             if merged is None:
                 # This path already crossed out of `method` through a different call, so
                 # this caller is not on it. Another slot's path holds that caller.
                 continue
-            reached.extend(self._resolve((_SLOT, caller, ordinal, index), merged, frames))
+            reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         return tuple(reached)
 
     def _binding(
@@ -2785,7 +2884,7 @@ class _Walk:
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
-        return tuple(dict.fromkeys(reached))
+        return self._distinct(reached)
 
     def _object_site(
         self, symbol: str, frames: "_Frames", reader: str | None
@@ -2982,7 +3081,7 @@ class _Walk:
                             if target is not None
                             else [(path, replace(answer, inexact=True)) for path, answer in answers]
                         )
-        return tuple(dict.fromkeys(reached))
+        return self._distinct(reached)
 
     def _written(
         self,

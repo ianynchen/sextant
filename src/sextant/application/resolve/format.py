@@ -659,6 +659,8 @@ def _question(endpoint: dict[str, Any], answer: _Answer) -> dict[str, Any]:
         "protocol": endpoint.get("protocol"),
         "method": endpoint.get("method"),
         "path": endpoint.get("path"),
+        "method_kind": endpoint.get("method_kind"),
+        "path_kind": endpoint.get("path_kind"),
         "question": "format_conflict",
         "candidates": json.dumps(answer.candidates, sort_keys=True, separators=(",", ":")),
         "evidence": answer.trail,

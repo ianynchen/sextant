@@ -19,6 +19,7 @@ every other test here has one slot, and a per-position walk answers those exactl
 as a per-path one does.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,7 @@ _MANY = "([Ljava/lang/String;)V"
 _MAKES_STRING = "()Ljava/lang/String;"
 _MAKES_OBJECT = "()Ljava/lang/Object;"
 _TAKES_STRING = "(Ljava/lang/String;)V"
+_TAKES_TWO_STRINGS = "(Ljava/lang/String;Ljava/lang/String;)V"
 
 _REGISTRAR = _PKG + "Registrar#"
 _CALLER = _PKG + "Caller#"
@@ -839,6 +841,130 @@ def _facts() -> list[Fact]:
         _void(_CLOSING, "body", _TAKES_STRING),
         _site(
             _symbol(_CLOSING, "body", _TAKES_STRING),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        # The capture's three shapes javac emits (`OI-266`). An INSTANCE lambda — one that
+        # reads `this` — is created by a capture site whose FIRST argument is `this`, which
+        # becomes the body's receiver and not its parameter 0 (D00, the `lambda` row:
+        # `captures` is the site's argument count minus one for an instance body). Here
+        # `installOnThis` closes over two literals beside `this`.
+        _declared(_CLOSING, "installOnThis", "()V"),
+        _site(
+            _symbol(_CLOSING, "installOnThis", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "test", _MAKES_OBJECT),
+            arguments=[
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="string", value="first"),
+                CallArgument(kind="string", value="second"),
+            ],
+            result=6,
+        ),
+        _site(
+            _symbol(_CLOSING, "installOnThis", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+                    captures=2,
+                    source=6,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+        _void(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+        _site(
+            _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        # A STATIC lambda closing over two values: the capture site's arguments are exactly
+        # the captures, so body parameter i is argument i.
+        _declared(_CLOSING, "installStatic", "()V"),
+        _site(
+            _symbol(_CLOSING, "installStatic", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "test", _MAKES_OBJECT),
+            arguments=[
+                CallArgument(kind="string", value="one"),
+                CallArgument(kind="string", value="two"),
+            ],
+            result=4,
+        ),
+        _site(
+            _symbol(_CLOSING, "installStatic", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+                    captures=2,
+                    source=4,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+        _void(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+        _site(
+            _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        # A method reference BOUND to a receiver — `named::target`: the capture site's one
+        # argument is the receiver, `captures` is 0, and `target`'s parameter 0 is the
+        # interface's own argument, handed in by whoever invokes the function.
+        _declared(_CLOSING, "bindReference", "()V"),
+        _site(
+            _symbol(_CLOSING, "bindReference", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "accept", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="string", value="the-receiver")],
+            result=3,
+        ),
+        _site(
+            _symbol(_CLOSING, "bindReference", "()V"),
+            1,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CLOSING, "target", _TAKES_STRING),
+                    captures=0,
+                    source=3,
+                )
+            ],
+        ),
+        _declared(_CLOSING, "target", _TAKES_STRING),
+        _void(_CLOSING, "target", _TAKES_STRING),
+        _site(
+            _symbol(_CLOSING, "target", _TAKES_STRING),
             0,
             _ONE_TARGET,
             kind="virtual",
@@ -2125,6 +2251,41 @@ def test_a_lambda_body_reaches_the_value_it_closed_over(walked):
     """
     bindings = _bindings(walked, _symbol(_CLOSING, "body", _TAKES_STRING), 0)
     assert [binding.slots[0].value for binding in bindings] == ["closed-over"]
+
+
+@pytest.mark.pins("values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with")
+def test_an_instance_lambda_binds_each_capture_to_its_own_parameter(walked):
+    """**`OI-266`, Critical on real input.** An instance lambda's capture site hands `this`
+    FIRST, and `this` becomes the body's receiver, so the body's parameter i is the site's
+    argument i + 1. Binding argument i to parameter i read every captured value one
+    position off: vertx-examples' `sqlclient` published `POST /products` as answered by
+    `handleGetProduct`, at `resolved`, because three captured handlers each took their
+    neighbour's value.
+
+    `installOnThis` closes over `first` and `second` beside `this`; each body parameter
+    reads its own literal, not `this` and not the neighbour.
+    """
+    body = _symbol(_CLOSING, "bodyOnThis", _TAKES_TWO_STRINGS)
+    assert [b.slots[0].value for b in _bindings(walked, body, 0)] == ["first"]
+    assert [b.slots[0].value for b in _bindings(walked, body, 1)] == ["second"]
+
+
+@pytest.mark.pins("values.a-lambda-body-reaches-the-values-it-CAPTURED")
+def test_a_static_lambda_binds_each_capture_to_the_same_position(walked):
+    """A static lambda's capture site hands the captures and nothing else, so nothing is
+    skipped: parameter i is argument i. Skipping a receiver the site does not have would
+    read `two` for parameter 0 and nothing for parameter 1."""
+    body = _symbol(_CLOSING, "bodyStatic", _TAKES_TWO_STRINGS)
+    assert [b.slots[0].value for b in _bindings(walked, body, 0)] == ["one"]
+    assert [b.slots[0].value for b in _bindings(walked, body, 1)] == ["two"]
+
+
+def test_a_bound_method_reference_binds_no_parameter_to_its_receiver(walked):
+    """`named::target` captures only its receiver (`captures` 0): `target`'s parameter 0 is
+    the function's own argument, handed in by whoever calls it, so it is `external` — never
+    the receiver the capture site was given."""
+    bindings = _bindings(walked, _symbol(_CLOSING, "target", _TAKES_STRING), 0)
+    assert _reasons(bindings) == ["external"]
 
 
 @pytest.mark.pins("values.an-UNREADABLE-constant-answers-not_readable-never-nothing")
@@ -4493,3 +4654,241 @@ def test_a_leading_hole_reached_from_two_contexts_keeps_both(fetched):
         ("expression", "{}/z"),
         ("literal", "svc-a/z"),
     ]
+
+
+# --- Where a producer path ENDS at a parameter (Vert.x Task 9) ------------------------------
+# The pass-through reader asks whether a `next()` receiver came from a handler's context
+# parameter, walking it back once per call site. Two shapes: `Chain#handle(ctx)` calls
+# `ctx.next()` directly and inside a lambda that captured `ctx`; `Chain#outer(ctx)` hands
+# `ctx` to `Chain#inner`, which calls `ctx.next()`. Nothing in the module calls `handle` or
+# `outer`: the framework does.
+_CHAIN = _PKG + "Chain#"
+_CONTEXT = _PKG + "Context#"
+_TAKES_CONTEXT = "(Lcom/acme/orders/values/Context;)V"
+_CAPTURED = "(Lcom/acme/orders/values/Context;Ljava/lang/Object;)V"
+_NEXT = (_CONTEXT, "next", "()V")
+_LOGS = "(Lcom/acme/orders/values/Context;)Lcom/acme/orders/values/Context;"
+
+
+def _chain_facts() -> list[Fact]:
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    body = _symbol(_CHAIN, "lambda$handle$0", _CAPTURED)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    relay = _symbol(_CHAIN, "relay", _TAKES_CONTEXT)
+    own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
+    return [
+        _type(_CHAIN),
+        _declared(_CHAIN, "handle", _TAKES_CONTEXT),
+        _void(_CHAIN, "handle", _TAKES_CONTEXT),
+        _site(handle, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # `u -> ctx.next()`: the capture site's argument is `ctx`, and the lambda entry names
+        # the body whose parameter 0 is that capture.
+        _site(
+            handle,
+            1,
+            ("java/lang/invoke/LambdaMetafactory#", "handle", _MAKES_OBJECT),
+            arguments=[CallArgument(kind="parameter", value=0)],
+            result=5,
+        ),
+        _site(
+            handle,
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CHAIN, "lambda$handle$0", _CAPTURED),
+                    captures=1,
+                    source=5,
+                )
+            ],
+        ),
+        _declared(_CHAIN, "lambda$handle$0", _CAPTURED),
+        _void(_CHAIN, "lambda$handle$0", _CAPTURED),
+        _site(body, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        _declared(_CHAIN, "outer", _TAKES_CONTEXT),
+        _void(_CHAIN, "outer", _TAKES_CONTEXT),
+        _site(
+            outer,
+            0,
+            (_CHAIN, "inner", _TAKES_CONTEXT),
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _declared(_CHAIN, "inner", _TAKES_CONTEXT),
+        _void(_CHAIN, "inner", _TAKES_CONTEXT),
+        _site(inner, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # `RoutingContext log(RoutingContext c) { return c; }`, and `relay(ctx)` calling
+        # `log(ctx).next()`: the walk enters `log` through its return, so `log`'s parameter is
+        # `relay`'s argument at that call.
+        _declared(_CHAIN, "log", _LOGS),
+        _returns(_CHAIN, "log", _LOGS, 0, CallArgument(kind="parameter", value=0)),
+        _declared(_CHAIN, "relay", _TAKES_CONTEXT),
+        _void(_CHAIN, "relay", _TAKES_CONTEXT),
+        _site(
+            relay,
+            0,
+            (_CHAIN, "log", _LOGS),
+            arguments=[CallArgument(kind="parameter", value=0)],
+            result=7,
+        ),
+        _site(relay, 1, _NEXT, kind="virtual", receiver=7),
+        # A handler that is itself a lambda: `route.handler(ctx -> ctx.next())` captures
+        # nothing, so its parameter 0 is what the framework hands it.
+        _declared(_CHAIN, "register", "()V"),
+        _site(
+            _symbol(_CHAIN, "register", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[
+                CallArgument(
+                    kind="lambda",
+                    symbol=method_descriptor(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+                    captures=0,
+                )
+            ],
+        ),
+        _declared(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+        _void(_CHAIN, "lambda$register$1", _TAKES_CONTEXT),
+        _site(own, 0, _NEXT, kind="virtual", receiver_parameter=0),
+        # A context held in a field two methods write from their parameter 0, neither of
+        # them called in the module, and `held()` calling `next()` on the field.
+        *_writes(_CHAIN, "first", _TAKES_CONTEXT, "context"),
+        *_writes(_CHAIN, "second", _TAKES_CONTEXT, "context"),
+        _declared(_CHAIN, "held", "()V"),
+        _site(
+            _symbol(_CHAIN, "held", "()V"),
+            0,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="field", symbol=_CHAIN + "context.")],
+        ),
+    ]
+
+
+@pytest.fixture(scope="module")
+def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_chain")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "chain.jsonl", _document(), _chain_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _ends(
+    workspace: DuckDbWorkspace, method: str, ordinal: int, stop: frozenset[str] = frozenset()
+) -> tuple[Producer, ...]:
+    return producers_of(
+        value_index(workspace),
+        _at(workspace, method, ordinal),
+        RECEIVER,
+        frozenset(),
+        stop_at_parameters_of=stop,
+    )
+
+
+@pytest.mark.pins("values.a-producer-end-at-a-callerless-parameter-NAMES-it")
+def test_a_path_ending_at_a_callerless_parameter_names_it(chained):
+    """`ctx.next()` in `handle`: the receiver is `handle`'s parameter 0, which nothing in
+    the module binds. The end is still `external` — the value comes from outside — and it
+    now names WHICH parameter it reached, which is the whole of what the pass-through reader
+    needs. Through `inner`, the path crosses to `outer` and names `outer`'s parameter."""
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    assert _ends(chained, handle, 0) == (Producer(reason="external", parameter=(handle, 0)),)
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0) == (Producer(reason="external", parameter=(outer, 0)),)
+    # The value walk's own answer there is what it was: `external`, nothing else.
+    assert [b.slots[RECEIVER] for b in _bindings(chained, handle, 0)] == [
+        Answer(kind="unresolved", reason="external")
+    ]
+
+
+@pytest.mark.pins("values.a-producer-walk-STOPS-at-a-named-methods-parameter")
+def test_stop_at_parameters_ends_at_the_named_methods_parameter(chained):
+    """Naming `inner` ends the walk AT `inner`'s parameter 0 instead of crossing to `outer`:
+    the reader asked whether the receiver came from that parameter, and it did. The end is
+    no reason — nothing went unresolved — and only the parameter. Naming a method the path
+    does not reach changes nothing."""
+    inner = _symbol(_CHAIN, "inner", _TAKES_CONTEXT)
+    outer = _symbol(_CHAIN, "outer", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0, frozenset({inner})) == (Producer(parameter=(inner, 0)),)
+    assert _ends(chained, inner, 0, frozenset({outer})) == (Producer(parameter=(outer, 0)),)
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    assert _ends(chained, inner, 0, frozenset({handle})) == _ends(chained, inner, 0)
+
+
+@pytest.mark.pins("values.a-producer-walk-STOPS-at-a-named-methods-parameter")
+def test_a_next_inside_a_lambda_reaches_the_handlers_captured_parameter(chained):
+    """`u -> ctx.next()` inside `handle`: the body's parameter 0 is the capture, and the
+    capture edge crosses it to the capture site's argument — `handle`'s parameter 0. Named or
+    not, the end is the HANDLER's context parameter, never the lambda body's slot."""
+    handle = _symbol(_CHAIN, "handle", _TAKES_CONTEXT)
+    body = _symbol(_CHAIN, "lambda$handle$0", _CAPTURED)
+    assert _ends(chained, body, 0) == (Producer(reason="external", parameter=(handle, 0)),)
+    assert _ends(chained, body, 0, frozenset({handle})) == (Producer(parameter=(handle, 0)),)
+
+
+@pytest.mark.pins("values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality")
+def test_a_stop_set_no_path_reaches_ends_every_path_as_no_stop_does(walked):
+    """Every site and slot of the main fixture, read by the producer reader with nothing
+    named to stop at and with a stop set no path reaches: the same ends, field for field. A
+    parameter is named only on an `external` end that names no call, and an `external`
+    answer carrying a parameter compares equal to one without — the parameter is not part of
+    what the answer IS. That the existing readers' output did not move is shown by their own
+    tests, which pass unchanged; this test does not compare against the code before it."""
+    index = value_index(walked)
+    declared = {_FACTORY_IDENTITY}
+    nowhere = frozenset({_symbol(_CHAIN, "nowhere", "()V")})
+    for site in walked.query("call_sites"):
+        for slot in [*range(len(site["arguments"] or [])), RECEIVER]:
+            plain = producers_of(index, site, slot, declared)
+            assert producers_of(index, site, slot, declared, stop_at_parameters_of=nowhere) == plain
+            for end in plain:
+                if end.parameter is not None:
+                    assert end.reason == "external" and end.caller is None
+    assert Answer(kind="unresolved", reason="external") == replace(
+        Answer(kind="unresolved", reason="external"), parameter=("m", 0)
+    )
+
+
+@pytest.mark.pins("values.a-descended-FRAME-answers-before-the-stop")
+def test_a_stop_set_method_entered_through_its_return_answers_its_callers_argument(chained):
+    """`log(ctx).next()` in `relay`: the walk enters `log` through its return, so `log`'s
+    parameter 0 is `relay`'s argument at that call, and the end is `relay`'s parameter —
+    even with `log` named. Stopping in `log` would blame a handler that never received this
+    context."""
+    relay = _symbol(_CHAIN, "relay", _TAKES_CONTEXT)
+    log = _symbol(_CHAIN, "log", _LOGS)
+    assert _ends(chained, relay, 1, frozenset({log})) == (
+        Producer(reason="external", parameter=(relay, 0)),
+    )
+    assert _ends(chained, relay, 1, frozenset({log, relay})) == (Producer(parameter=(relay, 0)),)
+
+
+@pytest.mark.pins("values.two-callerless-WRITERS-are-two-named-ends")
+def test_two_callerless_writers_of_one_field_name_both_parameters(chained):
+    """The field is written from `first`'s parameter 0 and from `second`'s, and nothing in the
+    module calls either: two `external` ends at two parameters, each named. They compare
+    equal as answers, so the value walk still answers one `external`."""
+    held = _symbol(_CHAIN, "held", "()V")
+    ends = producers_of(value_index(chained), _at(chained, held, 0), 0, frozenset())
+    assert ends == (
+        Producer(reason="external", parameter=(_symbol(_CHAIN, "first", _TAKES_CONTEXT), 0)),
+        Producer(reason="external", parameter=(_symbol(_CHAIN, "second", _TAKES_CONTEXT), 0)),
+    )
+    assert _reasons(_bindings(chained, held, 0)) == ["external"]
+
+
+@pytest.mark.pins("values.a-producer-end-at-a-callerless-parameter-NAMES-it")
+def test_a_handler_that_is_itself_a_lambda_ends_at_the_lambdas_own_parameter(chained):
+    """`route.handler(ctx -> ctx.next())`: the lambda captured nothing, so its parameter 0 is
+    the framework's to supply, and the end names the lambda body's own parameter."""
+    own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
+    assert _ends(chained, own, 0) == (Producer(reason="external", parameter=(own, 0)),)

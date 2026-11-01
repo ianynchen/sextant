@@ -167,7 +167,12 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
             continue
         rows.append(
             {column: endpoint.get(column) for column in _MATCH_COLUMNS}
-            | {"prefixed": canonical_http_path(f"{served_under}{by_package}{path}")}
+            | {
+                "prefixed": canonical_http_path(
+                    f"{served_under}{by_package}{path}",
+                    str(endpoint["path_kind"]) if endpoint.get("path_kind") else None,
+                )
+            }
         )
     if rows:
         workspace.derive("prefix_endpoint_paths", rows=rows)
@@ -466,13 +471,13 @@ def _from_parameter(
     index: ValueIndex, method: str, position: int, seen: frozenset[tuple[str, int]]
 ) -> frozenset[tuple[str, int]]:
     found: set[tuple[str, int]] = set()
-    for caller, ordinal in index.callers.get((method, position), ()):
+    for caller, ordinal, argument in index.callers.get((method, position), ()):
         site = index.sites.get((caller, ordinal))
         arguments = (site or {}).get("arguments") or []
-        if position < len(arguments):
-            # The walk's own convention (`_Walk._parameter`): parameter N is the argument at
-            # the same index of the site that bound it.
-            found |= _origins(index, caller, arguments[position], seen)
+        if argument < len(arguments):
+            # The walk's own convention (`_Walk._parameter`): parameter N is the argument the
+            # binding names at the site that bound it.
+            found |= _origins(index, caller, arguments[argument], seen)
     return frozenset(found)
 
 

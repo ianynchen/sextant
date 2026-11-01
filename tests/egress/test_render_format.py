@@ -875,6 +875,146 @@ def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee()
     ) in text
 
 
+def test_a_refused_registration_question_names_the_registering_method_and_handler():
+    """DR-6's arm. Candidate shape (`caller`, `handler`, `reason`) matches what
+    `inbound_routes.refusal_rows` writes; the identity path is the address as written,
+    which no endpoint row carries because none was derived."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "bad",
+            "question": "refused_registration",
+            "candidates": json.dumps(
+                [
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": "com/acme/Routes#lambda$wire$0().",
+                        "reason": "unrooted_path",
+                    }
+                ]
+            ),
+            "evidence": "com/acme/Routes#wire().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `GET bad` — refused_registration: registered by com/acme/Routes#wire(). "
+        "(com/acme/Routes#lambda$wire$0().); the framework refuses a path that is empty or "
+        "lacks a leading `/`, so it serves nothing for it"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    ("reason", "phrase"),
+    [
+        ("exact_mount_path", "refuses to mount a router on a path with no trailing wildcard"),
+        ("pattern_mount_path", "refuses to mount a router on a regular expression path"),
+        ("wildcard_mount_point", "refuses a mount point that ends in the wildcard it adds"),
+    ],
+)
+def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str, phrase: str):
+    """A refused mount (Vert.x spec §3c) is filed under its own reason, and the sentence says
+    that reason, never the unrooted path's."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/api",
+            "question": "refused_registration",
+            "candidates": json.dumps(
+                [{"caller": "com/acme/Routes#wire().", "handler": None, "reason": reason}]
+            ),
+            "evidence": "com/acme/Routes#wire().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "registered by com/acme/Routes#wire(). (no handler read); the framework "
+        f"{phrase}, so it serves nothing for it"
+    ) in text
+
+
+def test_a_mount_prefix_question_names_the_mount_and_the_unread_argument():
+    """Vert.x spec §3c's arm. Candidate shape matches what `mounts.file_unread_prefix`
+    writes: the mount call, the argument its prefix is read at, what it read, and the method
+    that registered the route."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "<prefix>/edge",
+            "question": "mount_prefix",
+            "candidates": json.dumps(
+                [
+                    {
+                        "argument": 0,
+                        "at": "com/acme/Routes#lambda$each$0().",
+                        "at_ordinal": 1,
+                        "caller": "com/acme/Routes#each().",
+                        "mount": "com/acme/Routes#lambda$each$0().",
+                        "mount_ordinal": 2,
+                        "read": "`{}*`",
+                    }
+                ]
+            ),
+            "evidence": "com/acme/Routes#lambda$each$0().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `GET <prefix>/edge` — mount_prefix: registered by com/acme/Routes#each().; the mount "
+        "at com/acme/Routes#lambda$each$0(). (call 2) reads its prefix from argument 0 of "
+        "call 1 in com/acme/Routes#lambda$each$0()., which reads as `{}*`, so the prefix is "
+        "not known"
+    ) in text
+
+
+def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
+    """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
+    and `name`) matches what `pass_through.file_unread` writes: a context handed to an
+    out-of-module method reads as a hand-off, and a handler object a factory built reads as
+    built by it — never as a hand-off."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "PUT",
+            "path": "/u2/:id",
+            "question": "handler_pass_through",
+            "candidates": json.dumps(
+                [
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": "com/acme/Routes#check().",
+                        "unread": [
+                            {"how": "handed_to", "name": "com/acme/base/HttpUtils#nextRoute()."}
+                        ],
+                    },
+                    {
+                        "caller": "com/acme/Routes#wire().",
+                        "handler": None,
+                        "unread": [{"how": "produced_by", "name": "com/acme/Routes#factory()."}],
+                    },
+                ]
+            ),
+            "evidence": "com/acme/Routes#check().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `PUT /u2/:id` — handler_pass_through: com/acme/Routes#check(). (registered by "
+        "com/acme/Routes#wire().) hands the request's context to "
+        "com/acme/base/HttpUtils#nextRoute()., where it is not followed here, so whether it "
+        "passes the request on is not known; a handler object (registered by "
+        "com/acme/Routes#wire().) is built by com/acme/Routes#factory()., whose body is not "
+        "read here, so whether it passes the request on is not known"
+    ) in text
+
+
 def test_a_web_stack_question_names_each_stack_and_the_keys_it_would_apply():
     """Ruling 3's arm, for the reason every arm here has a test. Candidate shape (`stack`,
     `keys`) matches what `path_prefix._ask_web_stack` writes; both identity halves are NULL

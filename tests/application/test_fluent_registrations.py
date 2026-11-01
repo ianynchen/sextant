@@ -13,6 +13,7 @@ names its body BARE while the body's own call sites are recorded under the modul
 symbol (D00 §5a).
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from test_config_join import _module_document
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import fluent
+from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -90,6 +92,7 @@ def _catalog(
     direction: str = "inbound",
     catalog_id: str = "invented-adapters",
     bean_model: dict | None = None,
+    protocol: str = "amqp",
 ) -> Catalog:
     # **The hoisted identity table, because the engine now resolves through it** (Task 9,
     # the same correction Task 8 made to `test_call_engines`). `YamlCatalogSource.load`
@@ -111,7 +114,7 @@ def _catalog(
     return Catalog(
         id=catalog_id,
         style="fluent",
-        protocol="amqp",
+        protocol=protocol,
         direction=direction,
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
@@ -222,6 +225,8 @@ def test_an_inbound_chain_carries_the_lambda_it_was_handed_as_its_handler(tmp_pa
         "format": None,
         "format_resolution": None,
         "served_by": None,
+        "path_kind": None,
+        "method_kind": None,
     }
 
 
@@ -2957,8 +2962,8 @@ def _vertx_call(
 
 def _vertx_chain(*, with_handler: bool, owner: str = _VERTX_BUS) -> list:
     """`bus.consumer("orders.twostep")` followed either by `.handler(lambda)` — the
-    registration — or by `.setMaxBufferedMessages(16)`, an undeclared step that passes
-    through and ends the chain short of any terminal."""
+    registration — or by `.setMaxBufferedMessages(16)`, a capture-less step that is no
+    terminal and ends the chain short of any."""
     facts = [
         _vertx_call(
             owner,
@@ -3068,3 +3073,541 @@ def test_a_vertx_consumer_never_given_a_handler_derives_nothing(tmp_path: Path):
     either would notice a regression. Disabling it derives a row for this input, which is
     the false positive M6 forbids."""
     assert _vertx_rows(tmp_path, with_handler=False) == []
+
+
+# --- the media columns of an inbound row ------------------------------------
+
+_MEDIA_MATCHES = {
+    **_ADAPTER_MATCHES,
+    "steps": [
+        *_ADAPTER_MATCHES["steps"],
+        {"method": "produces", "captures": {"produces": "arg0"}},
+        {"method": "consumes", "captures": {"consumes": "arg0"}},
+    ],
+}
+
+
+@pytest.mark.pins("inbound_routes.fluent-fills-the-media-columns")
+def test_an_inbound_chain_fills_its_media_columns_from_its_captures(tmp_path: Path):
+    """Vert.x spec §3g item 2: the media a chain declares are the inbound row's
+    `consumes`/`produces`, the same JSON text a combinator row and a Spring row carry.
+    Only the media the chain captured are filled; the other column stays NULL."""
+    facts = _adapter(
+        ("produces", [CallArgument(kind="string", value="application/json")]),
+        ("consumes", [CallArgument(kind="string", value="text/xml")]),
+    )
+    workspace = _run(tmp_path, facts, _catalog(_MEDIA_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["consumes"], row["produces"]) == ('["text/xml"]', '["application/json"]')
+
+
+def test_an_outbound_chain_keeps_its_media_columns_null(tmp_path: Path):
+    """Outbound rows are unchanged: a request's media are not a served contract."""
+    facts = _adapter(("produces", [CallArgument(kind="string", value="application/json")]))
+    workspace = _run(tmp_path, facts, _catalog(_MEDIA_MATCHES, direction="outbound"))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["consumes"], row["produces"]) == (None, None)
+
+
+# --- accumulating captures (Vert.x spec §3g item 1) --------------------------
+
+_REPEATING_MATCHES = {
+    **_ADAPTER_MATCHES,
+    "steps": [
+        {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": ["http_method"]},
+        {"method": "onMessage", "captures": {"handler": "arg0"}, "repeats": ["handler"]},
+        {"method": "produces", "captures": {"produces": "arg0"}, "repeats": ["produces"]},
+    ],
+}
+
+
+def _captures_of(tmp_path: Path, facts: list, matches: dict) -> dict:
+    catalog = _catalog(matches)
+    workspace = _run(tmp_path, facts, catalog)
+    [end] = list(chain_ends(workspace, catalog))
+    workspace.close()
+    return dict(end.captures)
+
+
+def _strings(captured: Any) -> list[str]:
+    return [argument["value"] for argument in captured]
+
+
+def _verb(name: str) -> tuple[str, list[CallArgument]]:
+    return ("verb", [CallArgument(kind="string", value=name)])
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_a_repeated_verb_step_keeps_every_verb_in_order(tmp_path: Path):
+    """A step declaring `repeats: [http_method]` accumulates: `method(GET)` then
+    `method(DELETE)` is two verbs, oldest first, where last-wins would keep one and say
+    the route serves nothing else."""
+    captures = _captures_of(
+        tmp_path, _adapter(_verb("GET"), _verb("DELETE"), _verb("PUT")), _REPEATING_MATCHES
+    )
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE", "PUT"]
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_a_repeated_handler_terminal_keeps_every_handler_in_order(tmp_path: Path):
+    """The terminal-named step `onMessage` repeats too: three handlers on one chain are
+    three captures, in the order they were registered."""
+    first, second, third = (
+        CallArgument(kind="lambda", source=9, symbol=f"com/acme/streams/Wiring#h{n}()V.")
+        for n in (1, 2, 3)
+    )
+    captures = _captures_of(
+        tmp_path,
+        _adapter(("onMessage", [first]), ("onMessage", [second]), ("onMessage", [third])),
+        _REPEATING_MATCHES,
+    )
+
+    assert [handler["symbol"] for handler in captures["handler"]] == [
+        f"com/acme/streams/Wiring#h{n}()V." for n in (1, 2, 3)
+    ]
+
+
+def test_a_non_repeating_capture_stays_last_wins(tmp_path: Path):
+    """No `repeats`, no change: the same two calls on a step declaring none leave the
+    last value alone, as every shipped catalog reads them."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "steps": [{"method": "verb", "captures": {"http_method": "arg0"}}],
+    }
+    captures = _captures_of(tmp_path, _adapter(_verb("GET"), _verb("DELETE")), matches)
+
+    assert captures["http_method"]["value"] == "DELETE"
+
+
+@pytest.mark.pins("chains.a-repeats-capture-keeps-every-value-in-call-order")
+def test_statement_style_calls_on_one_receiver_accumulate_through_the_fold(tmp_path: Path):
+    """`r.method(GET); r.method(DELETE); r.handler(h)` as separate statements on a local:
+    each call returns its receiver (`returns_receiver`) and drops the result, so the walk
+    folds them in place, and the accumulation crosses that fold."""
+    matches = {
+        **_REPEATING_MATCHES,
+        "steps": [{**step, "returns_receiver": True} for step in _REPEATING_MATCHES["steps"]],
+    }
+    facts = [
+        _call(CALLER, ADAPTER, "<init>", 0, receiver=5, result=None, invoke_kind="special"),
+        _call(CALLER, ADAPTER, "verb", 1, receiver=5, result=20, arguments=_verb("GET")[1]),
+        _call(CALLER, ADAPTER, "verb", 2, receiver=5, result=21, arguments=_verb("DELETE")[1]),
+        _call(CALLER, ADAPTER, "onMessage", 3, receiver=5, result=22, arguments=[_lambda()]),
+    ]
+    captures = _captures_of(tmp_path, facts, matches)
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE"]
+    assert len(captures["handler"]) == 1
+
+
+@pytest.mark.pins("chains.the-walk-back-accumulates-a-repeats-capture")
+def test_calls_before_the_root_accumulate_too(tmp_path: Path):
+    """The same two `verb` calls made on the object a root is then called on
+    (`Adapter.begin().verb(GET).verb(DELETE).route(..)`): the backward walk to the root
+    folds them in chain order and keeps both."""
+    registry = "com/acme/streams/Registry#"
+    matches = {
+        "roots": [
+            {
+                "owner": "com.acme.streams.Registry",
+                "method": "route",
+                "captures": {"channel": "arg0"},
+            }
+        ],
+        "steps": [{**step, "owner": ADAPTER_TYPE} for step in _REPEATING_MATCHES["steps"]],
+        "terminal": ["route"],
+    }
+    facts = [
+        _call(CALLER, ADAPTER, "begin", 0, receiver=None, result=10),
+        _call(CALLER, ADAPTER, "verb", 1, receiver=10, result=11, arguments=_verb("GET")[1]),
+        _call(CALLER, ADAPTER, "verb", 2, receiver=11, result=12, arguments=_verb("DELETE")[1]),
+        _call(
+            CALLER,
+            registry,
+            "route",
+            3,
+            receiver=12,
+            result=13,
+            arguments=[CallArgument(kind="string", value=SUBSCRIPTION)],
+        ),
+    ]
+    captures = _captures_of(tmp_path, facts, matches)
+
+    assert _strings(captures["http_method"]) == ["GET", "DELETE"]
+
+
+def test_an_unreadable_verb_stays_in_the_list_as_unreadable(tmp_path: Path):
+    """`method(verbFromAConfig)` is a verb the route serves that nobody can read: it keeps
+    its place as an unresolved entry, so the list does not claim to be complete."""
+    unreadable = ("verb", [CallArgument(kind="unresolved")])
+    captures = _captures_of(tmp_path, _adapter(_verb("GET"), unreadable), _REPEATING_MATCHES)
+
+    assert [argument["kind"] for argument in captures["http_method"]] == ["string", "unresolved"]
+
+
+@pytest.mark.pins("fluent.several-accumulated-verbs-are-one-row-each")
+def test_several_accumulated_verbs_are_one_row_each_not_the_first(tmp_path: Path):
+    """Vert.x spec §3f: `method(GET).method(DELETE)` serves both verbs, so each is a row of
+    its own, never the first with the rest dropped. A verb nobody could read is a row too,
+    `unresolved` with `method` NULL, so the rows never claim the list is complete. (Until
+    Task 8 the chain derived one `unresolved` row for the lot.)"""
+    unreadable = ("verb", [CallArgument(kind="unresolved")])
+    workspace = _run(
+        tmp_path,
+        _adapter(_verb("GET"), _verb("DELETE"), _verb("GET"), unreadable),
+        _catalog(_REPEATING_MATCHES),
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted((row["method"] or "", row["resolution"]) for row in rows) == [
+        ("", "unresolved"),
+        ("DELETE", "resolved"),
+        ("GET", "resolved"),
+    ]
+
+
+def test_a_catalog_poison_outlasts_a_repeating_capture(tmp_path: Path):
+    """`reroute` poisons `handler` to the chain's end; a handler registered after it
+    does not become the route's handler, accumulating or not."""
+    matches = {
+        **_REPEATING_MATCHES,
+        "steps": [*_REPEATING_MATCHES["steps"], {"method": "reroute", "poisons": ["handler"]}],
+    }
+    captures = _captures_of(
+        tmp_path,
+        _adapter(("reroute", []), ("onMessage", [_lambda()])),
+        matches,
+    )
+
+    assert captures["handler"]["reason"] == "poisoned"
+
+
+@pytest.mark.parametrize(
+    ("step", "fragment"),
+    [
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": "http_method"},
+            "invented-adapters.*verb.*repeats.*list",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": ["path"]},
+            "invented-adapters.*verb.*repeats.*path.*captures",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "GET"}, "repeats": ["http_method"]},
+            "invented-adapters.*verb.*repeats.*http_method.*argument",
+        ),
+        (
+            {"method": "verb", "captures": {"http_method": "arg0"}, "repeats": [3]},
+            "invented-adapters.*verb.*repeats",
+        ),
+    ],
+    ids=["not-a-list", "names-no-capture", "names-a-literal", "not-a-name"],
+)
+def test_a_malformed_repeats_is_refused_naming_the_file(tmp_path: Path, step: dict, fragment: str):
+    _refused(tmp_path, {**_ADAPTER_MATCHES, "steps": [step]}, fragment)
+
+
+def test_repeats_on_a_root_is_refused(tmp_path: Path):
+    """A root starts the chain with nothing yet captured to add to, so the word would
+    load and do nothing."""
+    root = {**_ADAPTER_MATCHES["roots"][0], "repeats": ["channel"]}
+    _refused(tmp_path, {**_ADAPTER_MATCHES, "roots": [root]}, "invented-adapters.*roots.*repeats")
+
+
+# --- the readers of an accumulated capture ----------------------------------
+
+
+@pytest.mark.pins("fluent.a-handler-tuple-answers-with-its-first")
+def test_an_inbound_row_takes_the_first_handler_of_several(tmp_path: Path):
+    """A catalog declaring no `passes_on` has no handler that passes the request on, so of a
+    route's several handlers the first registered answers, and a chain with one handler is
+    unchanged."""
+    second_body = "com/acme/streams/Wiring#lambda$inbound$1(Lcom/acme/streams/Message;)V."
+    second = CallArgument(kind="lambda", source=10, symbol=second_body)
+    facts = [
+        *_adapter(("onMessage", [_lambda()]), ("onMessage", [second])),
+        _body_symbol(),
+        _body_symbol(second_body),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_REPEATING_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["handler"] == _MODULE + BODY
+
+
+# --- the inbound dedup key --------------------------------------------------
+
+_OTHER_CALLER = _MODULE + "com/acme/streams/Wiring#inboundAgain()."
+
+
+@pytest.mark.pins("fluent.an-inbound-row-is-keyed-on-what-it-serves")
+def test_two_registrations_of_one_route_and_handler_in_two_methods_are_one_row(tmp_path: Path):
+    """An inbound row's wire identity does not depend on which method registered it: the
+    same route answered by the same handler is one consumer registered twice."""
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(("onMessage", [_lambda()]), caller=_OTHER_CALLER),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"]) for row in rows] == [(SUBSCRIPTION, _MODULE + BODY)]
+
+
+@pytest.mark.pins("fluent.an-inbound-row-keeps-its-route-in-the-key")
+def test_one_handler_on_two_routes_is_two_rows(tmp_path: Path):
+    """The same handler method referenced on two routes serves two addresses."""
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            caller=_OTHER_CALLER,
+            subscription=CallArgument(kind="string", value="billing.queue"),
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(row["path"] for row in rows) == ["billing.queue", SUBSCRIPTION]
+
+
+@pytest.mark.pins("fluent.an-inbound-row-keeps-its-handler-in-the-key")
+def test_two_handlers_on_one_route_are_two_rows(tmp_path: Path):
+    other = "com/acme/streams/Wiring#lambda$inboundAgain$0(Lcom/acme/streams/Message;)V."
+    facts = [
+        *_adapter(("onMessage", [_lambda()])),
+        *_adapter(("onMessage", [_lambda(other)]), caller=_OTHER_CALLER),
+        _body_symbol(),
+        _body_symbol(other),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted(row["handler"] for row in rows) == sorted([_MODULE + BODY, _MODULE + other])
+
+
+@pytest.mark.pins("fluent.an-inbound-row-is-keyed-on-what-it-serves")
+def test_two_registrations_of_one_route_with_no_handler_are_one_row(tmp_path: Path):
+    facts = [
+        *_adapter(("discard", [])),
+        *_adapter(("discard", []), caller=_OTHER_CALLER),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"]) for row in rows] == [(SUBSCRIPTION, None)]
+
+
+@pytest.mark.pins("derive_call_endpoints.an-inbound-row-ignores-its-registering-method")
+def test_an_inbound_route_the_table_already_holds_is_not_inserted_for_another_method(
+    tmp_path: Path,
+):
+    """The table-side twin of the key above: the same route handed in again from another
+    method finds the route there already."""
+
+    def row(caller: str) -> dict[str, Any]:
+        return {
+            "protocol": "amqp",
+            "direction": "inbound",
+            "method": None,
+            "path": SUBSCRIPTION,
+            "handler": _MODULE + BODY,
+            "caller": caller,
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "catalog_id": "invented-adapters",
+            "request_shape": None,
+            "response_shape": None,
+            "consumes": None,
+            "produces": None,
+        }
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoints_reset")
+    workspace.derive("call_endpoints", rows=[row(CALLER)])
+    workspace.derive("call_endpoints", rows=[row(_OTHER_CALLER)])
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == [SUBSCRIPTION]
+
+
+# --- a path the framework refuses -------------------------------------------
+
+_ROUTE_MATCHES = {
+    "roots": [{"owner": ADAPTER_TYPE, "method": "<init>", "captures": {"url": "arg1"}}],
+    "steps": [{"method": "onMessage", "captures": {"handler": "arg0"}}],
+    "terminal": ["<init>"],
+}
+_REFUSING_MATCHES = {**_ROUTE_MATCHES, "refuses_unrooted_path": True}
+
+
+def _route(declared: str, *, caller: str = CALLER) -> list:
+    return [
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            caller=caller,
+            subscription=CallArgument(kind="string", value=declared),
+        ),
+        _body_symbol(),
+    ]
+
+
+def _questions(workspace: DuckDbWorkspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("open_questions")]
+
+
+@pytest.mark.pins("fluent.a-refused-path-is-recorded-and-never-repaired")
+@pytest.mark.parametrize("declared", ["bad", ""], ids=["no-leading-slash", "empty"])
+def test_a_refused_path_derives_no_row_and_is_recorded(tmp_path: Path, declared: str):
+    """Vert.x throws on a path that is empty or does not start with `/` (DR-6): the
+    application does not start with it, so no row serves it, it is not repaired to `/bad`,
+    and the declaration is filed where the other refused registrations are filed."""
+    workspace = _run(tmp_path, _route(declared), _catalog(_REFUSING_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["protocol"], question["path"], question["question"]) == (
+        "http",
+        declared,
+        "refused_registration",
+    )
+    assert json.loads(question["candidates"]) == [
+        {"caller": CALLER, "handler": _MODULE + BODY, "reason": "unrooted_path"}
+    ]
+
+
+def test_a_rooted_path_is_not_refused_when_the_flag_is_set(tmp_path: Path):
+    workspace = _run(tmp_path, _route("/ok"), _catalog(_REFUSING_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["/ok"]
+    assert questions == []
+
+
+def test_two_registrations_of_one_refused_path_are_one_question_with_both_callers(
+    tmp_path: Path,
+):
+    facts = [*_route("bad"), *_route("bad", caller=_OTHER_CALLER)]
+    workspace = _run(tmp_path, facts, _catalog(_REFUSING_MATCHES, protocol="http"))
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert [c["caller"] for c in json.loads(question["candidates"])] == sorted(
+        [CALLER, _OTHER_CALLER]
+    )
+
+
+@pytest.mark.pins("fluent.a-refusal-is-the-catalogs-word-not-every-frameworks")
+def test_without_the_flag_the_leading_slash_is_still_repaired(tmp_path: Path):
+    """A framework that repairs an unrooted path (Spring does) keeps the repair: the flag
+    is the catalog's statement about ONE framework, never a rule applied to all."""
+    workspace = _run(tmp_path, _route("bad"), _catalog(_ROUTE_MATCHES, protocol="http"))
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["/bad"]
+    assert questions == []
+
+
+def test_a_flag_that_is_not_a_boolean_is_refused_naming_the_file(tmp_path: Path):
+    _refused(
+        tmp_path,
+        {**_ROUTE_MATCHES, "refuses_unrooted_path": "yes"},
+        "invented-adapters.*refuses_unrooted_path.*true or false",
+    )
+
+
+def _assembled_route(template: str) -> list:
+    """A route whose path is `template` assembled from one operand nobody can read
+    (`"bad" + id`, `prefix + "/x"`): the concat the walk reads back, `{}` standing for the
+    unread piece."""
+    concat = CallSiteFact(
+        document_id="doc_1",
+        caller=CALLER,
+        target=CallTarget(
+            owner="java/lang/invoke/StringConcatFactory#",
+            name="makeConcatWithConstants",
+            descriptor="(Ljava/lang/String;)Ljava/lang/String;",
+        ),
+        invoke_kind="static",
+        ordinal=-1,
+        receiver=None,
+        result=88,
+        arguments=[CallArgument(kind="unresolved", source=86)],
+    )
+    return [
+        concat,
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            subscription=CallArgument(kind="concat", source=88, value=template),
+        ),
+        _body_symbol(),
+    ]
+
+
+@pytest.mark.pins("fluent.a-partly-read-path-is-refused-where-its-first-character-was-read")
+def test_a_partly_read_path_whose_first_character_is_read_and_unrooted_is_refused(
+    tmp_path: Path,
+):
+    """`"bad" + id`: Vert.x checks the first character alone, so whatever the tail is the
+    route is refused, and the half-read path is not repaired to `/bad{}`."""
+    workspace = _run(
+        tmp_path, _assembled_route("bad{}"), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    rows = _rows(workspace)
+    [question] = _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (question["path"], question["question"]) == ("bad{}", "refused_registration")
+
+
+@pytest.mark.pins("fluent.a-path-whose-first-piece-is-unread-is-not-refused")
+def test_a_path_whose_first_piece_is_unread_is_not_refused(tmp_path: Path):
+    """`prefix + "/x"` with an unread prefix: the unread piece may be the `/`, so the
+    refusal is undecided and the row derives as it did before."""
+    workspace = _run(
+        tmp_path, _assembled_route("{}/x"), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    rows = _rows(workspace)
+    questions = _questions(workspace)
+    workspace.close()
+
+    # Today's behaviour, unchanged: the row derives (the canonicaliser roots the unread piece).
+    assert [row["path"] for row in rows] == ["/<host>/x"]
+    assert questions == []
+
+
+@pytest.mark.pins("fluent.a-path-whose-first-piece-is-unread-is-not-refused")
+@pytest.mark.parametrize("template", ["#{prefix}{}", "${prefix}{}"], ids=["spel", "placeholder"])
+def test_a_path_starting_with_an_expression_is_not_refused(tmp_path: Path, template: str):
+    """`#{…}` and `${…}` are unread pieces like `<host>`: the expression may be the `/`."""
+    workspace = _run(
+        tmp_path, _assembled_route(template), _catalog(_REFUSING_MATCHES, protocol="http")
+    )
+    questions = _questions(workspace)
+    workspace.close()
+
+    assert questions == []

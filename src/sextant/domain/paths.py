@@ -41,7 +41,7 @@ storage may not simply import this module: ARCHITECTURE §10 forbids a
 protocol name in `storage/`, and this seam's name is one.
 """
 
-from sextant.domain.closed_sets import Direction, Protocol
+from sextant.domain.closed_sets import PATH_KIND_PATTERN, Direction, Protocol
 
 _SCHEME = "://"
 # The two notations an unresolved address arrives in: a property placeholder
@@ -54,6 +54,9 @@ _SCHEME = "://"
 # as long as no framework spells a SERVED path with either sequence — a
 # framework that did would have its literal address left uncanonicalized here.
 _EXPRESSION_OPENS = ("${", "#{")
+# Exported for the one caller that asks whether a path STARTS with one (`inbound_routes`),
+# so it keeps no spelling of its own.
+EXPRESSION_OPENS = _EXPRESSION_OPENS
 
 
 def serves_urls(protocol: str, direction: str) -> bool:
@@ -73,11 +76,15 @@ def is_path_shaped(raw: str) -> bool:
     return _SCHEME not in raw and not any(open_ in raw for open_ in _EXPRESSION_OPENS)
 
 
-def canonical_http_path(raw: str) -> str:
+def canonical_http_path(raw: str, path_kind: str | None = None) -> str:
     """`raw` as the URL the framework serves, or `raw` untouched when it is
     not a path half. Trailing slashes are PRESERVED: Framework 6 removed
-    trailing-slash matching, so `/users/` is a different URL from `/users`."""
-    if not is_path_shaped(raw):
+    trailing-slash matching, so `/users/` is a different URL from `/users`.
+
+    A PATTERN path (`path_kind`) is a regular expression, not an address, so it is returned
+    untouched: a leading slash added to one would write a different expression.
+    """
+    if path_kind == PATH_KIND_PATTERN or not is_path_shaped(raw):
         return raw
     if raw == "":
         return "/"

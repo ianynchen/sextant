@@ -192,6 +192,12 @@ from sextant.application.resolve.shapes.arguments import (
     _array_elements,
     _expanded_arguments,
 )
+from sextant.application.resolve.shapes.inbound_routes import (
+    MEDIA_FIELDS,
+    join_prefix,
+    media_json,
+    validated_path_join,
+)
 from sextant.application.resolve.shapes.member_values import (
     member_table,
     names_members,
@@ -220,10 +226,6 @@ _IDENTITY_POISON = (_METHOD, _PATH)
 # any-path pattern, which is what a catch-all serves (spec §7 case 3).
 _ANY_PATH = "/**"
 
-# The one `path_join` a catalog may declare, beside "absent" (verbatim). Named
-# here so a typo in a catalog is refused at load rather than silently read as
-# verbatim — which would publish the glued address the word exists to prevent.
-_LEADING_SLASH = "leading_slash"
 # The dispatch form of a call that has no receiver (D00 §5's `invoke_kind`): the
 # one form the origin check of spec §12 word 1 has nothing to read on.
 _STATIC = "static"
@@ -244,18 +246,19 @@ _NO_VERB = "none"
 _HELPER_DEPTH = 16
 _ROUTING_DEPTH = "routing_depth"
 
-# The two roles a `media` rule may fill. Validated at load rather than
-# discovered at derive time: a typo here silently mislabels every media value
-# a catalog reads (`ports/catalogs.py`'s own discipline).
-_MEDIA_FIELDS = ("consumes", "produces")
+# `MEDIA_FIELDS`, the two roles a `media` rule may fill, is validated at load rather than
+# discovered at derive time: a typo silently mislabels every media value a catalog reads
+# (`ports/catalogs.py`'s own discipline). `LEADING_SLASH`, the one `path_join` a catalog may
+# declare, is checked at load so a typo is refused rather than read as verbatim, which would
+# publish the glued address the word exists to prevent. Both are `inbound_routes`'.
 # The values a verb rule's `protocol` may name (spec 2026-10-26 §3b) — D00's closed set,
-# checked at load for the reason `_MEDIA_FIELDS` is: a misspelt protocol files every row
+# checked at load for the reason `MEDIA_FIELDS` is: a misspelt protocol files every row
 # the rule derives under a word nothing links.
 _PROTOCOLS = frozenset(member.value for member in Protocol)
 
 # A `request_requirement`'s two closed sets (spec 2026-09-19 §5a): what KIND of thing a
 # route demands, and what the framework enforces about it. Validated at load for the
-# reason `_MEDIA_FIELDS` is — a misspelt kind would file a header under a word nothing
+# reason `MEDIA_FIELDS` is — a misspelt kind would file a header under a word nothing
 # downstream reads.
 _REQUIREMENT_KINDS = ("header", "query", "cookie", "param")
 _REQUIREMENT_LEVELS = ("required", "optional", "absent")
@@ -1944,24 +1947,10 @@ def _argument_constraints(
 
 
 def _literal_path(literal: str, context: _TreeContext) -> str:
-    """One literal path segment as the framework will join it — the catalog's
-    `path_join` applied, or the literal untouched when none is declared. Every
-    literal the fold reads for a path position passes through here, so a join
-    declared once holds for prefixes, verbs and (when they are read) array
-    elements alike; a rule's own `path: ""` does not, since the empty segment is
-    exactly one the join leaves alone. `leading_slash` is the framework's own
-    three exceptions, verbatim: a segment that already starts with `/`, the
-    empty segment, and the bare `*` stay as written; every other segment gains
-    a leading `/`. Two spellings of one registration must be one row, and the
-    join is what makes `path("api", …)` and `path("/api", …)` the same address
-    here as they are in the framework."""
-    if (
-        context.path_join == _LEADING_SLASH
-        and literal not in ("", "*")
-        and not literal.startswith("/")
-    ):
-        return "/" + literal
-    return literal
+    """One literal path segment as the framework will join it (`join_prefix`, shared with
+    `fluent`): the catalog's `path_join` applied, or the literal untouched when none is
+    declared. Every literal the fold reads for a path position passes through here."""
+    return join_prefix(None, literal, context.path_join)
 
 
 def _handler_of(
@@ -2243,8 +2232,10 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
                 continue
         serialized = {
             **row,
-            "consumes": _media_json(row["consumes"]),
-            "produces": _media_json(row["produces"]),
+            "consumes": media_json(row["consumes"]),
+            "produces": media_json(row["produces"]),
+            "path_kind": None,
+            "method_kind": None,
         }
         if row["path"] is not None:
             seen[key] = serialized
@@ -2276,18 +2267,11 @@ def _media_unioned(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             grouped[key] = fresh
             unioned.append(fresh)
             continue
-        for field in _MEDIA_FIELDS:
+        for field in MEDIA_FIELDS:
             existing[field] = sorted(set(existing[field]) | set(row[field]))
         # Media widen, requirements narrow: the alternatives' shared demands only (`_shared`).
         existing[_REQUIREMENTS] = _shared(existing[_REQUIREMENTS], row[_REQUIREMENTS])
     return unioned
-
-
-def _media_json(values: list[str]) -> str | None:
-    """A media column: a JSON array of the declared wire values, or NULL where
-    nothing was derivable (spec §4) — the same text
-    `derive_endpoints.sql`'s own `to_json` writes for annotation rows."""
-    return json.dumps(values, separators=(",", ":")) if values else None
 
 
 def _validate_matches(catalog: Catalog) -> None:
@@ -2389,7 +2373,7 @@ def _validate_matches(catalog: Catalog) -> None:
         if ("media_arg" in rule or (role in ("verbs", "prefixes") and "fills" in rule)) and (
             role not in ("verbs", "prefixes")
             or not _position_inside(rule.get("media_arg"), rule)
-            or rule.get("fills") not in _MEDIA_FIELDS
+            or rule.get("fills") not in MEDIA_FIELDS
         ):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares "
@@ -2555,12 +2539,7 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"that carries a chain declares a route of its own (D02 §2's `combinator` "
                 f"style)"
             )
-    if catalog.matches.get("path_join", _LEADING_SLASH) != _LEADING_SLASH:
-        raise CatalogError(
-            f"loading catalog {catalog.source}: `path_join: "
-            f"{catalog.matches.get('path_join')!r}` — the only value is `{_LEADING_SLASH}`; "
-            f"leave it out for verbatim concatenation (D02 §2's `combinator` style)"
-        )
+    validated_path_join(catalog.matches, catalog.source, "combinator")
     # Spec 2026-09-19 §4c: `all_methods` is the framework's own default-methods list, as
     # the annotation style already spells it — a non-empty list of upper-case tokens.
     all_methods = catalog.matches.get("all_methods")
@@ -2612,7 +2591,7 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"got {entry!r} (D02 §2's `combinator` style)"
             )
     for rule in catalog.matches.get("vocabulary", {}).get("media", []):
-        if rule.get("fills") not in _MEDIA_FIELDS:
+        if rule.get("fills") not in MEDIA_FIELDS:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
                 f"`fills: {rule.get('fills')!r}` — a media rule fills `consumes` or "

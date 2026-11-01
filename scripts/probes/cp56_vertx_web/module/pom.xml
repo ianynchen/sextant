@@ -1,0 +1,18 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.sextant.probes</groupId>
+  <artifactId>cp56-vertx-web</artifactId>
+  <version>0</version>
+  <!-- CP-56's subject: one Java file of Vert.x Web and WebClient call shapes, compiled by javac 21
+       against Vert.x 5.0.0 (the version the fixture builds with) and read with `javap`. Compiled
+       by the probe's harness, never run as an application. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <vertx.version>5.0.0</vertx.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>io.vertx</groupId><artifactId>vertx-web</artifactId><version>${vertx.version}</version></dependency>
+    <dependency><groupId>io.vertx</groupId><artifactId>vertx-web-client</artifactId><version>${vertx.version}</version></dependency>
+  </dependencies>
+</project>

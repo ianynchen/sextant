@@ -202,6 +202,26 @@ def test_a_handler_serving_several_addresses_is_one_trace_naming_all_of_them():
     )
 
 
+@pytest.mark.pins("render_trace.an-ANY-METHOD-root-says-any")
+def test_a_root_serving_every_verb_is_named_any_never_an_unread_verb():
+    """Vert.x spec §3a, final review C1: a root reached by a row with `method_kind = any`
+    carries the marker, and its heading says `any /x` as the endpoint table does. Without it
+    the NULL method prints `(unresolved)`, a verb reported unread that serves every verb."""
+    trace = _trace(_step(), identities=(RootIdentity("http", None, "/x", method_kind="any"),))
+    assert (("code", "any /x"),) in _summary_row(trace)
+    assert "(unresolved)" not in _header_text(trace)
+
+
+@pytest.mark.pins("render_trace.a-PATTERN-root-is-marked-a-pattern")
+def test_a_root_reached_by_a_pattern_path_is_marked_a_pattern():
+    """`path_kind = pattern` on the root (Vert.x spec §3a): the regex is not an address, and
+    the heading says so as the endpoint table does."""
+    trace = _trace(
+        _step(), identities=(RootIdentity("http", "GET", "\\/f\\/.+", path_kind="pattern"),)
+    )
+    assert (("code", "GET \\/f\\/.+ (pattern)"),) in _summary_row(trace)
+
+
 def test_a_roots_path_passes_the_redactor_exactly_as_an_endpoints_does():
     """`path` is one of the two columns that can carry a whole address, so a
     credential in one is an exposure at the render exit (2K design §1). The

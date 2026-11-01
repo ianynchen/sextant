@@ -72,7 +72,17 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- the bean here. NULL from an engine that composes no type with a row, which
     -- then falls back to the handler's (or caller's) enclosing class. Last, so a
     -- workspace migrated by adding columns has the same column order.
-    served_by         TEXT
+    served_by         TEXT,
+    -- Two markers about the row's OWN address, read by the canonicaliser and the linker off
+    -- the row they already hold (`closed_sets.PATH_KIND_PATTERN`, `ANY_METHOD`). `path_kind`
+    -- is `pattern` where the path is a regular expression the framework matches rather than
+    -- a template it serves, NULL otherwise: a pattern is never canonicalised and never
+    -- linked by path. `method_kind` is `any` where the row serves every HTTP method, NULL
+    -- otherwise; a NULL `method` WITHOUT it still means "nobody read the verb". Columns, not
+    -- `endpoint_metadata` entries, because `system_endpoints` is the one list the linker
+    -- reads and a side table would add a read per row. Last, as `served_by` was.
+    path_kind         TEXT,
+    method_kind       TEXT
 );
 
 -- Pre-declared for the same reason as `endpoints` above: a scanner too weak
@@ -168,12 +178,12 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- One of the closed set `payload_binding`, `format_conflict`,
     -- `channel_destination`, `service_identity`, `environment_divergence`,
     -- `binder_protocol`, `unselected_binding`, `handler_protocol`,
-    -- `registration_activation`
-    -- (2G design §6, extended by 2O design §0, F2 §3.4, F2 §3.6 and `OI-64`) — checked in
-    -- `resolve/open_questions.py`, which owns the set and refuses anything
-    -- outside it. This comment named the original TWO until 2O Task 9, which
-    -- shipped the writer `channel_destination` had been waiting for; the
-    -- other two gained theirs earlier in the same phase.
+    -- `registration_activation`, `self_exchange`, `routing_conflict`,
+    -- `routing_depth`, `web_stack`, `prefix_not_measured`,
+    -- `refused_registration`, `handler_pass_through` and `mount_prefix` - checked in
+    -- `resolve/open_questions.py`, which
+    -- owns the set (its `QUESTIONS`, with each kind's reason) and refuses
+    -- anything outside it. This list is kept equal to that tuple.
     question   TEXT,
     -- The answers that were on the table, as a JSON array — each carrying
     -- what it would have made the format or payload type, where it was seen,
@@ -185,7 +195,17 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- closed evidence tiers — an unanswered question has no tier, and the
     -- reader of this table needs to know where to look, not how much to
     -- trust an answer nobody gave.
-    evidence   TEXT
+    evidence   TEXT,
+    -- The endpoint row's own markers (`endpoints.path_kind`/`method_kind`, Vert.x spec §3a),
+    -- carried with the identity they qualify by the pass that filed the question against
+    -- that row: without them a question on a row serving every verb renders its NULL
+    -- `method` as a verb nobody read, and a pattern path as an address. NULL on a question
+    -- filed against no endpoint row, and on every row whose identity needs no marker. Not
+    -- part of the question's identity (`domain/enrichment.question_identity`): they say
+    -- what the identity's columns mean, not which row it is. Last, so a workspace migrated
+    -- by adding columns has the same column order.
+    method_kind TEXT,
+    path_kind   TEXT
 );
 
 -- The first of the two NON-WIRE tables (2O design §4): work the framework
@@ -482,7 +502,15 @@ CREATE TABLE IF NOT EXISTS roots (
     -- label for it would report a gap where there is none.
     protocol  TEXT,
     method    TEXT,
-    path      TEXT
+    path      TEXT,
+    -- The `endpoints` row's own markers for that address (`path_kind`, `method_kind`,
+    -- Vert.x spec §3a), carried with it for the reason the address is: they are part of
+    -- what the three columns above MEAN — a NULL `method` beside `any` serves every verb,
+    -- beside NULL nobody read it — so the renderer spells the root's address the way the
+    -- endpoint table does. NULL for a scheduled root, as its address is. Last, as on
+    -- `endpoints`.
+    method_kind TEXT,
+    path_kind   TEXT
 );
 
 -- F8 §9.4 (W37): what each root REACHES, materialised.
@@ -1230,8 +1258,10 @@ SELECT document_id,
        -- `->>` on an absent key is SQL NULL, which is today's meaning for every site
        -- that carries no such parameter.
        (payload ->> 'receiver_parameter')::INTEGER AS receiver_parameter,
-       -- D00 §5: the static field a `getstatic` receiver was read from; NULL elsewhere.
+       -- D00 §5: the field a `getstatic` receiver, or a `getfield` on `this`, was read
+       -- from; NULL elsewhere. `receiver_field_kind` is `instance` for the second.
        payload ->> 'receiver_field'            AS receiver_field,
+       payload ->> 'receiver_field_kind'       AS receiver_field_kind,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site'

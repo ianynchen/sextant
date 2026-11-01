@@ -206,6 +206,21 @@ public final class CallSample {
         shared.third();
     }
 
+    /** An instance field of `this` the receiver is read from: a client a constructor stored
+     *  in a field, then called on in another method ({@code client.get("/q")}). */
+    Link held;
+
+    /** The receiver is a {@code GETFIELD} on {@code this}: named like a static read. */
+    public void thisFieldReceiver() {
+        held.third();
+    }
+
+    /** The receiver is a {@code GETFIELD} on {@code this} in a static method's sense of
+     *  slot 0 — the first parameter, another object: no key. */
+    public static void parameterFieldReceiver(CallSample other) {
+        other.held.third();
+    }
+
     /** The OkHttp shape, and the ordinary way people write a builder: the built
      *  value goes into a local and a *separate* call consumes it. The store and
      *  the reload are the only things between the two halves, and if they count

@@ -17,6 +17,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A value an instance lambda closes over is read as its own, not its neighbour's**
+  (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
+  and the value walk bound capture *i* to the site's argument *i*, so every captured value was
+  one position off. vertx-examples' `sqlclient` published `POST /products` as answered by
+  `handleGetProduct`, at `resolved`. Any catalog reading a value through such a capture was
+  affected. Measured: the six field pins are unchanged.
+- **Vert.x Web: a route path handed in as a parameter is read** (OI-265): a path local a
+  lambda captures, or a helper's path parameter, gave `path` NULL.
+- **Vert.x Web: routes are ordered within their own router** (OI-263). One verb and path on
+  two routers made by two calls are each their router's row, `resolved`; vertx-examples'
+  `web-examples` had 34 of 46 rows `narrowed` against other example servers.
+- **Vert.x Web: vertx-web-validation's `ValidationHandler` passes on** (OI-261), so the
+  handler after it names the row. vertx-web-proxy's `ProxyHandler` answers and stays a stated
+  boundary.
 - **A controller serves the mappings it inherits without overriding** (ruling 8 of the
   2026-10-30 review). `OrderController extends CrudController<Order>`, overriding nothing,
   published no rows at all: the inheritance walk only looked at methods a class declares
@@ -66,6 +80,10 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **Quarkus Reactive Routes follow Vert.x Web's rules** (the same dispatcher, spec
+  2026-10-30-vertx-web §3a). A `@Route` with no `methods` is one row marked as serving every
+  method, where it was six rows; a `@Route(regex = …)` is a pattern row with the regex
+  verbatim, where it derived nothing.
 - **An empty cell in Scheduled work says why it is empty** (ruled 2026-10-29). A Quartz row
   read part by part names, in a new `scheduled_work.untied` column, each part the code
   states but no one path ties to the row; the document prints those `not tied down`, and an
@@ -73,6 +91,18 @@ here would restate those documents rather than add anything.
   helper, not that it is read at runtime. An `@Scheduled` job's name is empty rather than
   NULL, printed `—`: the framework gives none. `not in the code` is left for a value the
   code really does not state. `GRAPH_SCHEMA_VERSION` 10.
+- **`GRAPH_SCHEMA_VERSION` 13**: `endpoints` gains `path_kind` and `method_kind`, two markers
+  about a row's own address. A path marked `pattern` is a regular expression: it is not
+  canonicalised and no call is linked to it by path. A row marked `any` serves every HTTP
+  method, so a call of any verb links to it; a NULL method without the marker still links to
+  no verb. A path holding a named hole (`<prefix>/status`) is never linked by path either.
+  Vert.x Web's rows and Quarkus Reactive Routes' rows write them (below). `roots` and
+  `open_questions` carry the same two markers from the endpoint row they name, so the module
+  document's trace headings and open-question lines say `any /x` and `(pattern)` exactly as
+  its endpoint tables do, never `(unresolved) /x` for a route serving every verb. The export
+  carries them on `endpoints`, `roots`, `roots_by_address` and `open_questions`, and the
+  bundle's `addresses.ndjson` index carries them per address; a workspace of the older vintage
+  is refused and re-analysed.
 - **`GRAPH_SCHEMA_VERSION` 12**: `endpoints` gains `served_by`, the class a row is served by
   (ruling 8). A row's conditions are read off that class's bean — the handler's own where the
   handler is a bean — so a row a conditional controller inherits carries the controller's
@@ -84,6 +114,29 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Vert.x Web and Vert.x WebClient** (spec 2026-10-30-vertx-web; probe CP-56, Vert.x 4.5.10,
+  5.0.0 and 5.2.1; catalogs `vertx-web.yml`, `vertx-webclient.yml` and
+  `client-models/vertx-web.yml`). COVERAGE §5.1 and §5.2 read `✅` for both, with fifteen
+  stated boundaries.
+  - **Routes.** Each route a `Router` serves is one inbound row with Vert.x's verb and path
+    and the handler that answers. A handler that calls `next()` on its context passes the
+    request on and is no row; the first handler that does not names the row. Where that
+    depends on a method in another jar, the row is `partial` with a `handler_pass_through`
+    question naming the method.
+  - **Shapes.** A route with no verb is one row serving every method; a route with no path is
+    `/*`; a regex route is a pattern row. A path Vert.x refuses is recorded, never repaired.
+    A sub-router's routes take the prefix of the mount that received that same router; an
+    unread prefix is `<prefix>/…` at `partial`. `queryParam` and `request().getHeader` reads
+    in a handler body are requirements; `virtualHost` is a host requirement.
+  - **Requests.** Each `WebClient` request sent is one outbound row, followed back across
+    methods to where it was built. One peer per call, `host:port`, whichever address form.
+    A relative request takes the base the client's options object sets
+    (`setDefaultHost`/`setDefaultPort`); an unread base leaves the peer empty, never
+    `localhost:80`.
+  - **The RxJava 3 and Mutiny wrappers** are read as the same calls.
+  - **Measured** on Hono, vertx-examples, Strimzi and two Quarkus quickstarts (spec "As
+    built"): Hono's HTTP adapter gives 7 rows, each naming its handler; Mesh did not build
+    under Maven 3.10. The six field pins are unchanged.
 - **Quartz: each new trigger is a scheduled entry point** (spec 2026-10-28-quartz; probe
   CP-55, Quartz 2.5.1).
   - **One row per trigger.** Each `TriggerBuilder.newTrigger()…build()` is one

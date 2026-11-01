@@ -178,6 +178,19 @@ class Protocol(StrEnum):
     EVENTBUS = "eventbus"
 
 
+# The two markers an `endpoints` row can carry about its OWN address, stored as columns so the
+# linker reads them off the row it already has (`path_kind`, `method_kind`).
+#
+# `PATH_KIND_PATTERN`: the path is a regular expression the framework matches against, not a
+# template it serves. It is the text as written, so its resolution is whatever the reading
+# was; what differs is what the path IS, which is data on the row and never a trust level.
+# A pattern is not canonicalised and is never matched against another row's path.
+PATH_KIND_PATTERN = "pattern"
+# `ANY_METHOD`: the row serves every HTTP method. Said explicitly, never by a NULL `method`
+# alone, because a NULL method otherwise means "nobody read the verb" and links to no verb.
+ANY_METHOD = "any"
+
+
 class Direction(StrEnum):
     """Which way a wire identity is used (D00 §4): served here, called from here, or both.
 

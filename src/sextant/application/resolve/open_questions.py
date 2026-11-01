@@ -130,6 +130,42 @@ QUESTIONS = (
     # Candidates: one per key, with the framework, the module's version(s) and the ranges the
     # key is declared for.
     "prefix_not_measured",
+    # DR-6, Vert.x spec §3a. A declaration the framework raises on rather than repairs —
+    # a route path that is empty or has no leading `/` — so the application does not start
+    # with it and no row serves it. Candidates: one per registration, the caller, the
+    # handler and the reason (`unrooted_path`; for a mount, Vert.x spec §3c,
+    # `exact_mount_path`, `pattern_mount_path` or `wildcard_mount_point`). Identity is the
+    # refused address as written, which no endpoint row carries because none was derived.
+    #
+    # A question rather than a finding of its own, and rather than a silent drop, for
+    # `routing_conflict`'s reason one table over: a disagreement between the code and the
+    # framework that a person resolves. Repairing the path instead would publish an address
+    # the framework never serves, which DR-5's linking would then match against real ones.
+    "refused_registration",
+    # Vert.x spec §3b. An inbound row whose handler is not readable here: it hands the
+    # request's context to a method whose body is in another jar (Hono's
+    # `HttpUtils.nextRoute`) or stores it where the walk cannot follow (a field, a
+    # constructor), or it is an object another jar builds and not one of the framework's own
+    # handlers. The handler's identity is read, whether it passes the request
+    # on is not, so the row is `partial` and this question names the code that decides it.
+    # Candidates: one per row of the identity, the handler, the registering method and the
+    # unread code (`unread`, empty where no call names it).
+    #
+    # The row's own reason, filed against its wire identity: no endpoint column carries a
+    # reason (`evidence` is a provenance tier), and a partial address explains itself in its
+    # path while a partial dispatch outcome has nothing on the row to say it.
+    "handler_pass_through",
+    # Vert.x spec §3c. An inbound row served under a sub-router mount whose path was not read
+    # whole (Mesh's `forEach` over prefixes another module builds): the route's own path is
+    # read, the prefix in front of it is not, so the row's path holds the named hole
+    # `<prefix>` at `partial` and this question names what was not read. Candidates: one per
+    # mount the row is served under, the mount call (`mount`, `mount_ordinal`), the argument
+    # its prefix is read at (`argument` of the call at `at`, `at_ordinal`), what was read there
+    # (`read`) and the method that registered the route (`caller`).
+    #
+    # The row's own reason, for `handler_pass_through`'s reason: the hole says WHAT is
+    # missing, and only this says where to look for it.
+    "mount_prefix",
 )
 
 
@@ -154,6 +190,10 @@ def record_open_questions(workspace: Workspace, rows: list[dict[str, Any]]) -> N
     generic shape here would either be empty or wrong. An empty list writes
     nothing rather than a no-op statement.
 
+    A row filed against an `endpoints` row also carries that row's
+    `method_kind` and `path_kind`; a row without them gets NULL, which is what
+    every question filed against no endpoint row means by them.
+
     Raises `ValueError` naming the offending value when `question` is outside
     `QUESTIONS`: the value is bound straight into a published artifact, where
     a typo is indistinguishable from a kind of question nobody implemented.
@@ -166,4 +206,7 @@ def record_open_questions(workspace: Workspace, rows: list[dict[str, Any]]) -> N
                 f"— 2G design §6's question set is closed (NFR-5)"
             )
     if rows:
-        workspace.derive("open_questions_insert", rows=rows)
+        workspace.derive(
+            "open_questions_insert",
+            rows=[{"method_kind": None, "path_kind": None, **row} for row in rows],
+        )

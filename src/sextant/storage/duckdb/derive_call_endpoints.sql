@@ -30,7 +30,10 @@
 --             the catalog that built the row — provenance only, never part
 --             of wire identity. `consumes`/`produces` (2E design §4) are
 --             carried data, never identity — every engine but Task 5's
---             Spring pass passes NULL for both.
+--             Spring pass passes NULL for both. `path_kind`/`method_kind`
+--             (`closed_sets.PATH_KIND_PATTERN`, `ANY_METHOD`) say what the
+--             path and a NULL method ARE, NULL on an ordinary row; only
+--             `fluent` sets them (Vert.x spec §3a).
 -- EVERY INSERTED ROW IS MINTED A `row_id` (follow-the-object, Ruling 7), the
 -- same way `insert_endpoints.sql` does: one above the highest id in the table,
 -- numbered over the rows that survive the gate and the guard below (the inner
@@ -41,17 +44,18 @@
 INSERT INTO endpoints (
     row_id, protocol, direction, method, path, handler, caller, peer,
     handler_signature, resolution, evidence, catalog_id, request_shape, response_shape,
-    consumes, produces
+    consumes, produces, path_kind, method_kind
 )
 SELECT (SELECT coalesce(max(row_id), 0) FROM endpoints)
            + row_number() OVER (
                ORDER BY r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
                         r.resolution, r.evidence, r.catalog_id, r.request_shape,
-                        r.response_shape, r.consumes, r.produces, r.handler_signature
+                        r.response_shape, r.consumes, r.produces, r.handler_signature,
+                        r.path_kind, r.method_kind
            ),
        r.protocol, r.direction, r.method, r.path, r.handler, r.caller, r.peer,
        r.handler_signature, r.resolution, r.evidence, r.catalog_id, r.request_shape,
-       r.response_shape, r.consumes, r.produces
+       r.response_shape, r.consumes, r.produces, r.path_kind, r.method_kind
 FROM (
 SELECT r.*
 FROM (SELECT UNNEST(
@@ -59,7 +63,8 @@ FROM (SELECT UNNEST(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR,
         handler VARCHAR, caller VARCHAR, peer VARCHAR, handler_signature VARCHAR,
         resolution VARCHAR, evidence VARCHAR, catalog_id VARCHAR,
-        request_shape VARCHAR, response_shape VARCHAR, consumes VARCHAR, produces VARCHAR
+        request_shape VARCHAR, response_shape VARCHAR, consumes VARCHAR, produces VARCHAR,
+        path_kind VARCHAR, method_kind VARCHAR
     )[]
 ) AS r)
 -- THE ADDRESSES-NOTHING GATE, mechanism 3's twin on the call-site side.
@@ -119,6 +124,15 @@ WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
 -- why it belongs here: two calls to one path at two addresses are two calls, and only
 -- the address separates them.
 --
+-- AN INBOUND row also matches on `handler`, the SQL twin of fluent's inbound key
+-- `(protocol, verb, path, handler)`: which method registered a route is not part of what the
+-- route serves, so the route a table row already serves with the same handler is not
+-- inserted again because another method registered it. The `caller`/`peer` comparison
+-- stays as one more way to match, not the only one: this guard also stands between two
+-- ENGINES describing one route, and what they agree on there is the caller, not the
+-- handler's spelling. A NULL handler matches nothing here, which keeps two handler-less
+-- rows of different callers apart exactly as before.
+--
 -- `IS NOT DISTINCT FROM` on both, like `method` above: either may be NULL, and plain
 -- equality reads NULL = NULL as unknown, which would stop the guard matching the very
 -- rows it exists to catch.
@@ -128,7 +142,8 @@ WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
       AND existing.direction = r.direction
       AND existing.method IS NOT DISTINCT FROM r.method
       AND existing.path      = r.path
-      AND existing.caller IS NOT DISTINCT FROM r.caller
-      AND existing.peer   IS NOT DISTINCT FROM r.peer
+      AND ((existing.caller IS NOT DISTINCT FROM r.caller
+            AND existing.peer IS NOT DISTINCT FROM r.peer)
+           OR (r.direction = 'inbound' AND existing.handler = r.handler))
 )
 ) r;

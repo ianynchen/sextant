@@ -14,14 +14,15 @@
 -- here would hide it.
 --
 -- Parameters:
---   $rows -- {handler, root_kind, protocol, method, path} rows, one per
---            address a trace can start at, and one all-NULL address for a
---            root nothing addresses.
-INSERT INTO roots (handler, root_kind, protocol, method, path)
-SELECT r.handler, r.root_kind, r.protocol, r.method, r.path
+--   $rows -- {handler, root_kind, protocol, method, path, method_kind,
+--            path_kind} rows, one per address a trace can start at, and one
+--            all-NULL address for a root nothing addresses.
+INSERT INTO roots (handler, root_kind, protocol, method, path, method_kind, path_kind)
+SELECT r.handler, r.root_kind, r.protocol, r.method, r.path, r.method_kind, r.path_kind
 FROM (
     SELECT UNNEST($rows::STRUCT(
         handler VARCHAR, root_kind VARCHAR,
-        protocol VARCHAR, method VARCHAR, path VARCHAR
+        protocol VARCHAR, method VARCHAR, path VARCHAR,
+        method_kind VARCHAR, path_kind VARCHAR
     )[]) AS r
 );

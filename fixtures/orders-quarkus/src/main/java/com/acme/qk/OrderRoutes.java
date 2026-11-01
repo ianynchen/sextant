@@ -60,4 +60,17 @@ public class OrderRoutes {
     public String search(@Param String q, @Header("X-Tenant") String tenant) {
         return "[]";
     }
+
+    // Vert.x registers a `@Route` with no `methods` for every verb, and one with `regex` on
+    // the regular expression alone (spec 2026-10-30 §3a): the same dispatcher Vert.x Web
+    // routes use, so the same two rows.
+    @Route(path = "/anyverb")
+    public String anyVerb() {
+        return "{}";
+    }
+
+    @Route(regex = "\\/qk\\/files\\/.+", methods = HttpMethod.GET)
+    public String file() {
+        return "{}";
+    }
 }

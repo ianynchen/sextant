@@ -284,6 +284,10 @@ _TOPIC_ENDPOINT_KWARGS = {
     "prefix_from": [],
     "peer_from": [],
     "method_from": "method",
+    # Vert.x plan Task 14's two words, inert: no catalog in this file serves a verbless mapping
+    # for every method or names a regular expression instead of a path.
+    "verbless_serves": None,
+    "pattern_from": [],
     # Task 5: no catalog in this file declares media attributes, so both alias
     # lists are empty — the "every non-HTTP catalog derives NULL" default.
     "consumes_from": [],
@@ -698,6 +702,54 @@ def test_a_resolved_row_with_no_path_and_no_peer_is_not_inserted(tmp_path: Path)
     assert sorted((str(r["resolution"]), r["peer"]) for r in rows) == [
         ("resolved", "orders.internal"),
         ("unresolved", None),
+    ]
+
+
+@pytest.mark.pins(
+    "derive_call_endpoints.an-inbound-row-of-another-handler-is-kept",
+    "derive_call_endpoints.an-inbound-row-ignores-its-registering-method",
+)
+def test_one_route_from_two_callers_is_one_row_per_handler(tmp_path: Path):
+    """`derive_call_endpoints.sql`'s inbound match on `handler` (Vert.x plan, Task 6; final
+    review M8), pinned at its own seam because it guards every engine's inbound rows. One route
+    registered by a second method with the SAME handler is the row already there, not a second
+    one; with a DIFFERENT handler, from a different caller, it is a row of its own, both kept."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    def _row(handler: str, caller: str) -> dict:
+        return {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": "GET",
+            "path": "/orders",
+            "handler": f"com/acme/routes/Handlers#{handler}(sig_1a2b3c4d).",
+            "caller": f"com/acme/routes/Routes#{caller}(sig_1a2b3c4d).",
+            "peer": None,
+            "handler_signature": None,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "request_shape": None,
+            "response_shape": None,
+            "catalog_id": "cat-in",
+        }
+
+    workspace.derive("call_endpoints", rows=[_row("list", "first")])
+    workspace.derive("call_endpoints", rows=[_row("list", "second")])
+    workspace.derive("call_endpoints", rows=[_row("search", "third")])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert sorted((str(r["handler"]), str(r["caller"])) for r in rows) == [
+        (
+            "com/acme/routes/Handlers#list(sig_1a2b3c4d).",
+            "com/acme/routes/Routes#first(sig_1a2b3c4d).",
+        ),
+        (
+            "com/acme/routes/Handlers#search(sig_1a2b3c4d).",
+            "com/acme/routes/Routes#third(sig_1a2b3c4d).",
+        ),
     ]
 
 
@@ -2328,7 +2380,8 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
     workspace._connection.execute(
-        "INSERT INTO roots VALUES (?, 'inbound_endpoint', 'http', 'GET', ?)",
+        "INSERT INTO roots (handler, root_kind, protocol, method, path) "
+        "VALUES (?, 'inbound_endpoint', 'http', 'GET', ?)",
         ["mod com/acme/A#go(sig_1).", secret],
     )
     workspace._connection.execute(
@@ -2540,6 +2593,28 @@ def test_the_address_ordering_masks_its_path_like_the_table_it_reorders(tmp_path
             f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')"
         ).fetchall()
         assert not any("hunter2" in str(cell) for row in rows for cell in row), name
+
+
+@pytest.mark.pins("workspace.the-address-ordering-carries-every-roots-column")
+def test_the_address_ordering_carries_every_column_the_table_it_reorders_does(tmp_path: Path):
+    """The same rows, reordered: a column `roots.parquet` ships and `roots_by_address.parquet`
+    drops gives one bundle two answers about one root. The markers are the case that slipped
+    (final review C1): `any` on one file, a verb nobody read on the other."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace._connection.execute(
+        "INSERT INTO roots (handler, root_kind, protocol, method, path, method_kind, path_kind) "
+        "VALUES ('m a/A#a().', 'inbound_endpoint', 'http', NULL, '/a.+', 'any', 'pattern')"
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    workspace.close()
+
+    files = {
+        name: duckdb.sql(f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')")
+        for name in ("roots", "roots_by_address")
+    }
+    assert files["roots"].columns == files["roots_by_address"].columns
+    assert files["roots"].fetchall() == files["roots_by_address"].fetchall()
 
 
 def test_the_coverage_distributions_group_the_columns_that_already_exist(tmp_path: Path):

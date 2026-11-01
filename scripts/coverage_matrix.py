@@ -122,8 +122,10 @@ FRAMEWORKS: dict[str, list[str]] = {
         "JDK / Apache HttpClient",
         "Micronaut HTTP client",
         "MicroProfile REST Client",
-        "Apache Camel",
         "Ktor HttpClient",
+        # Apache Camel left the target list on 2026-10-31: the user ruled it out of scope on
+        # adoption on 2026-10-26 (docs/COVERAGE.md "Priority order"); its §5.2 row stays,
+        # tagged to no framework line.
         "Vert.x WebClient",
     ],
     "SOAP": [
@@ -211,7 +213,6 @@ FRAMEWORK_NONE = {"any", "—", ""}
 # frameworks (`test_feature_delivery.py`); this is presentation data.
 ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
-    "apache-camel": ["Apache Camel"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
     # Named 2026-10-24 when Quarkus gRPC shipped for grpc-java's generated forms and the field
     # measurement found Quarkus's own Mutiny forms unread on both real modules.
@@ -317,7 +318,6 @@ FAMILIES: dict[str, list[str]] = {
         "Pekko / Alpakka Connectors Kafka",
         "Akka / Pekko actors",
     ],
-    "Apache Camel": ["Apache Camel"],
     "Temporal / Cadence": ["Temporal / Cadence"],
     "Quartz": ["Quartz"],
 }

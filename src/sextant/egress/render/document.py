@@ -50,7 +50,14 @@ from sextant.application.resolve.resolved_schedules import redact_schedule_value
 # addresses that reach it was made in `resolve/roots.py`, and re-making it here
 # is the derivation "Egress is read-only" exists to forbid.
 from sextant.application.resolve.roots import Root
-from sextant.domain.closed_sets import Anchor, Protocol, Resolution, TraceStop
+from sextant.domain.closed_sets import (
+    ANY_METHOD,
+    PATH_KIND_PATTERN,
+    Anchor,
+    Protocol,
+    Resolution,
+    TraceStop,
+)
 from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
@@ -535,7 +542,14 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     address therefore come out of one function — two would be two answers to
     "what is this endpoint called" in one document.
     """
-    return _wire_address(endpoint["protocol"], endpoint["method"], endpoint["path"], redactor)
+    return _wire_address(
+        endpoint["protocol"],
+        endpoint["method"],
+        endpoint["path"],
+        redactor,
+        any_method=endpoint.get("method_kind") == ANY_METHOD,
+        pattern=endpoint.get("path_kind") == PATH_KIND_PATTERN,
+    )
 
 
 # The ledger questions whose NULL verb is an ABSENCE rather than a verb the
@@ -551,15 +565,29 @@ _ANY_VERB_QUESTIONS = frozenset({"routing_conflict"})
 
 def _question_identity(row: dict[str, object], redactor: Redactor) -> str:
     """One `open_questions` row's wire identity — `_wire_identity`'s reading,
-    except for the questions above, whose absent verb renders as `any`."""
-    method = row["method"]
-    if method is None and str(row["question"]) in _ANY_VERB_QUESTIONS:
-        method = "any"
-    return _wire_address(row["protocol"], method, row["path"], redactor)
+    markers included, except for the questions above, whose absent verb renders
+    as `any`."""
+    any_method = row.get("method_kind") == ANY_METHOD or (
+        row["method"] is None and str(row["question"]) in _ANY_VERB_QUESTIONS
+    )
+    return _wire_address(
+        row["protocol"],
+        row["method"],
+        row["path"],
+        redactor,
+        any_method=any_method,
+        pattern=row.get("path_kind") == PATH_KIND_PATTERN,
+    )
 
 
 def _wire_address(
-    protocol_value: object, method_value: object, path_value: object, redactor: Redactor
+    protocol_value: object,
+    method_value: object,
+    path_value: object,
+    redactor: Redactor,
+    *,
+    any_method: bool = False,
+    pattern: bool = False,
 ) -> str:
     """A wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
@@ -573,9 +601,18 @@ def _wire_address(
     redactor: `https://user:pass@host/x` renders with its userinfo stripped,
     and a repo value pattern masks whatever else it names. A `${...}`
     expression passes through whole — it is a reference to a value, not the
-    value."""
+    value.
+
+    `any_method` and `pattern` are the row's own `method_kind` and `path_kind` (Vert.x spec
+    §3a), which an `endpoints` row carries and `roots` and `open_questions` carry from it: a
+    row serving every verb renders `any`, the
+    word `_question_identity` already uses, never the `(unresolved)` its NULL method would
+    otherwise print; a path the framework matches as a regular expression is followed by
+    `(pattern)`, so it never reads as a URL someone could call."""
     protocol = "" if protocol_value is None else str(protocol_value)
     rendered_path = "(unresolved)" if path_value is None else redactor.redact_text(str(path_value))
+    if pattern and path_value is not None:
+        rendered_path = f"{rendered_path} (pattern)"
     # NO protocol at all — the address alone, with no verb and no prefix
     # (OI-1). Only an `open_questions` row reaches this: an `endpoints` row
     # always carries one (`resolve/endpoints.py` refuses a catalog that mints
@@ -589,7 +626,7 @@ def _wire_address(
         return rendered_path
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
-    method = method_value
+    method = ANY_METHOD if method_value is None and any_method else method_value
     # A verbed protocol whose row carries no verb *by design*
     # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
     # would report a gap that does not exist. Every other verbed protocol —
@@ -1174,6 +1211,28 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
     return _runs(f"{what}, so nothing above accounts for it: library `{coordinate}`{tail}.")
 
 
+# Why the framework refuses a registration (`refused_registration`), one phrase per
+# `inbound_routes` reason word, read by `_candidate_line`.
+_REFUSAL_PHRASES = {
+    "unrooted_path": "refuses a path that is empty or lacks a leading `/`",
+    "exact_mount_path": "refuses to mount a router on a path with no trailing wildcard",
+    "pattern_mount_path": "refuses to mount a router on a regular expression path",
+    "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
+}
+
+# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
+# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
+_PASS_THROUGH_PHRASES = {
+    "handed_to": "hands the request's context to {}, where it is not followed here",
+    "stored_in": "stores the request's context in {}, where it is not followed here",
+    "produced_by": "is built by {}, whose body is not read here",
+    "of_type": "is declared as {}, a type whose handler is not read here",
+    "from_field": "comes from {}, whose declared type is not a handler read here",
+    "no_body": "runs {}, which has no body read here and no module override",
+    "argument": "is an argument of {} that is not read here",
+}
+
+
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
@@ -1325,6 +1384,43 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         return (
             f"`{candidate['key']}` is configured but not applied: it is declared for "
             f"{candidate['framework']} {ranges}, and the module runs {running}"
+        )
+    if question == "refused_registration":
+        # DR-6: a declaration the framework raises on, filed by
+        # `resolve/shapes/inbound_routes.py::file_refusal` and verified against that
+        # writer's own `candidates` line. The row's own path is the address as written, so
+        # the sentence names the registering method and the handler, which are what a
+        # reader opens, and says the reason the framework refuses it.
+        handler = candidate["handler"] or "no handler read"
+        return (
+            f"registered by {candidate['caller']} ({handler}); the framework "
+            f"{_REFUSAL_PHRASES[str(candidate['reason'])]}, so it serves nothing for it"
+        )
+    if question == "handler_pass_through":
+        # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
+        # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
+        # own `candidates` line. Each `unread` entry says what its name IS — where the
+        # context went unfollowed, what built the handler object, or the handler method with
+        # no body — so a builder is never called a hand-off.
+        handler = candidate["handler"] or "a handler object"
+        reasons = ", and ".join(
+            _PASS_THROUGH_PHRASES[str(entry["how"])].format(entry["name"])
+            for entry in cast(list[dict[str, str]], candidate["unread"])
+        )
+        return (
+            f"{handler} (registered by {candidate['caller']}) {reasons}, so whether it "
+            f"passes the request on is not known"
+        )
+    if question == "mount_prefix":
+        # Vert.x spec §3c: a row served under a mount whose path was not read whole, filed by
+        # `resolve/shapes/mounts.py::file_unread_prefix` and verified against that writer's
+        # own `candidates` line: the mount call, the argument its prefix is read at, and
+        # what that argument read as.
+        return (
+            f"registered by {candidate['caller']}; the mount at {candidate['mount']} (call "
+            f"{candidate['mount_ordinal']}) reads its prefix from argument "
+            f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
+            f"which reads as {candidate['read']}, so the prefix is not known"
         )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
@@ -2211,7 +2307,14 @@ def _root_addresses(root: Root, redactor: Redactor) -> tuple[Run, ...]:
         return _text(_NO_WIRE_ADDRESS)
     return _code(
         "; ".join(
-            _wire_address(identity.protocol, identity.method, identity.path, redactor)
+            _wire_address(
+                identity.protocol,
+                identity.method,
+                identity.path,
+                redactor,
+                any_method=identity.method_kind == ANY_METHOD,
+                pattern=identity.path_kind == PATH_KIND_PATTERN,
+            )
             for identity in root.identities
         )
     )

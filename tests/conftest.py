@@ -26,10 +26,8 @@ def stub_library_in_the_local_repository() -> Path:
     """Built and installed once per session, and skipped entirely when it is
     already current — every test in this suite depends on it, including the ones
     that never touch Maven, so the up-to-date path must cost nothing."""
-    jar = fixture_stub.local_repository_jar()
-    if fixture_stub.is_current(jar):
-        return jar
-    return fixture_stub.compile_and_install(offline=True)
+    fixture_stub.install_all(offline=True)
+    return fixture_stub.local_repository_jar()
 
 
 @pytest.fixture(scope="session")

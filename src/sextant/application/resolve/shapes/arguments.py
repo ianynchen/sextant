@@ -196,6 +196,9 @@ _UNREADABLE_HOST = "<host>"
 # longer has an unread half, so the marker comes off (`fluent._with_authority`). Exported
 # rather than re-spelled, so the two places cannot drift.
 UNREADABLE_HOST = _UNREADABLE_HOST
+# The walk's hole, exported for the same reason: `inbound_routes` asks whether a path starts
+# with one, and must not keep a spelling of its own.
+HOLE = _HOLE
 
 # **The kind a query parameter a CALL SENDS is recorded under** (`OI-151`).
 #

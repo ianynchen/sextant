@@ -10,15 +10,18 @@
 -- once per resolve in reset_open_questions.sql, outside this file.
 --
 -- Parameters:
---   $rows -- {protocol, method, path, question, candidates, evidence} rows.
---            `candidates` arrives as JSON TEXT, already serialized and
---            key-sorted by the pass, and is cast to JSON here so the column
---            holds a document rather than a string.
-INSERT INTO open_questions (protocol, method, path, question, candidates, evidence)
-SELECT r.protocol, r.method, r.path, r.question, r.candidates::JSON, r.evidence
+--   $rows -- {protocol, method, path, question, candidates, evidence,
+--            method_kind, path_kind} rows. `candidates` arrives as JSON TEXT,
+--            already serialized and key-sorted by the pass, and is cast to JSON
+--            here so the column holds a document rather than a string.
+INSERT INTO open_questions (
+    protocol, method, path, question, candidates, evidence, method_kind, path_kind
+)
+SELECT r.protocol, r.method, r.path, r.question, r.candidates::JSON, r.evidence,
+       r.method_kind, r.path_kind
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, method VARCHAR, path VARCHAR, question VARCHAR,
-        candidates VARCHAR, evidence VARCHAR
+        candidates VARCHAR, evidence VARCHAR, method_kind VARCHAR, path_kind VARCHAR
     )[]
 ) AS r);

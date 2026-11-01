@@ -57,7 +57,9 @@ def _receiver(site: Mapping[str, Any], effective: Mapping[Any, Mapping[str, Any]
     if site.get("invoke_kind") == "static":
         return short_class_name(str(site["owner"]))
     field = site.get("receiver_field")
-    if field is not None:
+    # A field of `this` (`parent.seconds()`) is no constant: written `Owner.parent.seconds()`
+    # it would be a static call nobody wrote.
+    if field is not None and site.get("receiver_field_kind") is None:
         symbol = bare_descriptor(str(field))
         owner = owner_of(symbol)
         # The call's owner is the type the receiver is declared as, so a field of that same
@@ -65,6 +67,8 @@ def _receiver(site: Mapping[str, Any], effective: Mapping[Any, Mapping[str, Any]
         if owner is None or owner != bare_descriptor(str(site["owner"])) or not member_name(symbol):
             return None
         return f"{short_class_name(owner)}.{member_name(symbol)}"
+    if field is not None:
+        return None
     producer = effective.get(site.get("receiver")) if site.get("receiver") is not None else None
     return None if producer is None else _call(producer, effective, qualified=True)
 

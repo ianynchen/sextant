@@ -133,17 +133,24 @@ public final class MethodFlow {
             Integer receiverParameter = target.hasReceiver()
                 ? parameterIndex(frame.getStack(base - 1), parameterSlots)
                 : null;
-            // A third thing `sourceId` cannot say: a receiver read by GETSTATIC keeps the
-            // read's own id, which no other fact names, so nothing joined it to the field.
-            // The field's symbol is what an argument read the same way already carries
-            // (`field`/`enum`), so a walk can reach the field's writer from the receiver
-            // too — Kotlin's file-level `val client = …` followed by `client.config { … }`.
+            // A third thing `sourceId` cannot say: a receiver read by GETSTATIC, or by
+            // GETFIELD on `this`, keeps the read's own id, which no other fact names, so
+            // nothing joined it to the field. The field's symbol is what an argument read the
+            // same way already carries (`field`/`enum`), so a walk can reach the field's
+            // writer from the receiver too — Kotlin's file-level `val client = …` followed by
+            // `client.config { … }`, and a client a constructor stored in `this.client`.
             String receiverField = target.hasReceiver()
-                ? staticFieldOf(frame.getStack(base - 1))
+                ? receiverFieldOf(frame.getStack(base - 1), instructions, frames,
+                                  (method.access & Opcodes.ACC_STATIC) != 0)
                 : null;
+            // Which of the two reads named it: a field of `this` says so, because the symbol
+            // alone reads the same as a static field's (`Owner#name.`), and a reader writing
+            // the call as source would otherwise write `Owner.name.call()` for `this.name`.
+            boolean receiverOnThis = receiverField != null
+                && singleSource(frame.getStack(base - 1)).getOpcode() == Opcodes.GETFIELD;
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
             lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver,
-                                   receiverParameter, receiverField, result,
+                                   receiverParameter, receiverField, receiverOnThis, result,
                                    implementationOf(insns[i]), arguments));
         }
         return lines;
@@ -1350,13 +1357,23 @@ public final class MethodFlow {
         return index < 0 ? null : index;
     }
 
-    /** The static field a value was read from, as the argument grammar spells a field
-     *  (`owner#name.`), or null: one producer, and that producer a GETSTATIC. A receiver
-     *  read by GETFIELD gets no key: only the static read was ruled in (2026-10-26), so
-     *  an instance field's receiver is a stated boundary (D00 §5). */
-    private static String staticFieldOf(SourceValue value) {
+    /** The field a receiver was read from, as the argument grammar spells a field
+     *  (`owner#name.`), or null: one producer, and that producer a GETSTATIC, or a GETFIELD
+     *  whose object is `this` — the `ALOAD 0` of an instance method, the one object whose
+     *  field writes are facts too (`FieldWriteFact`, the same rule). A GETFIELD on any other
+     *  object (`box.link`) gets no key: the field is read per object (object-identity
+     *  ruling 1), and naming it would join `box`'s field to whoever wrote `this`'s. Static
+     *  reads were ruled in on 2026-10-26, `this`'s fields on 2026-10-31 (D00 §5). */
+    private static String receiverFieldOf(SourceValue value, InsnList instructions,
+                                          Frame<SourceValue>[] frames, boolean isStatic) {
         AbstractInsnNode producer = singleSource(value);
-        if (!(producer instanceof FieldInsnNode field) || field.getOpcode() != Opcodes.GETSTATIC) {
+        if (!(producer instanceof FieldInsnNode field)) return null;
+        if (field.getOpcode() == Opcodes.GETFIELD) {
+            Frame<SourceValue> read = frames[instructions.indexOf(field)];
+            if (isStatic || read == null) return null;
+            AbstractInsnNode object = singleSource(read.getStack(read.getStackSize() - 1));
+            if (!(object instanceof VarInsnNode load) || load.var != 0) return null;
+        } else if (field.getOpcode() != Opcodes.GETSTATIC) {
             return null;
         }
         return field.owner + "#" + field.name + ".";
@@ -1376,7 +1393,8 @@ public final class MethodFlow {
 
     private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
                                        int ordinal, Integer receiver, Integer receiverParameter,
-                                       String receiverField, Integer result, String implementation,
+                                       String receiverField, boolean receiverOnThis,
+                                       Integer result, String implementation,
                                        List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
@@ -1407,8 +1425,11 @@ public final class MethodFlow {
         // Absent rather than null on every site whose receiver is not a parameter — the
         // rule `implementation` follows two lines up, for the same reason.
         if (receiverParameter != null) fact.put("receiver_parameter", String.valueOf(receiverParameter));
-        // Absent on every site whose receiver is not a GETSTATIC, by the same rule.
+        // Absent on every site whose receiver is not a GETSTATIC or a GETFIELD on `this`, by
+        // the same rule.
         if (receiverField != null) fact.put("receiver_field", JsonOut.string(receiverField));
+        // Written only for a field of `this`; absent, a named receiver field is a static one.
+        if (receiverOnThis) fact.put("receiver_field_kind", JsonOut.string("instance"));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
         return JsonOut.object(fact);

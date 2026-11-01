@@ -92,4 +92,6 @@ def _row(feeder: dict[str, Any], handler: str | None) -> dict[str, Any]:
         "response_shape": None,
         "consumes": None,
         "produces": None,
+        "path_kind": None,
+        "method_kind": None,
     }

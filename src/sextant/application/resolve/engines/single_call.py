@@ -13,7 +13,7 @@ catalog data; this module never names a framework.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from typing import Any, cast
@@ -49,6 +49,7 @@ from sextant.application.resolve.shapes.arguments import (
     with_authority,
 )
 from sextant.application.resolve.shapes.client_base import (
+    CLIENT_IS_RECEIVER,
     against_client_base,
     client_base_of,
     request_url_of,
@@ -305,6 +306,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # through, and None for every catalog declaring no `client_base` — whose rows are then
     # exactly what they were.
     client_base = client_base_of(matches, catalog.source)
+    _refuse_options_rung(client_base, catalog)
     _validate_client_rows(methods, client_base, catalog)
     # Read once per run, beside `_validate_methods`, because it is checked
     # against the rows: a separator with no paired row, or a paired row with
@@ -1063,6 +1065,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     "response_shape": response_shape,
                     "consumes": None,
                     "produces": None,
+                    "path_kind": None,
+                    "method_kind": None,
                 }
             )
 
@@ -1156,6 +1160,22 @@ def _given(argument: dict[str, Any] | None) -> bool:
     """An address part the call hands over: present, and not the `null` a defaulted or
     explicitly absent part compiles to."""
     return argument is not None and argument.get("kind") != "null"
+
+
+def _refuse_options_rung(declared: Mapping[str, Any] | None, catalog: Catalog) -> None:
+    """Refuses an options-object `client_base` (`setters`, `fill_authority`), whatever its
+    `client_arg`: this style reads a block ladder's base and joins it with
+    `against_client_base`, and its call has no chain whose root a client could be the receiver
+    of. A block ladder naming `client_arg: receiver` is already refused by `client_base_of`,
+    which reads a block ladder's client at an argument index only."""
+    if declared is None:
+        return
+    if "setters" in declared:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `client_base` is an options-object rung or "
+            f"names `client_arg: {CLIENT_IS_RECEIVER}`, which only the `fluent` style reads "
+            f"(D02 §2); a `single_call` client base is a block ladder at an argument index"
+        )
 
 
 def _validate_client_rows(rows: list[dict[str, Any]], declared: Any, catalog: Catalog) -> None:

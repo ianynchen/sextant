@@ -36,6 +36,10 @@ detect:
 measured:
   - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0"],
       identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+  # The `returns_receiver` flags on `MessageConsumer` below, and nothing else here (row 324),
+  # at this file's two lines only.
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0"],
+      identity: reported, by: scripts/probes/cp56_vertx_web.md }
 
 requires: [call_site, string_constants, chain_reconstruction]
 
@@ -76,9 +80,29 @@ matches:
     # `fluent`'s stated rule: the handler never moves the row's resolution.
     # MEASURED (CP-31 Q2): this descriptor is byte-identical at 4.5.10 and
     # 5.0.0, so one entry covers both releases.
+    #
+    # `returns_receiver` on it and on every other method `MessageConsumer` declares to return
+    # `MessageConsumer` at 4.5.10 and 5.0.0 (CP-56 row 324: `MessageConsumerImpl` answers
+    # `this` for each). A consumer configured in statements of its own —
+    # `c = bus.consumer("a"); c.exceptionHandler(e); c.handler(h);` — is then one chain, where
+    # a call whose result is dropped would otherwise fork it. The others carry nothing a row
+    # reads and are capture-less; `setMaxBufferedMessages` is 4.5.10 only. 5.2.1's
+    # `processor(Function)` is not flagged: this file is measured at 4.5.10 and 5.0.0.
     - { method: handler, owner: io.vertx.core.eventbus.MessageConsumer,
         descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;",
-        captures: { handler: arg0 } }
+        captures: { handler: arg0 }, returns_receiver: true }
+    - { method: endHandler, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
+    - { method: exceptionHandler, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
+    - { method: fetch, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "(J)Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
+    - { method: pause, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "()Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
+    - { method: resume, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "()Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
+    - { method: setMaxBufferedMessages, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "(I)Lio/vertx/core/eventbus/MessageConsumer;", returns_receiver: true }
     # THE SEND STEP, in both of its declared overloads. MEASURED (CP-31 Q3):
     # `write(T)` returning `io.vertx.core.Future` exists at 4.5.10 and 5.0.0;
     # `write(T, Handler)` returning void exists ONLY at 4.5.10 — the same
@@ -92,11 +116,11 @@ matches:
         captures: { body: arg0 } }
   # The two terminals, one per direction. A chain that reaches neither derives
   # nothing — which is exactly the handler-less consumer, and the row this
-  # catalog exists to NOT write. `deliveryOptions(...)`, `pause()`, `resume()`,
-  # `fetch(long)`, `setMaxBufferedMessages(int)` and the rest of both interfaces
-  # are undeclared and pass through uncaptured (D02 §2's `fluent` rule): none of
-  # them names an address or registers anything, so nothing is lost by their
-  # silence and no `poisons:` entry is warranted.
+  # catalog exists to NOT write. `MessageConsumer`'s other self-returning calls
+  # are capture-less steps above; `deliveryOptions(...)` and the rest of
+  # `MessageProducer` are undeclared and pass through uncaptured (D02 §2's
+  # `fluent` rule): none of them names an address or registers anything, so
+  # nothing is lost by their silence and no `poisons:` entry is warranted.
   terminal: [handler, write]
 
 # The first two rows are copied verbatim from spring-resttemplate.yml (harvest

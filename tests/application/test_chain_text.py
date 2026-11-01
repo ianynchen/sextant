@@ -171,7 +171,10 @@ def test_a_nested_call_on_a_nested_call_is_written_with_it() -> None:
     )
 
 
-@pytest.mark.pins("schedules.a-nested-call-is-written-WITH-its-receiver")
+@pytest.mark.pins(
+    "schedules.a-nested-call-is-written-WITH-its-receiver",
+    "chain_text.a-field-of-this-is-no-constant",
+)
 @pytest.mark.parametrize(
     "receiver",
     [
@@ -181,6 +184,13 @@ def test_a_nested_call_on_a_nested_call_is_written_with_it() -> None:
         {},
         # a static field of ANOTHER type: a read of something that can vary
         {"receiver": 6, "receiver_field": "org/acme/Config#unit."},
+        # a field of `this` of the call's own type (`this.unit.toMillis(5)`): no constant,
+        # and `TimeUnit.unit.toMillis(5)` would be a static read nobody wrote
+        {
+            "receiver": 6,
+            "receiver_field": f"{TIME_UNIT}unit.",
+            "receiver_field_kind": "instance",
+        },
     ],
 )
 def test_a_nested_call_on_a_receiver_not_written_gives_none(receiver: dict[str, Any]) -> None:

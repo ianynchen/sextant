@@ -22,6 +22,7 @@ from sextant.application.resolve.effective_annotations import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
@@ -205,6 +206,14 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         "peer_from": list(mapping.get("peer_from", [])),
         "method_from": mapping["method_from"],
         "all_methods": list(mapping["all_methods"]),
+        # Vert.x spec §3a: `any` where a mapping naming no method serves every method of an
+        # open set, so the derivation writes ONE row marked `method_kind = any` instead of
+        # fanning `all_methods` out; NULL for every catalog that says nothing, Spring's
+        # closed-enum fan-out included. The word `fluent` catalogs already use.
+        "verbless_serves": validated_verbless_serves(mapping, catalog.source, "annotation_driven"),
+        # The attributes whose value is a regular expression, not a path: the derivation
+        # publishes it verbatim as a pattern row. Empty for every catalog declaring none.
+        "pattern_from": list(mapping.get("pattern_from", [])),
         "catalog_id": catalog.id,
         # Optional (media evidence kind (a), spec §4): absent on every
         # catalog that declares neither, so it derives NULL with zero YAML
@@ -2237,6 +2246,8 @@ def _reply_row(
         "response_shape": None,
         "consumes": None,
         "produces": None,
+        "path_kind": None,
+        "method_kind": None,
     }
 
 

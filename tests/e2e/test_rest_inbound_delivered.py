@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN
 from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -2046,3 +2047,727 @@ def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
     assert ("GET", "/orders/list", "property") in conditioned
     assert ("POST", "/orders", "property") in conditioned
     assert {path for _, path, _ in conditioned if path.startswith("/products")} == set()
+
+
+# ---------------------------------------------------------------------------------------
+# Vert.x Web and WebClient (spec 2026-10-30 §3f, plan 2026-10-31). Every test below is the
+# failing intention test of one task: `xfail(strict=True)` names the task that turns it
+# green, and that task removes the mark. Tests are grouped by that task, so one task flips
+# whole tests, never half of one.
+# ---------------------------------------------------------------------------------------
+
+VERTX_WEB = FIXTURES / "orders-vertx-web"
+
+
+@pytest.fixture(scope="module")
+def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    """One `module analyze` of the Vert.x fixture — inbound, outbound and the handler-read
+    rows all read it. The base jar it depends on is installed by `fixture_stub`. The module
+    document one `render` of the same analysis writes rides along (`document`), because the
+    document is the result."""
+    workspace_dir = tmp_path_factory.mktemp("vertx")
+    tables = _analyzed_tables(VERTX_WEB, workspace_dir)
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        tables["open_questions"] = [dict(row) for row in workspace.query("open_questions")]
+        tables["roots"] = [dict(row) for row in workspace.query("roots")]
+    finally:
+        workspace.close()
+    result = CliRunner().invoke(
+        cli, ["module", "render", str(VERTX_WEB), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    tables["document"] = (workspace_dir / "render" / "architecture.md").read_text(encoding="utf-8")
+    return tables
+
+
+@pytest.fixture(scope="module")
+def vertx_inbound(vertx_tables: dict[str, list[dict]]) -> list[dict]:
+    return [
+        r
+        for r in vertx_tables["endpoints"]
+        if r["direction"] == "inbound" and r["protocol"] == "http"
+    ]
+
+
+@pytest.fixture(scope="module")
+def vertx_outbound(vertx_tables: dict[str, list[dict]]) -> list[dict]:
+    return [
+        r
+        for r in vertx_tables["endpoints"]
+        if r["direction"] == "outbound" and r["protocol"] == "http"
+    ]
+
+
+def _serves_any_method(row: dict) -> bool:
+    """The any-method marker (spec §3a): `endpoints.method_kind`. This is the one place the
+    tests name where it lives."""
+    return row["method"] is None and row.get("method_kind") == ANY_METHOD
+
+
+def _is_pattern(row: dict) -> bool:
+    """A path that is a regular expression, not an address (spec §3a): `endpoints.path_kind`.
+    This body is the one place the tests name it."""
+    return row.get("path_kind") == PATH_KIND_PATTERN
+
+
+def _reason_of(row: dict, tables: dict[str, list[dict]]) -> str:
+    """Why a `partial` row is partial, in words: the `handler_pass_through` open question
+    filed against the row's wire identity (Vert.x Task 10), its candidates and its evidence.
+    The ledger carries it because no endpoint column carries a reason (`endpoints.evidence`
+    is a provenance tier)."""
+    return " ".join(
+        f"{q['question']} {q['candidates']} {q['evidence']}"
+        for q in tables["open_questions"]
+        if q["question"] == "handler_pass_through"
+        and (q["protocol"], q["method"], q["path"]) == (row["protocol"], row["method"], row["path"])
+    )
+
+
+def _vertx_handler(row: dict) -> str:
+    """`Class#method` out of the handler symbol."""
+    return str(row["handler"]).rsplit("/", 1)[1].partition("(")[0]
+
+
+def _served(rows: list[dict], handler_class: str) -> set[tuple]:
+    """`(method, path, handler, resolution)` of every row a handler class answers."""
+    return {
+        (r["method"], r["path"], _vertx_handler(r), r["resolution"])
+        for r in rows
+        if r["handler"] is not None and _vertx_handler(r).startswith(handler_class + "#")
+    }
+
+
+# Task 8: single-handler routes ---------------------------------------------------------
+
+
+def test_vertx_single_handler_routes_derive_their_verb_and_path(vertx_inbound):
+    """Verb methods, `route(HttpMethod, path)`, accumulated `method(…)` calls, the same route
+    as separate statements on a `Route` local with self-returning calls between, a regex
+    route, a path from a constant, and a `virtualHost` route. Each shape is on its own path,
+    so the set below is the whole class bar the `String.format` route, which has its own test
+    below: a row it does not list is a wrong row."""
+    expected = {
+        ("GET", "/orders", "OrderRoutes#list", "resolved"),
+        ("POST", "/orders", "OrderRoutes#create", "resolved"),
+        ("PUT", "/orders/:id", "OrderRoutes#update", "resolved"),
+        ("GET", "/orders/:id", "OrderRoutes#find", "resolved"),
+        ("DELETE", "/orders/:id", "OrderRoutes#find", "resolved"),
+        ("GET", "/statement/:id", "OrderRoutes#statement", "resolved"),
+        ("DELETE", "/statement/:id", "OrderRoutes#statement", "resolved"),
+        (None, "/any", "OrderRoutes#any", "resolved"),
+        ("GET", "\\/files\\/.+", "OrderRoutes#file", "resolved"),
+        ("GET", "/v", "OrderRoutes#virtualHost", "resolved"),
+        ("GET", "/items", "OrderRoutes#items", "resolved"),
+        ("GET", "/search", "OrderRoutes#search", "resolved"),
+    }
+    # The `/health` lambda and the `String.format` route have their own tests below.
+    served = {
+        r
+        for r in _served(vertx_inbound, "OrderRoutes")
+        if "#lambda$" not in r[2] and r[2] != "OrderRoutes#formatted"
+    }
+    assert served == expected, sorted(served, key=str)
+
+
+def test_vertx_a_string_format_path_is_what_the_structural_walk_answers(vertx_inbound):
+    """`router.get(String.format("/a/:%s", P))` (spec §4, a stated boundary): `String.format`
+    is not modelled (OI-143: one rule, not one parser per method), so the route is the verb
+    its root names with the path unread — one row, `GET`, path NULL, `unresolved` — never a
+    path guessed from the format string. Measured on the fixture 2026-10-31."""
+    assert [
+        (r["method"], r["path"], r["resolution"])
+        for r in vertx_inbound
+        if r["handler"] is not None and _vertx_handler(r) == "OrderRoutes#formatted"
+    ] == [("GET", None, "unresolved")]
+
+
+def test_vertx_a_route_with_no_verb_is_one_any_method_row(vertx_inbound):
+    """`route("/any").handler(…)` serves every verb: ONE row, method NULL, carrying the
+    any-method marker — never six rows, and never a bare NULL that reads as "nobody read
+    the verb" (spec §3a)."""
+    rows = [r for r in vertx_inbound if r["path"] == "/any"]
+    assert len(rows) == 1, rows
+    assert _serves_any_method(rows[0]), rows[0]
+
+
+@pytest.mark.pins("roots.a-root-carries-its-rows-markers")
+def test_vertx_a_trace_and_a_question_spell_an_any_method_row_as_the_row_does(vertx_tables):
+    """Final review C1, finished: `roots` and `open_questions` carry the endpoint row's
+    `method_kind`/`path_kind`, so the document's trace headings and open-question lines say
+    `any /any` and `(pattern)` as its endpoint table does — before, both printed
+    `(unresolved) /any`, a verb reported unread on a route serving every verb."""
+    roots = {r["path"]: r for r in vertx_tables["roots"] if r["path"] in ("/any", "\\/files\\/.+")}
+    assert roots["/any"]["method_kind"] == ANY_METHOD, roots
+    assert roots["\\/files\\/.+"]["path_kind"] == PATH_KIND_PATTERN, roots
+    plain = [
+        q
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "handler_pass_through" and q["path"] == "/plain"
+    ]
+    assert [(q["method"], q["method_kind"]) for q in plain] == [(None, ANY_METHOD)], plain
+    document = vertx_tables["document"]
+    assert "(unresolved) /any" not in document
+    assert "(unresolved) /plain" not in document
+    assert "`any /plain` — handler_pass_through" in document
+    assert "`any /any`" in document.split("## Traces", 1)[1]
+    assert "GET \\/files\\/.+ (pattern)" in document.split("## Traces", 1)[1]
+
+
+def test_vertx_a_route_with_no_path_serves_every_path(vertx_inbound):
+    """The official hello world's only route, `router.route().handler(rc -> …)`: one row,
+    path `/*`, method NULL, answering. `router.route().handler(BodyHandler.create())`
+    beside it in `PassThroughRoutes` passes on and is no row."""
+    rows = [r for r in vertx_inbound if "/HelloServer#" in str(r["handler"])]
+    assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [(None, "/*", "resolved")]
+    assert _serves_any_method(rows[0]), rows[0]
+    # javac 21's name for the lambda (the fixture is built with JDK 21).
+    assert _vertx_handler(rows[0]) == "HelloServer#lambda$start$0", rows[0]["handler"]
+
+
+def test_vertx_respond_is_a_terminal(vertx_inbound):
+    """`router.get("/health").respond(ctx -> Future.succeededFuture(…))`: one row. The
+    handler is the lambda, a body of `OrderRoutes`."""
+    rows = [r for r in vertx_inbound if r["path"] == "/health"]
+    assert [(r["method"], r["resolution"]) for r in rows] == [("GET", "resolved")]
+    # javac 21's name for the lambda (the fixture is built with JDK 21).
+    assert _vertx_handler(rows[0]) == "OrderRoutes#lambda$register$0", rows[0]["handler"]
+
+
+def test_vertx_a_disabled_route_and_a_refused_path_are_no_row(vertx_inbound, vertx_tables):
+    """`.disable()` ends a chain with no row: Vert.x serves nothing for it. A path with no
+    leading `/` is refused by Vert.x, so it is no row and is NOT repaired to `/bad` (DR-6).
+    The refused declaration is recorded as a `refused_registration` open question."""
+    paths = {r["path"] for r in vertx_inbound}
+    assert "/gone" not in paths
+    assert "bad" not in paths and "/bad" not in paths
+    # Control: the routes beside them derive, so the absence above is the rule's doing.
+    assert "/orders" in paths
+    refused = [
+        (q["protocol"], q["method"], q["path"])
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "refused_registration"
+    ]
+    assert ("http", "GET", "bad") in refused, refused
+
+
+def test_vertx_a_regex_route_is_a_verbatim_pattern_row(vertx_inbound):
+    """`router.getWithRegex("\\/files\\/.+")`: the path is the regex verbatim, `resolved`,
+    marked a pattern, and not canonicalised (no `/` put in front of its leading `\\`)."""
+    regex = "\\/files\\/.+"
+    rows = [r for r in vertx_inbound if r["path"] == regex]
+    assert len(rows) == 1, sorted(str(r["path"]) for r in vertx_inbound)
+    assert (rows[0]["method"], rows[0]["resolution"]) == ("GET", "resolved")
+    assert _is_pattern(rows[0]), rows[0]
+
+
+def test_vertx_handler_reads_and_a_virtual_host_reach_endpoint_metadata(vertx_tables):
+    """`ctx.queryParam("q")` and `ctx.request().getHeader("X-T")` are requirements of the
+    `/search` row (the mechanism `javalin.yml` ships), and `virtualHost("api.example.com")`
+    is a host requirement on `/v`, because it restricts which `Host` the route serves."""
+    requirements = _requirements(vertx_tables["endpoint_metadata"])
+    search = {(r[3], r[4]) for r in requirements if r[1] == "/search"}
+    assert search == {("query", "q"), ("header", "X-T")}, sorted(requirements, key=str)
+    host = {(r[3], r[4], r[5]) for r in requirements if r[1] == "/v"}
+    assert any(
+        kind == "host" and "api.example.com" in (name, value) for kind, name, value in host
+    ), host
+
+
+# Task 10: which handler answers ------------------------------------------------------
+
+
+def test_vertx_the_first_answering_handler_names_the_row(vertx_inbound):
+    """Vert.x runs a chain's handlers in order and stops at the first that does not pass on
+    (spec §3b). `.handler(this::a).handler(this::b)` with both answering is handler `a`.
+    The Hono pair — `post(EVENTS).handler(auth).handler(BodyHandler.create())` then
+    `post(EVENTS).handler(this::ingest)` in one method — is ONE row, handler `ingest`,
+    `resolved`: the first chain only passes on."""
+    rows = _served(vertx_inbound, "PassThroughRoutes")
+    assert ("GET", "/two", "PassThroughRoutes#a", "resolved") in rows
+    assert not any(r[2] == "PassThroughRoutes#b" for r in rows)
+    events = {r for r in rows if r[1] == "/events"}
+    assert events == {("POST", "/events", "PassThroughRoutes#ingest", "resolved")}, events
+
+
+@pytest.mark.pins("mounts.a-router-handed-in-from-outside-may-be-any-router")
+def test_vertx_two_chains_registered_in_different_methods_are_narrowed(vertx_inbound):
+    """The same `(verb, path)` registered in two methods, both answering: the order is not
+    in the code, so each is a row and each is `narrowed` (one of them answers)."""
+    telemetry = {r for r in _served(vertx_inbound, "PassThroughRoutes") if r[1] == "/telemetry"}
+    assert telemetry == {
+        ("POST", "/telemetry", "PassThroughRoutes#acceptFirst", "narrowed"),
+        ("POST", "/telemetry", "PassThroughRoutes#acceptSecond", "narrowed"),
+    }, telemetry
+
+
+@pytest.mark.pins("values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with")
+def test_vertx_handlers_an_instance_lambda_captured_name_their_own_rows(vertx_inbound):
+    """vertx-examples' `sqlclient` shape (`OI-266`): three handler locals captured by a
+    `compose(v -> …)` lambda that also reads `this.vertx`. javac hands that lambda `this`
+    first, so reading capture i as argument i published `POST /products` as answered by
+    `handleGetProduct`, at `resolved`. Each row names its own handler."""
+    assert _served(vertx_inbound, "CapturedRoutes") == {
+        ("GET", "/products/:productID", "CapturedRoutes#handleGetProduct", "resolved"),
+        ("POST", "/products", "CapturedRoutes#handleAddProduct", "resolved"),
+        ("GET", "/products", "CapturedRoutes#handleListProducts", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.a-url-handed-in-as-a-parameter-is-asked-of-the-walk")
+def test_vertx_a_path_handed_in_as_a_capture_or_a_parameter_is_read(vertx_inbound):
+    """`OI-265`: a path held in a local a lambda captures, and a path a helper is handed as
+    its parameter, are each a literal one value edge away. Both rows carried `path` NULL at
+    `unresolved` while the handler, reached the same way, resolved."""
+    assert _served(vertx_inbound, "CapturedPaths") == {
+        ("GET", "/reports", "CapturedPaths#reports", "resolved"),
+        ("GET", "/audits", "CapturedPaths#audits", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-on-different-routers-are-not-ordered-against-each-other")
+def test_vertx_one_verb_and_path_on_different_routers_is_each_routers_own_row(vertx_inbound):
+    """`OI-263`: Vert.x orders routes within one router. `GET /ping` on three routers — two
+    made in one method, one in another class — is three answering routes, each `resolved`.
+    They were `narrowed` against each other across classes (34 of vertx-examples
+    web-examples' 46 rows), and in one method the second router's route was dropped as if
+    the first one's ran before it."""
+    pings = [r for r in vertx_inbound if r["path"] == "/ping"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in pings} == {
+        ("GET", "TwoRouters#adminPing", "resolved"),
+        ("GET", "TwoRouters#apiPing", "resolved"),
+        ("GET", "PingServer#ping", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-made-on-one-router-are-rivals")
+def test_vertx_two_handlers_on_one_router_from_two_methods_stay_narrowed(vertx_inbound):
+    """One router made in `start` and handed to two methods, each giving `GET /same-router` a
+    handler: one router, no order the code states, so each row is `narrowed`. A router
+    identity read wrongly as two would make both `resolved`."""
+    shared = [r for r in vertx_inbound if r["path"] == "/same-router"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in shared} == {
+        ("GET", "TwoRouters#firstShared", "narrowed"),
+        ("GET", "TwoRouters#secondShared", "narrowed"),
+    }
+
+
+@pytest.mark.pins("mounts.a-router-is-its-producer-on-its-call-path")
+def test_vertx_two_routers_from_one_factory_helper_are_each_routers_own_row(vertx_inbound):
+    """Final review I1, the user's ruling (2026-10-30): the same object is the same producer
+    reached on the same call path. `a = make(); b = make();` runs `Router.router` twice, so
+    `GET /factory-ping` on each is its router's own answer, both `resolved`. Identified by
+    the making call alone they were one router, and `b`'s route was dropped as if `a`'s ran
+    before it."""
+    pings = [r for r in vertx_inbound if r["path"] == "/factory-ping"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in pings} == {
+        ("GET", "RouterFactory#aPing", "resolved"),
+        ("GET", "RouterFactory#bPing", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-made-on-one-router-are-rivals")
+def test_vertx_one_router_from_a_helper_given_one_path_twice_stays_narrowed(vertx_inbound):
+    """The negative of the above: one call of the helper is one router, given
+    `GET /factory-same` inside the helper and again by its caller. One router, two methods,
+    no order the code states, so each row is `narrowed`. Told apart by their call paths
+    wrongly, both would be `resolved`."""
+    same = [r for r in vertx_inbound if r["path"] == "/factory-same"]
+    assert {(r["method"], _vertx_handler(r), r["resolution"]) for r in same} == {
+        ("GET", "RouterFactory#helperSame", "narrowed"),
+        ("GET", "RouterFactory#callerSame", "narrowed"),
+    }
+
+
+def _mount_order(rows: list[dict], case: str) -> set[tuple]:
+    """`(method, handler, resolution)` of every row on `MountOrder`'s `case` path."""
+    return {
+        (r["method"], _vertx_handler(r), r["resolution"])
+        for r in rows
+        if r["path"] == f"/mount-order/{case}/x"
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_parent_route_before_the_mount_answers_and_the_mounted_one_never_runs(
+    vertx_inbound,
+):
+    """A mounted router is served from its parent, at the mount route's place: the parent's
+    own `GET /mount-order/parent-first/x`, made before `route(".../*").subRouter(sub)` in one
+    method, answers, and `sub.get("/x")` never runs. Both were `resolved`, two answers to one
+    request, because the two routes are on two routers."""
+    assert _mount_order(vertx_inbound, "parent-first") == {
+        ("GET", "MountOrder#parentFirstOwn", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_mount_before_the_parent_route_answers_through_the_mounted_router(
+    vertx_inbound,
+):
+    """The mount made first: the mounted router's route answers, the parent's own never
+    runs."""
+    assert _mount_order(vertx_inbound, "mount-first") == {
+        ("GET", "MountOrder#subOfMountFirst", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_mount_route_is_ordered_by_its_own_order(vertx_inbound):
+    """`order(1)` on the mount route against `order(5)` on the parent's own: the mount is tried
+    first though it was made after."""
+    assert _mount_order(vertx_inbound, "ordered") == {
+        ("GET", "MountOrder#subOfOrdered", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_nested_mounts_are_ordered_at_the_outermost_mount(vertx_inbound):
+    """`inner` mounted on `middle`, `middle` on `parent`, the parent's own route made after
+    `middle`'s mount: the innermost router's route answers."""
+    assert _mount_order(vertx_inbound, "nested/inner") == {
+        ("GET", "MountOrder#innerOfNested", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent")
+def test_vertx_a_parent_route_and_a_mount_made_in_two_methods_are_narrowed(vertx_inbound):
+    """The parent's own route and the mount on it made in two methods: the order is not in the
+    code, so each is a row and each is `narrowed`."""
+    assert _mount_order(vertx_inbound, "two-methods") == {
+        ("GET", "MountOrder#twoMethodsOwn", "narrowed"),
+        ("GET", "MountOrder#subOfTwoMethods", "narrowed"),
+    }
+
+
+@pytest.mark.pins("fluent.routes-on-different-routers-are-not-ordered-against-each-other")
+def test_vertx_a_route_and_a_mount_on_unrelated_routers_are_each_resolved(vertx_inbound):
+    """A route on one router and a router mounted on another, unrelated one: neither is served
+    from the other, so each is its own router's answer, `resolved`."""
+    assert _mount_order(vertx_inbound, "unrelated") == {
+        ("GET", "MountOrder#unrelatedOwn", "resolved"),
+        ("GET", "MountOrder#subOfUnrelated", "resolved"),
+    }
+
+
+def test_vertx_a_handler_that_calls_next_is_middleware(vertx_inbound):
+    """`assertTenant` calls `ctx.next()` and is the only handler of `route("/t/*")`: no row.
+    So is a `next()` inside a lambda that captured the context (`onSuccess(u ->
+    ctx.next())`), and so is `route().handler(BodyHandler.create())`."""
+    paths = {r["path"] for r in vertx_inbound}
+    assert "/t/*" not in paths
+    assert "/lambda" not in paths
+    # Control: an answering route of the same class derives, so the absences are the rule's.
+    assert "/reply" in paths
+
+
+def test_vertx_the_context_is_followed_into_module_helpers(vertx_inbound):
+    """`extractJson` hands `ctx` to an in-module helper that calls `ctx.next()`: it passes
+    on, so the row is `updateU`, `resolved`. An answering handler that hands `ctx` to an
+    in-module helper that replies is its own row, `resolved`."""
+    rows = _served(vertx_inbound, "PassThroughRoutes")
+    assert ("PUT", "/u/:id", "PassThroughRoutes#updateU", "resolved") in rows
+    assert ("GET", "/reply", "PassThroughRoutes#viaHelper", "resolved") in rows
+
+
+@pytest.mark.pins(
+    "fluent.an-unreadable-handler-gives-a-partial-row",
+    "pass_through.a-producer-is-named-as-a-producer",
+)
+def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vertx_tables):
+    """`check` hands `ctx` to the base jar's `HttpUtils.nextRoute`, whose body is outside the
+    module: the handler's identity is read, its outcome is not, so the row is `check`,
+    `partial`, and the reason names the helper. `route(p).handler(baseFactory())`, an
+    inherited base-jar factory returning a handler that is not the framework's, is `partial`
+    too. `route(p).handler(createCorsHandler(…))` returns the library's `CorsHandler`, a
+    framework handler that passes on: no row."""
+    rows = [
+        r
+        for r in vertx_inbound
+        if "PassThroughRoutes#" in str(r["handler"]) or r["path"] in ("/plain", "/cors")
+    ]
+    check = [r for r in rows if r["path"] == "/u2/:id"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in check] == [
+        ("PUT", "PassThroughRoutes#check", "partial")
+    ]
+    reason = _reason_of(check[0], vertx_tables)
+    assert '{"how":"handed_to","name":"com/acme/vertx/base/HttpUtils#nextRoute(' in reason, reason
+    plain = [r for r in rows if r["path"] == "/plain"]
+    assert [r["resolution"] for r in plain] == ["partial"], plain
+    # The base factory BUILT the handler: it is named as its producer, never as a hand-off.
+    reason = _reason_of(plain[0], vertx_tables)
+    assert '{"how":"produced_by","name":"com/acme/vertx/PassThroughRoutes#baseFactory(' in reason
+    assert "handed_to" not in reason, reason
+    assert not [r for r in rows if r["path"] == "/cors"]
+
+
+def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):
+    """An anonymous class passed as the handler is the object Vert.x calls `handle` on: the
+    row names that `handle`, `resolved` — the one taking a `RoutingContext`, which javac's
+    bridge `handle(Object)` hands the context to, never the bridge."""
+    rows = [r for r in vertx_inbound if r["path"] == "/anon"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in rows] == [
+        ("GET", "AnonymousRoutes$1#handle", "resolved")
+    ], rows
+    # The same descriptor as every other `(RoutingContext)V` handler of the fixture.
+    after = next(r for r in vertx_inbound if _vertx_handler(r) == "PassThroughRoutes#ingest")
+    assert rows[0]["handler"].rsplit("(", 1)[1] == after["handler"].rsplit("(", 1)[1], rows[0]
+
+
+def test_vertx_a_context_captured_by_an_anonymous_callback_passes_on(vertx_inbound):
+    """`onSuccess(new Handler<String>() { … ctx.next(); })` inside a handler: javac keeps
+    `ctx` in a synthetic field the anonymous class's constructor writes, and the `next()` is on
+    a `getfield` of it. Since the receiver of a call on `this`'s field is named (D00 §5,
+    2026-10-31) the walk follows `val$ctx` to the constructor's write and on to the handler's
+    own context: `viaAnonymous` passes the request on, and `after` answers, `resolved`.
+    Re-pinned from `partial` (Vert.x Task 13): the `next()` was unread only because the
+    receiver's field was not in the facts; `fluent.an-unreadable-handler-gives-a-partial-row`
+    stays pinned by the other-module test above."""
+    rows = [r for r in vertx_inbound if r["path"] == "/anon-next"]
+    assert [(r["method"], _vertx_handler(r), r["resolution"]) for r in rows] == [
+        ("GET", "AnonymousRoutes#after", "resolved")
+    ], rows
+
+
+@pytest.mark.pins("pass_through.a-handler-is-identified-by-its-declared-type")
+def test_vertx_a_framework_handler_is_identified_by_its_declared_type(vertx_inbound):
+    """Hono's shapes: a `BodyHandler` configured after it is built and handed in as a
+    `Handler<RoutingContext>` parameter, one returned by a factory, and a `CorsHandler` field
+    set from a constructor nothing calls. The producer walk reaches no construction for any of
+    them (`escapes`, `external`), so each is read by its declared static type — the caller's
+    `BodyHandler.create()`, the factory's return, the field's type — and passes on. The
+    answering chain names the row."""
+    rows = {
+        (r["method"], r["path"], _vertx_handler(r), r["resolution"])
+        for r in vertx_inbound
+        if r["path"] in ("/typed", "/typed-field")
+    }
+    assert rows == {
+        ("POST", "/typed", "StaticTypeRoutes#accept", "resolved"),
+        ("GET", "/typed-field", "StaticTypeRoutes#accept", "resolved"),
+    }, rows
+
+
+# Task 11: mounts -------------------------------------------------------------------------
+
+
+@pytest.mark.pins("mounts.a-route-takes-the-prefix-of-the-mount-that-received-its-router")
+def test_vertx_sub_routers_take_the_prefix_they_are_mounted_under(vertx_inbound):
+    """`root.route("/api/*").subRouter(api)` with `api` built in `build(vertx)`, and a router
+    built with `new RouterImpl(vertx)` mounted at `/m`: their routes serve under the mount's
+    prefix (spec §3c), `resolved`."""
+    rows = _served(vertx_inbound, "ApiRoutes")
+    assert ("GET", "/api/status", "ApiRoutes#status", "resolved") in rows
+    assert ("GET", "/m/impl", "ApiRoutes#status", "resolved") in rows
+    assert not [r for r in rows if r[1] in ("/status", "/impl")], rows
+
+
+@pytest.mark.pins(
+    "values.an-object-reader-lets-calls-on-the-object-past",
+    "mounts.a-module-method-returning-a-router-is-walked-into",
+)
+def test_vertx_a_router_mounted_at_two_prefixes_serves_under_both(vertx_inbound):
+    """One router built by `v(vertx)` and mounted at `/v1/*` and `/v2/*`: its route is served
+    under both, each `resolved` (enumerable is exact)."""
+    assert _served(vertx_inbound, "MountedTwice") == {
+        ("GET", "/v1/ping", "MountedTwice#ping", "resolved"),
+        ("GET", "/v2/ping", "MountedTwice#ping", "resolved"),
+    }
+
+
+@pytest.mark.pins("mounts.a-mount-reads-its-prefix-on-the-routes-own-path")
+def test_vertx_a_router_built_and_mounted_per_call_keeps_its_own_prefix(vertx_inbound):
+    """`createSubRouter(name)` builds a router and mounts it at `"/" + name + "*"`, called
+    for `users` and `groups`, each getting its own routes: each route under its own prefix
+    only. `/groups/:userUuid` and `/users/:groupUuid/members` are the mixing (OI-222) this
+    pins against."""
+    assert _served(vertx_inbound, "PerCallSubRouters") == {
+        ("GET", "/users/:userUuid", "PerCallSubRouters#user", "resolved"),
+        ("GET", "/groups/:groupUuid/members", "PerCallSubRouters#members", "resolved"),
+    }
+
+
+@pytest.mark.pins(
+    "mounts.an-unread-prefix-is-a-named-hole", "fluent.a-prefix-row-takes-the-weaker-word"
+)
+def test_vertx_a_mount_with_an_unread_prefix_names_the_hole(vertx_inbound):
+    """`RouterSource.prefixes().forEach(p -> root.route(p + "*").subRouter(edge))` over a
+    list from the base jar: the route is `<prefix>/edge`, `partial` — a named hole, never a
+    complete-looking path — and a router handed in from the base jar and given routes here
+    is served at its root, `resolved`."""
+    by_path = {
+        r["path"]: r
+        for r in vertx_inbound
+        if "ApiRoutes#status" in str(r["handler"])
+        or "edge" in str(r["path"])
+        or r["path"] == "/provided"
+    }
+    assert "<prefix>/edge" in by_path, sorted(by_path)
+    assert by_path["<prefix>/edge"]["resolution"] == "partial", sorted(by_path)
+    assert "/edge" not in by_path
+    assert by_path["/provided"]["resolution"] == "resolved"
+
+
+@pytest.mark.pins("mounts.an-unread-prefix-files-its-reason")
+def test_vertx_an_unread_prefix_names_the_mount_and_the_argument_not_read(vertx_tables):
+    """The `<prefix>/edge` row's reason (`mount_prefix`): the mount call in the `forEach`
+    lambda, and argument 0 of the `route(p + "*")` call it reads its prefix from, which reads
+    as the template with its hole unfilled (coordinator ruling 2)."""
+    questions = [
+        q
+        for q in vertx_tables["open_questions"]
+        if q["question"] == "mount_prefix" and q["path"] == "<prefix>/edge"
+    ]
+    assert len(questions) == 1, vertx_tables["open_questions"]
+    [candidate] = json.loads(questions[0]["candidates"])
+    assert "ApiRoutes#lambda$mountEach$0" in candidate["mount"]
+    assert (candidate["mount_ordinal"], candidate["at_ordinal"], candidate["argument"]) == (2, 1, 0)
+    assert candidate["read"] == "`{}*`"
+    assert "ApiRoutes#mountEach" in candidate["caller"]
+
+
+def test_vertx_a_router_built_in_a_base_class_takes_the_prefix_a_third_method_mounts(
+    vertx_inbound,
+):
+    """Hono's shape: `MountingVerticle` builds the router into a field, hands it to the
+    abstract `addRoutes(router)` that `TelemetryVerticle` overrides, and mounts it in a third
+    method at `/hono/*`: the subclass's route serves under the prefix (spec §3c)."""
+    assert _served(vertx_inbound, "TelemetryVerticle") == {
+        ("POST", "/hono/telemetry-in", "TelemetryVerticle#accept", "resolved"),
+    }
+
+
+# Task 12: outbound parts, absolute URLs and the Hono helper ---------------------------
+
+
+def _vertx_calls(rows: list[dict], caller_class: str) -> set[tuple]:
+    """`(method, path, peer)` of every outbound row a client class sends."""
+    return {
+        (r["method"], r["path"], r["peer"])
+        for r in rows
+        if r["caller"] is not None and f"/{caller_class}#" in str(r["caller"])
+    }
+
+
+@pytest.mark.pins("fluent.host-and-port-compose-one-peer")
+def test_vertx_a_call_with_host_port_and_uri_has_one_peer(vertx_outbound):
+    """`client.get(8080, "inventory", "/stock/" + sku).send()`: `GET`, the path with its
+    unread tail a hole, peer `inventory:8080` — the same peer `getAbs("http://inventory:8080/
+    stock")` gives (spec §3d)."""
+    calls = _vertx_calls(vertx_outbound, "InventoryClient")
+    stock = {c for c in calls if c[0] == "GET"}
+    assert len(stock) == 1, calls
+    (_, path, peer) = next(iter(stock))
+    assert peer == "inventory:8080"
+    # A hole built from a variable the facts name is published under that name
+    # (`test_a_path_segment_built_from_a_variable_names_that_variable`,
+    # tests/e2e/test_rest_outbound_delivered.py): `sku`, the parameter. The fixture compiles
+    # with `-parameters` so the facts carry the name.
+    assert path == "/stock/{sku}", path
+
+
+def test_vertx_an_absolute_call_splits_its_url_and_carries_the_body_type(vertx_outbound):
+    """`client.postAbs("http://billing/charges").sendJson(charge)`: `POST`, peer `billing`,
+    path `/charges`, request body `Charge`."""
+    rows = [
+        r
+        for r in vertx_outbound
+        if r["method"] == "POST"
+        and r["peer"] == "billing"
+        and "InventoryClient#" in str(r["caller"])
+    ]
+    assert [(r["path"], r["resolution"]) for r in rows] == [("/charges", "resolved")], rows
+    assert "Charge" in str(rows[0]["request_shape"]), rows[0]
+
+
+@pytest.mark.pins("vertx-webclient.a-statement-style-timeout-returns-its-receiver")
+def test_vertx_a_request_built_in_a_helper_and_sent_by_its_caller_is_one_row(vertx_outbound):
+    """Hono's shape: `request(expression)` builds `client.postAbs(QUERY).addQueryParam(…)`,
+    calls `timeout` and `basicAuthentication` on it in statement style, returns
+    `r.as(BodyCodec.jsonObject())`; `query` sends it. One outbound row — the self-returning
+    calls neither fork the chain nor hide its root."""
+    assert _vertx_calls(vertx_outbound, "PrometheusClient") == {
+        ("POST", "/api/v1/query", "prometheus:9090"),
+    }
+
+
+# Task 13: the client's base address ----------------------------------------------------
+
+
+@pytest.mark.pins("client_base.the-options-rung-reads-the-factorys-options")
+def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
+    """`WebClient.create(vertx, new WebClientOptions().setDefaultHost("search")
+    .setDefaultPort(9200))` then `client.get("/q").send()`: `GET /q`, peer `search:9200` —
+    the options object is followed from the factory, and the setters made on that same
+    object are read (spec §3d). The client is held in `this.client` and called on through
+    it, which the walk reads off the receiver's field (D00 §5, 2026-10-31)."""
+    assert _vertx_calls(vertx_outbound, "SearchClient") == {("GET", "/q", "search:9200")}
+
+
+@pytest.mark.pins("fluent.every-callers-url-is-a-row-of-its-own")
+def test_vertx_a_url_parameter_is_one_row_per_callers_value(vertx_outbound):
+    """Final review I2, ruled on enumerable-is-exact: a helper's url parameter is handed
+    `"/param-known"`, `"/param-other"` and a value nobody reads. Each literal is its own row,
+    `resolved`, and the unread value is a row with `path` NULL, `unresolved`. Publishing one
+    literal alone, `resolved`, would claim it was the whole answer."""
+    rows = [
+        r
+        for r in vertx_outbound
+        if r["caller"] is not None and "/ParameterUrls#call(" in str(r["caller"])
+    ]
+    assert {(r["method"], r["path"], r["resolution"]) for r in rows} == {
+        ("GET", "/param-known", "resolved"),
+        ("GET", "/param-other", "resolved"),
+        ("GET", None, "unresolved"),
+    }
+    # The review's own case: one literal caller and one unread. The literal was published
+    # alone, `resolved`, as though it were the only value the helper is ever handed.
+    lone = [
+        r
+        for r in vertx_outbound
+        if r["caller"] is not None and "/ParameterUrls#single(" in str(r["caller"])
+    ]
+    assert {(r["method"], r["path"], r["resolution"]) for r in lone} == {
+        ("DELETE", "/param-lone", "resolved"),
+        ("DELETE", None, "unresolved"),
+    }
+
+
+def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
+    """Hono's shape: the options are configured statement by statement from a config object's
+    getters (`config.getHost()`, `config.getPort()`), beside calls that set no address, and
+    the config object is handed in by a framework, so where its host comes from is outside the
+    module. The host is unread: `GET /suggest` keeps its path with no peer — never a default
+    Vert.x would fill (coordinator ruling 2026-10-31, Q2 option B: no configuration-read table
+    exists, so a `Properties.getProperty` host is not read either). The port getter returns a
+    constant, and `get("search-alt", "/alt")` goes to `search-alt:9200`: the 9200 is on the
+    options object alone, so the reader did follow the factory to it, past the configuring
+    calls, and through the getter."""
+    assert _vertx_calls(vertx_outbound, "ConfiguredSearchClient") == {
+        ("GET", "/suggest", None),
+        ("GET", "/alt", "search-alt:9200"),
+    }
+
+
+# Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------
+
+
+@pytest.mark.pins(
+    "derive_endpoints.a-verbless-mapping-serves-any-method-where-the-catalog-says-so",
+    "derive_endpoints.a-pattern-attribute-is-a-pattern-row",
+    "derive_endpoints.a-pattern-row-takes-no-prefix",
+    "derive_endpoints.a-pattern-row-is-not-canonicalised",
+)
+def test_quarkus_reactive_routes_verbless_and_regex(quarkus_endpoints):
+    """A `@Route` with no `methods` is registered by Vert.x for any method (the same
+    dispatcher Vert.x Web uses, spec §3a): ONE row, method NULL, any-method marker — not six
+    rows. `@Route(regex = …)` derives the pattern row, the regex verbatim and `resolved`."""
+    inbound = [r for r in quarkus_endpoints if r["direction"] == "inbound"]
+    anyverb = [r for r in inbound if r["path"] == "/qk/orders/anyverb"]
+    assert len(anyverb) == 1, anyverb
+    assert _serves_any_method(anyverb[0]), anyverb[0]
+    regex = "\\/qk\\/files\\/.+"
+    files = [r for r in inbound if r["path"] == regex]
+    assert len(files) == 1, sorted(str(r["path"]) for r in inbound)
+    assert (files[0]["method"], files[0]["resolution"]) == ("GET", "resolved")
+    assert _is_pattern(files[0]), files[0]

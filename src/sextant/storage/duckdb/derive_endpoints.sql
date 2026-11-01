@@ -96,6 +96,18 @@
 --                           where the catalog declares no peer at all.
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
+--   $verbless_serves     -- `any` where a mapping annotation naming no method serves EVERY
+--                           method of an open set (spec 2026-10-30 §3a), so it
+--                           derives ONE row with method NULL and `method_kind = any` rather
+--                           than a row per verb of `$all_methods` (which that catalog leaves
+--                           empty); NULL where the catalog says nothing, which keeps a
+--                           closed-enum catalog's fan-out exactly as it was.
+--   $pattern_from        -- attribute names whose value is a REGULAR EXPRESSION the framework
+--                           matches paths against rather than a path it serves, or an
+--                           empty list. A mapping naming one
+--                           derives a row whose path is the expression verbatim and whose
+--                           `path_kind` is `pattern`: no prefix joins it and no canonical
+--                           rule touches it, and the linker never links it by path.
 --   $consumes_from       -- attribute names the mapping annotation's declared
 --                           request media types are read from, scalar-or-array
 --                           (the $path_from pattern), or an empty list where the
@@ -343,7 +355,8 @@ WITH RECURSIVE catalog_params AS (
             type_media_from_siblings
                 STRUCT("column" VARCHAR, ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
-            all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
+            all_methods VARCHAR[], verbless_serves VARCHAR, pattern_from VARCHAR[],
+            consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
             fallback_prefix_attr VARCHAR, fallback_scope_separator VARCHAR,
             qualifier_from VARCHAR[], qualifier_separator VARCHAR, qualifier_format VARCHAR,
@@ -581,7 +594,17 @@ declared AS (
         -- the matched annotation's own attribute cannot be stated in this
         -- grammar, and that boundary is in `docs/COVERAGE.md` rather than
         -- silent.
+        --
+        -- `$pattern_from` is read FIRST and wins: a mapping naming a regular
+        -- expression is matched on the expression alone, so the expression is the
+        -- path and no sibling or default may stand in front of it.
         coalesce(list_extract(list_filter(list_transform(
+            cp.pattern_from,
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1),
+        list_extract(list_filter(list_transform(
             cp.path_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
@@ -645,7 +668,12 @@ declared AS (
         -- with `member_declarations` below puts both kinds of row through one
         -- expression.
         mc.path_fallback AS path_fallback,
-        mc.path_fallback_prefixes AS path_fallback_prefixes
+        mc.path_fallback_prefixes AS path_fallback_prefixes,
+        -- `pattern` where the path above is the `$pattern_from` expression, read the
+        -- same way: the mapping names one when any of those attributes is present.
+        CASE WHEN len(list_filter(cp.pattern_from,
+                                  n -> coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL)) > 0
+             THEN 'pattern' END AS path_kind
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
          AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
@@ -1023,7 +1051,9 @@ member_declarations AS (
         -- declared without `$path_fallback`, so this is never NULL on a catalog
         -- that reaches here.
         cp.path_fallback AS path_fallback,
-        cp.path_fallback_prefixes AS path_fallback_prefixes
+        cp.path_fallback_prefixes AS path_fallback_prefixes,
+        -- A member is an operation, never a regular expression.
+        CAST(NULL AS VARCHAR) AS path_kind
     FROM exposed_members em
     JOIN symbols s ON s.symbol = em.symbol
     JOIN catalog_params cp ON cp.catalog_id = em.catalog_id
@@ -1306,8 +1336,15 @@ mapped_methods AS (
            d.qualifier AS qualifier,
            d.requires_qualifier AS requires_qualifier,
            d.path_fallback AS path_fallback,
-           d.path_fallback_prefixes AS path_fallback_prefixes
+           d.path_fallback_prefixes AS path_fallback_prefixes,
+           d.path_kind AS path_kind,
+           -- `any` where no verb was named AND the catalog says that serves every one
+           -- (`$verbless_serves`): the row's own statement that its NULL method is
+           -- "all of them", not "nobody read it".
+           CASE WHEN len(d.methods) = 0 AND vc.verbless_serves = 'any' THEN 'any' END
+               AS method_kind
     FROM (SELECT * FROM declared UNION ALL SELECT * FROM member_declarations) d
+    JOIN catalog_params vc ON vc.catalog_id = d.catalog_id
 ),
 mappings AS (
     SELECT mm.catalog_id AS catalog_id,
@@ -1320,7 +1357,9 @@ mappings AS (
            mm.qualifier AS qualifier,
            mm.requires_qualifier AS requires_qualifier,
            mm.path_fallback AS path_fallback,
-           mm.path_fallback_prefixes AS path_fallback_prefixes
+           mm.path_fallback_prefixes AS path_fallback_prefixes,
+           mm.path_kind AS path_kind,
+           mm.method_kind AS method_kind
     FROM mapped_methods mm
 ),
 derived AS (
@@ -1618,7 +1657,12 @@ derived AS (
         -- either value, which is what keeps the polymorphic-handler shape
         -- working: such a member carries no address, so both values agree, and
         -- they agree by construction rather than by a second rule.
-        CASE WHEN cp.class_level = 'sibling' AND scoped_name <> ''
+        --
+        -- A PATTERN row (`$pattern_from`) takes no prefix at all: the catalog's
+        -- prefix joins a path and nothing else (its own file says what was measured),
+        -- and a prefix joined to an expression would be one nobody wrote.
+        CASE WHEN m.path_kind IS NOT NULL THEN scoped_name
+             WHEN cp.class_level = 'sibling' AND scoped_name <> ''
              THEN scoped_name
              WHEN type_prefix = '' OR scoped_name = ''
                   OR cp.path_separator IS NULL
@@ -1634,7 +1678,10 @@ derived AS (
         -- mapping derives, so the two would not merge (ruling R12). Equal to
         -- `$canonical_path` for every row that did not flip, which is every row
         -- of every catalog declaring no rule.
-        CASE WHEN flipped THEN cp.flip_canonical_path ELSE cp.canonical_path END AS canonical,
+        -- Never for a pattern: an expression is not an address (`canonical_http_path`'s
+        -- own `path_kind` rule, mirrored here like the rest of the seam).
+        CASE WHEN m.path_kind IS NOT NULL THEN FALSE
+             WHEN flipped THEN cp.flip_canonical_path ELSE cp.canonical_path END AS canonical,
         -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
         -- `$canonical_path` says the composed address IS a URL this module
         -- serves rather than an address recorded as written, and the two
@@ -1736,6 +1783,8 @@ derived AS (
              THEN 'unresolved' ELSE 'resolved' END AS resolution,
         'compiler'  AS evidence,
         m.catalog_id AS catalog_id,
+        m.path_kind AS path_kind,
+        m.method_kind AS method_kind,
         -- Raw per-row lists (evidence kind (a): mapping attributes) — still
         -- to be unioned and JSON-normalized below, per row group sharing a
         -- wire identity plus handler/caller/resolution/evidence/catalog_id.
@@ -1870,7 +1919,7 @@ derived AS (
 -- so it splits nothing a handler did not already split.
 unioned AS (
     SELECT protocol, direction, method, path, handler, caller, peer,
-           handler_signature, resolution, evidence, catalog_id, served_by,
+           handler_signature, resolution, evidence, catalog_id, served_by, path_kind, method_kind,
            CASE WHEN count(consumes_list) = 0 THEN NULL
                 ELSE to_json(list_sort(list_distinct(flatten(list(consumes_list)
                      FILTER (WHERE consumes_list IS NOT NULL))))) END AS consumes,
@@ -1881,7 +1930,8 @@ unioned AS (
     GROUP BY ALL
 )
 SELECT protocol, direction, method, path, handler, caller, peer,
-       handler_signature, resolution, evidence, catalog_id, consumes, produces, served_by
+       handler_signature, resolution, evidence, catalog_id, consumes, produces, served_by,
+       path_kind, method_kind
 FROM unioned d
 -- THE ADDRESSES-NOTHING GATE (2O Task 7 Step 4; rewritten by the principles
 -- sweep's mechanism 3, §4 and §7.7). An empty address is not a destination:

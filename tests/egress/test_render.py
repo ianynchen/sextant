@@ -380,6 +380,58 @@ def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     assert "(unresolved)" not in text
 
 
+@pytest.mark.pins("render.an-ANY-METHOD-row-says-any-not-unresolved")
+def test_an_any_method_row_renders_any_never_an_unread_verb():
+    """Vert.x spec §3a: "any method" is said explicitly, never by NULL alone. A verbless
+    `router.route("/my-route")` (and a Quarkus `@Route` naming no `methods`) derives ONE row
+    with `method` NULL and `method_kind = any`; rendering `(unresolved)` there tells the
+    reader a verb went unread when every verb is served (final review C1)."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": None,
+                "method_kind": "any",
+                "path": "/my-route",
+                "handler": "s maven c 1 com/acme/Server#hello(RoutingContext).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `any /my-route` | `Server#hello` |" in text
+    assert "(unresolved)" not in text
+
+
+@pytest.mark.pins("render.a-PATTERN-path-is-marked-a-pattern")
+def test_a_pattern_path_is_marked_as_a_pattern_in_the_endpoint_column():
+    """`path_kind = pattern` (Vert.x spec §3a): the path is a regular expression the
+    framework matches, not a URL. Printed bare it reads as a literal address nobody can
+    call (final review C1)."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "PUT",
+                "path": "\\/telemetry\\/.+",
+                "path_kind": "pattern",
+                "handler": "s maven c 1 com/acme/Server#upload(RoutingContext).",
+                "resolution": "resolved",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `PUT \\/telemetry\\/.+ (pattern)` | `Server#upload` |" in text
+
+
 def test_a_graphql_root_operation_renders_protocol_verb_and_field():
     """2H design §1 / D06: `graphql query orders`.
 
@@ -1021,6 +1073,40 @@ def test_the_document_strips_url_userinfo_from_both_address_columns():
     assert "s3cret" not in text
     assert "`GET https://billing.internal/invoices`" in text
     assert "| https://billing.internal |" in text
+
+
+@pytest.mark.pins("render.an-ANY-METHOD-question-says-any")
+def test_an_open_question_on_an_any_method_row_says_any_never_an_unread_verb():
+    """Vert.x spec §3a, final review C1: a question filed against a row serving every verb
+    carries the row's `method_kind`, and its line says `any /plain`. Before, Hono's `/*`
+    pass-through question read `(unresolved) /*`. A pattern path is marked as the endpoint
+    table marks it."""
+    questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/plain",
+            "method_kind": "any",
+            "path_kind": None,
+            "question": "handler_pass_through",
+            "candidates": "[]",
+            "evidence": "the handler is built in another jar",
+        },
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "\\/f\\/.+",
+            "method_kind": None,
+            "path_kind": "pattern",
+            "question": "handler_pass_through",
+            "candidates": "[]",
+            "evidence": "the handler is built in another jar",
+        },
+    ]
+    text = render_module_document(MODULE, REPORT, "a3f91c", open_questions=questions)
+    assert "`any /plain` — handler_pass_through" in text
+    assert "`GET \\/f\\/.+ (pattern)` — handler_pass_through" in text
+    assert "(unresolved) /plain" not in text
 
 
 def test_the_document_masks_an_open_questions_candidate_peer():

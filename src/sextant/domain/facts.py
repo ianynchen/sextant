@@ -473,6 +473,10 @@ class CallSiteFact(BaseModel):
     # carries the read's own value id, which no other fact names, so without this a call on
     # a file-level `val` joins to nothing. Absent everywhere else.
     receiver_field: str | None = None
+    # `instance` where `receiver_field` names a field of `this` read by `getfield`
+    # (2026-10-31); absent, a named receiver field is a static one. The symbol alone cannot
+    # say which, and a reader writing the call as source needs to (`chain_text`).
+    receiver_field_kind: Literal["instance"] | None = None
     result: int | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM

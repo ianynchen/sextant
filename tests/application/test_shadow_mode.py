@@ -306,6 +306,23 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # `job_identity_step`'s `name`/`group` (one ask, two slots) and the four `for_job` overloads'
 # captures (four asks, five slots: `job_detail`, `job_name`+`job_group`, `job_name`,
 # `job_key`).
+# **`vertx-web` joined at (32, 34) on 2026-10-31** (Vert.x spec §3a), a new catalog: 22 roots
+# reading a path or a verb and a path (the two-argument roots are two slots each), the eight
+# steps reading an argument (`method`, `path`, `pathRegex`, `produces`, `consumes`, and the
+# three handler steps), and its two `request_reads`. **(33, 35) on 2026-10-31, Task 10**: the
+# `order` step's `order: arg0` capture, read by the same shape (`last()`'s is a literal).
+# **(35, 38) on 2026-10-31, Task 11**: the two `mount` entries — `subRouter`'s `router_arg`
+# (one slot) and `mountSubRouter`'s `router_arg` and `prefix_arg` (two slots).
+# **`vertx-web` (40, 45) on 2026-10-31, Task 15** (spec §3e): the RxJava 3 and Mutiny wrappers'
+# four mount entries (their `subRouter` one slot each, their `mountSubRouter` two) and
+# Mutiny's `handler(Consumer)` step, whose `handler: arg0` is read like the core's.
+# **`vertx-webclient` (297, 433) on 2026-10-31, Task 15**: the wrappers' 82 roots whose
+# parameters name the wrapper's own `UriTemplate` or `SocketAddress` (41 each, +154 asks and
+# +230 slots: each reads its `url`, `host` and `port` arguments, a template form its factory's
+# `of(String)` argument too), nine body-carrying send steps (`rxSendJson`, …, one slot each),
+# and the fourteen `client_base` rungs for the wrappers' `create` and `wrap` (one slot each).
+# The roots the wrappers share with the core are the core's own entries with a longer `owner`
+# list, which adds no position.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -363,6 +380,8 @@ _ASKS_PER_CATALOG = {
     "temporal-untyped": (3, 3),
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
+    "vertx-web": (40, 45),
+    "vertx-webclient": (297, 433),
     "vertx-eventbus-mutiny": (8, 14),
 }
 
@@ -390,8 +409,20 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # factory's rung, same comment. **+2 on 2026-10-26**: its two `may_set_base` plugin
     # positions, same comment. **+62 on 2026-10-26**: the two new Ktor WebSocket and SSE
     # client catalogs, 23 and 39, same comment. **+3 on 2026-10-29**: the new `quartz`
-    # catalog, same comment. **+5 on 2026-10-29**: its job steps, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 895
+    # catalog, same comment. **+5 on 2026-10-29**: its job steps, same comment. **+32 on
+    # 2026-10-31**: the new `vertx-web` catalog, same comment. **+1 on 2026-10-31**: its
+    # `order` capture, same comment. **+2 on 2026-10-31**: its two `mount` entries, same
+    # comment. **+101 on 2026-10-31**: the new `vertx-webclient` catalog, its roots' `url`,
+    # `host` and `port` positions and its steps', same comment. **+4 on 2026-10-31**: its
+    # `SocketAddress` forms' uri positions, read since the coordinator's ruling, same comment.
+    # **+18 on 2026-10-31** (Task 13): the `vertx-web` client model merged into
+    # `vertx-webclient`, its seven factory rungs' `options_arg` and ten setters' `value_arg`,
+    # and `request(RequestOptions)`, whose root now reads `options: arg0`; the other two
+    # `RequestOptions` roots gain a slot each, same comment. **-3 on 2026-10-31** (Task 13
+    # review): the three `setSsl` setters, no longer read since a peer carries no scheme.
+    # **+182 on 2026-10-31** (Task 15): the RxJava 3 and Mutiny wrappers' own roots, steps,
+    # mounts and factory rungs, same comment (5 in `vertx-web`, 177 in `vertx-webclient`).
+    assert sum(asks for asks, _ in counted.values()) == 1232
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

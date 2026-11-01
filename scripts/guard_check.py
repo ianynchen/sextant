@@ -146,6 +146,10 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+# Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
+_PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
+_MOUNTS = "sextant/application/resolve/shapes/mounts.py"
+_INBOUND_ROUTES = "sextant/application/resolve/shapes/inbound_routes.py"
 # The stitcher (M06), whose guards arrived with the reactor linking spec.
 _PARTICIPANTS = "sextant/application/stitch/participants.py"
 _LINKS = "sextant/application/stitch/links.py"
@@ -161,6 +165,9 @@ _EFFECTIVE_CALLS = "sextant/application/resolve/effective_calls.py"
 _CHAIN_TEXT = "sextant/application/resolve/shapes/chain_text.py"
 _SCHEDULED_CHAIN = "sextant/application/resolve/engines/scheduled_chain.py"
 _QUARTZ_CATALOG = "sextant/catalogs/quartz.yml"
+_VERTX_WEBCLIENT_CATALOG = "sextant/catalogs/vertx-webclient.yml"
+_VERTX_WEB_CATALOG = "sextant/catalogs/vertx-web.yml"
+_VERTX_WEB_CLIENT_MODEL = "sextant/catalogs/client-models/vertx-web.yml"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _RESOLVED_SCHEDULES = "sextant/application/resolve/resolved_schedules.py"
 _CONFIG = "sextant/application/resolve/config.py"
@@ -177,6 +184,7 @@ _PIPELINE = "sextant/application/resolve/pipeline.py"
 _CALL_EDGES = "sextant/application/resolve/call_edges.py"
 _TRACE = "sextant/application/query/trace.py"
 _API = "sextant/api.py"
+_INDEX = "sextant/egress/export/index.py"
 _DOCUMENT = "sextant/egress/render/document.py"
 _VALUES = "sextant/application/resolve/values.py"
 _VOCABULARY = "sextant/application/boundary/vocabulary.py"
@@ -501,8 +509,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            resolution if key not in rows_by_key else "
-                "_weaker(rows_by_key[key], resolution)\n",
+                find="            resolution\n            if key not in rows_by_key\n"
+                "            else _weaker_schedule_word(rows_by_key[key], resolution)\n",
                 replace="            resolution  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -990,6 +998,104 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "stitch.a-PATTERN-path-is-never-linked-by-path": Guard(
+        what="an inbound row marked as a pattern is left out of the served index",
+        why="a regular expression is not an address. Indexed, `/files/.+` would be linked to "
+        "any call that happens to spell that text, and a pattern that matches many addresses "
+        "would be linked to none of the ones it serves: either way a dependency is invented",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):\n',
+                replace="        if _NAMED_HOLE.search(str(path)):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.a-NAMED-HOLE-in-a-served-path-is-never-linked-by-path": Guard(
+        what="an inbound row whose path holds a named hole is left out of the served index",
+        why="`<prefix>/status` says the mount prefix went unread. Linked by equality it would "
+        "tie a call to another service's `<prefix>/status` that merely shares the placeholder "
+        "(the `<host>` refusal, user decision 6, applied to a path segment)",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):\n',
+                replace='        if row.get("path_kind") == PATH_KIND_PATTERN:  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-row-links-an-outbound-call-of-any-verb": Guard(
+        what="a call of any verb finds an inbound row marked any-method on the same path",
+        why="the row serves every verb, so without this a DELETE to `/any` is reported as a "
+        "call nothing serves, and the route as uncalled: a missing dependency",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="    candidates = (exact | served.get((protocol, ANY_METHOD, path), set())) - {source}\n",
+                replace="    candidates = exact - {source}  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-UNCALLED-report-skips-pattern-and-named-hole-rows": Guard(
+        what="`uncalled` leaves out pattern paths and paths holding a named hole",
+        why="the linker refuses to match them, so no call can reach them in this analysis; "
+        "reporting them uncalled states a finding nobody read",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(row["path"])):\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-link-marks-only-the-any-method-row-reached": Guard(
+        what="a link served by an any-method row does not mark a plain NULL-method row reached",
+        why="`to_method` NULL names both rows; marking the plain one hides an uncalled route "
+        "behind a call that never reached it",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="            if not link.to_any_method:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-link-states-no-method": Guard(
+        what="a link whose only server is an any-method row states a NULL method",
+        why="the link would name a method no inbound row has, and the join on "
+        "(participant, method, path) would find nothing",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find="        return verb if participant in exact else None\n",
+                replace="        return verb  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "stitch.an-ANY-METHOD-row-is-reached-through-a-by-name-link-on-its-path": Guard(
+        what="an any-method row is reached by a link at a verb it was served by name",
+        why="otherwise the any-method row beside a GET row is reported uncalled while the call "
+        "to the path was linked: a false finding",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='        if row.get("method_kind") == ANY_METHOD and key[:2] + key[3:] in reached_by_path:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "paths.a-PATTERN-path-is-never-canonicalised": Guard(
+        what="canonical_http_path returns a pattern path untouched",
+        why="a regular expression given a leading slash is a different expression, so the "
+        "row would publish a pattern that matches other addresses than the one written",
+        edits=(
+            Edit(
+                path="sextant/domain/paths.py",
+                find="    if path_kind == PATH_KIND_PATTERN or not is_path_shaped(raw):\n",
+                replace="    if not is_path_shaped(raw):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "stitch.a-REGISTERED-name-becomes-an-alias-and-an-equal-one-does-not": Guard(
         what="a module's registered service name becomes an alias, and one equal to the "
         "artifactId does not",
@@ -1248,6 +1354,1265 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/values.py",
                 find="        if len(distinct) == 1:\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-repeats-capture-keeps-every-value-in-call-order": Guard(
+        what="a capture a step declares `repeats` reaches the chain's end as a tuple of every "
+        "value, oldest first, instead of the last one (Vert.x spec 2026-10-30 §3g item 1)",
+        why="a Vert.x route may call `method(…)` for several verbs and `handler(…)` for "
+        "several handlers; last-wins kept one of each and the route looked as though it "
+        "served a single verb through a single handler",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            continue\n"
+                "        captures[field] = _appended(captures.get(field), value) if field in repeats else value\n",
+                replace="            continue\n"
+                "        captures[field] = value  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.the-walk-back-accumulates-a-repeats-capture": Guard(
+        what="the calls made before a root (the backward walk) add to a `repeats` capture "
+        "as the forward walk does",
+        why="the two walks fold the same steps; if the backward one overwrote, a route "
+        "configured on the object its root is then called on would keep only its last verb "
+        "while the same calls written after the root kept them all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for field, value in folded.items():\n"
+                "        captures[field] = _appended(captures.get(field), value) if field in repeats else value\n",
+                replace="    for field, value in folded.items():\n"
+                "        captures[field] = value  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-handler-tuple-answers-with-its-first": Guard(
+        what="an inbound `fluent` row whose chain accumulated several handlers, in a catalog "
+        "declaring no `passes_on`, carries the first one registered: none passes the request "
+        "on, so the first answers (Vert.x plan, Tasks 5 and 10)",
+        why="without it a route with two handlers read no handler at all, and a route "
+        "nothing could be followed from looked like a route with no consumer",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        first = arguments[0] if arguments else None\n",
+                replace="        first = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-first-handler-that-does-not-pass-on-answers": Guard(
+        what="a route chain's row names the first of its handlers, in call order, that does "
+        "not pass the request on (Vert.x plan, Task 10; spec §3b)",
+        why="without it the row names a handler Vert.x never runs, since the one before it "
+        "answered",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    for argument in arguments:\n        judged = context.judged.get(",
+                replace="    for argument in reversed(arguments):  # guard disabled by "
+                "scripts/guard_check.py\n        judged = context.judged.get(",
+            ),
+        ),
+    ),
+    "fluent.a-chain-whose-every-handler-passes-on-is-no-row": Guard(
+        what="a route chain whose every handler passes the request on derives no row: it is "
+        "middleware (Vert.x plan, Task 10; spec §3b)",
+        why="without it `router.route().handler(BodyHandler.create())` and an auth-only route "
+        "publish rows no handler of the module answers",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            return judged\n    return None\n",
+                replace="            return judged\n    return _Judged(None, ANSWERS)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unreadable-handler-gives-a-partial-row": Guard(
+        what="a row whose answering handler is not readable here is `partial` (Vert.x plan, "
+        "Task 10; spec §3b)",
+        why="without it a handler handing its context to another jar's `nextRoute` is published "
+        "`resolved`, asserting a dispatch outcome nothing read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if unreadable and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-route-chain-in-one-method-runs-in-root-order": Guard(
+        what="of two routes on one verb and path registered in one method, the first root call "
+        "answers and the second never runs (Vert.x plan, Task 10; spec §3b)",
+        why="without it two answering routes in one method are each a `narrowed` row, though "
+        "Vert.x numbers its routes as they are made and the order is exact",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    return registered[0] == then_registered[0] and "
+                "registered[1] < then_registered[1]\n",
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.route-chains-in-different-methods-are-narrowed": Guard(
+        what="routes on one verb and path in no known order, with different handlers, are each "
+        "a row at `narrowed` (Vert.x plan, Task 10; spec §3b)",
+        why="without it each is `resolved`, two rows each claiming to be the one that answers",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if key in rivalled and row["resolution"] == '
+                "str(Resolution.RESOLVED):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-literal-route-order-decides": Guard(
+        what="literal `order(int)` values order routes on one verb and path, wherever they were "
+        "registered (Vert.x plan, Task 10; spec §3b)",
+        why="without it two ordered routes in two methods are each `narrowed`, though Vert.x "
+        "tries the lower order first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        return order < then_order\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-last-route-runs-after-the-rest": Guard(
+        what="a route given `last()` is tried after every route not given it (Vert.x plan, "
+        "Task 10; spec §3b)",
+        why="without it a `last()` route and another are in no known order and both rows are "
+        "`narrowed`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        return then_order == _LAST\n",
+                replace="        return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-order-capture-reads-an-argument-or-last": Guard(
+        what="an `order` capture that is neither `argN` nor `last` is refused at load (Vert.x "
+        "plan, Task 10)",
+        why="without it a misspelt order loads, reads as an unread order and leaves routes the "
+        "catalog meant to order unordered",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            captures[_ORDER] == _LAST or "
+                "_ARG_REFERENCE.match(str(captures[_ORDER]))\n",
+                replace="            True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-route-takes-the-prefix-of-the-mount-that-received-its-router": Guard(
+        what="a route whose router reaches the producer a mount's router argument reaches, on "
+        "paths that agree, serves under that mount's prefix (Vert.x plan, Task 11; spec §3c)",
+        why="without it every sub-router's routes are published at the root, `/status` for "
+        "`/api/status`, resolved and wrong",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                if _identity(mounted) != made:\n",
+                replace="                if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-mount-reads-its-prefix-on-the-routes-own-path": Guard(
+        what="a mount's path is read within the path that joined the route to the mount (Vert.x "
+        "plan, Task 11; spec §3c, user ruling 2026-10-30)",
+        why="without it a helper that builds and mounts a router per call gives every caller's "
+        "routes every caller's prefix: `/groups/:userUuid` (OI-222's mixing)",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find='                self._workspace, {"prefix": at.prefix}, self._index, '
+                "within=path\n",
+                replace='                self._workspace, {"prefix": at.prefix}, self._index, '
+                "within=None\n",
+            ),
+        ),
+    ),
+    "mounts.a-module-method-returning-a-router-is-walked-into": Guard(
+        what="the producer reader stops at a call returning a router only where the module does "
+        "not read its body (Vert.x plan, Task 11; spec §3c)",
+        why="without it a router built in a helper and mounted by its caller is two producers, "
+        "the helper's factory and the helper call, and its routes take no prefix",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        elif call in index.unscanned:\n",
+                replace="        else:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-prefix-argument-is-the-mount-point": Guard(
+        what="a mount call naming its prefix as an argument (`prefix_arg`, 4.5's "
+        "`mountSubRouter`) is a mount (Vert.x plan, Task 11; spec §3c)",
+        why='without it a 4.5 router mounted by `mountSubRouter("/api", sub)` serves its '
+        "routes at the root",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if rule.prefix_arg is not None and rule.matches(site):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.nested-mounts-compose": Guard(
+        what="a mount's prefix goes behind the prefixes of the router it is mounted on (Vert.x "
+        "plan, Task 11; spec §3c)",
+        why="without it a router mounted inside a mounted router loses the outer prefix: "
+        "`/v1/orders` for `/api/v1/orders`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if at.parent is None:\n            return [ROOT]\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n"
+                "            return [ROOT]\n",
+            ),
+        ),
+    ),
+    "mounts.a-refused-mount-adds-no-prefix": Guard(
+        what="a mount the framework refuses (`refuses`) gives no prefix (Vert.x plan, Task 11; "
+        "spec §3c, DR-6)",
+        why="without it `subRouter` on an exact path, which Vert.x throws on, publishes its "
+        "router's routes under a prefix nothing serves",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if text is not None and self._refusal(mount, at, *text) is not None:\n"
+                "            return None\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return None\n",
+            ),
+        ),
+    ),
+    "mounts.a-refused-mount-serves-nothing": Guard(
+        what="an execution that reaches a router only through a mount the framework refuses "
+        "serves nothing, not even at the root (Vert.x plan, Task 11; coordinator ruling 4)",
+        why="without it a route on a router whose only mount Vert.x throws on is published at "
+        "the root, an address the application never serves",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                reached.append(joined)\n",
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-execution-that-reaches-no-mount-serves-at-the-root": Guard(
+        what="a helper's router served unmounted by one caller and mounted by another serves "
+        "at its root too (Vert.x plan, Task 11; coordinator ruling 3)",
+        why="without it the unmounted caller's route is lost, and enumerable is exact",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="            if chosen is not None and self._unmounted(chosen, caller, "
+                "agreeing, entered | {method}):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-unread-prefix-files-its-reason": Guard(
+        what="a row whose path holds `<prefix>` files a `mount_prefix` question naming the "
+        "mount and the argument not read (Vert.x plan, Task 11; coordinator ruling 2)",
+        why="without it the hole says what is missing and nothing says where to look",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if prefix.unread and context.unread_prefixes is not None:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.a-path-join-other-than-leading-slash-is-refused": Guard(
+        what="`path_join` is `leading_slash` or absent, refused otherwise, for every engine "
+        "that reads it (Vert.x plan, Task 11; coordinator ruling 6)",
+        why="without it a misspelt rule reads as verbatim and publishes glued addresses",
+        edits=(
+            Edit(
+                path=_INBOUND_ROUTES,
+                find='    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.every-chain-end-of-a-mount-call-is-a-way-to-it": Guard(
+        what="a mount call walked back to several callers' routes is reached by each, each read "
+        "on its own path (Vert.x plan, Task 11 review fix 1)",
+        why="without it only the first caller's route is a mount path, and the others' routers "
+        "are published at the root: `/y` for `/b/y`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                for way, at in enumerate(mount.paths):\n",
+                replace="                for way, at in enumerate(mount.paths[:1]):  # guard "
+                "disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-refusal-is-read-for-every-way-to-the-mount": Guard(
+        what="a mount call reached by several callers' routes reads each way's path for its "
+        "refusals (Vert.x plan, Task 11 review fix 1)",
+        why="without it a refusal on the second caller's exact path is lost",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        found: list[tuple[int, str, str]] = []\n"
+                "        for way, at in enumerate(mount.paths):\n",
+                replace="        found: list[tuple[int, str, str]] = []\n"
+                "        for way, at in enumerate(mount.paths[:1]):  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-self-returning-router-call-is-the-same-router": Guard(
+        what="a call returning its own receiver is no router producer (Vert.x plan, Task 11 "
+        "review fix 2)",
+        why="without it `sub.errorHandler(500, h)` is a router of its own and `sub`'s routes "
+        "take no prefix from the mount that received it",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if call in found or not descriptor or (*call, str(descriptor)) in "
+                "configuring:\n",
+                replace="        if call in found or not descriptor:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-object-reader-goes-through-a-self-returning-call": Guard(
+        what="`which_object` walks a value a configuring call produced on through that call's "
+        "receiver (Vert.x plan, Task 11 review fix 2)",
+        why="without it `sub.errorHandler(500, h)` reaches no producer, and the mount it is "
+        "handed to receives no router this module builds",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._which_object and row is not None and _call_of(row) in "
+                "self._configuring:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-router-handed-in-is-the-parameter-it-arrived-at": Guard(
+        what="two producer-reader ends at one module parameter nothing calls, on agreeing "
+        "paths, are one router (Vert.x plan, Task 11 review fix 3)",
+        why="without it a router handed in and mounted inside the module serves only at its root",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="    if producer.parameter is not None and producer.reason == EXTERNAL:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-path-read-in-part-is-refused-where-the-part-read-decides": Guard(
+        what="a mount path whose last piece is read is checked for the wildcard as a literal is "
+        "(Vert.x plan, Task 11 review fix 4)",
+        why='without it `route(p + "/v1").subRouter(sub)`, which Vert.x refuses, is served '
+        "under `<prefix>`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if wildcard is None or not (whole or not _UNREAD_END.search(text)):\n",
+                replace="        if wildcard is None or not whole:  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-refused-mount-is-recorded": Guard(
+        what="a mount the framework refuses is filed as a `refused_registration` question with "
+        "its reason (Vert.x plan, Task 11; spec §3c, DR-6)",
+        why="without it a mount Vert.x throws on vanishes without a word",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="                reason = self._refusal(mount, at, *text)\n",
+                replace="                reason = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.an-unread-prefix-is-a-named-hole": Guard(
+        what="a mount whose path is not read whole puts `<prefix>` in front of the route's path "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why="without it a route under an unread mount reads as served at the root, a "
+        "complete-looking path that is not the address",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="        if text is None or not text[1]:\n            return self._hole(mount, "
+                "at, _read_as(answer))\n",
+                replace="        if text is None or not text[1]:  # guard disabled by "
+                "scripts/guard_check.py\n            return None\n",
+            ),
+        ),
+    ),
+    "fluent.a-prefix-row-takes-the-weaker-word": Guard(
+        what="a route row under a prefix takes the weaker of its own word and the prefix's "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why="without it `<prefix>/edge` is published `resolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            url_resolution = weaker(url_resolution, prefix.resolution)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-mount-chain-derives-no-row-of-its-own": Guard(
+        what="a chain ending at a mount call derives no row unless it was given a handler "
+        "(Vert.x plan, Task 11; spec §3c)",
+        why='without it every `route("/api/*").subRouter(sub)` is a handler-less row of its own',
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if "handler" not in end.captures:\n                continue\n',
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n",
+            ),
+        ),
+    ),
+    "fluent.host-and-port-compose-one-peer": Guard(
+        what="a call's `host` and `port` captures compose with its `url` into one peer, `host` "
+        "or `host:port` (Vert.x plan, Task 12; spec §3d)",
+        why='without it `client.get(8080, "inventory", "/stock")` publishes no peer, though '
+        '`getAbs("http://inventory:8080/stock")`, the same call, publishes `inventory:8080`',
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if "host" not in captures and "port" not in captures:\n'
+                "        return address\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        return address\n",
+            ),
+        ),
+    ),
+    "fluent.a-stated-host-or-port-replaces-the-urls-own": Guard(
+        what="a stated `host` or `port` replaces only that part of the authority an absolute URL "
+        "holds (Vert.x plan, Task 12; CP-56 row 130)",
+        why='without it `getAbs("http://a:1/x").host("b")` publishes `b`, dropping the port '
+        "Vert.x keeps, and `.port(9)` on an absolute URL is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    host, port = _authority_parts(peer)\n",
+                replace="    host, port = None, None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-host-leaves-the-peer-unread": Guard(
+        what="a `host` or `port` captured and not read leaves the peer NULL and the row "
+        "`partial` (Vert.x plan, Task 12)",
+        why="without it a call to a host nobody read is a `resolved` relative call, a claim that "
+        "the address was read in full",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if stated is None:\n            partly = weaker(",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            partly = weaker(",
+            ),
+        ),
+    ),
+    "chains.host-and-port-are-call-site-positions": Guard(
+        what="a `host` or `port` capture that is not `argN` is refused at load (Vert.x plan, "
+        "Task 12)",
+        why="without it `host: inventory` loads, captures a literal no reader takes, and every "
+        "row of the chain publishes no peer",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", '
+                '"port", "options")\n',
+                replace='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")  '
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-uri-template-is-read-off-its-factory": Guard(
+        what="a `UriTemplate` form reads its template off `UriTemplate.of` (Vert.x plan, Task 12)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &template [{ owner: io.vertx.uritemplate.UriTemplate, method: of, "
+                "arg: 0 }]",
+                replace="url_via: &template [{ owner: io.vertx.uritemplate.UriTemplate, method: "
+                "guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-socket-address-form-reads-its-uri": Guard(
+        what="a `request(HttpMethod, SocketAddress, …)` form reads its uri string as the path, "
+        "with no peer (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 1)",
+        why="without it a request sent to a server address publishes nothing, though its path "
+        "is in the call",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, destination: unread, url: arg2 } }',
+                replace='method: request, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, destination: unread, serves: false } }',
+            ),
+        ),
+    ),
+    "fluent.a-host-or-port-is-traced-as-the-url-is": Guard(
+        what="a `host` or `port` not written at the call is traced by the walk the assembled "
+        "`url` takes (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 4)",
+        why="without it a host handed in as a parameter, with a literal at every caller, "
+        "publishes no peer",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    walked = _walked_with(argument, context, (), reader=_part_answer, "
+                "within=context.path)\n",
+                replace="    walked = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-parts-form-reads-as-the-absolute-form": Guard(
+        what="a call's host and port are composed into the address the absolute form of the call "
+        "carries and read by that form's reader (Vert.x plan, Task 12 review; coordinator "
+        "ruling 2026-10-31: one peer per call, whichever form)",
+        why='without it `get(9200, "${search.host}", "/q")` and `getAbs("http://${search.host}'
+        ':9200/q")`, one call, publish two different rows',
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    stated_peer, _, _ = url_of({"kind": "string", "value": f"//{authority}'
+                '{tail}"})\n',
+                replace='    stated_peer, _, _ = _address_of(f"//{authority}{tail}")  # guard '
+                "disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-walked-configuration-expression-is-a-read-host": Guard(
+        what="a host or port the walk answers as a configuration expression with no unread hole "
+        "is read as that key (Vert.x plan, Task 12 review)",
+        why="without it a host traced to `${search.host}` through the walk publishes no peer, "
+        "though the same key written in an absolute URL does",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if answer.kind == EXPRESSION and not _holes(str(answer.value)):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-destination-names-no-peer": Guard(
+        what="a chain whose root says `destination: unread` has no peer, whatever its URL or a "
+        "host or port step names (Vert.x plan, Task 12 review; CP-56 rows 325-326)",
+        why='without it `requestAbs(POST, address, "http://billing/charges")` publishes `billing`, '
+        "the request's `Host`, as where it is sent, though it goes to the address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if captures.get(_DESTINATION) == _UNREAD_DESTINATION:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-destination-is-the-one-word": Guard(
+        what="a `destination` capture other than `unread` is refused at load (Vert.x plan, Task 12 "
+        "review)",
+        why="without it `destination: server` loads and reads as a chain whose destination is read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if _DESTINATION in captures and captures[_DESTINATION] != "
+                "_UNREAD_DESTINATION:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-socket-address-form-names-no-peer": Guard(
+        what="the `SocketAddress` roots say `destination: unread` (Vert.x plan, Task 12 review; "
+        "CP-56 rows 325-326)",
+        why="without it an absolute URL handed to `requestAbs(m, address, url)` publishes its "
+        "authority as where the request goes",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/vertx/'
+                "core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/HttpRequest;"
+                '",\n        captures: { http_method: arg0, destination: unread, url: arg2 } }',
+                replace='method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/'
+                "vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/"
+                'HttpRequest;",\n        captures: { http_method: arg0, url: arg2 } }',
+            ),
+        ),
+    ),
+    "vertx-webclient.a-statement-style-put-header-returns-its-receiver": Guard(
+        what="`HttpRequest.putHeader` is flagged `returns_receiver` (Vert.x plan, Task 12 review; "
+        "CP-56 row 111)",
+        why="without it `r.putHeader(…);` written as a statement forks a branch of its own, and "
+        "the request `r.send()` sends carries no header",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="        collects: { kind: header, name: arg0, value: arg1 }, returns_receiver: "
+                "true }",
+                replace="        collects: { kind: header, name: arg0, value: arg1 } }",
+            ),
+        ),
+    ),
+    "fluent.an-unread-first-piece-behind-a-stated-host-is-a-hole": Guard(
+        what="a uri whose first piece is unread, behind a stated host, writes that piece as a "
+        "hole, not `<host>` (Vert.x plan, Task 12; coordinator ruling 2026-10-31, item 5)",
+        why="without it the path says the host went unread beside a peer that names it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if path is not None and path.startswith(_UNREADABLE_HOST):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-uri-step-names-an-address": Guard(
+        what="a `uri(…)` step makes a chain whose root read no address derive (Vert.x plan, "
+        "Task 12; spec §3d)",
+        why='without it `request(GET, address, p).uri("/y").send()` is no row though it '
+        "names its path",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="captures: { url: arg0, serves: true }, returns_receiver: true }",
+                replace="captures: { url: arg0 }, returns_receiver: true }",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-statement-style-timeout-returns-its-receiver": Guard(
+        what="`HttpRequest.timeout(long)` is flagged `returns_receiver` (Vert.x plan, Task 12; "
+        "CP-56 row 111)",
+        why="without it `r.timeout(5000);` written as a statement in a helper that returns the "
+        "request (Hono's shape) hides the request from the walk back from its caller's "
+        "`send()`, and the call is no row",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find='method: timeout, descriptor: "(J)Lio/vertx/ext/web/client/HttpRequest;", '
+                "returns_receiver: true }",
+                replace='method: timeout, descriptor: "(J)Lio/vertx/ext/web/client/HttpRequest;" }',
+            ),
+        ),
+    ),
+    "values.an-object-reader-lets-calls-on-the-object-past": Guard(
+        what="`producer_paths(..., which_object=True)` lets every call made on the value past "
+        "the `escapes` window (Vert.x plan, Task 11; spec §3c)",
+        why="without it a router given its routes before it is mounted answers `escapes` at "
+        "the mount, and no route on it takes the prefix",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        which_object=which_object,\n",
+                replace="        which_object=False,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.leading-slash-gives-a-slashless-segment-its-slash": Guard(
+        what="`join_prefix` under `leading_slash` gives a segment not starting with `/` one "
+        "(Vert.x plan, Task 4 review, built in Task 11)",
+        why='without it `route("api") { get("orders") }` reads `/apiorders`',
+        edits=(
+            Edit(
+                path=_INBOUND_ROUTES,
+                find='    if rule == LEADING_SLASH and path not in ("", "*") and not '
+                'path.startswith("/"):\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-next-reached-on-the-received-context-passes-on": Guard(
+        what="a handler passes the request on where a `passes_on` call's receiver walks back to "
+        "the context it received, through its own body, a module helper or a lambda's capture "
+        "(Vert.x plan, Task 10; spec §3b)",
+        why="without it every middleware handler answers and every route's row names its "
+        "first handler, auth and body parsers included",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        if reached & ended:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-outside-the-module-is-unreadable": Guard(
+        what="a handler that hands its context to a method whose body is not read is not "
+        "readable here (Vert.x plan, Task 10; spec §3b)",
+        why="without it a handler whose pass-through is decided in another jar answers, and its "
+        "row is published `resolved`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        elif outside:\n",
+                replace="        elif False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.only-an-argument-is-a-hand-off": Guard(
+        what="a call ON the context (`ctx.response()`, `ctx.fail(…)`) is not a hand-off: only "
+        "the context passed as an argument is (Vert.x plan, Task 10; spec §3b)",
+        why="without it every handler calling the framework's own API on its context is not "
+        "readable here, and every route is `partial`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            for slot, argument in enumerate(site.get("arguments") or ()):\n',
+                replace='            for slot, argument in enumerate([*(site.get("arguments") or ()), '
+                '{"kind": "parameter", "value": site.get("receiver_parameter")}]):'
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-to-another-handler-follows-it": Guard(
+        what="the context a handler hands to a module method is followed to that method's "
+        "parameter, so a handler calling another handler that passes on passes on too "
+        "(Vert.x plan, Task 10; spec §3b)",
+        why="without it the walk back from the second handler's `next()` stops at its own "
+        "parameter and the first handler, which passes on through it, answers",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                        reached.add(target)\n"
+                "                        stack.append(target)\n",
+                replace="                        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-framework-handler-object-passes-on": Guard(
+        what="a handler object of a `framework_handlers` package, or a subpackage, passes on "
+        "by the framework's contract (Vert.x plan, Task 10; spec §3b)",
+        why="without it `BodyHandler.create()` and a CORS factory's `CorsHandler` are not "
+        "readable here and their routes publish `partial` rows nothing in the module answers",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                return Handler(outcome=PASSES_ON)\n",
+                replace="                return Handler(outcome=UNREADABLE)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-bridge-hands-the-context-to-the-method-the-row-names": Guard(
+        what="of a handler class's two `handle` methods, the row names the one javac's bridge "
+        "hands the context to (Vert.x plan, Task 10)",
+        why="without it the row names whichever sorts first, half the time the synthetic "
+        "bridge `handle(Object)`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                    (*stands_for, *(m for m in methods if m not in stands_for)),\n",
+                replace="                    tuple(methods),  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-written-to-a-field-is-unreadable": Guard(
+        what="a handler whose received context is written into a field is not readable here: "
+        "a `next()` on it later is on a `getfield` no fact names (Vert.x plan, Task 10, "
+        "ruling 2026-10-31)",
+        why="without it such a handler reads as answering and its row is published "
+        "`resolved`, though it may pass the request on",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="        outside.extend((STORED_IN, field) for field in stored.get((method, "
+                "parameter), ()))\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-context-handed-to-a-constructor-is-unreadable": Guard(
+        what="a handler that hands its received context to a constructor is not readable "
+        "here: the object keeps it, as javac's synthetic capture field does (Vert.x plan, "
+        "Task 10, ruling 2026-10-31)",
+        why="without it an anonymous callback calling `next()` on a captured context leaves "
+        "its handler answering, an invented `resolved` row",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                if site["name"] == "<init>" or (not targets and key not '
+                "in index.reached):\n",
+                replace="                if not targets and key not in index.reached:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-is-identified-by-its-declared-type": Guard(
+        what="a handler object the producer walk pins to no call is identified by the "
+        "declared static type of the parameter, field or factory return it came from "
+        "(Vert.x plan, Task 10, ruling 2026-10-31)",
+        why="without it a framework handler configured after it is built, or handed in as a "
+        "`Handler` parameter, is not readable here, and its middleware chain suppresses the "
+        "answering route (Hono `http-base`: every row's handler NULL)",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            declared = self._declared_type(site[0], argument, set())\n",
+                replace="            declared: list[Handler] = []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-method-runs-its-module-overrides": Guard(
+        what="a handler method runs what a call to it would: its own body and every module "
+        "override or implementation, through the hierarchy `call_edges` reads (Vert.x plan, "
+        "Task 10, review round 1)",
+        why="without it `auth::check` on a module interface, or a module handler type whose "
+        "subclass overrides `handle`, is judged on a body that never runs and may publish an "
+        "answering row for a handler that passes on",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                for subtype in self._dispatch.subtypes.get(start, ()):\n",
+                replace="                for subtype in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-handler-method-with-no-body-is-unreadable": Guard(
+        what="a handler method with no body read here and no module override is not readable "
+        "here, named (Vert.x plan, Task 10, review round 1)",
+        why="without it an abstract or interface method with nothing implementing it reads as "
+        "a body with no `next()` and its row is published `resolved`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            runs = self._inherited(bare, start)\n",
+                replace="            runs = [symbol]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-producer-is-named-as-a-producer": Guard(
+        what="an unreadable handler object names the call that BUILT it as its producer "
+        "(`produced_by`), never as a hand-off (Vert.x plan, Task 10, review round 1)",
+        why="without it the reason says the handler hands its context to the factory that "
+        "made it, a call the context never reaches",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="            unread: Unread = (PRODUCED_BY, maker)\n",
+                replace="            unread = (HANDED_TO, maker)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-question-keeps-an-unread-path-unread": Guard(
+        what="a `handler_pass_through` question is filed under the row's own path, NULL where "
+        "the path is unread (Vert.x plan, Task 10, review round 1)",
+        why="without it a route whose path is unread files its question under the text "
+        "`None`, an address no route has",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='        (str(row["protocol"]), row["method"], row["path"]),\n',
+                replace='        (str(row["protocol"]), row["method"], str(row["path"])),  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "fluent.several-bodies-dispatch-can-run-are-one-narrowed-row-each": Guard(
+        what="a handler whose dispatch can run several bodies (a module interface method two "
+        "classes implement) is one row per answering body, each `narrowed` (Vert.x plan, "
+        "Task 10, review round 2)",
+        why="without it the row names one implementation picked by symbol order, `resolved`, "
+        "a claim about which body runs that nothing read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        variants = answering.alternatives or (answering,)\n",
+                replace="        variants = (answering,)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-no-body-reason-stays-on-the-bodiless-method": Guard(
+        what="where dispatch runs several read bodies, each alternative keeps its own outcome; "
+        "a no-body reason stays on the method that has no body (Vert.x plan, Task 10, review "
+        "round 3)",
+        why="without it every alternative row is `partial` with a reason about a different method",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                UNREADABLE if symbol == bodiless else outcomes[symbol],\n",
+                replace="                UNREADABLE if bodiless else outcomes[symbol],  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.two-unnamed-handler-objects-are-two-rows": Guard(
+        what="two route registrations whose handler objects nothing names (handler NULL) stay "
+        "two rows, each with its own reason (Vert.x plan, Task 10, review round 1)",
+        why="without it the NULL handler merges them and one registration's reason is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    return handler if handler is not None else candidate.registered\n",
+                replace="    return handler  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-construction-runs-only-its-classs-body": Guard(
+        what="a constructed handler (`new X(…)`) runs only the body X declares or inherits, "
+        "never a subclass's override (Vert.x plan, Task 10, review round 3; "
+        "`Dispatch.candidates`)",
+        why="without it `new BaseHandler()` is judged on `SubHandler#handle`, a body it cannot "
+        "run, and a passing-on override hides an answering route",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            return self._object(str(argument.get("symbol")), None, '
+                "constructed=True)\n",
+                replace='            return self._object(str(argument.get("symbol")), None, '
+                "constructed=False)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.overrides-are-read-below-the-named-type": Guard(
+        what="overrides are read below the handler's own named type, not below the ancestor "
+        "that declares `handle` (Vert.x plan, Task 10, review round 3)",
+        why="without it a handler typed `Left` takes `Right`'s override, a sibling under the "
+        "same base that a `Left` can never be",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            start = named or owner_of(bare) or ""\n',
+                replace='            start = owner_of(bare) or ""  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "pass_through.a-private-or-static-reference-runs-exactly": Guard(
+        what="a reference to a private or static method, every synthetic lambda body among "
+        "them, runs it exactly; only a virtual or interface reference is dispatched (Vert.x "
+        "plan, Task 10, review round 3)",
+        why="without it a private handler takes an unrelated same-named method of a subclass "
+        "as an override",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find="                dispatched=symbol not in self._exact,\n",
+                replace="                dispatched=True,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-construction-producer-in-the-static-read-is-its-owner": Guard(
+        what="in the static-type read, a `<init>` producer is a construction of its owner "
+        "(Vert.x plan, Task 10, review round 3)",
+        why="without it a handler constructed then configured is read by the `void` return of "
+        "its constructor and is not readable here",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                constructed = name == "<init>"\n',
+                replace="                constructed = False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "pass_through.a-malformed-word-is-refused": Guard(
+        what="a malformed `passes_on`, `framework_handlers` or `handler_methods`, or either of "
+        "the last two without `passes_on`, is refused at load (Vert.x plan, Task 10)",
+        why="without it a misspelt word loads and silently reads every handler as answering, "
+        "or as the framework's",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='                raise CatalogError(f"{where} `{word}` is read only beside '
+                '`passes_on`")\n',
+                replace="                pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='        raise CatalogError(f"{where} `passes_on` is a non-empty list of '
+                '{{owner, method}}")\n',
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='            raise CatalogError(\n                f"{where} a `passes_on` '
+                'entry is {{owner, method}}, each a name; got {entry!r}"\n            )\n',
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PASS_THROUGH,
+                find='            raise CatalogError(f"{where} `{word}` is a list of names; got '
+                '{value!r}")\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-inbound-row-is-keyed-on-what-it-serves": Guard(
+        what="an inbound `fluent` row dedups on `(protocol, verb, path, handler)`, never on "
+        "the method that registered it (Vert.x plan, Task 6)",
+        why="a route answered by one handler and registered from two methods is one consumer "
+        "registered twice; keyed on the registering method it published two rows for it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                None if inbound else context.caller,\n",
+                replace="                context.caller,\n",
+            ),
+        ),
+    ),
+    "fluent.a-refused-path-is-recorded-and-never-repaired": Guard(
+        what="an inbound `fluent` path a refusing framework (`refuses_unrooted_path`) throws "
+        "on - empty, or no leading `/` - derives no row and is filed as a "
+        "`refused_registration` question (Vert.x plan, Task 7, DR-6)",
+        why="without it the canonicaliser prepends the `/` and the module publishes a route "
+        "Vert.x throws on at startup, at an address it never serves",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and is_unrooted(path, url_resolution == str(Resolution.RESOLVED))\n",
+                replace="                and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-partly-read-path-is-refused-where-its-first-character-was-read": Guard(
+        what="an inbound `fluent` path read only in part is refused by a refusing framework "
+        'when its first character was read and is not `/` (`"bad" + id`), since '
+        "`checkPath` looks at that character alone (Vert.x plan, Task 7 fix round 1)",
+        why="without it the half-read path is repaired to `/bad{id}` and published as a route "
+        "Vert.x throws on at startup",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and url_resolution in (str(Resolution.RESOLVED), str(Resolution.PARTIAL))\n",
+                replace="                and url_resolution == str(Resolution.RESOLVED)\n",
+            ),
+        ),
+    ),
+    "fluent.a-path-whose-first-piece-is-unread-is-not-refused": Guard(
+        what='a partly read path whose FIRST piece is unread (`prefix + "/x"`) is not '
+        "refused: the unread piece may be the `/` (Vert.x plan, Task 7 fix round 1)",
+        why="without it every route built on a prefix the analysis could not read was "
+        "dropped as refused, a route Vert.x serves",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/inbound_routes.py",
+                find="    return read_whole or not path.startswith(_UNKNOWN_START)\n",
+                replace="    return True\n",
+            ),
+        ),
+    ),
+    "fluent.several-accumulated-verbs-are-one-row-each": Guard(
+        what="a `fluent` chain that accumulated several verbs (`repeats`) derives one row per "
+        "verb, in call order (Vert.x plan, Task 8; spec §3f)",
+        why="without it `method(GET).method(DELETE)` publishes one route and drops the verb "
+        "the module also serves",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            for each in (declared_verb if isinstance(declared_verb, tuple) else (declared_verb,))\n",
+                replace="            for each in (declared_verb[:1] if isinstance(declared_verb, tuple) else (declared_verb,))\n",
+            ),
+        ),
+    ),
+    "fluent.a-verbless-chain-serves-any-method-where-the-catalog-says-so": Guard(
+        what="an inbound `fluent` chain with no verb, in a catalog declaring `verbless_serves: "
+        "any`, is one row with method NULL and `method_kind = any` (Vert.x plan, Task 8)",
+        why="without it the row reads as a route whose verb nobody read, and the linker joins "
+        "no call of any verb to a route that serves them all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    method_kind = context.verbless_serves if verbless and direction == "inbound" else None\n',
+                replace="    method_kind = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pathless-chain-serves-the-catalogs-every-path": Guard(
+        what="an inbound `fluent` chain that never captured an address, in a catalog declaring "
+        "`pathless_serves`, serves that path (`/*`), `resolved` (Vert.x plan, Task 8)",
+        why="without it `router.route().handler(h)`, the official hello world, is an "
+        "unresolved row with no path and the module's only route is lost",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]\n",
+                replace="        destinations = [_composed_address(captures, context)]\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-capture-marks-the-row-and-skips-canonicalising": Guard(
+        what="a `fluent` chain whose address was captured `url_is: pattern` publishes it "
+        "verbatim with `path_kind = pattern` (Vert.x plan, Task 8; spec §3a)",
+        why="without it `\\/files\\/.+` is canonicalised to `/\\/files\\/.+`, an expression "
+        "nobody wrote, and linked by path as if it were an address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    path_kind = _URL_IS.get(str(captures.get("url_is")))\n',
+                replace="    path_kind = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-path-is-never-refused": Guard(
+        what="a pattern path is never refused by `refuses_unrooted_path`: Vert.x skips "
+        "`checkPath` for a regex route (Vert.x plan, Task 8; CP-56 row 118)",
+        why="without it a regex route not starting with `/` is filed as refused and derives "
+        "no row, though Vert.x registers and serves it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                and path_kind != PATH_KIND_PATTERN\n",
+                replace="                and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-pattern-path-keeps-its-query-characters": Guard(
+        what="a pattern path keeps every character: its `?` is a quantifier, not the start of "
+        "a query string (Vert.x plan, Task 8)",
+        why="without it `/(a|b)?q=.+` is cut to `/(a|b)` and a query parameter `q` is invented",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="(path, ()) if path_kind == PATH_KIND_PATTERN else query_entries(path)",
+                replace="query_entries(path)",
+            ),
+        ),
+    ),
+    "fluent.a-chain-marked-not-serving-derives-nothing": Guard(
+        what="a `fluent` chain whose last `serves` capture is false (`disable()`), or whose "
+        "`serves` is poisoned (`remove()`), derives no row (Vert.x plan, Task 8)",
+        why="without it a disabled or removed route is published as served",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    serving = captures.get(_SERVES, True) is True\n",
+                replace="    serving = True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-malformed-route-word-is-refused": Guard(
+        what="`url_is` outside its closed set, a non-boolean `serves`, a `verbless_serves` "
+        "other than `any` and a `pathless_serves` that is not a path are refused naming the "
+        "file (Vert.x plan, Task 8)",
+        why="a misspelt word would load and read as another answer: a pattern published as an "
+        "address, or a disabled route served",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    _validate_route_captures([*roots, *bean_roots, *steps], catalog)\n",
+                replace="",
+            ),
+            Edit(
+                path=_INBOUND_ROUTES,
+                find="    if declared is not None and declared != ANY_METHOD:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_FLUENT,
+                find="    if declared is not None and not (isinstance(declared, str) and declared):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-refused-path-is-one-refusal-under-its-roots-verb": Guard(
+        what="a refused path is filed once per chain, under the verb its ROOT named, however "
+        "many verbs later steps add (Vert.x plan, Task 8 fix round 1)",
+        why='Vert.x throws at `route("bad")` before any `method(...)` runs; filed per verb, '
+        "one refused registration reads as several",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                    method=refused_verb,\n",
+                replace="                    method=verb,\n",
+            ),
+        ),
+    ),
+    "chains.a-collects-name-may-be-a-literal": Guard(
+        what="a `collects` entry's `name` may be a literal name the framework fixes (`name: "
+        "Host`), read as that string, beside an `argN` position (Vert.x plan, Task 8 fix "
+        "round 1)",
+        why="without it `virtualHost(h)`'s entry has no name, and `_metadata_row` masks a "
+        "value whose name is unread: the host is published as `«redacted»`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/chains.py",
+                find='        else {"kind": "string", "value": str(declared_name)}\n',
+                replace="        else None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-malformed-collects-is-refused": Guard(
+        what="a `collects` block that is not `{kind, value: argN, name: argN or a literal "
+        "name}` is refused naming the file (Vert.x plan, Task 8 fix round 1)",
+        why="a misspelt block would load and collect nothing, or collect under a label nobody "
+        "wrote",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/chains.py",
+                find='            "collects": _validated_collects(step, catalog),\n',
+                replace='            "collects": step.get("collects"),\n',
+            ),
+        ),
+    ),
+    "fluent.a-refusal-is-the-catalogs-word-not-every-frameworks": Guard(
+        what="only a catalog declaring `refuses_unrooted_path` refuses an unrooted path; every "
+        "other fluent catalog keeps the canonicaliser's leading-slash repair (Vert.x plan, "
+        "Task 7)",
+        why="without it a framework that repairs the path (Spring does) lost its row, "
+        "because a rule measured on one framework was applied to all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                context.refuses_unrooted\n",
+                replace="                True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.an-inbound-row-keeps-its-handler-in-the-key": Guard(
+        what="an inbound `fluent` row's dedup key carries its handler, so two handlers on one "
+        "route, or one handler on two routes, stay separate rows (Vert.x plan, Task 6)",
+        why="with the registering method out of the key and no handler in it, a second "
+        "consumer of a route would vanish into the first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                handler if inbound else None,\n",
+                replace="                None,\n",
+            ),
+        ),
+    ),
+    "fluent.an-inbound-row-keeps-its-route-in-the-key": Guard(
+        what="an inbound `fluent` row's dedup key carries its route, so one handler method "
+        "registered on two routes is two rows (Vert.x plan, Task 6)",
+        why="the handler is in the key now and the registering method is not; a key of "
+        "handler alone would fold every route one method serves into the first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                path,\n                None if inbound else context.caller,\n",
+                replace="                None,\n                None if inbound else context.caller,\n",
+            ),
+        ),
+    ),
+    "inbound_routes.media-reads-an-accumulated-capture": Guard(
+        what="the media columns read a `produces`/`consumes` capture accumulated over several "
+        "calls, element by element",
+        why="Vert.x calls `produces(…)` once per media type; reading only a single value or "
+        "a varargs array published NULL for a route that names its media",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/inbound_routes.py",
+                find="    if isinstance(argument, tuple):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.fluent-fills-the-media-columns": Guard(
+        what="an inbound `fluent` row carries the media its chain captured in `consumes` and "
+        "`produces`, read by the same function `combinator` calls",
+        why="Vert.x declares what a route consumes and produces on the route chain; without "
+        "this the row published both NULL, and a client sending the wrong media type to a "
+        "route that refuses it looked like a route with no media contract at all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    consumes, produces = media_columns(captures) if direction == "inbound" '
+                "else (None, None)\n",
+                replace="    consumes, produces = None, None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1866,6 +3231,172 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render.an-ANY-METHOD-row-says-any-not-unresolved": Guard(
+        what="the module document renders a `method_kind = any` row's verb as `any` (Vert.x "
+        "spec §3a; final review C1)",
+        why="without it every verbless Vert.x route and every Quarkus `@Route` naming no "
+        "`methods` reads `(unresolved) /path`, a verb reported unread that serves every verb",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        any_method=endpoint.get("method_kind") == ANY_METHOD,\n',
+                replace="        any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render.a-PATTERN-path-is-marked-a-pattern": Guard(
+        what="the module document follows a `path_kind = pattern` path with `(pattern)` (Vert.x "
+        "spec §3a; final review C1)",
+        why="without it a regular expression the framework matches reads as a URL someone "
+        "could call",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='        pattern=endpoint.get("path_kind") == PATH_KIND_PATTERN,\n',
+                replace="        pattern=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render.an-ANY-METHOD-question-says-any": Guard(
+        what="an open question filed against a `method_kind = any` row renders its verb as "
+        "`any` (Vert.x spec §3a; final review C1)",
+        why="without it Hono's `/*` pass-through question reads `(unresolved) /*`, a verb "
+        "reported unread on a route serving every verb",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find='    any_method = row.get("method_kind") == ANY_METHOD or (\n',
+                replace="    any_method = False or (  # guard disabled\n",
+            ),
+        ),
+    ),
+    "pass_through.a-question-carries-its-rows-markers": Guard(
+        what="a `handler_pass_through` question carries the row's `method_kind`/`path_kind` "
+        "(Vert.x spec §3a; final review C1)",
+        why="without them the question on a verbless route reads `(unresolved) /path`",
+        edits=(
+            Edit(
+                path=_PASS_THROUGH,
+                find='            "method_kind": row.get("method_kind"),\n',
+                replace='            "method_kind": None,  # guard disabled\n',
+            ),
+        ),
+    ),
+    "workspace.the-address-ordering-carries-every-roots-column": Guard(
+        what="`roots_by_address.parquet` carries every column `roots.parquet` does, the "
+        "markers included (final review C1)",
+        why="without it the two files of one bundle disagree about whether a root serves "
+        "every verb",
+        edits=(
+            Edit(
+                path=_WORKSPACE,
+                find="               coalesce(a.masked, r.path) AS path, r.method_kind, r.path_kind\n"
+                "        FROM roots_by_address r\n",
+                replace="               coalesce(a.masked, r.path) AS path, r.method_kind, NULL AS path_kind\n"
+                "        FROM roots_by_address r\n",
+            ),
+        ),
+    ),
+    "index.an-address-carries-its-rows-markers": Guard(
+        what="`addresses.ndjson` carries the root's `method_kind`/`path_kind` (Vert.x spec "
+        "§3a; final review C1)",
+        why="without them a verbless route's address record reads as a verb nobody read",
+        edits=(
+            Edit(
+                path=_INDEX,
+                find='                "method_kind": root["method_kind"],\n',
+                replace='                "method_kind": None,  # guard disabled\n',
+            ),
+        ),
+    ),
+    "render_trace.an-ANY-METHOD-root-says-any": Guard(
+        what="a trace heading renders a `method_kind = any` root's verb as `any` (Vert.x spec "
+        "§3a; final review C1)",
+        why="without it every verbless Vert.x route's trace reads `(unresolved) /path`",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="                any_method=identity.method_kind == ANY_METHOD,\n",
+                replace="                any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "render_trace.a-PATTERN-root-is-marked-a-pattern": Guard(
+        what="a trace heading follows a `path_kind = pattern` root's path with `(pattern)` "
+        "(Vert.x spec §3a; final review C1)",
+        why="without it a regular expression reads as a URL in the trace section",
+        edits=(
+            Edit(
+                path=_DOCUMENT,
+                find="                pattern=identity.path_kind == PATH_KIND_PATTERN,\n",
+                replace="                pattern=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "roots.a-root-carries-its-rows-markers": Guard(
+        what="`roots` carries the endpoint row's `method_kind`/`path_kind` with the address "
+        "(Vert.x spec §3a; final review C1)",
+        why="without them a root's NULL method reads as a verb nobody read, and its trace "
+        "heading says `(unresolved)` on a route serving every verb",
+        edits=(
+            Edit(
+                path=_ROOTS,
+                find='            "method_kind": method_kind,\n',
+                replace='            "method_kind": None,  # guard disabled\n',
+            ),
+        ),
+    ),
+    "render.the-system-document-says-ANY-for-an-any-method-end": Guard(
+        what="the system document's Endpoint cell says `any` for a link landing on an "
+        "any-method row (Vert.x spec §3a; final review C1)",
+        why="without it the cell prints an empty verb, which reads as missing data",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find="_verb(link.to_method, link.to_any_method)",
+                replace="_verb(link.to_method, False)",
+            ),
+        ),
+    ),
+    "render.the-system-document-says-ANY-for-an-uncalled-any-method-row": Guard(
+        what="the system document's uncalled Endpoint cell says `any` for an any-method row "
+        "(Vert.x spec §3a; final review C1)",
+        why="without it an uncalled verbless route prints an empty verb",
+        edits=(
+            Edit(
+                path=_SYSTEM_RENDER,
+                find="_verb(u.method, u.any_method)",
+                replace="_verb(u.method, False)",
+            ),
+        ),
+    ),
+    "stitch.an-uncalled-ANY-METHOD-row-says-so": Guard(
+        what="`uncalled` carries a row's `method_kind = any` on `Uncalled.any_method` (final "
+        "review C1)",
+        why="without it the system document cannot tell an uncalled any-method row from one "
+        "whose verb is NULL",
+        edits=(
+            Edit(
+                path=_LINKS,
+                find='                any_method=row.get("method_kind") == ANY_METHOD,\n',
+                replace="                any_method=False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "mounts.a-router-is-its-producer-on-its-call-path": Guard(
+        what="two `Place` routers are one object only where the same producer is reached on "
+        "agreeing paths (the user's ruling, 2026-10-30; final review I1)",
+        why="without it two routers made by two calls of one factory helper are one router, "
+        "and the second's route on the same verb and path is dropped as if the first ran "
+        "before it",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="    return router[0] == other[0] and router[1].joined(other[1]) is not None\n",
+                replace="    return router[0] == other[0]  # guard disabled\n",
+            ),
+        ),
+    ),
     "stitch.the-LINKS-legend-says-what-not-evaluated-means-once": Guard(
         what='where any link end renders "not evaluated", the Links section carries one fixed '
         "sentence saying what it means and that the participant's module document says why",
@@ -2450,6 +3981,144 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-url-handed-in-as-a-parameter-is-asked-of-the-walk": Guard(
+        what="a `url` capture that is the method's parameter — handed in by a caller or "
+        "captured by a lambda — is read by the no-identity walk the assembled address takes",
+        why="without it `router.get(path)` in a helper, or on a path local a lambda captured, "
+        "publishes `path` NULL at `unresolved` beside a handler reached the same way that "
+        "resolves (`OI-265`). The walk is asked with no identity entries, so it reaches only "
+        "literals the code states and cannot conclude that a producer means the address",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT, _PARAMETER):\n',
+                replace='    if isinstance(argument, dict) and argument.get("kind") in (_CONCAT,):'
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.every-callers-url-is-a-row-of-its-own": Guard(
+        what="a `url` parameter its callers hand several values is one address per value: "
+        "each literal `resolved`, an unread value a row with `path` NULL (final review I2, "
+        "enumerable is exact)",
+        why="without it one literal is published alone, `resolved`, beside a sibling caller "
+        "whose value nobody read, and two literals publish nothing at all",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        if assembled is not None and argument.get("kind") == _PARAMETER:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-default-set-and-unread-leaves-no-peer": Guard(
+        what="a client default a request takes that was set and not read, or disputed, leaves "
+        "the row's peer NULL at its own resolution (D02's options-object rung; final review I3)",
+        why='without it `setDefaultHost("search").setDefaultPort(config.port())` publishes the '
+        "peer `search` at `resolved`, where Vert.x sends to `search:<unread>`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        text = defaults[part]\n        if text is None:\n            return None\n",
+                replace="        text = defaults[part]\n        if text is None:\n"
+                "            continue  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-default-the-paths-dispute-is-set-and-unread": Guard(
+        what="a part every path to the options sets, and two read otherwise, is set and not "
+        "read (None), never absent (final review I3)",
+        why="without it two factories naming two default ports read as no port set, and the "
+        "row publishes the host alone at `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        part: value if all(other[part] == value for other in rest) else None\n"
+                "        for part, value in first.items()\n"
+                "        if all(part in other for other in rest)\n",
+                replace="        part: value\n"
+                "        for part, value in first.items()\n"
+                "        if all(part in other and other[part] == value for other in rest)\n",
+            ),
+        ),
+    ),
+    "fluent.routes-on-different-routers-are-not-ordered-against-each-other": Guard(
+        what="routes on one verb and path whose routers are two different calls neither "
+        "precede nor narrow each other: Vert.x orders routes within one router",
+        why="without it every example server in vertx-examples' web-examples, each with its "
+        "own router, narrowed the others' routes on a shared path (34 of 46 rows, `OI-263`), "
+        "and two routers' routes in one method dropped the second as if the first ran before it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if router is not None and other is not None and not same_router(router, other):\n"
+                "            return None\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.routes-made-on-one-router-are-rivals": Guard(
+        what="two routes whose known routers share a making call can be on one router, so "
+        "two handlers there are each `narrowed`",
+        why="without it a router made once and handed to two methods that each give one path "
+        "a handler publishes both handlers `resolved`, two answers to one request",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    return any(_meets(one, other) is not None for one in first.places for "
+                "other in then.places)\n",
+                replace="    return any(_meets(one, other) is not None and None in (one[-1][0], "
+                "other[-1][0]) for one in first.places for other in then.places)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-router-handed-in-from-outside-may-be-any-router": Guard(
+        what="a route whose router arrived as a parameter nothing in the module binds has no "
+        "known router, so it is ordered against every route on its verb and path",
+        why="two such parameters are two names, not two objects: the caller outside the module "
+        "may hand both the same router. Read as two routers, two methods giving one path a "
+        "handler each publish both `resolved`",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find='    return (made, path) if made[0] == "call" else None\n',
+                replace="    return (made, path)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "mounts.a-mounted-router-is-served-at-its-mount-route-on-the-parent": Guard(
+        what="a route on a mounted router stands at the mount route's place on the parent "
+        "router, so it is ordered against the parent's own routes on its verb and path, "
+        "nested mounts each a step",
+        why="without it a parent route and a mounted router's route on one verb and path are "
+        "read as two routers' answers and both published `resolved`, though Vert.x tries the "
+        "parent's own routes and the mount route in order and only one ever runs",
+        edits=(
+            Edit(
+                path=_MOUNTS,
+                find="            (*place[:-1], (place[-1][0], mount), (made, None))\n",
+                replace="            ((made, None),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-capture-skips-the-receiver-an-instance-lambda-is-created-with": Guard(
+        what="a lambda body's parameter i is the capture site's argument i plus the arguments "
+        "ahead of the captures — `this` for an instance body — never argument i",
+        why="javac's capture site for an instance lambda hands `this` first, and `this` becomes "
+        "the body's receiver (D00's `captures` is the argument count minus one for it). Binding "
+        "argument i to parameter i read every value such a lambda closed over as its "
+        "neighbour's: vertx-examples' `sqlclient` published `POST /products` as answered by "
+        "`handleGetProduct` at `resolved` (`OI-266`). Any value read through an instance "
+        "lambda's captures — a topic, a path, a handler — is affected",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                receiver = max(len(bound) - count, 0)\n",
+                replace="                receiver = 0  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-binding-written-from-a-CONSTANT-answers-that-constant": Guard(
         what="a field written from a constant resolves to that constant, with no crossing — "
         "the value is in the fact",
@@ -2681,8 +4350,8 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.a-STATIC-FIELD-receiver-is-followed-to-its-writer": Guard(
-        what="a call receiver read by `getstatic` is resolved as the field D00 §5's "
-        "`receiver_field` names",
+        what="a call receiver read by `getstatic`, or by `getfield` on `this` (2026-10-31), is "
+        "resolved as the field D00 §5's `receiver_field` names",
         why="the receiver's own value id is the `getstatic` instruction, which no other fact "
         "names, so `val derived = client.config { }` at file level reaches no parent: the "
         "derived client's relative call loses the base Ktor sends it to (CP-54 row 80)",
@@ -2769,6 +4438,93 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="        if identity not in self._declared:",
                 replace='        if row["name"] not in {name for _, name in self._declared}:  '
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-producer-end-at-a-callerless-parameter-NAMES-it": Guard(
+        what="an `external` end at a parameter nothing in the module binds names that "
+        "parameter, `(method, index)`, on the producer reader's end",
+        why="the Vert.x pass-through reader asks whether a `next()` receiver came from a "
+        "handler's context parameter (spec 2026-10-30 §3b); an end that says only "
+        "`external` cannot tell a handler's own context from any other value handed in from "
+        "outside, so every handler calling `next()` would read as not readable here, or a "
+        "`next()` on some other context would count as passing on",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
+                "parameter=(method, index)))",
+                replace="            return _only(trail, _unresolved(EXTERNAL))  "
+                "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-producer-walk-STOPS-at-a-named-methods-parameter": Guard(
+        what="a parameter of a method named in `stop_at_parameters_of` ends the producer "
+        "walk there, naming it, instead of crossing to the method's callers",
+        why="a handler the module also calls directly has callers, so the walk crosses past "
+        "its context parameter to wherever those callers got a value, and the reader never "
+        "learns the receiver was the handler's own context: a pass-through handler would be "
+        "read as answering, which publishes a route row for middleware",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if method in self._stop_at_parameters_of:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.a-descended-FRAME-answers-before-the-stop": Guard(
+        what="inside a callee the walk entered through its return, a parameter of a method "
+        "named in `stop_at_parameters_of` is the argument at that call, not a stop",
+        why="`log(ctx).next()` with `log` registered as a handler too: stopping in `log` "
+        "names `log`'s parameter as where the receiver came from, so the pass-through reader "
+        "credits `log` with passing on a context it never received, and blames the wrong "
+        "handler for the route",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        frame = self._frame_in(frames, method)\n"
+                "        if frame is not None:\n"
+                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
+                "frames)\n"
+                "        if method in self._stop_at_parameters_of:\n",
+                replace="        frame = None if method in self._stop_at_parameters_of else "
+                "self._frame_in(frames, method)  # guard disabled by scripts/guard_check.py\n"
+                "        if frame is not None:\n"
+                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
+                "frames)\n"
+                "        if method in self._stop_at_parameters_of:\n",
+            ),
+        ),
+    ),
+    "values.two-callerless-WRITERS-are-two-named-ends": Guard(
+        what="for the producer reader, two `external` ends at two different parameters are "
+        "kept apart where a binding's writes are gathered",
+        why="the parameter is outside the answer's equality, so a plain dedupe keeps the "
+        "first writer's parameter only: a context held in a field two handlers write would "
+        "name one handler, and the other's `next()` would read as coming from nowhere it owns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if not self._parameters_apart:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.the-parameter-an-external-answer-ended-at-is-OUTSIDE-its-equality": Guard(
+        what="the parameter an `external` answer carries is not part of the answer's "
+        "equality, so the value walk deduplicates answers exactly as before it existed",
+        why="two `external` answers at two parameters would become two distinct answers to "
+        "every reader that deduplicates the value walk's answers, which could split one "
+        "unresolved slot into several and change rows no Vert.x code touches",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    parameter: tuple[str, int] | None = dataclass_field(default=None, "
+                "compare=False, repr=False)",
+                replace="    parameter: tuple[str, int] | None = None  "
                 "# guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -2988,9 +4744,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        _derive(end, context if end.path is None else "
-                "replace(context, path=end.path))\n",
-                replace="        _derive(end, context)  # guard disabled by scripts/guard_check.py\n",
+                find="        if end.path is not None:\n            held = replace(held, path=end.path)\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            held = replace(held, path=end.path)\n",
             ),
         ),
     ),
@@ -3439,6 +5195,81 @@ GUARDS: dict[str, Guard] = {
                 # disabling it at one site alone would measure a different
                 # question from the one the catalogs' near-misses ask.
                 occurrences=5,
+            ),
+        ),
+    ),
+    "derive_endpoints.a-verbless-mapping-serves-any-method-where-the-catalog-says-so": Guard(
+        what="an annotation mapping naming no method, in a catalog declaring `verbless_serves: "
+        "any`, is one row with method NULL and `method_kind = any` (Vert.x plan, Task 14)",
+        why="without it `@Route` with no `methods` reads as a route whose verb nobody read, and "
+        "the linker joins no call of any verb to a route that serves them all",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="           CASE WHEN len(d.methods) = 0 AND vc.verbless_serves = 'any' THEN 'any' END\n",
+                replace="           CAST(NULL AS VARCHAR)  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-malformed-verbless-word-is-refused": Guard(
+        what="`mapping.verbless_serves` other than `any` is refused naming the file (Vert.x "
+        "plan, Task 14)",
+        why="a misspelt word would load and read as no word, publishing a verb nobody read "
+        "where the catalog meant every verb",
+        edits=(
+            Edit(
+                path=_INBOUND_ROUTES,
+                find="    if declared is not None and declared != ANY_METHOD:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-attribute-is-a-pattern-row": Guard(
+        what="a mapping naming a `pattern_from` attribute derives a row marked "
+        "`path_kind = pattern` (Vert.x plan, Task 14)",
+        why="without it `@Route(regex)` is linked by path as if the expression were an address",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="             THEN 'pattern' END AS path_kind\n",
+                replace="             THEN CAST(NULL AS VARCHAR) END AS path_kind\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-row-takes-no-prefix": Guard(
+        what="a pattern row's path is the expression alone: the type-level prefix is not joined "
+        "to it (Vert.x plan, Task 14; Quarkus joins `@RouteBase` to `path` only, 3.17.5)",
+        why="without it `/qk/orders` + `\\/qk\\/files\\/.+` is an expression nobody wrote and "
+        "nothing matches",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        CASE WHEN m.path_kind IS NOT NULL THEN scoped_name\n",
+                replace="        CASE WHEN FALSE THEN scoped_name  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "derive_endpoints.a-pattern-row-is-not-canonicalised": Guard(
+        what="a pattern row skips the canonical-address rules (Vert.x plan, Task 14)",
+        why="without it `\\/qk\\/files\\/.+` gains a leading `/`, an expression nobody wrote",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        CASE WHEN m.path_kind IS NOT NULL THEN FALSE\n",
+                replace="        CASE WHEN FALSE THEN FALSE  -- guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "path_prefix.a-pattern-row-is-not-canonicalised-by-the-prefix": Guard(
+        what="the configured/installed prefix passes the row's `path_kind` to "
+        "`canonical_http_path`, so a pattern is prefixed but never rewritten",
+        why="without it a pattern's doubled separator collapses and the expression published "
+        "is one nobody wrote",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/path_prefix.py",
+                find='                    str(endpoint["path_kind"]) if endpoint.get("path_kind") else None,\n',
+                replace="                    None,\n",
             ),
         ),
     ),
@@ -4179,6 +6010,33 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/storage/duckdb/derive_call_endpoints.sql",
                 find="WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)",
                 replace="WHERE TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "derive_call_endpoints.an-inbound-row-ignores-its-registering-method": Guard(
+        what="an inbound call-site row is not inserted when its route is already in the "
+        "table with the same handler, whichever method registered it (Vert.x plan, Task 6)",
+        why="the method that registered a route is not part of what the route serves; "
+        "compared on caller and peer alone, a route registered from two methods was two rows",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/derive_call_endpoints.sql",
+                find="           OR (r.direction = 'inbound' AND existing.handler = r.handler))\n",
+                replace="           OR FALSE)\n",
+            ),
+        ),
+    ),
+    "derive_call_endpoints.an-inbound-row-of-another-handler-is-kept": Guard(
+        what="an inbound call-site row on a route already in the table is kept where its "
+        "handler and its caller both differ (Vert.x plan, Task 6; final review M8)",
+        why="the handler match stands for every engine's inbound rows: matched on the route "
+        "alone, a second handler registered on one path by another method would vanish with "
+        "no gap row saying so",
+        edits=(
+            Edit(
+                path="sextant/storage/duckdb/derive_call_endpoints.sql",
+                find="           OR (r.direction = 'inbound' AND existing.handler = r.handler))\n",
+                replace="           OR (r.direction = 'inbound'))\n",
             ),
         ),
     ),
@@ -6047,8 +7905,8 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path=_FLUENT,
-                find="        else _string_value(declared_verb) or static_field_value(declared_verb, context.verb_fields)\n",
-                replace="        else _string_value(declared_verb)  # guard disabled by scripts/guard_check.py\n",
+                find="    return _string_value(argument) or static_field_value(argument, context.verb_fields)\n",
+                replace="    return _string_value(argument)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -6124,6 +7982,185 @@ GUARDS: dict[str, Guard] = {
                 find="    if scheme is not None:\n        return None\n",
                 replace="    if scheme is not None:  # guard disabled by scripts/guard_check.py\n"
                 "        return relative\n",
+            ),
+        ),
+    ),
+    "client_base.the-options-rung-reads-the-factorys-options": Guard(
+        what="an options-object rung reads the options argument of the factory that built the "
+        "client (Vert.x Task 13, spec §3d)",
+        why="without it a Vert.x client built by `WebClient.create(vertx, options)` has no "
+        'defaults, and `client.get("/q")` publishes no peer where Vert.x sends to '
+        "`search:9200` (CP-56 row 124)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='            each.append(self.parts_of(built, int(rung["options_arg"])))\n',
+                replace="            each.append({})  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "client_base.every-call-returning-the-options-configures-them": Guard(
+        what="a call on an options type returning a type `configures` names hands back the same "
+        "object, so it configures it (CP-56 rows 103-105, 112)",
+        why="Hono's options are configured statement by statement beside `setConnectTimeout` "
+        "and `setTrustOptions`; read as the object escaping, the host it sets is lost",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='                or returned_type(str(site["descriptor"])) in returns.get(str(site["owner"]), ())\n',
+                replace="                or False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "client_base.one-ladder-is-one-shape": Guard(
+        what="a `client_base` ladder mixing options rungs and block rungs is refused at load",
+        why="neither reader follows the other's rungs, so a mixed ladder would load and read a "
+        "base from half of it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find='        if not isinstance(rung, dict) or "options_arg" not in rung:\n',
+                replace="        if not isinstance(rung, dict):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-client-at-the-roots-receiver-is-read-there": Guard(
+        what="`client_arg: receiver` reads the client off the receiver of the chain's root call",
+        why="a Vert.x request is made ON its client (`client.get(…)`); without it no client is "
+        "found and no default is filled",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        return {"captured_at": (root["caller"], root["ordinal"], RECEIVER)}\n',
+                replace="        return None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-default-fills-only-what-the-request-does-not-name": Guard(
+        what="a client default fills only the host or port the request names none of (CP-56 "
+        "row group (e))",
+        why='`get("other", "/a")` sends to `other`, with the default port; filling every '
+        "part would publish the client's default host over the one the request names",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    missing = [part for part in ("host", "port") if part not in captures]\n',
+                replace='    missing = ["host", "port"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "fluent.an-absolute-request-takes-no-default": Guard(
+        what="an absolute request (`xAbs`) takes neither default (CP-56 row 124)",
+        why='`putAbs("http://billing/c")` goes to `billing`; filled with the client\'s port it '
+        "would publish `billing:9200`, an address nobody calls",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if peer is not None or context.workspace is None:\n        return captures\n",
+                replace="    if context.workspace is None:  # guard disabled by scripts/guard_check.py\n"
+                "        return captures\n",
+            ),
+        ),
+    ),
+    "fluent.an-unread-default-leaves-the-resolution-alone": Guard(
+        what="a client default that was set and not read fills nothing (Q4 ruling 2026-10-31)",
+        why="Vert.x never rewrites the path, so an unread default host leaves only the peer "
+        "unread; filled as an unread part it would mark a fully read path `partial`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if text is None:\n            return None\n"
+                "        filled[part] = _part_argument(text)\n",
+                replace="        filled[part] = _UNRESOLVED_ARGUMENT if text is None else "
+                "_part_argument(text)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-options-object-is-read-by-the-options-reader": Guard(
+        what="an `options` capture is read by the client model's setters into the request's "
+        "own parts (Vert.x spec §3d)",
+        why='`request(GET, new RequestOptions().setURI("/x"))` names its address on the '
+        "object; unread, the request derives no row",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    if _OPTIONS in captures:\n        captures = _with_request_options(captures, context)\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+            ),
+        ),
+    ),
+    "vertx-webclient.a-request-options-form-reads-its-options": Guard(
+        what="`request(HttpMethod, RequestOptions)` captures its options object",
+        why="without the capture the form reads no address and a request built from a "
+        "`RequestOptions` derives no row",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="captures: { http_method: arg0, options: arg1, serves: false } }",
+                replace="captures: { http_method: arg0, serves: false } }",
+            ),
+        ),
+    ),
+    "chain_text.a-field-of-this-is-no-constant": Guard(
+        what="a nested call on a field of `this` (`receiver_field_kind: instance`) is not "
+        "written as a static constant (Task 13 review, item 2)",
+        why="`this.unit.toMillis(5)` would be written `TimeUnit.unit.toMillis(5)`, a static "
+        "read nobody wrote, in a published schedule",
+        edits=(
+            Edit(
+                path=_CHAIN_TEXT,
+                find='    if field is not None and site.get("receiver_field_kind") is None:\n',
+                replace="    if field is not None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-options-uri-set-and-unread-is-still-a-row": Guard(
+        what="a `RequestOptions` uri set and not read still makes the request a row",
+        why="the request and the fact that it names an address are both read; dropping the "
+        "row is a silent loss (Task 13 review, item 1)",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='        if field == "url":\n',
+                replace='        if field == "url" and text is not None:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "client_base.paths-must-agree-on-a-default": Guard(
+        what="a client default is filled only where every path to the client agrees on it",
+        why="a client one of two factories built has no one default host; filling either "
+        "publishes a peer the module may not call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/client_base.py",
+                find="        part: value if all(other[part] == value for other in rest) else None\n",
+                replace="        part: value  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.a-request-naming-its-host-takes-the-default-port-unread-path-or-not": Guard(
+        what="`x(host, uri)` with an unread uri still takes the default port (Task 13 review, "
+        "item 6)",
+        why="a request naming its own host is never absolute, so the default port applies "
+        "whether or not its path was read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='    if path is None and "host" not in captures:\n',
+                replace="    if path is None:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.an-options-rung-is-refused": Guard(
+        what="`single_call` refuses an options-object `client_base` at load",
+        why="its reader assumes a block ladder's `setter` and `may_set_base` and would fail "
+        "with a KeyError, naming no file",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find='    if "setters" in declared:\n        raise CatalogError(\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        raise CatalogError(\n",
             ),
         ),
     ),
@@ -6683,6 +8720,327 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "vertx-wrappers.rxjava3-routers-are-owners": Guard(
+        what="RxJava 3's `Router` is an owner of every root (Vert.x plan, Task 15; spec §3e; CP-56 rows 135-155)",
+        why='without it `router.get("/orders").handler(…)` on an RxJava 3 router is no route, and the module publishes no inbound endpoint',
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+                replace="owner: &routers [io.vertx.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routers-are-owners": Guard(
+        what="Mutiny's `Router` is an owner of every root (Task 15; spec §3e; CP-56 rows 213-234)",
+        why="without it a Mutiny router's routes are no endpoints",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router],",
+                replace="owner: &routers [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-routes-are-owners": Guard(
+        what="RxJava 3's `Route` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 156-174)",
+        why="without it `r.method(GET);` written as a statement on an RxJava 3 route forks a branch of its own and the route serves the verb its root named, or none",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+                replace="owner: &routes [io.vertx.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routes-are-owners": Guard(
+        what="Mutiny's `Route` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 235-253)",
+        why="without it a statement-style Mutiny route loses the verbs and paths its later statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route, io.vertx.mutiny.ext.web.Route],",
+                replace="owner: &routes [io.vertx.ext.web.Route, io.vertx.rxjava3.ext.web.Route],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-handler-takes-a-consumer": Guard(
+        what="Mutiny's `Route.handler(Consumer)` registers the route (Task 15; spec §3e; CP-56 row 246)",
+        why="without it the one registering call a Mutiny route is written with names no handler, and the route is no endpoint",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Route, method: handler, descriptor:",
+                replace="owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-failure-handler-takes-a-consumer": Guard(
+        what="Mutiny's `Route.failureHandler(Consumer)` is a capture-less step (Task 15; CP-56 row 249)",
+        why="without it `r.failureHandler(…);` written as a statement on a Mutiny route forks a branch of its own, and the route loses what its other statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Route, method: failureHandler,",
+                replace="owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-next-passes-the-request-on": Guard(
+        what="RxJava 3's `RoutingContext.next()` carries the request to the next handler (Task 15; CP-56 row 293)",
+        why="without it an RxJava 3 handler that only calls `next()` is published as the route's answering handler",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="    - { owner: io.vertx.rxjava3.ext.web.RoutingContext, method: next }",
+                replace="    - { owner: io.vertx.rxjava3.ext.web.RoutingContext, method: guardDisabled }",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-next-passes-the-request-on": Guard(
+        what="Mutiny's `RoutingContext.next()` carries the request to the next handler (Task 15; CP-56 row 294)",
+        why="without it a Mutiny handler that only calls `next()` is published as the route's answering handler",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="    - { owner: io.vertx.mutiny.ext.web.RoutingContext, method: next }",
+                replace="    - { owner: io.vertx.mutiny.ext.web.RoutingContext, method: guardDisabled }",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-framework-handlers-pass-on": Guard(
+        what="RxJava 3's own handler package passes on by contract (Task 15; spec §3e)",
+        why="without it `route().handler(BodyHandler.create())` on RxJava 3 is published as an answering route",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+            ),
+        ),
+    ),
+    "vertx-web.validation-handlers-pass-on": Guard(
+        what="vertx-web-validation's `ValidationHandler`, and RxJava 3's twin, pass on by "
+        "contract (OI-261; `javap`, `ValidationHandlerImpl.handle` calls `next()`)",
+        why="without it the route after `handler(ValidationHandlerBuilder…build())` names no "
+        "handler and is `partial`, though the module's own handler after it answers",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find=", io.vertx.ext.web.validation, io.vertx.rxjava3.ext.web.validation]",
+                replace="]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-framework-handlers-pass-on": Guard(
+        what="Mutiny's own handler package passes on by contract (Task 15; spec §3e)",
+        why="without it `route().handler(BodyHandler.create())` on Mutiny is published as an answering route",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler, io.vertx.mutiny.ext.web.handler,",
+                replace="framework_handlers: [io.vertx.ext.web.handler, io.vertx.rxjava3.ext.web.handler,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-sub-router-mounts-by-its-route-path": Guard(
+        what="RxJava 3's `Route.subRouter(Router)` mounts a router at the route's path (Task 15; CP-56 row 171)",
+        why="without it the routes of a sub-router mounted through a RxJava 3 route serve at the root, a path no request takes",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find='owner: io.vertx.rxjava3.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/rxjava3/ext/web/Router;)Lio/vertx/rxjava3/ext/web/Route;",\n        router_arg: 0',
+                replace='owner: io.vertx.rxjava3.ext.web.Route, method: guardDisabled, descriptor: "(Lio/vertx/rxjava3/ext/web/Router;)Lio/vertx/rxjava3/ext/web/Route;",\n        router_arg: 0',
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-sub-router-mounts-by-its-route-path": Guard(
+        what="Mutiny's `Route.subRouter(Router)` mounts a router at the route's path (Task 15; CP-56 row 250)",
+        why="without it the routes of a sub-router mounted through a Mutiny route serve at the root, a path no request takes",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find='owner: io.vertx.mutiny.ext.web.Route, method: subRouter, descriptor: "(Lio/vertx/mutiny/ext/web/Router;)Lio/vertx/mutiny/ext/web/Route;",\n        router_arg: 0',
+                replace='owner: io.vertx.mutiny.ext.web.Route, method: guardDisabled, descriptor: "(Lio/vertx/mutiny/ext/web/Router;)Lio/vertx/mutiny/ext/web/Route;",\n        router_arg: 0',
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-mount-sub-router-mounts-at-its-prefix": Guard(
+        what="RxJava 3's `Router.mountSubRouter(String, Router)` mounts at its prefix (Task 15; CP-56 row 137)",
+        why="without it the routes of a sub-router mounted this way at Vert.x 4.5 serve at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.rxjava3.ext.web.Router, method: mountSubRouter, descriptor:",
+                replace="owner: io.vertx.rxjava3.ext.web.Router, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-mount-sub-router-mounts-at-its-prefix": Guard(
+        what="Mutiny's `Router.mountSubRouter(String, Router)` mounts at its prefix (Task 15; CP-56 row 216)",
+        why="without it the routes of a sub-router mounted this way at Vert.x 4.5 serve at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.Router, method: mountSubRouter, descriptor:",
+                replace="owner: io.vertx.mutiny.ext.web.Router, method: guardDisabled, descriptor:",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-routers-are-router-types": Guard(
+        what="RxJava 3's `Router` is a router type, so one a producer made is found (Task 15; spec §3c)",
+        why="without it a route registered on a router built by `io.vertx.rxjava3.ext.web.Router.router(vertx)` takes no mount prefix and is published at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+                replace="router_type: [io.vertx.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-routers-are-router-types": Guard(
+        what="Mutiny's `Router` is a router type, so one a producer made is found (Task 15; spec §3c)",
+        why="without it a route registered on a router built by `io.vertx.mutiny.ext.web.Router.router(vertx)` takes no mount prefix and is published at the root",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CATALOG,
+                find="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router, io.vertx.mutiny.ext.web.Router]",
+                replace="router_type: [io.vertx.ext.web.Router, io.vertx.rxjava3.ext.web.Router]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-clients-are-owners": Guard(
+        what="RxJava 3's `WebClient` is an owner of every root whose parameters match the core's (Task 15; CP-56 rows 177-190)",
+        why='without it `client.get(8080, "inventory", "/stock")` on an RxJava 3 client is no outbound call',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+                replace="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-clients-are-owners": Guard(
+        what="Mutiny's `WebClient` is an owner of every root whose parameters match the core's (Task 15; CP-56 rows 256-272)",
+        why="without it a Mutiny client's calls are no outbound calls",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient, io.vertx.mutiny.ext.web.client.WebClient],",
+                replace="owner: &clients [io.vertx.ext.web.client.WebClient, io.vertx.rxjava3.ext.web.client.WebClient],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-requests-are-owners": Guard(
+        what="RxJava 3's `HttpRequest` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 191-205)",
+        why="without it `r.putHeader(…);` written as a statement on an RxJava 3 request forks a branch of its own and the sent request carries no header",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+                replace="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-requests-are-owners": Guard(
+        what="Mutiny's `HttpRequest` is an owner of every step, each `returns_receiver` (Task 15; CP-56 rows 273-284)",
+        why="without it a statement-style Mutiny request carries none of what its statements set",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest, io.vertx.mutiny.ext.web.client.HttpRequest],",
+                replace="owner: &requests [io.vertx.ext.web.client.HttpRequest, io.vertx.rxjava3.ext.web.client.HttpRequest],",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-rx-send-sends-the-request": Guard(
+        what="RxJava 3's `rxSend…` terminals send a request (Task 15; CP-56 row 298)",
+        why="without them a request sent only through `rxSend()` is no outbound call",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="rxSend, rxSendJson, rxSendJsonObject,",
+                replace="rxSendJson, rxSendJsonObject,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-and-await-sends-the-request": Guard(
+        what="Mutiny's `sendAndAwait` and `sendAndForget` send a request (Task 15; CP-56 row 302)",
+        why="without them a request sent only through `sendAndAwait()` is no outbound call",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="sendAndAwait, sendAndForget, sendJsonAndAwait,",
+                replace="sendJsonAndAwait,",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-body-sends-name-their-body": Guard(
+        what="RxJava 3's `rxSendJson` names the body it sends (Task 15; CP-56 row 298)",
+        why="without it a request sent with `rxSendJson(order)` publishes no request shape",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: io.vertx.rxjava3.ext.web.client.HttpRequest, method: rxSendJson, captures",
+                replace="owner: io.vertx.rxjava3.ext.web.client.HttpRequest, method: guardDisabled, captures",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-body-sends-name-their-body": Guard(
+        what="Mutiny's `sendJsonAndAwait` names the body it sends (Task 15; CP-56 row 302)",
+        why="without it a request sent with `sendJsonAndAwait(order)` publishes no request shape",
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: sendJsonAndAwait, captures",
+                replace="owner: io.vertx.mutiny.ext.web.client.HttpRequest, method: guardDisabled, captures",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-uri-template-is-read-off-its-factory": Guard(
+        what="a RxJava 3 `UriTemplate` form reads its template off the wrapper's own `UriTemplate.of` (Task 15; `javap` on the wrapper jars)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` on a RxJava 3 client publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &rx3_template [{ owner: io.vertx.rxjava3.uritemplate.UriTemplate, method: of, arg: 0 }]",
+                replace="url_via: &rx3_template [{ owner: io.vertx.rxjava3.uritemplate.UriTemplate, method: guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-uri-template-is-read-off-its-factory": Guard(
+        what="a Mutiny `UriTemplate` form reads its template off the wrapper's own `UriTemplate.of` (Task 15; `javap` on the wrapper jars)",
+        why='without it every `client.get(UriTemplate.of("/stock/{sku}"))` on a Mutiny client publishes no path',
+        edits=(
+            Edit(
+                path=_VERTX_WEBCLIENT_CATALOG,
+                find="url_via: &mutiny_template [{ owner: io.vertx.mutiny.uritemplate.UriTemplate, method: of, arg: 0 }]",
+                replace="url_via: &mutiny_template [{ owner: io.vertx.mutiny.uritemplate.UriTemplate, method: guardDisabled, arg: 0 }]",
+            ),
+        ),
+    ),
+    "vertx-wrappers.rxjava3-client-factory-is-a-rung": Guard(
+        what="RxJava 3's `WebClient.create(Vertx, WebClientOptions)` is a rung of the options ladder (Task 15; CP-56 row 175)",
+        why="without it a RxJava 3 client built from options that set a default host and port publishes its calls with no peer",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CLIENT_MODEL,
+                find='owner: io.vertx.rxjava3.ext.web.client.WebClient, method: create, options_arg: 1,\n        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+                replace='owner: io.vertx.rxjava3.ext.web.client.WebClient, method: guardDisabled, options_arg: 1,\n        descriptor: "(Lio/vertx/rxjava3/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+            ),
+        ),
+    ),
+    "vertx-wrappers.mutiny-client-factory-is-a-rung": Guard(
+        what="Mutiny's `WebClient.create(Vertx, WebClientOptions)` is a rung of the options ladder (Task 15; CP-56 row 254)",
+        why="without it a Mutiny client built from options that set a default host and port publishes its calls with no peer",
+        edits=(
+            Edit(
+                path=_VERTX_WEB_CLIENT_MODEL,
+                find='owner: io.vertx.mutiny.ext.web.client.WebClient, method: create, options_arg: 1,\n        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+                replace='owner: io.vertx.mutiny.ext.web.client.WebClient, method: guardDisabled, options_arg: 1,\n        descriptor: "(Lio/vertx/mutiny/core/Vertx;Lio/vertx/ext/web/client/WebClientOptions;)',
+            ),
+        ),
+    ),
 }
 
 
@@ -6813,6 +9171,9 @@ def copy_tree(destination: Path) -> Path:
     shutil.copy2(REPO / "fixtures" / "pom.xml", destination / "fixtures" / "pom.xml")
     for named in (
         "orders-soap-client",
+        # The second library `fixture_stub.LIBRARIES` installs: the session fixture builds
+        # every listed library, so a copy without this one fails before any test runs.
+        "orders-vertx-web-base",
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",
@@ -6843,6 +9204,10 @@ def copy_tree(destination: Path) -> Path:
         # 3): which dispatcher serves a row is read off the catalog that derived it, so the
         # guard that keeps the servlet path off a plain servlet is pinned on real facts.
         "orders-contextpath",
+        # Vert.x Web (spec 2026-10-30 §3b): whether a handler hands its context to a method of
+        # the base jar is read off real facts, so the guard keeping such a row `partial` is
+        # pinned on the e2e test of this module.
+        "orders-vertx-web",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

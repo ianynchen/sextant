@@ -1004,16 +1004,24 @@ into a lambda body can then tell "this call is on the lambda's own parameter" fr
 receiver could not be read". Strictly additive: an engine that does not read it sees the
 site it always saw.
 
-**`receiver_field`** names the static field a receiver was read from, where the receiver is
-a `getstatic`: `owner#name.`, the symbol a call ARGUMENT read the same way already carries
+**`receiver_field`** names the field a receiver was read from, where the receiver is a
+`getstatic`, or a `getfield` on `this` (the `aload_0` of an instance method): `owner#name.`, the symbol a call ARGUMENT read the same way already carries
 (the `field` and `enum` kinds below). `receiver` keeps the read's own value id, so every
 within-method join is unchanged; but no other fact names that id, so a walk from the
 receiver reached nothing before this key. Kotlin's file-level `val client = …` followed by
 `client.config { … }` is the shape it exists for (2026-10-26): the `config` call's receiver
 is now the binding `client`, which the walk follows to its writer as it follows the same
-field read as an argument. A receiver read by `getfield` gets no key — only the static read
-was ruled in, so an instance field's receiver is a stated boundary. Absent everywhere else,
-and strictly additive in the same way.
+field read as an argument. Since 2026-10-31 a receiver read by `getfield` on `this` is named
+too: a client a constructor stored in `this.client` and another method calls on — Hono's
+`PrometheusBasedAsyncCacheLoader`, and the ordinary service shape — is the binding the walk
+follows to the constructor's write (object-identity ruling 1 reads a field per object, and
+`this` is the one object whose field writes are facts). A `getfield` on any other object
+(`box.link`, or slot 0 of a static method, which is its first parameter) gets no key: naming
+it would join that object's field to whoever wrote `this`'s. Absent everywhere else, and
+strictly additive in the same way (`scripts/probes/fact_additivity/run.py`). **`receiver_field_kind`**
+is `instance` on such a site, written only there: the symbol `owner#name.` reads the same for a
+static field and a field of `this`, and a reader writing the call as source (`chain_text`) must
+not write `Owner.name.call()` for `this.name`. Absent, a named receiver field is a static one.
 
 **`arguments`** carries one entry per argument slot, resolved by walking the frame back to
 each slot's source instruction. Without it, every endpoint path is unresolved — this is why

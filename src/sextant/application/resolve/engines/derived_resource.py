@@ -278,6 +278,8 @@ def _append(
             "response_shape": None,
             "consumes": None,
             "produces": produces,
+            "path_kind": None,
+            "method_kind": None,
         }
     )
 

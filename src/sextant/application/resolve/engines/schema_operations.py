@@ -332,6 +332,8 @@ def _row(catalog: Catalog, method: str | None, path: str, evidence: str) -> dict
         "response_shape": None,
         "consumes": None,
         "produces": None,
+        "path_kind": None,
+        "method_kind": None,
     }
 
 

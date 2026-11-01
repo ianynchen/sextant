@@ -472,6 +472,8 @@ def _question(endpoint: dict[str, Any], candidates: list[_Candidate], trail: str
         "protocol": endpoint.get("protocol"),
         "method": endpoint.get("method"),
         "path": endpoint.get("path"),
+        "method_kind": endpoint.get("method_kind"),
+        "path_kind": endpoint.get("path_kind"),
         "question": _QUESTION,
         "candidates": json.dumps(ordered, sort_keys=True, separators=(",", ":")),
         "evidence": f"{trail}: {named}",

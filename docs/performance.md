@@ -570,3 +570,153 @@ row split by the per-phase timer. The previous table (after P-1 and P-3) read 2.
 | render | 0.1s | 0.3s |
 | export | 0.2s | 1.3s |
 | **total** | **1.3–1.4s** | **5.2–5.5s** |
+
+## Baseline before the Vert.x catalogs (CP-56, 2026-10-31)
+
+Taken before any Vert.x Web or WebClient catalog exists, so the Vert.x work (spec
+`2026-10-30-vertx-web-design.md`) has numbers to be compared with. Machine: Apple M4, arm64, macOS,
+JDK 21 (`/opt/homebrew/opt/openjdk@21`). Each corpus was built first, then analyzed with
+`sextant module analyze <module> --workspace <fresh dir>` under `logging.basicConfig(level=INFO)`, so
+`pipeline._timed` prints one line per resolve pass. Three runs each, wall time of the whole command
+(Python start-up included):
+
+| module | built with | endpoints | wall, three runs |
+|---|---|---|---|
+| `examples/quarkus-quickstarts/reactive-routes-quickstart` | its `./mvnw -B -DskipTests compile` (17s; the offline attempt failed — dependencies were not cached — and the online retry succeeded) | 2 | 2.15s, 2.17s, 2.12s |
+| `examples/hono/adapters/http-base` | system `mvn` (Hono ships no wrapper), `-pl adapters/http-base -am -DskipTests compile` (30s, same offline-then-online) | 0 | 2.34s, 2.38s, 2.30s |
+| `examples/mesh/core` | **not timed: no build** | — | — |
+
+Per stage (the third run of each; the other runs print the same figures at this resolution, except
+that Hono's scan read 0.2s in its second run):
+
+| stage | quarkus `reactive-routes-quickstart` | hono `http-base` |
+|---|---|---|
+| scan | 0.1s (46 facts) | 0.1s (1606 facts) |
+| interpret schemas | under 0.1s | under 0.1s |
+| `derive_endpoints` | 0.4s | 0.4s |
+| `derive_endpoint_shapes` | 0.2s | 0.2s |
+| resolve, whole | 0.6s | 0.7s |
+| every other `pipeline._timed` pass | 0.0s | 0.0s |
+
+Hono's 0 endpoints is the point of the baseline: Sextant reads no Vert.x Web route today, and the
+cost shown is the cost of a module with no Vert.x work in it. Quarkus's 2 endpoints are the
+Reactive Routes ones.
+
+**Mesh: not timed — Maven 3.10.0 will not read the reactor.** `mvn -B -o -pl core -am compile` fails
+offline on the parent pom (`com.gentics:maven-parent:5.1.1`, served only by the Gentics repository);
+online the parent downloads and Maven then refuses two poms of the reactor
+(`'dependencyManagement.dependencies.dependency.(groupId:artifactId:type:classifier)' must be unique:
+com.gentics.mesh:mesh-bom:pom`, `mesh-server` and one more), so no module builds. `core` also needs its
+siblings built from source (their versions are `3.3.3-SNAPSHOT`), so building it alone is no way
+round. `examples/mesh/core/target/classes` does not exist, and `analyze` stops at the scan with
+`--classes must name a directory of class files or a .jar file`. A build under an older Maven (3.9.x)
+might read the poms; none is installed, and downloading one was not part of this task.
+
+## After the Vert.x catalogs (Task 16, 2026-10-31) — re-timing incomplete
+
+**Superseded** by "After the Vert.x catalogs, re-timed (CP-56, 2026-10-31)" below, which
+restored both folders and took the three-run figures this section owed. Kept as the record of
+what was measured at the time.
+
+Same machine and JDK as the baseline above. **The three-run re-timing of the two baseline modules
+was not done.** The timing script was run with its two arguments joined into one word, and its
+unquoted `rm -rf` then removed `examples/hono/adapters/http-base` and
+`examples/quarkus-quickstarts/reactive-routes-quickstart` from their checkouts. Both must be
+restored from git and rebuilt before they can be timed again. What exists is one analysis of each,
+taken for the corpus measurement just before that, on an otherwise idle machine:
+
+| stage | quarkus `reactive-routes-quickstart`, before → after | hono `http-base`, before → after |
+|---|---|---|
+| scan | 0.1s → 0.1s (46 facts) | 0.1s → 0.1s (1606 facts) |
+| resolve, whole | 0.6s → 0.7s | 0.7s → 0.7s |
+| endpoints | 2 → 3 | 0 → 7 |
+
+These are single runs rounded to 0.1s, so they cannot say whether a stage grew by more than 10%:
+Quarkus's 0.6s → 0.7s is within one rounding step. The three-run figures stay owed.
+
+**Hono `adapter-base` (new, no baseline).** Built with `mvn -pl adapter-base -am compile`, three
+runs: wall 6.22s, 6.01s, 6.01s; scan 2.5–2.6s (28331 facts); resolve 1.9s, of which
+`derive_endpoints` is 1.1s; one endpoint (the WebClient call). The baseline did not time this
+module, so how much of `derive_endpoints` the Vert.x catalogs add is not measured.
+
+**Mesh `core`: still not timed.** Maven 3.10.0 refuses the reactor again (`mesh-bom` declared
+twice in `mesh-server`'s and `mesh-database-tests-common`'s `dependencyManagement`).
+
+**`measure_value_walk.py`, re-run:** index fold 1.25s, walk 0.09s, `resolve_site` 0.36s over 2,312
+distinct positions (2,911 asks) at 1,975 sites. The last recorded run before the Vert.x catalogs read
+1.23s / 0.13s / 0.40s over 1,838 positions: the new catalogs and fixture ask more positions, and the
+time did not grow. The six field pins pass unchanged.
+
+**After the OI-266, OI-265, OI-263 and OI-261 fixes (same day, `cov/vertx`).** One analysis each,
+rounded to 0.1s: resolve on vertx-examples `web-examples` 0.8s → 0.9s (56 endpoints), Hono
+`device-registry-base` 0.9s → 0.9s, `adapter-base` 2.0s → 2.0s; within one rounding step.
+`measure_value_walk.py`: index fold 1.25s, walk 0.11s, `resolve_site` 0.38s over 2,332 positions
+(2,941 asks) at 1,995 sites, from 1.25 / 0.09 / 0.36s over 2,312. The 20 new positions are the
+fixture's four new classes. The answers moved because captured values now bind to their own
+parameters: `not_readable` 399 → 283 (the receiver an instance lambda's capture site hands first
+was read as the first capture), `external` 5,231 → 5,591, literals 2,025 → 2,160;
+apollo-portal's widest positions reach 761 paths where they reached 685, and the largest
+binding count is 11,712 (was 11,672). The six field pins pass unchanged.
+
+## After the Vert.x catalogs, re-timed (CP-56, 2026-10-31)
+
+Completes the re-timing the section above left owed. Same machine, JDK and method as the baseline:
+both folders were restored from their own git clones and rebuilt (Quarkus `./mvnw -B -o -DskipTests
+compile`, Hono `mvn -B -o -pl adapters/http-base -am -DskipTests compile`; both built offline, 1s and
+4s), then `sextant module analyze <module> --workspace <fresh dir>` three times each under INFO
+logging.
+
+| module | endpoints, before → after | wall, three runs, before | wall, three runs, after | change (mean) |
+|---|---|---|---|---|
+| `examples/quarkus-quickstarts/reactive-routes-quickstart` | 2 → 3 | 2.15s, 2.17s, 2.12s | 2.23s, 2.20s, 2.21s | +0.07s (+3%) |
+| `examples/hono/adapters/http-base` | 0 → 7 | 2.34s, 2.38s, 2.30s | 2.46s, 2.37s, 2.36s | +0.04s (+2%) |
+| `examples/mesh/core` | — | not measured | not measured | — |
+
+Per stage (all three runs read the same, except Hono's `derive_endpoints` 0.5s in its first run and
+`derive_endpoint_shapes` 0.1s there):
+
+| stage | quarkus, before → after | hono, before → after |
+|---|---|---|
+| scan | 0.1s → 0.1s (46 facts) | 0.1s → 0.1s (1606 facts) |
+| `derive_endpoints` | 0.4s → 0.4s | 0.4s → 0.4s |
+| `derive_endpoint_shapes` | 0.2s → 0.1s | 0.2s → 0.2s |
+| resolve, whole | 0.6s → 0.7s | 0.7s → 0.7s |
+
+Wall time grew 2–3% on both modules, inside the run-to-run spread. The one figure that reads more
+than 10% higher is Quarkus's whole resolve, 0.6s → 0.7s, and it is one rounding step at 0.1s: no
+single pass moved (`derive_endpoints` is 0.4s in both, `derive_endpoint_shapes` fell), every other
+pass prints 0.0s, and the wall time, which has 0.01s resolution, is up 3%. The stage lines cannot place
+the extra 0.1s more finely than that. The extra endpoint (2 → 3) and Hono's 7 new endpoints are
+Vert.x Web routes Sextant now reads.
+
+**Mesh `core`: still not measured.** Tried again; Maven 3.10.0 offline refuses two poms of the
+reactor (`mesh-bom:pom` declared twice in `dependencyManagement`, line 21 and line 32), so no module
+builds and there is no `target/classes` to analyze.
+
+## The Vert.x branch on modules with no Vert.x (final review M1, 2026-10-31)
+
+The review asked what `vertx-web.yml` costs where nothing matches: fluent catalogs are not
+dependency-gated, so it runs on every module. Timed on the two largest field-pin corpora, neither
+of which has Vert.x: `apollo-portal` (386 classes, 364 endpoints) and `mall-admin` (157 classes,
+160 endpoints). Branch `cov/vertx` after the final-review fixes, against the merge base `3f1347b6`
+in a git worktree with its own extractor jar built from that commit. Apple M4, JDK 21.0.13, three
+alternating runs each, in-process (`sextant module analyze` through the click entry point, with
+`fluent.run` wrapped to time each catalog). Endpoint counts are identical on both trees.
+
+| module | wall, base (three runs) | wall, branch (three runs) | change (mean) | `derive_endpoints` base → branch |
+|---|---|---|---|---|
+| `apollo-portal` | 3.954s, 3.959s, 3.943s | 4.217s, 4.145s, 4.167s | +0.224s (+5.7%) | 1.1s → 1.3s |
+| `mall-admin` | 4.925s, 5.015s, 5.044s | 5.069s, 5.253s, 5.160s | +0.166s (+3.3%) | 1.9–2.0s → 2.1s |
+
+What the two Vert.x catalogs themselves take (the same in all three runs):
+
+| module | `vertx-web.yml` | `vertx-webclient.yml` | both, share of branch wall |
+|---|---|---|---|
+| `apollo-portal` | 0.029s (0.7%) | 0.055s (1.3%) | 0.084s (2.0%) |
+| `mall-admin` | 0.055s (1.1%) | 0.091s (1.8%) | 0.146s (2.8%) |
+
+`vertx-web.yml`'s passes add under 5% on both modules (0.7% and 1.1%), so the early return the
+review proposes is not forced by this measurement. The whole branch adds more than the two
+catalogs do: on `apollo-portal` 0.224s, of which the Vert.x catalogs are 0.084s; the other
+0.14s is elsewhere in `derive_endpoints` (1.1s → 1.3s) and was not profiled to a pass here.
+That puts the branch as a whole over 5% on `apollo-portal`, which is reported rather than fixed.
