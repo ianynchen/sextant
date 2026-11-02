@@ -266,7 +266,7 @@ class BoundarySource:
             "handler": members[0]["handler"],
             "trigger": members[0]["trigger"],
             "name": members[0]["name"],
-            **_attributes(members, "expression", "resolution"),
+            **_attributes(members, "expression", "resolution", "refused"),
             **self._handler_evidence(members),
         }
 

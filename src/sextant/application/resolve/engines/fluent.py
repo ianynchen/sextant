@@ -271,7 +271,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
     referenced: list[str] = []
-    walk_index = cached_value_index(workspace, catalog.not_hand_offs)
+    walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
     client_base = client_base_of(matches, catalog.source)
     _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
     rows: list[dict[str, Any]] = []

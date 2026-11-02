@@ -279,11 +279,12 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        found.extend((job, path) for job in (context.jobs_by_key or {})"
-                ".get(named, ()))",
-                replace="        found.extend((job, path) for key, jobs in (context.jobs_by_key "
-                'or {}).items() if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in '
-                "jobs)  # guard disabled by scripts/guard_check.py",
+                find="        found.extend((job, path, _ACCEPTED) for job in (context.jobs_by_key "
+                "or {}).get(named, ()))",
+                replace="        found.extend((job, path, _ACCEPTED) for key, jobs in "
+                '(context.jobs_by_key or {}).items() if key.rsplit(".", 1)[-1] == '
+                'named.rsplit(".", 1)[-1] for job in jobs)  # guard disabled by '
+                "scripts/guard_check.py",
             ),
         ),
     ),
@@ -322,10 +323,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
-                "row.untied)",
-                replace="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
-                "row.untied, id(row))  # guard disabled by scripts/guard_check.py",
+                find="            row.untied,\n            refused,\n        )\n",
+                replace="            row.untied,\n            refused,\n            id(row),  # guard "
+                "disabled by scripts/guard_check.py\n        )\n",
             ),
         ),
     ),
@@ -438,10 +438,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            continue\n        found.extend((job, path) for job in "
+                find="            continue\n        found.extend((job, path, _ACCEPTED) for job in "
                 "(context.jobs_by_key or {}).get(named, ()))",
-                replace="            continue\n        found.extend((job, _ANY_PATH) for job "
-                "in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
+                replace="            continue\n        found.extend((job, _ANY_PATH, _ACCEPTED) "
+                "for job in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
                 "scripts/guard_check.py",
             ),
         ),
@@ -468,8 +468,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="trigger.two_calls_of_one_helper(path) for trigger in triggers",
-                replace="True for trigger in triggers  # guard disabled by scripts/guard_check.py",
+                find="for trigger in triggers if trigger.two_calls_of_one_helper(path)]",
+                replace="for trigger in triggers]  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -7299,8 +7299,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ROOTS,
-                find='        if row["handler"] is not None\n    }',
-                replace="        if True  # guard disabled\n    }",
+                find='        if row["handler"] is not None\n',
+                replace="        if True  # guard disabled\n",
             ),
         ),
     ),
@@ -8920,6 +8920,91 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="            if answer.kind == LITERAL and answer.literal_kind == SYMBOL:\n",
                 replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-STATED-hand-off-keeps-the-trigger": Guard(
+        what="a hand-off to a call a catalog states the effect of (`hand_off_effects`) is a "
+        "step of the path, not `escapes`: the parts the call does not bind stay as they were "
+        "(spec 2026-11-02 rule 7, ruled by the user 2026-11-02)",
+        why="a trigger scheduled once is unknown to every later call, though Quartz's "
+        "measured `scheduleJob` changes only which job it names",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if row is not None and (*_call_of(row), slot) in self._index.stated:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-call-the-framework-REFUSES-is-marked-refused": Guard(
+        what="a pairing call whose trigger an earlier stated call already bound to another "
+        "job is marked `refused`, from the catalog's `refuses: bound_elsewhere` (rule 7)",
+        why="a job Quartz refuses to schedule (`Trigger does not reference given job!`) is "
+        "published as running on the trigger's schedule",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return _Refusal(bound_to=bound)\n",
+                replace="    return _ACCEPTED  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal": Guard(
+        what="two built jobs with one `JobKey` are one job to the refusal, as Quartz compares "
+        "keys (`JobKey.equals`, CP-55 row 27)",
+        why="a second `scheduleJob` naming the trigger's own job by key is marked refused, "
+        "though Quartz's check accepts it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return keys[0] == keys[1]\n",
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "roots.a-REFUSED-schedule-is-NOT-a-root": Guard(
+        what="a `scheduled_work` row the framework refuses (`refused` set) gives no root: the "
+        "job never runs on that clock (user ruling 2026-11-02)",
+        why="a job Quartz refuses to schedule gets a trace, and its call graph reads as code "
+        "that runs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/roots.py",
+                find='        and row["refused"] is None\n',
+                replace="        # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.the-DOCUMENT-says-a-schedule-is-REFUSED": Guard(
+        what="the document's schedule table and the job's detail block say a refused "
+        "schedule is refused by the framework (`scheduled_work.refused`, user ruling "
+        "2026-11-02)",
+        why="the document lists a job the framework refuses as a schedule that runs",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='        if row.get("refused") is not None:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='                + (_REFUSED_RESOLUTION if row.get("refused") is not None else "")\n',
+                replace="                # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "boundary.a-SCHEDULE-carries-its-refusal": Guard(
+        what="a boundary `schedule` entry carries `refused`, from a workspace and from a "
+        "bundle (spec 2026-11-02 rule 7, user ruling 2026-11-02)",
+        why="a diff or an observability map lists a schedule the framework refuses as one "
+        "that runs",
+        edits=(
+            Edit(
+                path="sextant/application/boundary/source.py",
+                find='            **_attributes(members, "expression", "resolution", "refused"),\n',
+                replace='            **_attributes(members, "expression", "resolution"),  '
+                "# guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

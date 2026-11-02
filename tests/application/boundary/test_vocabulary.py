@@ -18,12 +18,20 @@ def test_the_seven_kinds_in_their_order():
     ]
 
 
-def test_the_vocabulary_version_is_three():
+def test_the_vocabulary_version_is_four():
     """The stamp lives in `domain/version.py` with the other three; the registry does not
     keep a second copy of it (the Step 0 lesson: copies of one stamp drift). Version 2 is
     `dependency` gaining `conditions` (spec 2026-10-23-deployment-set-conditions, ruling 2);
-    version 3 is `schedule`'s identity gaining `name` (spec 2026-10-28-quartz, ruling 5)."""
-    assert BOUNDARY_VOCABULARY_VERSION == 3
+    version 3 is `schedule`'s identity gaining `name` (spec 2026-10-28-quartz, ruling 5);
+    version 4 is `schedule`'s attributes gaining `refused` (spec 2026-11-02 rule 7)."""
+    assert BOUNDARY_VOCABULARY_VERSION == 4
+
+
+def test_a_schedule_carries_whether_the_framework_refuses_it():
+    """A schedule the framework refuses (`scheduled_work.refused`, ruled by the user
+    2026-11-02) is an attribute of the entry, so a diff or an observability map reading the
+    schedule kind lists it with why — never as work that runs."""
+    assert KINDS["schedule"].attributes == ("expression", "resolution", "refused")
 
 
 @pytest.mark.pins("boundary.a-DEPENDENCY-carries-its-callers-conditions")

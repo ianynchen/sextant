@@ -1043,7 +1043,16 @@ field the walk to the expression stopped at — bare because a method in a jar h
 coordinates; set only when `expression` is NULL),
 `resolution`, `evidence`, `catalog_id` and `untied` (the parts — `handler`, `name`,
 `expression`, in that order — that are NULL because the paths reaching the trigger disagree
-on them, not because the code states none; NULL where no part is). `handler`, `trigger`,
+on them, not because the code states none; NULL where no part is) and, beside it, `refused`
+[ruled 2026-11-02 by the user]: why the framework REFUSES the call that schedules the job,
+as text (`trigger DEFAULT.nightly is already bound to BJob`), read from what the catalog
+states the call does (`hand_off_effects`, D02 §1f; spec `2026-11-02-per-path-truth-design.md`
+rule 7), NULL on every row the framework accepts. `resolution` keeps its meaning — how sure
+the read is — so a refused row keeps the resolution it was read at, and may be `partial`.
+**A refused row's handler is not a root**: the job never runs on that schedule, so its call
+graph is not code that runs. The document says `refused by the framework` in the row's
+resolution cell and gives the reason under the table; the boundary `schedule` kind carries
+it as an attribute. `handler`, `trigger`,
 `name`, `expression` and `expression_source` are nullable. **Each empty cell says why it is
 empty** (ruled 2026-10-29): a NULL the row's `untied` names is a value the code states and
 no one path ties to this row, printed `not tied down`; any other NULL is a fact the code
@@ -1218,7 +1227,7 @@ compared by nothing).
 | `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
 | `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
-| `schedule` | `scheduled_work` | handler, trigger, name | expression, resolution | catalog |
+| `schedule` | `scheduled_work` | handler, trigger, name | expression, resolution, refused | catalog |
 | `error-handler` | `error_handlers` | handler, exception | advice, scope, status, response shape | catalog |
 
 **The wire is the identity; the handler is evidence.** Measured on six months of
@@ -1432,6 +1441,7 @@ own cadence.
 | 11 | `endpoints` and `endpoint_metadata` gain `row_id`: an endpoint row is numbered when it is written, and an entry attached to it is bound to that number when it is written and follows the row through the path prefix and a protocol reclassification (spec `2026-10-30-object-identity-design.md`, ruling 7). The export leaves the id out, so no bundle column changes | refused by its stamp exactly as at 5 to 10, so rows with no id — which no pass could find again — are re-derived rather than read beside numbered ones |
 | 12 | `endpoints` gains `served_by`, the class serving the row: the type its prefix and gate were composed with — the subclass, for a mapping a controller inherits without overriding and for an inherited exposed member. `endpoint_conditions` and the documents find the row's bean there (own symbol first), since Spring reads conditions off the registered class and `@Conditional` is not `@Inherited` (spec `2026-10-30-object-identity-design.md`, ruling 8). The export carries the column | refused by its stamp exactly as at 5 to 11, so an inherited row — whose conditions the older vintage read off the base — is re-derived rather than read beside rows that name their serving class |
 | 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
+| 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

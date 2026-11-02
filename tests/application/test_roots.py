@@ -474,6 +474,38 @@ def test_a_scheduled_row_may_have_no_handler_and_is_not_a_root(tmp_path: Path):
     assert rows == [_scheduled_row()]
 
 
+@pytest.mark.pins("roots.a-REFUSED-schedule-is-NOT-a-root")
+def test_a_schedule_the_framework_refuses_is_not_a_root(tmp_path: Path):
+    """A schedule the framework refuses (`scheduled_work.refused`, spec 2026-11-02 rule 7,
+    ruled by the user 2026-11-02) never starts its job: Quartz throws on the call that would
+    schedule it. Its handler's call graph is not code that runs on that clock, so the row is
+    no root — the user: "CJob never runs, so its call graph must not be shown as code that
+    runs". The `@Scheduled` root in the same workspace is the positive control."""
+    workspace = _scheduled_workspace(tmp_path)
+    workspace.derive(
+        "scheduled_work_insert",
+        rows=[
+            {
+                "handler": _MODULE
+                + "com/acme/jobs/CJob#execute(Lorg/quartz/JobExecutionContext;)V",
+                "trigger": "cron",
+                "name": "DEFAULT.nightly",
+                "expression": "0 0 3 * * ?",
+                "expression_source": None,
+                "resolution": "resolved",
+                "evidence": "compiler",
+                "catalog_id": "quartz",
+                "untied": None,
+                "refused": "trigger DEFAULT.nightly is already bound to com.acme.jobs.BJob",
+            }
+        ],
+    )
+    record_roots(workspace)
+    rows = workspace.query("roots")
+    workspace.close()
+    assert rows == [_scheduled_row()]
+
+
 def test_a_method_that_is_both_scheduled_and_exposed_is_two_roots(tmp_path: Path):
     """Two kinds are two answers to "what starts this", so they are two rows.
     The row key is (handler, kind): collapsing on the handler alone would lose

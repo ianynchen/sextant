@@ -1925,21 +1925,14 @@ def test_a_trigger_handed_to_a_scheduling_helper_keeps_its_cron(tmp_path: Path):
     ]
 
 
-@pytest.mark.pins("scheduled_chain.a-job-whose-trigger-ESCAPES-keeps-its-row")
-def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
-    """P4: `x()` schedules `trigger("c1")` with AJob; `y()` schedules `trigger("c2")` with
-    BJob AND then CJob: A@c1, B@c2, and C with its trigger UNKNOWN, `partial`.
-
-    **Re-pinned by the user's ruling of 2026-11-02** ("keep the row, make the trigger
-    unknown"). The first `scheduleJob` hands the trigger to code this module does not have
-    (spec 2026-11-02 rule 2), and that code changes it: Quartz 2.3.2's
-    `QuartzScheduler.scheduleJob(JobDetail, Trigger)` calls `OperableTrigger.setJobKey` on
-    it, and throws "Trigger does not reference given job!" when it already names another
-    job. So the trigger CJob is scheduled with is not known to be `c2` — the row stays (rule
-    4's own row with an unknown part), and says so rather than repeating B's cron."""
+def _one_trigger_two_calls(second: str, key: str | None = None) -> list:
+    """P4's shape: `x()` schedules `trigger("c1")` with AJob; `y()` builds ONE trigger
+    `trigger("c2")` and hands it to `scheduler.scheduleJob(newJob(BJob).build(), t)`, then
+    to `scheduleJob(<second>, t)` — `newJob(CJob).build()`, or (`second="same"`) the same
+    BJob detail again."""
     trigger_jvm, trigger = _cron_helper()
     facts = [*_classes("AJob", "BJob", "CJob"), *trigger]
-    for name, jobs, cron in (("x", ["AJob"], "c1"), ("y", ["BJob", "CJob"], "c2")):
+    for name, jobs, cron in (("x", ["AJob"], "c1"), ("y", ["BJob", second], "c2")):
         caller = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
         facts += [
             _method_symbol(name, "()V"),
@@ -1949,25 +1942,44 @@ def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
         ]
         for index, job in enumerate(jobs):
             at = 10 + 10 * index
-            facts += [
-                _site(
-                    caller,
-                    at,
-                    JOB_BUILDER,
-                    "newJob",
-                    f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
-                    result=at,
-                    arguments=(_class(job),),
-                ),
-                _site(
-                    caller,
-                    at + 1,
-                    JOB_BUILDER,
-                    "build",
-                    "()Lorg/quartz/JobDetail;",
-                    receiver=at,
-                    result=at + 1,
-                ),
+            if job != "same":
+                keyed = key is not None and name == "y"
+                facts += [
+                    _site(
+                        caller,
+                        at - 5 if keyed else at,
+                        JOB_BUILDER,
+                        "newJob",
+                        f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+                        result=at - 5 if keyed else at,
+                        arguments=(_class(job),),
+                    ),
+                    _site(
+                        caller,
+                        at + 1,
+                        JOB_BUILDER,
+                        "build",
+                        "()Lorg/quartz/JobDetail;",
+                        receiver=at,
+                        result=at + 1,
+                    ),
+                ]
+                if keyed:
+                    # `newJob(X).withIdentity(key).build()`.
+                    facts.append(
+                        _site(
+                            caller,
+                            at - 4,
+                            JOB_BUILDER,
+                            "withIdentity",
+                            f"(Ljava/lang/String;){_JOB_BUILDER_TYPE}",
+                            receiver=at - 5,
+                            result=at,
+                            arguments=(_string(str(key)),),
+                        )
+                    )
+            detail = 11 if job == "same" else at + 1
+            facts.append(
                 _site(
                     caller,
                     at + 2,
@@ -1977,15 +1989,138 @@ def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
                     receiver=99,
                     result=at + 2,
                     arguments=(
-                        CallArgument(kind="unresolved", source=at + 1),
+                        CallArgument(kind="unresolved", source=detail),
                         CallArgument(kind="unresolved", source=1),
                     ),
-                ),
-            ]
-    assert _rows_of(_scheduled(tmp_path, facts)) == [
-        ("None", "AJob#execute", "c1", "resolved"),
-        ("None", "BJob#execute", "c2", "resolved"),
-        ("None", "CJob#execute", "None", "partial"),
+                )
+            )
+    return facts
+
+
+def _refused_rows(rows: list[dict]) -> list[tuple]:
+    return sorted(
+        (str(_handler_of(row)), str(row["expression"]), row["resolution"], str(row["refused"]))
+        for row in rows
+    )
+
+
+@pytest.mark.pins("scheduled_chain.a-STATED-hand-off-keeps-the-trigger")
+@pytest.mark.pins("scheduled_chain.a-call-the-framework-REFUSES-is-marked-refused")
+def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
+    """P4: `x()` schedules `trigger("c1")` with AJob; `y()` schedules ONE trigger
+    `trigger("c2")` with BJob and then with CJob: A@c1 and B@c2 resolved, and C@c2 resolved
+    AND REFUSED.
+
+    **Re-pinned by the user's rulings of 2026-11-02**: rule 7 ("predict the framework's
+    behavior exactly, including its errors") and the refused column ("B: refused column";
+    a refused row keeps the resolution it was read at). Measured, CP-55 rows 24, 27, 40-41
+    (Quartz 2.5.1; 2.3.2 read by hand, the same): `StdScheduler` hands `scheduleJob(JobDetail,
+    Trigger)` to `QuartzScheduler`, which binds a trigger that names no job to the job
+    handed in (`setJobKey(job.getKey())`), throws "Trigger does not reference given job!"
+    where it names another, and changes nothing else of the trigger: the cron stays `c2`.
+    Two jobs built with no `withIdentity` never share a key (rows 30, 39). So the first call
+    binds the trigger to BJob, and the second is refused: CJob never runs on `c2`, and the
+    row says so rather than dropping it or calling the trigger unknown."""
+    rows = _scheduled(tmp_path, _one_trigger_two_calls("CJob"))
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+    ]
+
+
+def test_one_trigger_scheduled_twice_with_the_same_job_is_not_refused(tmp_path: Path):
+    """The same BJob detail handed to `scheduleJob` twice with one trigger. The trigger is
+    read through the first call (rule 7: the catalog states it binds the trigger and changes
+    nothing else), so the second call's trigger is still `c2`, bound to BJob. But the catalog
+    states nothing about what `scheduleJob` does to its JOB argument, so on the second call
+    the job is unknown (rule 2): its row names no job, `partial`, and whether Quartz refuses
+    it is not decided — never guessed as BJob, never marked refused.
+
+    **Stated, not built:** every job store in the Quartz jar then refuses the second STORE of
+    that key (`ObjectAlreadyExistsException`, rows 31-37, 43), but which store a module runs
+    is configuration, and the user ruled on 2026-11-02 that that decision comes later. The
+    row the first call makes is true either way."""
+    rows = _scheduled(tmp_path, _one_trigger_two_calls("same"))
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("None", "c2", "partial", "None"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-job-whose-trigger-ESCAPES-keeps-its-row")
+def test_a_job_whose_trigger_escapes_keeps_its_row(tmp_path: Path):
+    """`t = trigger("c2"); Lib.touch(t); scheduler.scheduleJob(newJob(CJob).build(), t)`:
+    `Lib.touch` is code this module does not have and no catalog states what it does, so the
+    trigger CJob is scheduled with is unknown (rule 2). CJob keeps its row — trigger, name
+    and cron unknown, `partial` — rather than disappearing (the user's ruling of 2026-11-02,
+    rule 4's own row with an unknown part; `_unread_triggers`)."""
+    trigger_jvm, trigger = _cron_helper()
+    caller = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    facts = [
+        *_classes("CJob"),
+        *trigger,
+        _method_symbol("y", "()V"),
+        _site(caller, 0, _TRIGGERS, "trigger", trigger_jvm, result=1, arguments=(_string("c2"),)),
+        _touched(caller, 5, 1, "Lorg/quartz/Trigger;"),
+        _site(
+            caller,
+            10,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=10,
+            arguments=(_class("CJob"),),
+        ),
+        _site(caller, 11, JOB_BUILDER, "build", "()Lorg/quartz/JobDetail;", receiver=10, result=11),
+        _site(
+            caller,
+            12,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            _SCHEDULE_JVM,
+            receiver=99,
+            result=12,
+            arguments=(
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="unresolved", source=1),
+            ),
+        ),
+    ]
+    assert _refused_rows(_scheduled(tmp_path, facts)) == [
+        ("CJob#execute", "None", "partial", "None"),
+        ("None", "c2", "partial", "None"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal")
+def test_a_second_job_with_the_trigger_jobs_key_is_not_refused(tmp_path: Path):
+    """BJob and CJob both built `withIdentity("j")`: Quartz compares the trigger's job KEY
+    with the job's (CP-55 row 27, `JobKey.equals`), and the keys are equal, so its check
+    does not refuse the second call and no row is marked refused. (The store's refusal of a
+    second job under one key, rows 31-37, is stated in the probe and not built: which store
+    a module runs is configuration.) Pins that the comparison is by key, never by class."""
+    rows = _scheduled(tmp_path, _one_trigger_two_calls("CJob", key="j"))
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "resolved", "None"),
+    ]
+
+
+@pytest.mark.pins("values.a-hand-off-to-code-we-do-NOT-have-escapes")
+def test_a_call_whose_effect_no_catalog_states_stays_unknown(tmp_path: Path):
+    """Rule 2 beside rule 7: with the catalogs' `hand_off_effects` taken away, the first
+    `scheduleJob` is a hand-off into a jar this module does not have, so the trigger the
+    second call is handed is unknown — `C` with no cron, `partial` — and nothing is marked
+    refused, since nothing states what the call does."""
+    catalog = replace(_quartz(_catalogs()), hand_off_effects=())
+    rows = _scheduled(tmp_path, _one_trigger_two_calls("CJob"), catalog)
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "None", "partial", "None"),
     ]
 
 

@@ -49,8 +49,8 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
-    "schema_version": 13,
-    "boundary_vocabulary_version": 3,
+    "schema_version": 14,
+    "boundary_vocabulary_version": 4,
     "catalog_hash": "sha256:catalogs",
     "module": {
         "id": "com.acme:orders-service",
@@ -318,6 +318,31 @@ def test_two_expressions_for_one_schedule_identity_are_both_kept(
     (row,) = sources(_built(tmp_path, build)).rows(KINDS["schedule"])
     assert row["expression"] == {"several": ["0 0 * * * *", "0 30 * * * *"]}
     assert row["resolution"] == "resolved"  # rows that agree keep the single value
+
+
+@pytest.mark.pins("boundary.a-SCHEDULE-carries-its-refusal")
+def test_a_refused_schedule_carries_its_refusal(
+    tmp_path: Path, sources: Callable[[Path], BoundarySource]
+):
+    """A schedule the framework refuses (`scheduled_work.refused`, spec 2026-11-02 rule 7,
+    ruled by the user 2026-11-02) reaches the boundary entry with why — read off a workspace
+    and off an exported bundle alike — so a diff or an observability map never lists it as
+    work that runs. An accepted schedule's is None."""
+
+    def build(workspace: DuckDbWorkspace) -> None:
+        for handler, refused in (
+            ("C#execute().", "trigger t is already bound to B"),
+            ("B#execute().", None),
+        ):
+            _insert(workspace, "scheduled_work", handler=handler, trigger="cron",
+                    name="DEFAULT.t", expression="0 0 * * * ?", resolution="resolved",
+                    evidence="compiler", catalog_id="quartz", refused=refused)  # fmt: skip
+
+    rows = sources(_built(tmp_path, build)).rows(KINDS["schedule"])
+    assert {row["handler"]: row["refused"] for row in rows} == {
+        "B#execute().": None,
+        "C#execute().": "trigger t is already bound to B",
+    }
 
 
 def test_handlers_behind_one_address_with_different_request_shapes_are_all_kept(
@@ -695,8 +720,8 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
         assert source.producer == {
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
-            "graph_schema_version": 13,
-            "boundary_vocabulary_version": 3,
+            "graph_schema_version": 14,
+            "boundary_vocabulary_version": 4,
             "catalog_hash": "sha256:catalogs",
         }
 

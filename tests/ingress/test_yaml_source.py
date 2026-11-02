@@ -557,3 +557,57 @@ def test_a_server_model_key_naming_an_unknown_dispatcher_is_refused(tmp_path: Pa
         YamlCatalogSource(tmp_path).server_model()
 
     assert "sping" in str(raised.value)
+
+
+# --- `hand_off_effects` (spec 2026-11-02 rule 7; D02 §1f) ------------------------------------
+
+_EFFECT = (
+    "id: invented\n"
+    "hand_off_effects:\n"
+    "  - { owner: com.acme.Scheduler, method: schedule, descriptor: '(LJ;LT;)V', arg: arg1,\n"
+    "      binds: { part: job, to: arg0 }, refuses: bound_elsewhere,\n"
+    "      by: scripts/probes/cp55_quartz_shapes.md, rows: '27' }\n"
+)
+
+
+def test_a_stated_hand_off_effect_is_read_with_its_arguments_as_indexes(tmp_path: Path):
+    """The owner in the facts' spelling and each `argN` as its index, so the walk matches a
+    call site's own `owner` and argument slot."""
+    _write_value_model(tmp_path, _EFFECT)
+
+    assert YamlCatalogSource(tmp_path).hand_off_effects() == (
+        {
+            "owner": "com/acme/Scheduler#",
+            "method": "schedule",
+            "descriptor": "(LJ;LT;)V",
+            "arg": 1,
+            "binds": {"part": "job", "to": 0},
+            "refuses": "bound_elsewhere",
+            "by": "scripts/probes/cp55_quartz_shapes.md",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        (("refuses: bound_elsewhere", "refuses: always"), "refuses"),
+        (("binds: { part: job, to: arg0 }, ", ""), "refuses"),
+        (("arg: arg1", "arg: 1"), "argN"),
+        (("by: scripts/probes/cp55_quartz_shapes.md, ", ""), "by"),
+        (("rows: '27'", "changes: [job]"), "does not read"),
+    ],
+)
+def test_a_malformed_hand_off_effect_is_refused_naming_its_file(
+    tmp_path: Path, change: tuple[str, str], says: str
+):
+    """A statement the walk could misread would be a measured claim nobody can rely on: a
+    condition outside the closed set, `refuses` with no `binds`, a bare index, no probe, or a
+    key the loader does not read is refused, naming the file."""
+    _write_value_model(tmp_path, _EFFECT.replace(*change))
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).hand_off_effects()
+
+    assert "hand_off_effects" in str(raised.value) and "invented.yml" in str(raised.value)
+    assert says in str(raised.value)

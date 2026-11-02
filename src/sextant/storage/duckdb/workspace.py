@@ -728,10 +728,10 @@ _NAMED_QUERIES = {
     # a second catalog claiming the same annotation would otherwise leave open.
     "scheduled_work": """
         SELECT handler, trigger, name, expression, expression_source, resolution, evidence,
-               catalog_id, untied
+               catalog_id, untied, refused
         FROM scheduled_work
         ORDER BY handler, trigger, name, expression, expression_source, resolution, evidence,
-                 catalog_id, untied
+                 catalog_id, untied, refused
     """,
     # Spec 2026-10-23-configured-schedules §3b: a placeholder job's value per environment,
     # read as `scheduled_work` is — the job's own (handler, trigger, name, expression) leads —
@@ -789,8 +789,9 @@ _NAMED_QUERIES = {
         ORDER BY key, environment, value, unresolved_reason, source
     """,
     "boundary_schedule": """
-        SELECT handler, trigger, name, expression, resolution, catalog_id FROM scheduled_work
-        ORDER BY handler, trigger, name, expression, resolution, catalog_id
+        SELECT handler, trigger, name, expression, resolution, refused, catalog_id
+        FROM scheduled_work
+        ORDER BY handler, trigger, name, expression, resolution, refused, catalog_id
     """,
     "boundary_error_handler": """
         SELECT handler, exception, advice, scope, status, response_shape, catalog_id
@@ -1447,12 +1448,13 @@ _EXPORT_QUERIES = {
     "scheduled_work": f"""
         SELECT w.handler, w.trigger, coalesce(n.masked, w.name) AS name,
                coalesce(a.masked, w.expression) AS expression,
-               w.expression_source, w.resolution, w.evidence, w.catalog_id, w.untied
+               w.expression_source, w.resolution, w.evidence, w.catalog_id, w.untied,
+               w.refused
         FROM scheduled_work w
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = w.expression
         LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = w.name
         ORDER BY w.handler, w.trigger, w.name, w.expression, w.expression_source, w.resolution,
-                 w.evidence, w.catalog_id, w.untied
+                 w.evidence, w.catalog_id, w.untied, w.refused
     """,
     # `error_handlers` exports through its named query verbatim, and the reason is that it
     # carries no masked column: a scope attribute is a package or a type, an exception and

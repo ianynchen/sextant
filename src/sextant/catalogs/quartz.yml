@@ -218,14 +218,14 @@ matches:
   #
   # WHAT EACH CALL DOES TO ITS ARGUMENTS, measured (CP-55 rows 24-48, quartz 2.5.1): the
   # two-argument `scheduleJob` binds a trigger naming no job to this job, and REFUSES one
-  # naming another ("Trigger does not reference given job!", rows 27, 40-41, 44); the
-  # collection forms re-bind every trigger to its entry's job with no check (rows 29, 45).
-  # Every job store in the jar also refuses a second store of a job or trigger key unless
-  # told to replace (rows 31-37, 43, 47-48); which store a module runs is configuration, so
-  # that refusal is stated there and not here. Rule 7 of the per-path truth spec (ruled
-  # 2026-11-02) has the reader take these effects from this catalog; it is NOT built yet:
-  # a trigger handed to one of these calls is still read as handed to code Sextant does
-  # not have (`escapes`, rule 2), pending a ruling on how a refused row is marked.
+  # naming another ("Trigger does not reference given job!", rows 27, 40-41, 44); that is
+  # stated in `value-models/quartz-scheduler.yml`'s `hand_off_effects` (spec 2026-11-02 rule
+  # 7, ruled by the user that day), so a trigger scheduled once keeps its schedule for the
+  # next call, and a call Quartz refuses keeps its row with `refused` set. The collection
+  # forms re-bind every trigger to its entry's job with no check (rows 29, 45), and every
+  # job store in the jar refuses a second store of a job or trigger key unless told to
+  # replace (rows 31-37, 43, 47-48); neither is stated: which store a module runs is
+  # configuration.
   pairing:
     - owner: org.quartz.Scheduler
       method: scheduleJob

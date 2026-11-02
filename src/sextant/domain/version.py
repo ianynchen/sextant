@@ -157,6 +157,12 @@ SEXTANT_VERSION = version("sextant")
 #             the marker still means no verb was read. The export carries both columns. A
 #             workspace of the older vintage has no marker, so a pattern would be read as
 #             an address, and it is refused and re-analysed.
+#     14      `scheduled_work` gains `refused`: why the framework refuses the call that
+#             schedules a job, read from what the catalog states the call does (spec
+#             2026-11-02-per-path-truth rule 7, the column ruled by the user 2026-11-02),
+#             NULL where it accepts it. A refused row's handler is not a root. A workspace
+#             of the older vintage would read every refused schedule as one that runs, so it
+#             is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -173,6 +179,11 @@ SEXTANT_VERSION = version("sextant")
 #             2026-10-28-quartz, ruling 5). Two Quartz triggers of one kind on one job, told
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
+#     4       `schedule`'s attributes gain `refused`: why the framework refuses the call that
+#             schedules the job, NULL where it accepts it (spec 2026-11-02-per-path-truth
+#             rule 7, the `scheduled_work.refused` column ruled by the user 2026-11-02). A
+#             consumer reading a schedule without it would take a refused one for work that
+#             runs.
 FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 13
-BOUNDARY_VOCABULARY_VERSION = 3
+GRAPH_SCHEMA_VERSION = 14
+BOUNDARY_VOCABULARY_VERSION = 4

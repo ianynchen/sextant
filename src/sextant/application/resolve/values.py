@@ -244,6 +244,10 @@ _BRANCH_OF = "branch-of"
 # Which body a hand-off with several callees ran (spec 2026-11-02 rule 1, `_Walk._handed_to`):
 # one path per callee, never one answer for all of them.
 _HANDED_TO = "handed-to"
+# A hand-off to a call a catalog STATES the effect of (spec 2026-11-02 rule 7,
+# `Catalog.hand_off_effects`): no `escapes`, a step of its own on the path, so a reader of
+# the part the call binds finds the call (`Path.stated`).
+_STATED = "stated"
 
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
@@ -604,6 +608,11 @@ class ValueIndex:
     # the compiler rather than the author writes and which only test for null and throw. A
     # call to one is no hand-off and no `nested` one; every other call, to any owner, is.
     not_hand_offs: frozenset[str] = frozenset()
+    # The hand-offs a catalog states the effect of (`Catalog.hand_off_effects`, spec
+    # 2026-11-02 rule 7), as `(owner, name, descriptor, slot)` in the site's own spelling. A
+    # value handed to one is not `escapes`: the statement says which part of it the call
+    # binds, and that it changes nothing else, so the path goes on with the call recorded.
+    stated: frozenset[tuple[str, str, str, int]] = frozenset()
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -658,7 +667,11 @@ def reset_value_index() -> None:
     _INDEX_BY_WORKSPACE.clear()
 
 
-def cached_value_index(workspace: Workspace, not_hand_offs: Sequence[str] = ()) -> "ValueIndex":
+def cached_value_index(
+    workspace: Workspace,
+    not_hand_offs: Sequence[str] = (),
+    hand_off_effects: Sequence[Mapping[str, Any]] = (),
+) -> "ValueIndex":
     """`value_index`, built at most once per workspace per resolve.
 
     Every engine that resolves values should ask for this rather than `value_index`
@@ -667,17 +680,22 @@ def cached_value_index(workspace: Workspace, not_hand_offs: Sequence[str] = ()) 
     """
     index = _INDEX_BY_WORKSPACE.get(workspace)
     if index is None:
-        index = value_index(workspace, not_hand_offs)
+        index = value_index(workspace, not_hand_offs, hand_off_effects)
         _INDEX_BY_WORKSPACE[workspace] = index
     return index
 
 
-def value_index(workspace: Workspace, not_hand_offs: Sequence[str] = ()) -> ValueIndex:
+def value_index(
+    workspace: Workspace,
+    not_hand_offs: Sequence[str] = (),
+    hand_off_effects: Sequence[Mapping[str, Any]] = (),
+) -> ValueIndex:
     """The index for one resolve. Built by `resolve_site` when it is not handed one.
 
     `not_hand_offs` is the catalogs' `not_hand_offs` (every catalog carries the same tuple):
     the owners whose calls take a value without handing it off. Empty, every call that takes
-    a value is a hand-off."""
+    a value is a hand-off. `hand_off_effects` is the catalogs' `hand_off_effects` (spec
+    2026-11-02 rule 7): the hand-offs whose effect a catalog states (`ValueIndex.stated`)."""
     sites: dict[tuple[str, int], Mapping[str, Any]] = {}
     receivers: dict[tuple[str, int], list[int]] = {}
     # The PROJECTION, not the raw fact stream — the rows every engine reads (spec
@@ -920,6 +938,10 @@ def value_index(workspace: Workspace, not_hand_offs: Sequence[str] = ()) -> Valu
         captured_as=shapes.captured_as,
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
+        stated=frozenset(
+            (str(e["owner"]), str(e["method"]), str(e["descriptor"]), int(e["arg"]))
+            for e in hand_off_effects
+        ),
     )
 
 
@@ -1299,6 +1321,16 @@ class Path:
         step = _Step((_CALLER_OF, callee), f"{caller}@{ordinal}")
         merged = _combine(self.trail, (step,))
         return None if merged is None else Path(merged, self.entered | {step})
+
+    def stated(self) -> tuple[tuple[str, int, int], ...]:
+        """The hand-offs this path passed whose effect a catalog states (spec 2026-11-02
+        rule 7, `ValueIndex.stated`), as `(caller, ordinal, slot)`, in the order the path
+        met them: what a reader of the part such a call binds applies, in turn."""
+        return tuple(
+            (str(step.context[1]), int(step.context[2]), int(step.context[3]))
+            for step in self.trail
+            if step.context[0] == _STATED
+        )
 
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
@@ -2518,7 +2550,8 @@ class _Walk:
         return sorted(events, key=lambda event: event[0])
 
     def _handed_to(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
-        """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one body's
+        """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one step where
+        a catalog states the call's effect at that argument (rule 7); else one body's
         window per callee `call_edges` resolves (rule 1), or `escapes` where there is none —
         code this module does not have — or where the call is through a type a lambda in this
         module implements, whose bodies `dispatch` does not list (fix round 1, M5). A `dynamic`
@@ -2528,6 +2561,12 @@ class _Walk:
         body it took (`_HANDED_TO`), so two reads of one hand-off agree on the body."""
         row = self._index.sites.get((method, ordinal))
         callees = self._index.callees.get((method, ordinal), ())
+        # Rule 7 (ruled by the user 2026-11-02): a call a catalog states the effect of is not
+        # code we do not have, whatever its body. The statement says the parts it does not
+        # bind stay as they were, so the path goes on, with the call written on it for the
+        # reader of the part it binds (`Path.stated`).
+        if row is not None and (*_call_of(row), slot) in self._index.stated:
+            return (((_Step((_STATED, method, ordinal, slot), _STATED),), ()),)
         if row is not None and row.get("invoke_kind") == "dynamic":
             return self._captured(method, ordinal, slot)
         if row is None or not callees:

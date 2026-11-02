@@ -95,13 +95,37 @@ publishes `search` while its port is unknown.
    is unknown (rule 2). A call the framework refuses gives its row marked refused, never dropped
    and never repaired.
 
-   Quartz 2.3.2, `QuartzScheduler.scheduleJob(JobDetail, Trigger)` (javap, 2026-11-02): it
-   checks both non-null; where the trigger names no job it binds it (`setJobKey(job.getKey())`);
-   where it names a different job it throws "Trigger does not reference given job!"; it calls
-   `computeFirstFireTime` (the next fire time, not the schedule); it stores both. So one trigger
-   scheduled with `BJob` then `CJob` is `BJob @ c2` resolved and `CJob @ c2` refused. The store's
-   own refusals (a job or trigger key already stored) are measured the same way, per job store
-   the module uses, before they are stated.
+   Quartz, `QuartzScheduler.scheduleJob(JobDetail, Trigger)`, measured (CP-55 section (g),
+   rows 24-48: `javap` of 2.5.1, the version the catalog lists, and the outcomes on an
+   in-memory scheduler created and never started; 2.3.2 read by hand, the same): it checks
+   both non-null; where the trigger names no job it binds it (`setJobKey(job.getKey())`);
+   where it names a job with another key it throws "Trigger does not reference given job!";
+   it calls `computeFirstFireTime` (the next fire time, not the schedule); it stores both.
+   Two jobs built with no `withIdentity` never share a key. So one trigger scheduled with
+   `BJob` then `CJob` is `BJob @ c2` resolved and `CJob @ c2` resolved and refused. The
+   collection forms re-bind every trigger with no check, and every job store in the Quartz
+   jar refuses a second store of one job or trigger key unless told to replace; both are
+   measured and stated in the probe, and neither is built: the collection forms reach a
+   trigger only through a collection, and which store a module runs is configuration (the
+   user, 2026-11-02: "that decision comes later").
+
+   **How a refused row is marked** [ruled by the user, 2026-11-02: "B: refused column"]:
+   `scheduled_work` gains a nullable `refused`, the framework's reason as text, NULL on every
+   row the framework accepts. `resolution` keeps its meaning, how sure the read is, so a
+   refused row keeps the resolution it was read at and may also be `partial`. A refused row's
+   handler is not a root: the job never runs on that schedule. Every reader that lists
+   schedules shows the refusal. The route table and Vert.x's refused routes are not changed
+   here (a separate item).
+
+   **As built.** The effect is the catalog key `hand_off_effects` (D02 §1f, in
+   `value-models/quartz-scheduler.yml`): per declared call and argument, `binds: {part, to}`
+   and `refuses: bound_elsewhere`, each citing its probe row. The walk reads a hand-off one
+   states as a step of its path, not `escapes`, so the parts it does not bind stay as they
+   were (`values._Walk._handed_to`, `Path.stated`); the Quartz reader applies the binding in
+   path order and marks the call refused where its job's key is not the bound job's
+   (`scheduled_chain._refusal`). Where a job's key cannot be read, whether it is refused is
+   not decided, and the row is no surer than `partial`.
+
 8. **Identity is not content** [ruled by the user, 2026-11-02]. A reader asking
    WHICH object or constant a value is (an `HttpMethod` constant, a class, the call that built
    it) is unaffected by a hand-off: Java hands a method a copy of the reference, so no callee can

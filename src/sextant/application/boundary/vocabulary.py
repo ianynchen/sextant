@@ -126,7 +126,9 @@ _KIND_LIST = (
         table="scheduled_work",
         where=None,
         identity=("handler", "trigger", "name"),
-        attributes=("expression", "resolution"),
+        # `refused` (spec 2026-11-02 rule 7, ruled by the user 2026-11-02): a schedule the
+        # framework refuses is listed with why, never as one that runs.
+        attributes=("expression", "resolution", "refused"),
         evidence=("catalog",),
         grounded_in_code=True,
     ),

@@ -631,6 +631,31 @@ calls, and each only checks and throws. `by` is required, as for `identified_by`
 reads it into `Catalog.not_hand_offs` (every catalog of a source carries the same tuple) and
 each engine hands it to `values.cached_value_index`.
 
+**`hand_off_effects` — what a declared call does to a value handed to it** (spec
+2026-11-02 rule 7, ruled by the user that day: "predict the framework's behavior exactly,
+including its errors"). A `value-models/` file may declare `hand_off_effects: [{owner,
+method, descriptor, arg, binds?, refuses?, by, rows?}]`, the owner dotted, `arg` and every
+argument written `argN`:
+
+- `arg` — the argument the value is handed at;
+- `binds: {part, to}` — where the value's `part` is not yet bound, the call binds it to the
+  value at argument `to`; **no other part of the value changes**;
+- `refuses` — when the call throws instead of doing so. A closed set, checked at load:
+  `bound_elsewhere`, the `binds` part already bound to another value. It needs `binds`;
+- `by` — the probe that measured it, required as `identified_by`'s is (`rows` names its
+  rows).
+
+The loader refuses any other key, an `arg` not written `argN`, and a `refuses` outside the
+set, naming the file, and reads the entries into `Catalog.hand_off_effects` (every catalog of
+a source carries the same tuple); each engine hands them to `values.cached_value_index`. The
+value walk reads a hand-off one entry states as a step of its path (`Path.stated`), never
+`escapes`: the parts the call does not bind are as they were. A reader of the part it binds
+applies the statement on that path — the Quartz reader marks a pairing call `refused`
+(`scheduled_work.refused`, D01) where an earlier stated call bound the trigger to a job with
+another key. A call the value is handed to that no entry states stays unknown (rule 2). The
+one shipped entry is `value-models/quartz-scheduler.yml`'s `Scheduler.scheduleJob(JobDetail,
+Trigger)` at `arg1` (CP-55 rows 24-48).
+
 **What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
 takes the table as data and uses it where a value's producer is a call this module could not
 read through. The walk has found the call (distance); the table says which of its arguments

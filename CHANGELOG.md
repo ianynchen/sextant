@@ -34,6 +34,19 @@ here would restate those documents rather than add anything.
   compiler's own null checks (`kotlin.jvm.internal.Intrinsics`, declared in
   `value-models/compiler-null-checks.yml`) are not hand-offs, and a Quartz job whose trigger
   read ends `escapes` keeps its row with the trigger unknown, `partial`.
+- **A schedule the framework refuses is kept and marked `refused`, never shown as work that
+  runs** (spec 2026-11-02 rule 7, ruled by the user that day: "predict the framework's
+  behavior exactly, including its errors"; the column ruled "B: refused column"). A hand-off
+  to a call a catalog declares takes its effect from the catalog's new `hand_off_effects`
+  (D02 §1f), measured in CP-55 rows 24-48: Quartz's `scheduleJob(JobDetail, Trigger)` binds a
+  trigger that names no job and changes nothing else of it, and refuses a trigger already
+  bound to a job with another key. One trigger scheduled with `BJob` then `CJob` is now
+  `BJob @ c2` and `CJob @ c2` refused, where it was `CJob` with its trigger unknown.
+  `scheduled_work` gains `refused` (graph schema 14; a refused row keeps its resolution), the
+  boundary `schedule` kind gains it as an attribute (vocabulary 4), the document says
+  `refused by the framework` with the reason, and a refused row's handler is no root. The job
+  store's own refusal of a second store of one key is measured and not built: which store a
+  module runs is configuration.
 - **A hand-off no longer hides which constant a value is** (spec 2026-11-02 rule 8, ruled by
   the user that day: "identity is not content"). Java hands a callee a copy of the reference,
   so no hand-off can make a variable another constant; where the walk reads a value as a

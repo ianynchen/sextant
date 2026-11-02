@@ -38,7 +38,7 @@ divergent prefix (CP-38's own scope note, and §5 of the spec measured all six p
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -115,7 +115,10 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
             # it is read from the call sites and not from `resolved_config` — and it carries
             # no version range, for the reason the shipped file states beside it.
             declared = _installed_prefixes(
-                workspace, entry, catalogs[0].not_hand_offs if catalogs else ()
+                workspace,
+                entry,
+                catalogs[0].not_hand_offs if catalogs else (),
+                catalogs[0].hand_off_effects if catalogs else (),
             )
             if declared:
                 for protocol in entry["protocols"]:
@@ -317,7 +320,10 @@ class _Installed:
 
 
 def _installed_prefixes(
-    workspace: Workspace, entry: dict[str, Any], not_hand_offs: Sequence[str] = ()
+    workspace: Workspace,
+    entry: dict[str, Any],
+    not_hand_offs: Sequence[str] = (),
+    hand_off_effects: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[_Installed, ...]:
     """Every entry the module declares in code, measured.
 
@@ -350,7 +356,7 @@ def _installed_prefixes(
     installers = _installer_sites(workspace, sites, entry["installer"])
     if not installers:
         return ()
-    index = cached_value_index(workspace, not_hand_offs)
+    index = cached_value_index(workspace, not_hand_offs, hand_off_effects)
     # WHICH MAP carries prefixes: the origin of every installer's argument 0.
     carries: set[tuple[str, int]] = set()
     for site in installers:

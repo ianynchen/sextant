@@ -275,7 +275,14 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     -- disagree on them, not because the code states none: a helper two
     -- callers call with two names states both, and ties neither to the row
     -- (Quartz design, R20). NULL where no part is.
-    untied     VARCHAR[]
+    untied     VARCHAR[],
+    -- Why the framework REFUSES the call that schedules this job, as text ("trigger
+    -- nightly is already bound to BJob"), read from what the catalog states the call does
+    -- (spec 2026-11-02 rule 7, `hand_off_effects`) [ruled 2026-11-02 by the user]. NULL on
+    -- every row the framework accepts. `resolution` keeps its meaning — how sure the read
+    -- is — so a refused row keeps the resolution it was read at, and may be `partial`. A
+    -- refused row's handler is NOT a root: the job never runs on this schedule.
+    refused    TEXT
 );
 
 -- A scheduled job's placeholder expression, per environment (spec
