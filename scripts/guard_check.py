@@ -9037,6 +9037,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "scheduled_chain.the-JOB-handed-to-scheduleJob-is-STATED": Guard(
+        what="the catalog states what `scheduleJob(JobDetail, Trigger)` does to its JOB "
+        "argument (nothing, CP-55 rows 27, 32, 35, 49-73), so the job stays a stated step, "
+        "not `escapes` (the user's ruling of 2026-11-02, option B)",
+        why="one job scheduled twice with one trigger publishes a second row naming no job",
+        edits=(
+            Edit(
+                path="sextant/catalogs/value-models/quartz-scheduler.yml",
+                find="    arg: arg0\n    hands_to:\n",
+                replace="    arg: arg9  # guard disabled by scripts/guard_check.py\n    hands_to:\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-module-LISTENER-is-read-as-a-capture": Guard(
+        what="a stated call that hands the value on to a method the module implements (a "
+        "`SchedulerListener.jobAdded`) is `escapes` where that body does anything to its "
+        "parameter, as a lambda's capture is (rule 2, the user's ruling of 2026-11-02)",
+        why="a module listener that re-classes every job it is handed is ignored, and the "
+        "job is published as the class the code built",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if stated in self._index.stated_hands:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
         what="a method's own parameter is windowed from the method's entry to the use: calls "
         "on it and hand-offs of it inside the method are read by the same rules (spec "

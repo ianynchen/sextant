@@ -642,19 +642,26 @@ argument written `argN`:
   value at argument `to`; **no other part of the value changes**;
 - `refuses` — when the call throws instead of doing so. A closed set, checked at load:
   `bound_elsewhere`, the `binds` part already bound to another value. It needs `binds`;
+- `hands_to: [{owner, method, descriptor, arg}]` — interface methods the call hands the
+  value on to, which the module may implement (a listener). Each module body of one is read
+  as a lambda's capture is (rule 2): a body that does anything to the parameter at `arg`, or
+  bodies that cannot be listed, make the hand-off `escapes`; bodies that do nothing leave it
+  stated [ruled by the user 2026-11-02];
 - `by` — the probe that measured it, required as `identified_by`'s is (`rows` names its
   rows).
 
-The loader refuses any other key, an `arg` not written `argN`, and a `refuses` outside the
-set, naming the file, and reads the entries into `Catalog.hand_off_effects` (every catalog of
+An entry with neither `binds` nor `refuses` states that the call changes nothing of the
+value. The loader refuses any other key, an `arg` not written `argN`, a malformed `hands_to`,
+and a `refuses` outside the set, naming the file, and reads the entries into `Catalog.hand_off_effects` (every catalog of
 a source carries the same tuple); each engine hands them to `values.cached_value_index`. The
 value walk reads a hand-off one entry states as a step of its path (`Path.stated`), never
 `escapes`: the parts the call does not bind are as they were. A reader of the part it binds
 applies the statement on that path — the Quartz reader marks a pairing call `refused`
 (`scheduled_work.refused`, D01) where an earlier stated call bound the trigger to a job with
 another key. A call the value is handed to that no entry states stays unknown (rule 2). The
-one shipped entry is `value-models/quartz-scheduler.yml`'s `Scheduler.scheduleJob(JobDetail,
-Trigger)` at `arg1` (CP-55 rows 24-48).
+shipped entries are `value-models/quartz-scheduler.yml`'s `Scheduler.scheduleJob(JobDetail,
+Trigger)` at `arg1` (binds the trigger's job; CP-55 rows 24-48) and at `arg0` (changes nothing
+of the job, hands it to `SchedulerListener.jobAdded`; rows 27, 32, 35, 49-73).
 
 **What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
 takes the table as data and uses it where a value's producer is a call this module could not

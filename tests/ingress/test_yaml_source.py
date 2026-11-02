@@ -583,9 +583,29 @@ def test_a_stated_hand_off_effect_is_read_with_its_arguments_as_indexes(tmp_path
             "arg": 1,
             "binds": {"part": "job", "to": 0},
             "refuses": "bound_elsewhere",
+            "hands_to": [],
             "by": "scripts/probes/cp55_quartz_shapes.md",
         },
     )
+
+
+def test_a_hand_off_effect_names_the_methods_it_hands_the_value_on_to(tmp_path: Path):
+    """`hands_to` (a listener the module may implement): each named interface method, its
+    owner in the facts' spelling and its argument as an index."""
+    _write_value_model(
+        tmp_path,
+        _EFFECT.replace(
+            "rows: '27' }",
+            "rows: '27', hands_to: [{ owner: com.acme.Listener, method: added,\n"
+            "      descriptor: '(LJ;)V', arg: arg0 }] }",
+        ),
+    )
+
+    [effect] = YamlCatalogSource(tmp_path).hand_off_effects()
+
+    assert effect["hands_to"] == [
+        {"owner": "com/acme/Listener#", "method": "added", "descriptor": "(LJ;)V", "arg": 0}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -596,6 +616,7 @@ def test_a_stated_hand_off_effect_is_read_with_its_arguments_as_indexes(tmp_path
         (("arg: arg1", "arg: 1"), "argN"),
         (("by: scripts/probes/cp55_quartz_shapes.md, ", ""), "by"),
         (("rows: '27'", "changes: [job]"), "does not read"),
+        (("rows: '27'", "hands_to: [{ owner: com.acme.L, method: added }]"), "hands_to"),
     ],
 )
 def test_a_malformed_hand_off_effect_is_refused_naming_its_file(

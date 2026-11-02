@@ -125,7 +125,17 @@ publishes `search` while its port is unknown.
    binding as its FIRST bind on the path — the builder's `forJob(…)` (every overload) where
    there is one, else the first stated call that binds it — and marks a later call refused
    where its job's key is not the bound one (`scheduled_chain._refusal`): `forJob(X)` then
-   `scheduleJob(Y, t)` marks Y refused (CP-55 row 44). Where a job's key cannot be read, whether it is refused is
+   `scheduleJob(Y, t)` marks Y refused (CP-55 row 44).
+
+   **The job argument** [ruled by the user, 2026-11-02, "option B"]: measured in 2.5.1 and
+   2.3.2 (CP-55 rows 27, 32, 35, 49-73), Quartz's own code reads the job and never changes
+   it, and hands it to `SchedulerListener.jobAdded` on every registered listener. The catalog
+   states that (`arg0`, `hands_to`). A listener the module implements is code we have, read as
+   a lambda's capture is (rule 2): a body that does nothing to the job leaves it stated; one
+   that does anything, or bodies that cannot be listed, make it `escapes`. So one job
+   scheduled twice with one trigger is ONE row, `resolved`. The second call is NOT marked
+   refused: the job store's refusal of a second store of one key is not built, since which
+   store a module runs is configuration. Where a job's key cannot be read, whether it is refused is
    not decided, and the row is no surer than `partial`.
 
 8. **Identity is not content** [ruled by the user, 2026-11-02]. A reader asking

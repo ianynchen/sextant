@@ -42,6 +42,49 @@ STD = "org.quartz.impl.StdScheduler"
 BUILDER_OF_JOBS = "org.quartz.JobBuilder"
 RAM_STORE = "org.quartz.simpl.RAMJobStore"
 JDBC_STORE = "org.quartz.impl.jdbcjobstore.JobStoreSupport"
+JDBC_DELEGATE = "org.quartz.impl.jdbcjobstore.StdJDBCDelegate"
+LISTENER = "org.quartz.SchedulerListener"
+# Read with `javap` only, never run: the version the user named when ruling on the job
+# argument (2026-11-02). Its manifest must state it, as every jar here must.
+OLD_QUARTZ = "2.3.2"
+# (owner, method, parameters as javap prints them, question): what reaches the JOB argument
+# of `scheduleJob(JobDetail, Trigger)` (h).
+JOB_BODIES = [
+    (
+        CORE,
+        "scheduleJob",
+        "org.quartz.JobDetail, org.quartz.Trigger",
+        (
+            "`QuartzScheduler.scheduleJob(JobDetail, Trigger)`: its calls, strings, exceptions "
+            "and throws (h)"
+        ),
+    ),
+    (
+        CORE,
+        "notifySchedulerListenersJobAdded",
+        "org.quartz.JobDetail",
+        (
+            "`QuartzScheduler.notifySchedulerListenersJobAdded(JobDetail)`, which "
+            "`scheduleJob` hands the job to (h)"
+        ),
+    ),
+    (RAM_STORE, "storeJob", None, "`RAMJobStore.storeJob(JobDetail, boolean)` (h)"),
+    (
+        JDBC_STORE,
+        "storeJob",
+        "java.sql.Connection, org.quartz.JobDetail, boolean",
+        "`JobStoreSupport.storeJob(Connection, JobDetail, boolean)` (h)",
+    ),
+    (
+        JDBC_DELEGATE,
+        "insertJobDetail",
+        "java.sql.Connection, org.quartz.JobDetail",
+        (
+            "`StdJDBCDelegate.insertJobDetail(Connection, JobDetail)`, what the JDBC store "
+            "reads off the job (h)"
+        ),
+    ),
+]
 # (owner, method, parameters as javap prints them, question): the three pairing calls the
 # catalog declares, as `StdScheduler` hands them on and `QuartzScheduler` runs them, and the
 # store calls they end in.
@@ -366,6 +409,47 @@ def main(argv: list[str]) -> int:
                 "quartz",
                 f"{entry[2]}; afterwards the trigger {entry[3]}",
             )
+
+    # (h) what `scheduleJob(JobDetail, Trigger)` does to its JOB argument, in 2.5.1 and in
+    # 2.3.2 (the version the user named, 2026-11-02): the calls the job reaches, the store
+    # calls it is handed to, and the listeners Quartz hands it to.
+    old = jar_at(*QUARTZ, OLD_QUARTZ)
+    if old is None:
+        raise ProbeError(f"NOT IN THE LOCAL REPOSITORY: {QUARTZ[0]}:{QUARTZ[1]}:{OLD_QUARTZ}")
+    old_stated, _ = identity(old, OLD_QUARTZ)
+
+    def emit_at(question: str, version: str, observed: str) -> None:
+        nonlocal row
+        row += 1
+        print(f"| {row} | {question} | `{QUARTZ[0]}:{QUARTZ[1]}` | {version} | {observed} |")
+
+    for jar, version in ((quartz[0], quartz[1]), (old, old_stated)):
+        read = classes(jar, [CORE, RAM_STORE, JDBC_STORE, JDBC_DELEGATE])
+        for owner, name, parameters, question in JOB_BODIES:
+            if (
+                version == quartz[1]
+                and owner in (RAM_STORE, JDBC_STORE)
+                or (version == quartz[1] and name == "scheduleJob")
+            ):
+                continue  # 2.5.1's are rows 27, 32 and 35 above
+            steps = body(read[owner], name, parameters)
+            if not steps:
+                raise ProbeError(f"{owner} has no {name}({parameters}) in {version}")
+            emit_at(question, version, effects(steps))
+        listeners = implementers(jar, LISTENER)
+        emit_at(
+            "every class in the jar that implements `org.quartz.SchedulerListener` (h)",
+            version,
+            "<br>".join(f"`{n}`" for n in listeners),
+        )
+        bodies = classes(jar, listeners)
+        for name in listeners:
+            steps = body(bodies[name], "jobAdded", "org.quartz.JobDetail")
+            emit_at(
+                f"`{name.rsplit('.', 1)[-1]}.jobAdded(JobDetail)` as compiled (h)",
+                version,
+                render(steps) if steps else "declares no `jobAdded` of its own",
+            )
     return 0
 
 
@@ -383,18 +467,25 @@ def effects(steps) -> str:
 def job_stores(jar: Path) -> list[str]:
     """Every class in `jar` whose `javap` declaration implements `JobStore`, or extends one
     that does, to a fixed point."""
+    return implementers(jar, "org.quartz.spi.JobStore", "-public")
+
+
+def implementers(jar: Path, interface: str, *flags: str) -> list[str]:
+    """Every class in `jar` whose `javap` declaration implements `interface`, or extends one
+    that does, to a fixed point. `flags` narrows the listing (`-public`)."""
     names = [n for n in class_names(jar) if n.startswith("org.quartz.")]
     declarations = {
         m.group(1): m.group(0)
         for m in re.finditer(
-            r"(?m)^(?:public |protected |private )?(?:abstract )?class ([\w.$]+)[^\n]*\{$",
-            javap(jar, "-public", *names),
+            r"(?m)^(?:public |protected |private )?(?:abstract )?(?:final )?class ([\w.$]+)"
+            r"[^\n]*\{$",
+            javap(jar, *flags, *names),
         )
     }
     found = {
         n
         for n, d in declarations.items()
-        if re.search(r"implements [^{]*org\.quartz\.spi\.JobStore(?![\w$])", d)
+        if re.search(rf"implements [^{{]*{re.escape(interface)}(?![\w$])", d)
     }
     while True:
         more = {

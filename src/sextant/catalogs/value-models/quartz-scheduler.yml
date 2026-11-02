@@ -18,6 +18,16 @@ displayName: What Quartz's Scheduler does to a trigger handed to it
 # else of the trigger a schedule row reads (`computeFirstFireTime` sets the next fire time,
 # not the schedule). Two jobs built with no `withIdentity` never share a key (rows 30, 39).
 #
+# Its JOB argument (CP-55 rows 27, 32, 35, 49-73: 2.5.1 and 2.3.2, the version the user named
+# when ruling on it, 2026-11-02, "option B"): Quartz's own code reads the job and never
+# changes it — `getKey()`, `getJobClass()`, a `clone()` kept by the in-memory store, the
+# JDBC store reading its key, data map, description and class — and hands it to
+# `SchedulerListener.jobAdded` on every listener registered. Every listener in the jar does
+# nothing to it, reads it, or hands it on to the listeners registered with it. A listener
+# the MODULE implements is code the module has, so it is read as a lambda's capture is
+# (rule 2): a `jobAdded` body that does nothing to its parameter leaves the job as it was;
+# one that does anything, or bodies that cannot be listed, make the job unknown.
+#
 # NOT STATED, so unknown: the collection forms (`scheduleJob(JobDetail, Set, boolean)`,
 # `scheduleJobs(Map, boolean)`), which re-bind every trigger with no check (rows 28-29, 45)
 # and reach a trigger only through a collection, which the walk does not follow per
@@ -34,3 +44,12 @@ hand_off_effects:
     refuses: bound_elsewhere
     by: scripts/probes/cp55_quartz_shapes.md
     rows: "24, 27, 30, 39, 40-41, 44"
+  - owner: org.quartz.Scheduler
+    method: scheduleJob
+    descriptor: "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)Ljava/util/Date;"
+    arg: arg0
+    hands_to:
+      - { owner: org.quartz.SchedulerListener, method: jobAdded,
+          descriptor: "(Lorg/quartz/JobDetail;)V", arg: arg0 }
+    by: scripts/probes/cp55_quartz_shapes.md
+    rows: "27, 32, 35, 49-73"

@@ -302,6 +302,8 @@ class YamlCatalogSource:
           it to the value at argument `to` (`argN`); no other part of the value changes;
         - `refuses` — when the call throws instead: `bound_elsewhere`, the `binds` part
           already bound to another value. The one condition shipped, a closed set;
+        - `hands_to` — `[{owner, method, descriptor, arg}]`, interface methods the call hands
+          the value on to, whose module bodies the walk reads as a lambda's capture;
         - `by` — the probe row that measured it, required as `identified_by`'s is.
 
         A call the value is handed to that no entry states is unknown (rule 2), so every key
@@ -1455,6 +1457,7 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
         "arg",
         "binds",
         "refuses",
+        "hands_to",
         "by",
         "rows",
     }
@@ -1472,11 +1475,31 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
         raise CatalogError(
             f"{where}: `refuses` is one of {list(_REFUSALS)} and needs `binds`, got {refuses!r}"
         )
+    hands_to = entry.get("hands_to") or []
+    if not isinstance(hands_to, list) or not all(
+        isinstance(handed, dict)
+        and set(handed) == {"owner", "method", "descriptor", "arg"}
+        and all(handed.values())
+        for handed in hands_to
+    ):
+        raise CatalogError(
+            f"{where}: `hands_to` is a list of `{{owner, method, descriptor, arg}}`, "
+            f"got {hands_to!r}"
+        )
     return {
         "owner": type_descriptor(str(entry["owner"])),
         "method": str(entry["method"]),
         "descriptor": str(entry["descriptor"]),
         "arg": _arg_index(entry["arg"], where),
+        "hands_to": [
+            {
+                "owner": type_descriptor(str(handed["owner"])),
+                "method": str(handed["method"]),
+                "descriptor": str(handed["descriptor"]),
+                "arg": _arg_index(handed["arg"], where),
+            }
+            for handed in hands_to
+        ],
         "binds": None
         if binds is None
         else {"part": binds["part"], "to": _arg_index(binds["to"], where)},

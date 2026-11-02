@@ -2029,19 +2029,83 @@ def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
     ]
 
 
-def test_one_trigger_scheduled_twice_with_the_same_job_is_not_refused(tmp_path: Path):
-    """The same BJob detail handed to `scheduleJob` twice with one trigger. The trigger is
-    read through the first call (rule 7: the catalog states it binds the trigger and changes
-    nothing else), so the second call's trigger is still `c2`, bound to BJob. But the catalog
-    states nothing about what `scheduleJob` does to its JOB argument, so on the second call
-    the job is unknown (rule 2): its row names no job, `partial`, and whether Quartz refuses
-    it is not decided — never guessed as BJob, never marked refused.
+@pytest.mark.pins("scheduled_chain.the-JOB-handed-to-scheduleJob-is-STATED")
+def test_one_trigger_scheduled_twice_with_the_same_job_is_one_row(tmp_path: Path):
+    """The same BJob detail handed to `scheduleJob` twice with one trigger: ONE row, B@c2
+    `resolved` [the user's ruling of 2026-11-02, "option B"]. The catalog states both
+    arguments: the trigger is bound and otherwise unchanged, and the JOB is not changed by
+    Quartz's own code at all — it reads its key and class, stores it and hands it to the
+    registered `SchedulerListener`s (CP-55 rows 27, 32, 35, 49-73, Quartz 2.5.1 and 2.3.2) —
+    and this module implements no listener. So the second call names the same job, which
+    Quartz's binding check accepts (row 27, `JobKey.equals`), and the two calls are one row.
 
-    **Stated, not built:** every job store in the Quartz jar then refuses the second STORE of
-    that key (`ObjectAlreadyExistsException`, rows 31-37, 43), but which store a module runs
-    is configuration, and the user ruled on 2026-11-02 that that decision comes later. The
-    row the first call makes is true either way."""
+    **Not built:** every job store in the jar then refuses the second STORE of that key
+    (`ObjectAlreadyExistsException`, rows 31-37, 43); which store a module runs is
+    configuration, so the second call is not marked refused (the user, 2026-11-02)."""
     rows = _scheduled(tmp_path, _one_trigger_two_calls("same"))
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+    ]
+
+
+def _listener(does: bool) -> list:
+    """`Listen implements SchedulerListener` with a `jobAdded(JobDetail job)` body that does
+    nothing to `job`, or (`does`) calls `((JobDetailImpl) job).setJobClass(CJob.class)` on
+    it."""
+    owner = f"{_JOBS}Listen#"
+    jvm = "(Lorg/quartz/JobDetail;)V"
+    method = _MODULE + method_descriptor(owner, "jobAdded", jvm)
+    facts: list = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + owner,
+            construct_kind="class",
+            interfaces=["org/quartz/SchedulerListener#"],
+        ),
+        SymbolFact(
+            document_id="doc_1", symbol=method, construct_kind="method", enclosing=_MODULE + owner
+        ),
+        MethodReturnFact(document_id="doc_1", method=method, ordinal=0, value=None),
+    ]
+    if does:
+        facts.append(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=method,
+                target=CallTarget(
+                    owner="org/quartz/impl/JobDetailImpl#",
+                    name="setJobClass",
+                    descriptor="(Ljava/lang/Class;)V",
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                receiver_parameter=0,
+                arguments=[_class("CJob")],
+            )
+        )
+    return facts
+
+
+@pytest.mark.pins("scheduled_chain.the-JOB-handed-to-scheduleJob-is-STATED")
+def test_a_module_listener_that_does_nothing_to_the_job_leaves_it_stated(tmp_path: Path):
+    """The module implements `SchedulerListener.jobAdded`, and Quartz hands it every job
+    `scheduleJob` stores (CP-55 rows 49, 61). Its body is code the module has, read as a
+    lambda's capture is (rule 2): this one does nothing to its parameter, so it cannot change
+    the job, and the same job scheduled twice is still one row."""
+    rows = _scheduled(tmp_path, [*_one_trigger_two_calls("same"), *_listener(does=False)])
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-module-LISTENER-is-read-as-a-capture")
+def test_a_module_listener_that_touches_the_job_makes_it_unknown(tmp_path: Path):
+    """The same listener calling `((JobDetailImpl) job).setJobClass(CJob.class)` — which
+    changes the job outright: when it runs is not known and what it does cannot be placed, so the job after the first `scheduleJob` is unknown
+    (`escapes`, rule 2): the second call's row names no job, `partial`, never guessed."""
+    rows = _scheduled(tmp_path, [*_one_trigger_two_calls("same"), *_listener(does=True)])
     assert _refused_rows(rows) == [
         ("AJob#execute", "c1", "resolved", "None"),
         ("BJob#execute", "c2", "resolved", "None"),

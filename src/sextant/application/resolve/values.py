@@ -134,6 +134,7 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
@@ -613,6 +614,14 @@ class ValueIndex:
     # value handed to one is not `escapes`: the statement says which part of it the call
     # binds, and that it changes nothing else, so the path goes on with the call recorded.
     stated: frozenset[tuple[str, str, str, int]] = frozenset()
+    # Where a stated call hands the value on to an interface method a module may implement
+    # (`hand_off_effects`' `hands_to`, spec 2026-11-02 rule 7 as ruled for a listener): per
+    # stated hand-off, the module's bodies of that method with the parameter the value lands
+    # on, or None where they cannot be listed (a subtype whose method resolves to no body
+    # read here). Read as a lambda's capture is (`_Walk._captured`).
+    stated_hands: Mapping[tuple[str, str, str, int], tuple[tuple[str, int], ...] | None] = (
+        dataclass_field(default_factory=dict)
+    )
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -942,7 +951,51 @@ def value_index(
             (str(e["owner"]), str(e["method"]), str(e["descriptor"]), int(e["arg"]))
             for e in hand_off_effects
         ),
+        stated_hands=_stated_hands(workspace, hand_off_effects, shapes.lambda_types),
     )
+
+
+def _stated_hands(
+    workspace: Workspace,
+    hand_off_effects: Sequence[Mapping[str, Any]],
+    lambda_types: AbstractSet[str],
+) -> dict[tuple[str, str, str, int], tuple[tuple[str, int], ...] | None]:
+    """`ValueIndex.stated_hands`: for each stated hand-off whose entry says the call hands the
+    value on (`hands_to`), every body this module has of each named interface method, with
+    the parameter the value lands on — found as the JVM would dispatch it, per in-module
+    subtype of the interface (`Dispatch.resolve`). None where one cannot be listed: a subtype
+    whose method resolves to no body read here, or a type a lambda in the module implements
+    (whose body `dispatch` does not list, fix round 1 M5). Built only where an entry names a
+    `hands_to`, so a source stating none reads no dispatch here (§8.7)."""
+    found: dict[tuple[str, str, str, int], tuple[tuple[str, int], ...] | None] = {}
+    named = [e for e in hand_off_effects if e.get("hands_to")]
+    if not named:
+        return found
+    dispatch = workspace.once(dispatch_of)
+    for effect in named:
+        bodies: list[tuple[str, int]] = []
+        listed = True
+        for handed in effect["hands_to"]:
+            owner, name, descriptor = (
+                str(handed["owner"]),
+                str(handed["method"]),
+                str(handed["descriptor"]),
+            )
+            if owner in lambda_types:
+                listed = False
+            for subtype in dispatch.subtypes.get(bare_descriptor(owner), ()):
+                declaring, _ = dispatch.resolve(subtype, name, descriptor)
+                read = (
+                    ()
+                    if declaring is None
+                    else dispatch.bodies.get(method_descriptor(declaring, name, descriptor), ())
+                )
+                if not read:
+                    listed = False
+                bodies.extend((body, int(handed["arg"])) for body in read)
+        key = (str(effect["owner"]), str(effect["method"]), str(effect["descriptor"]))
+        found[(*key, int(effect["arg"]))] = tuple(dict.fromkeys(bodies)) if listed else None
+    return found
 
 
 @dataclass
@@ -2566,6 +2619,18 @@ class _Walk:
         # bind stay as they were, so the path goes on, with the call written on it for the
         # reader of the part it binds (`Path.stated`).
         if row is not None and (*_call_of(row), slot) in self._index.stated:
+            # Where the statement says the call hands the value on to a method the module
+            # may implement (a listener), each such body is read as a lambda's capture is
+            # (`_captured`): one that does anything to its parameter, or bodies that cannot
+            # be listed, make the hand-off `escapes` (rule 2).
+            stated = (*_call_of(row), slot)
+            if stated in self._index.stated_hands:
+                bodies = self._index.stated_hands[stated]
+                if bodies is None or any(
+                    self._events(body, (_PARAMETER, parameter), -1, None, True)
+                    for body, parameter in bodies
+                ):
+                    return (((), ESCAPES),)
             return (((_Step((_STATED, method, ordinal, slot), _STATED),), ()),)
         if row is not None and row.get("invoke_kind") == "dynamic":
             return self._captured(method, ordinal, slot)
