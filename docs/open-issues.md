@@ -275,6 +275,9 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-269 | [SEXTANT-261](https://app.plane.so/portolan/browse/SEXTANT-261/) | A verbless Vert.x route and a verb route on the same path are never ordered against each other |
 | OI-270 | [SEXTANT-262](https://app.plane.so/portolan/browse/SEXTANT-262/) | The pass-through reader does not read a handle method inherited from an interface default (or Kotlin DefaultImpls) |
 | OI-271 | [SEXTANT-264](https://app.plane.so/portolan/browse/SEXTANT-264/) | A question's method/path markers come from the first registration filed at its identity |
+| OI-272 | [SEXTANT-266](https://app.plane.so/portolan/browse/SEXTANT-266/) | The per-path truth fix, then PR #88 (Vert.x) merged (Java/Kotlin complete, SEXTANT-265) |
+| OI-273 | [SEXTANT-267](https://app.plane.so/portolan/browse/SEXTANT-267/) | A Gradle project with no group is refused (no module id); the Kotlin examples cannot be analysed |
+| OI-274 | [SEXTANT-268](https://app.plane.so/portolan/browse/SEXTANT-268/) | Android modules are not detected: no java plugin, so no classes are read (outbound only) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
