@@ -85,6 +85,27 @@ publishes `search` while its port is unknown.
    delegation, not the user's.
 6. **A setter whose own argument has several values is unread** (`_Options._value`, unchanged):
    pairing two independent setters' candidates would publish combinations no path makes.
+7. **A hand-off to a call a catalog declares takes its effect from the catalog** [ruled by the
+   user, 2026-11-02: "predict the framework's behavior exactly, including its errors", DR-6].
+   A catalog-declared call is not code we do not have: the catalog is the measured statement of
+   what it does, and every row that passes through it rests on that same statement — never one
+   row on the statement and the next on "unknown". The catalog states, per declared call and
+   argument, what the call does to the value (measured with `javap`, cited to a probe row): which
+   parts it changes, and when it refuses. A declared call whose effect the catalog does not state
+   is unknown (rule 2). A call the framework refuses gives its row marked refused, never dropped
+   and never repaired.
+
+   Quartz 2.3.2, `QuartzScheduler.scheduleJob(JobDetail, Trigger)` (javap, 2026-11-02): it
+   checks both non-null; where the trigger names no job it binds it (`setJobKey(job.getKey())`);
+   where it names a different job it throws "Trigger does not reference given job!"; it calls
+   `computeFirstFireTime` (the next fire time, not the schedule); it stores both. So one trigger
+   scheduled with `BJob` then `CJob` is `BJob @ c2` resolved and `CJob @ c2` refused. The store's
+   own refusals (a job or trigger key already stored) are measured the same way, per job store
+   the module uses, before they are stated.
+8. **Identity is not content** [proposed 2026-11-02, awaiting the user's ruling]. A reader asking
+   WHICH object or constant a value is (an `HttpMethod` constant, a class, the call that built
+   it) is unaffected by a hand-off: Java hands a method a copy of the reference, so no callee can
+   make the caller's variable another object. Rules 1-3 apply to readers of an object's CONTENTS.
 
 ## 3. Not changed
 
