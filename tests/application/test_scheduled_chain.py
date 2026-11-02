@@ -2055,6 +2055,139 @@ def test_a_JobDetail_handed_through_a_helper_keeps_its_callers_cron(tmp_path: Pa
     ]
 
 
+def _touched(caller: str, ordinal: int, source: int, type_: str) -> CallSiteFact:
+    """`Lib.touch(value)`: the value handed to a method in a jar this module does not have,
+    which the walk answers `escapes` (spec 2026-11-02 rule 2)."""
+    return _site(
+        caller,
+        ordinal,
+        "com/other/Lib#",
+        "touch",
+        f"({type_})V",
+        arguments=(CallArgument(kind="unresolved", source=source),),
+    )
+
+
+@pytest.mark.pins("scheduled_chain.a-JOB-that-ESCAPES-keeps-its-row")
+def test_a_job_handed_where_the_walk_cannot_follow_keeps_its_row(tmp_path: Path):
+    """P6 with `k2()` handing its built job to `Lib.touch(job)` before `t(job, "c2")`: what
+    the jar does to the job is not known (rule 2), so that path names no job. Its row stays,
+    with no handler, beside k1's `AJob @ c1` (the user's ruling of 2026-11-02, rule 4's own row
+    with an unknown part; `_built_jobs`)."""
+    jvm, helper = _for_job_helper("Lorg/quartz/JobDetail;")
+    facts = [*_classes("AJob", "BJob"), *helper]
+    for name, job, cron, touched in (("k1", "AJob", "c1", False), ("k2", "BJob", "c2", True)):
+        caller = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        facts += [_method_symbol(name, "()V"), *_job_chain(caller, job)]
+        if touched:
+            facts.append(_touched(caller, 3, 3, "Lorg/quartz/JobDetail;"))
+        facts.append(
+            _site(
+                caller,
+                4,
+                _TRIGGERS,
+                "t",
+                jvm,
+                arguments=(CallArgument(kind="unresolved", source=3), _string(cron)),
+            )
+        )
+    assert _rows_of(_scheduled(tmp_path, facts)) == [
+        ("None", "AJob#execute", "c1", "resolved"),
+        ("None", "None", "c2", "partial"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-KEY-that-ESCAPES-keeps-its-row")
+def test_a_job_key_handed_where_the_walk_cannot_follow_keeps_its_row(tmp_path: Path):
+    """P5 with `k2()` handing its `jobKey("b")` to `Lib.touch(key)` before `t(key, "c2")`:
+    the key on that path is not known, so its row stays naming no job (`_built_keys`)."""
+    jvm, helper = _for_job_helper("Lorg/quartz/JobKey;")
+    facts = [
+        *_classes("AJob", "BJob"),
+        *_job_chain(f"{_JOBS}Jobs#a().", "AJob", "a"),
+        *_job_chain(f"{_JOBS}Jobs#b().", "BJob", "b"),
+        *helper,
+    ]
+    for name, key, cron, touched in (("k1", "a", "c1", False), ("k2", "b", "c2", True)):
+        caller = _MODULE + method_descriptor(_TRIGGERS, name, "()V")
+        facts += [
+            _method_symbol(name, "()V"),
+            _site(
+                caller,
+                0,
+                "org/quartz/JobKey#",
+                "jobKey",
+                "(Ljava/lang/String;)Lorg/quartz/JobKey;",
+                result=1,
+                arguments=(_string(key),),
+            ),
+        ]
+        if touched:
+            facts.append(_touched(caller, 1, 1, "Lorg/quartz/JobKey;"))
+        facts.append(
+            _site(
+                caller,
+                2,
+                _TRIGGERS,
+                "t",
+                jvm,
+                arguments=(CallArgument(kind="unresolved", source=1), _string(cron)),
+            )
+        )
+    assert _rows_of(_scheduled(tmp_path, facts)) == [
+        ("None", "AJob#execute", "c1", "resolved"),
+        ("None", "None", "c2", "partial"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-SCHEDULE-that-ESCAPES-keeps-its-row")
+def test_a_schedule_handed_where_the_walk_cannot_follow_keeps_its_row(tmp_path: Path):
+    """`withSchedule(pick())`, where `pick()` returns `cronSchedule("c1")` on one return and,
+    on the other, `cronSchedule("c2")` after handing it to `Lib.touch(b)`. The second path's
+    schedule is not known: its own row, kind `cron` (what `pick` is declared to return) and
+    no expression, beside `c1` — never dropped because another path read a chain
+    (`_schedules`)."""
+    cron_type = "Lorg/quartz/CronScheduleBuilder;"
+    pick_jvm = f"(){cron_type}"
+    pick = _MODULE + method_descriptor(_TRIGGERS, "pick", pick_jvm)
+    caller = _MODULE + method_descriptor(_TRIGGERS, "hourly", "()Lorg/quartz/Trigger;")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        _method_symbol("pick", pick_jvm),
+        _method_symbol("hourly", "()Lorg/quartz/Trigger;"),
+        *(
+            _site(
+                pick,
+                ordinal,
+                CRON_BUILDER,
+                "cronSchedule",
+                f"(Ljava/lang/String;){cron_type}",
+                result=ordinal + 1,
+                arguments=(_string(cron),),
+            )
+            for ordinal, cron in ((0, "c1"), (1, "c2"))
+        ),
+        _touched(pick, 2, 2, cron_type),
+        *(
+            MethodReturnFact(
+                document_id="doc_1",
+                method=pick,
+                ordinal=ordinal,
+                value=CallArgument(kind="unresolved", source=ordinal + 1),
+            )
+            for ordinal in (0, 1)
+        ),
+        *_scheduled_with(
+            caller, [_site(caller, 1, _TRIGGERS, "pick", pick_jvm, result=2)], schedule_source=2
+        ),
+    ]
+    rows = _scheduled(tmp_path, facts)
+    assert sorted((row["trigger"], str(row["expression"]), row["resolution"]) for row in rows) == [
+        ("cron", "None", "partial"),
+        ("cron", "c1", "partial"),
+    ]
+
+
 @pytest.mark.pins("quartz.an-UNTIED-part-is-kept-only-where-every-path-agrees")
 @pytest.mark.pins("quartz.an-UNTIED-part-is-NAMED")
 def test_an_untied_cron_that_differs_between_paths_is_null(tmp_path: Path):

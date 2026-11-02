@@ -8850,6 +8850,50 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "scheduled_chain.a-JOB-that-ESCAPES-keeps-its-row": Guard(
+        what="a job the walk from a pairing's job argument answers `escapes` on a path is that "
+        "path's job, unknown, so the path keeps its row naming no job (user ruling 2026-11-02, "
+        "`_built_jobs`)",
+        why="a trigger whose job something unread may have changed loses that caller's row, "
+        "and the schedule disappears from the document though the code makes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if producer.reason == ESCAPES:\n            found.append((None, path))\n",
+                replace="        if producer.reason == ESCAPES:  # guard disabled by scripts/guard_check.py\n"
+                "            pass\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-KEY-that-ESCAPES-keeps-its-row": Guard(
+        what="a `JobKey` the walk answers `escapes` on a path is that path's key, unknown, so "
+        "the path keeps its row naming no job (user ruling 2026-11-02, `_built_keys`)",
+        why="a trigger whose job key something unread may have changed loses that caller's "
+        "row, and the schedule disappears from the document though the code makes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if producer.reason == ESCAPES:\n            keys.append((None, path))\n",
+                replace="        if producer.reason == ESCAPES:  # guard disabled by scripts/guard_check.py\n"
+                "            pass\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-SCHEDULE-that-ESCAPES-keeps-its-row": Guard(
+        what="a schedule the walk answers `escapes` on one path, while another path reads a "
+        "chain, is its own row with the declared kind and no expression (user ruling "
+        "2026-11-02, `_schedules`)",
+        why="the path whose schedule something unread may have changed is dropped, and the "
+        "document shows only the other path's cron as though it were the only one",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    if chains:\n        found.extend(\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        found.extend(\n",
+            ),
+        ),
+    ),
     "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
         what="a method's own parameter is windowed from the method's entry to the use: calls "
         "on it and hand-offs of it inside the method are read by the same rules (spec "
