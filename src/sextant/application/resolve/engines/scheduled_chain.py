@@ -82,7 +82,7 @@ and is not derived.
 
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -780,6 +780,7 @@ def _pairings(
     7): read on the trigger's own path to that call, from what the calls the trigger was
     handed to before it did to the trigger, as the catalog states."""
     found: list[tuple[ChainEnd | None, Path | None, _Refusal]] = []
+    for_job = _for_job_binds(end, context)
     for consumer in end.consumers:
         for pairing in context.rules.pairing:
             if not (
@@ -796,7 +797,7 @@ def _pairings(
                     if (both := trigger.joined(path)) is not None
                 ]
                 found.extend(
-                    (job, both, _refusal(consumer, pairing, job, trigger, context))
+                    (job, both, _refusal(consumer, pairing, job, trigger, for_job, context))
                     for both, trigger in joined
                 )
                 # A trigger and a job that reached this call through DIFFERENT callers of
@@ -805,7 +806,9 @@ def _pairings(
                 # M-1 bound) is the pairing real and read apart (`_apart`).
                 apart = [trigger for trigger in triggers if trigger.two_calls_of_one_helper(path)]
                 if not joined and apart:
-                    found.append((job, None, _refusal(consumer, pairing, job, apart[0], context)))
+                    found.append(
+                        (job, None, _refusal(consumer, pairing, job, apart[0], for_job, context))
+                    )
     position = _position(end.captures.get(_JOB_DETAIL), context)
     if position is not None:
         found.extend((job, path, _ACCEPTED) for job, path in _built_jobs(*position, context))
@@ -830,13 +833,29 @@ def _pairings(
             None if job is None or job.terminal is None else _site_key(job.terminal),
             path,
             refusal.undecided,
-            None
-            if refusal.bound_to is None or refusal.bound_to.terminal is None
-            else _site_key(refusal.bound_to.terminal),
+            None if refusal.bound_to is None else refusal.bound_to.identity,
         ): (job, path, refusal)
         for job, path, refusal in found
     }
     return list(unique.values()) or [(None, _ANY_PATH, _ACCEPTED)]
+
+
+@dataclass(frozen=True)
+class _Bound:
+    """The job a trigger is bound to, as Quartz compares it (`JobKey.equals`, CP-55 row 27):
+    the built job where one is known (`end`), its key `group.name` where it can be read, and
+    whether that key is one `Key.createUniqueName` generates (a job built with no
+    `withIdentity`, rows 30, 39), which equals no other job's key."""
+
+    end: ChainEnd | None = field(default=None, compare=False, hash=False)
+    key: str | None = None
+    unique: bool = False
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """What tells two binds apart: the `build()` that made the job, else its key."""
+        built = None if self.end is None or self.end.terminal is None else self.end.terminal
+        return (None if built is None else _site_key(built), self.key, self.unique)
 
 
 @dataclass(frozen=True)
@@ -845,7 +864,7 @@ class _Refusal:
     is the job the trigger was already bound to where the call is refused, `undecided` where
     whether it is cannot be read. Neither: the call is accepted."""
 
-    bound_to: ChainEnd | None = None
+    bound_to: _Bound | None = field(default=None, compare=False, hash=False)
     undecided: bool = False
 
 
@@ -853,54 +872,108 @@ _ACCEPTED = _Refusal()
 _UNDECIDED = _Refusal(undecided=True)
 
 
+def _bound_of(job: ChainEnd, context: _Context) -> _Bound:
+    """A built job as a bind: its key where it has one, else the unique key Quartz gives it."""
+    if _NAME not in job.captures:
+        return _Bound(end=job, unique=True)
+    return _Bound(end=job, key=_key(job.captures.get(_NAME), job.captures.get(_GROUP), context))
+
+
+def _for_job_binds(end: ChainEnd, context: _Context) -> list[tuple[_Bound | None, Path]] | None:
+    """**The trigger's FIRST bind, where its builder makes it**: `forJob(…)`, every overload
+    the catalog lists, binds the trigger before `build()` and so before any call it is handed
+    to. Each bind the walk reads, with the path it holds on — `None` for one it cannot read
+    (a key the walk loses). None where the builder calls no `forJob` at all: the trigger is
+    then unbound until a stated call binds it (`_refusal`)."""
+    if not any(
+        field_name in end.captures
+        for field_name in (_JOB_DETAIL, _JOB_NAME, _JOB_GROUP, _JOB_KEY_FIELD)
+    ):
+        return None
+    binds: list[tuple[_Bound | None, Path]] = []
+    position = _position(end.captures.get(_JOB_DETAIL), context)
+    if position is not None:
+        binds.extend(
+            (None if job is None else _bound_of(job, context), path)
+            for job, path in _built_jobs(*position, context)
+        )
+        binds.extend(
+            (_bound_of(job, context), _ANY_PATH) for job in _injected_jobs(*position, context)
+        )
+    if _JOB_NAME in end.captures:
+        key = _key(end.captures.get(_JOB_NAME), end.captures.get(_JOB_GROUP), context)
+        binds.append((None if key is None else _Bound(key=key), _ANY_PATH))
+    position = _position(end.captures.get(_JOB_KEY_FIELD), context)
+    if position is not None:
+        binds.extend(
+            (None if key is None else _Bound(key=key), path)
+            for key, path in _built_keys(*position, context)
+        )
+    return binds
+
+
 def _refusal(
     consumer: Mapping[str, Any],
     pairing: "_Pairing",
     job: ChainEnd | None,
     trigger: Path,
+    for_job: list[tuple[_Bound | None, Path]] | None,
     context: _Context,
 ) -> _Refusal:
     """Whether Quartz refuses `consumer`, handed `job` and the trigger on `trigger`'s path,
     **from what the catalog states** (`Catalog.hand_off_effects`, spec 2026-11-02 rule 7,
     ruled by the user that day; measured in CP-55 rows 24-48), never from a model of our own.
 
-    The calls the trigger was handed to before this one, which the walk wrote on its path
-    (`Path.stated`), are read in order. The first that `binds` the trigger's part binds it to
-    the job at its `to` argument, on this same path; a later one either names that same job,
-    which changes nothing, or is refused, which changes nothing either — so the binding is
-    the first binder's job. This call is then refused where its own statement `refuses`
-    `bound_elsewhere` and the job it is handed is not that job (`_same_job`).
+    **The trigger's binding is its FIRST bind on the path.** The builder's `forJob(…)`
+    (`_for_job_binds`) comes first where there is one; else the first call the trigger was
+    handed to that `binds` it (`Path.stated`, read in order), to the job at its `to`
+    argument on this same path. Every later call either names that job, which changes
+    nothing, or is refused, which changes nothing either — so the binding stays the first
+    bind. This call is then refused where its own statement `refuses` `bound_elsewhere` and
+    its job's key is not the bound one (`_same_job`; CP-55 rows 27, 40-41, 44).
 
-    Undecided — never guessed — where the binder's job, or this call's, cannot be named, or
-    where this call states no effect at all and the trigger is already bound (rule 2: what an
-    unstated call does is unknown)."""
+    Undecided — never guessed, the row capped at `partial` — where either key cannot be
+    read, or where this call states no effect at all and the trigger is already bound (rule
+    2: what an unstated call does is unknown)."""
     effects = {
         (str(e["owner"]), str(e["method"]), str(e["descriptor"]), int(e["arg"])): e
         for e in context.catalog.hand_off_effects
     }
-    bound: ChainEnd | None = None
+    bound: _Bound | None = None
     known = True
-    for caller, ordinal, slot in trigger.stated():
-        site = context.index.sites.get((caller, ordinal))
-        effect = None if site is None else effects.get((*_call_of(site), slot))
-        if site is None or effect is None or effect["binds"] is None:
-            continue
-        binders = {
-            None if one is None else _site_key(one.terminal) if one.terminal else None: one
-            for one, path in _built_jobs(site, int(effect["binds"]["to"]), context)
+    if for_job is not None:
+        binds = {
+            None if one is None else one.identity: one
+            for one, path in for_job
             if trigger.joined(path) is not None
         }
-        if len(binders) != 1 or None in binders:
+        if len(binds) != 1 or None in binds:
             known = False
         else:
-            bound = next(iter(binders.values()))
-        break
+            bound = next(iter(binds.values()))
+    else:
+        for caller, ordinal, slot in trigger.stated():
+            site = context.index.sites.get((caller, ordinal))
+            effect = None if site is None else effects.get((*_call_of(site), slot))
+            if site is None or effect is None or effect["binds"] is None:
+                continue
+            binders = {
+                None if one is None else _bound_of(one, context).identity: one
+                for one, path in _built_jobs(site, int(effect["binds"]["to"]), context)
+                if trigger.joined(path) is not None
+            }
+            if len(binders) != 1 or None in binders:
+                known = False
+            else:
+                first = next(iter(binders.values()))
+                bound = None if first is None else _bound_of(first, context)
+            break
     if known and bound is None:
         return _ACCEPTED
     own = effects.get((*_call_of(consumer), pairing.trigger))
-    if not known or job is None or own is None:
+    if not known or bound is None or job is None or own is None:
         return _UNDECIDED
-    same = _same_job(bound, job, context)
+    same = _same_job(bound, _bound_of(job, context))
     if same is None:
         return _UNDECIDED
     if same or own["refuses"] != "bound_elsewhere":
@@ -908,33 +981,30 @@ def _refusal(
     return _Refusal(bound_to=bound)
 
 
-def _same_job(one: ChainEnd | None, other: ChainEnd, context: _Context) -> bool | None:
-    """Whether two built jobs have one `JobKey` — what Quartz compares (CP-55 row 27,
-    `JobKey.equals`). The same `build()` on one path is one job. A job built with no key of
-    its own is named `Key.createUniqueName` (rows 30, 39), so it equals no other; two with
-    keys equal where the keys are equal. None where a key cannot be read."""
-    if one is None:
-        return None
-    if (
-        one.terminal is not None
-        and other.terminal is not None
-        and _site_key(one.terminal) == _site_key(other.terminal)
-    ):
-        return True
-    if _NAME not in one.captures or _NAME not in other.captures:
+def _same_job(one: _Bound, other: _Bound) -> bool | None:
+    """Whether two binds name one `JobKey` — what Quartz compares (CP-55 row 27,
+    `JobKey.equals`). The same `build()` is one job. A key `Key.createUniqueName` generated
+    (rows 30, 39) equals no other; two keys read are equal where their text is. None where a
+    key cannot be read."""
+    if one.end is not None and other.end is not None:
+        mine, theirs = one.end.terminal, other.end.terminal
+        if mine is not None and theirs is not None and _site_key(mine) == _site_key(theirs):
+            return True
+    if one.unique or other.unique:
         return False
-    keys = [
-        _key(job.captures.get(_NAME), job.captures.get(_GROUP), context) for job in (one, other)
-    ]
-    if None in keys:
+    if one.key is None or other.key is None:
         return None
-    return keys[0] == keys[1]
+    return one.key == other.key
 
 
-def _bound_name(job: ChainEnd, context: _Context) -> str:
+def _bound_name(bound: _Bound, context: _Context) -> str:
     """The job a refused call's trigger is already bound to, as the refusal names it: its
     class's simple name (the user's own example: "already bound to BJob"), where the walk
-    reads one; else `another job`."""
+    reads one; else the job's key (`job DEFAULT.report`), as a `forJob(name)` gives it; else
+    `another job`."""
+    job = bound.end
+    if job is None:
+        return "another job" if bound.key is None else f"job {bound.key}"
     if context.rules.class_arg < len(job.root["arguments"] or []):
         classes = {
             _job_class(answers.get(_CLASS))[0]

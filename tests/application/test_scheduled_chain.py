@@ -2094,6 +2094,87 @@ def test_a_job_whose_trigger_escapes_keeps_its_row(tmp_path: Path):
     ]
 
 
+def _for_job_then_schedule(scheduled: str, key: str | None, readable: bool = True) -> list:
+    """`m()` builds `newTrigger().forJob("x").withSchedule(cronSchedule("0 0 * * * ?"))
+    .build()` — or, `readable=False`, `forJob(<a value the walk cannot read>)` — then hands it
+    to `scheduler.scheduleJob(newJob(<scheduled>)[.withIdentity(key)].build(), t)`. `Jobs#x()`
+    builds `newJob(XJob).withIdentity("x")`, the job `forJob("x")` names."""
+    caller = _MODULE + method_descriptor(_TRIGGERS, "m", "()V")
+    trigger = _trigger_for_job(caller, "x")
+    if not readable:
+        trigger[1] = trigger[1].model_copy(update={"arguments": [CallArgument(kind="unresolved")]})
+    facts = [
+        *_classes("XJob", scheduled),
+        *_job_chain(f"{_JOBS}Jobs#x().", "XJob", "x"),
+        _method_symbol("m", "()V"),
+        *trigger,
+        *[
+            site.model_copy(update={"ordinal": site.ordinal + 10})
+            for site in _job_chain(caller, scheduled, *((key,) if key else ()))
+        ],
+    ]
+    # `_job_chain` numbers its values 1-3; moved to ordinals 10-12, they keep their values,
+    # which do not collide with the trigger's 1-5 only where renumbered.
+    facts = [
+        fact.model_copy(
+            update={
+                "result": None if fact.result is None else fact.result + 20,
+                "receiver": None if fact.receiver is None else fact.receiver + 20,
+            }
+        )
+        if isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal >= 10
+        else fact
+        for fact in facts
+    ]
+    facts.append(
+        _site(
+            caller,
+            20,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            _SCHEDULE_JVM,
+            receiver=99,
+            result=40,
+            arguments=(
+                CallArgument(kind="unresolved", source=23),
+                CallArgument(kind="unresolved", source=5),
+            ),
+        )
+    )
+    return facts
+
+
+@pytest.mark.pins("scheduled_chain.the-FIRST-BIND-is-the-builders-forJob")
+def test_a_trigger_bound_by_forJob_refuses_another_job(tmp_path: Path):
+    """`forJob("x")` binds the trigger to job `DEFAULT.x` when it is BUILT, so it is the
+    first bind on every path; `scheduleJob(newJob(YJob).build(), t)` then names a job with
+    another key, and Quartz throws "Trigger does not reference given job!" (CP-55 row 44,
+    measured on exactly this shape). YJob's row is kept, marked refused; XJob's stands."""
+    rows = _scheduled(tmp_path, _for_job_then_schedule("YJob", None))
+    assert _refused_rows(rows) == [
+        ("XJob#execute", "0 0 * * * ?", "resolved", "None"),
+        ("YJob#execute", "0 0 * * * ?", "resolved", "trigger is already bound to job DEFAULT.x"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal")
+def test_a_trigger_bound_by_forJob_accepts_the_job_it_names(tmp_path: Path):
+    """The same trigger handed to `scheduleJob(newJob(XJob).withIdentity("x").build(), t)`:
+    the job's key IS the one `forJob("x")` bound, so Quartz's check passes and nothing is
+    refused — XJob on `0 0 * * * ?`, one row, `resolved`."""
+    rows = _scheduled(tmp_path, _for_job_then_schedule("XJob", "x"))
+    assert _refused_rows(rows) == [("XJob#execute", "0 0 * * * ?", "resolved", "None")]
+
+
+@pytest.mark.pins("scheduled_chain.an-UNREAD-first-bind-decides-nothing")
+def test_a_forJob_key_the_walk_cannot_read_decides_nothing(tmp_path: Path):
+    """`forJob(<unreadable>)`: the trigger IS bound when it is built, but to which job is not
+    known, so whether `scheduleJob(newJob(YJob).build(), t)` is refused is not decided —
+    never guessed either way. YJob's row is kept, not marked, and no surer than `partial`."""
+    rows = _scheduled(tmp_path, _for_job_then_schedule("YJob", None, readable=False))
+    assert _refused_rows(rows) == [("YJob#execute", "0 0 * * * ?", "partial", "None")]
+
+
 @pytest.mark.pins("scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal")
 def test_a_second_job_with_the_trigger_jobs_key_is_not_refused(tmp_path: Path):
     """BJob and CJob both built `withIdentity("j")`: Quartz compares the trigger's job KEY

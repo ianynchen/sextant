@@ -40,8 +40,10 @@ here would restate those documents rather than add anything.
   to a call a catalog declares takes its effect from the catalog's new `hand_off_effects`
   (D02 §1f), measured in CP-55 rows 24-48: Quartz's `scheduleJob(JobDetail, Trigger)` binds a
   trigger that names no job and changes nothing else of it, and refuses a trigger already
-  bound to a job with another key. One trigger scheduled with `BJob` then `CJob` is now
-  `BJob @ c2` and `CJob @ c2` refused, where it was `CJob` with its trigger unknown.
+  bound to a job with another key. The trigger's binding is its first bind on the path —
+  the builder's `forJob(…)`, else the first such call. One trigger scheduled with `BJob`
+  then `CJob` is now `BJob @ c2` and `CJob @ c2` refused, where it was `CJob` with its
+  trigger unknown; a `forJob(X)` trigger handed to `scheduleJob(Y, t)` marks `Y` refused.
   `scheduled_work` gains `refused` (graph schema 14; a refused row keeps its resolution), the
   boundary `schedule` kind gains it as an attribute (vocabulary 4), the document says
   `refused by the framework` with the reason, and a refused row's handler is no root. The job

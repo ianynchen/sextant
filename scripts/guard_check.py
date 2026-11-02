@@ -8958,7 +8958,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/scheduled_chain.py",
-                find="    return keys[0] == keys[1]\n",
+                find="    return one.key == other.key\n",
                 replace="    return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -9005,6 +9005,35 @@ GUARDS: dict[str, Guard] = {
                 find='            **_attributes(members, "expression", "resolution", "refused"),\n',
                 replace='            **_attributes(members, "expression", "resolution"),  '
                 "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.the-FIRST-BIND-is-the-builders-forJob": Guard(
+        what="a trigger whose builder calls `forJob(…)` is bound when it is built: that is "
+        "its first bind, and a later `scheduleJob` naming another job's key is refused "
+        "(spec 2026-11-02 rule 7, CP-55 row 44)",
+        why="`forJob(X)` then `scheduleJob(Y, t)` publishes Y as running on the trigger, "
+        'though Quartz throws "Trigger does not reference given job!"',
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    binds: list[tuple[_Bound | None, Path]] = []\n",
+                replace="    return None  # guard disabled by scripts/guard_check.py\n"
+                "    binds: list[tuple[_Bound | None, Path]] = []\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.an-UNREAD-first-bind-decides-nothing": Guard(
+        what="a first bind whose job key cannot be read decides nothing: the later call is "
+        "neither refused nor accepted, and its row is capped at `partial`",
+        why="`forJob(<unreadable>)` then `scheduleJob(Y, t)` publishes Y `resolved` as "
+        "running, a refusal Quartz may well make guessed away",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if len(binds) != 1 or None in binds:\n            known = False\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            known = False\n",
             ),
         ),
     ),

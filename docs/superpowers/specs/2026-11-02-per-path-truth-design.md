@@ -121,9 +121,11 @@ publishes `search` while its port is unknown.
    `value-models/quartz-scheduler.yml`): per declared call and argument, `binds: {part, to}`
    and `refuses: bound_elsewhere`, each citing its probe row. The walk reads a hand-off one
    states as a step of its path, not `escapes`, so the parts it does not bind stay as they
-   were (`values._Walk._handed_to`, `Path.stated`); the Quartz reader applies the binding in
-   path order and marks the call refused where its job's key is not the bound job's
-   (`scheduled_chain._refusal`). Where a job's key cannot be read, whether it is refused is
+   were (`values._Walk._handed_to`, `Path.stated`). The Quartz reader takes the trigger's
+   binding as its FIRST bind on the path — the builder's `forJob(…)` (every overload) where
+   there is one, else the first stated call that binds it — and marks a later call refused
+   where its job's key is not the bound one (`scheduled_chain._refusal`): `forJob(X)` then
+   `scheduleJob(Y, t)` marks Y refused (CP-55 row 44). Where a job's key cannot be read, whether it is refused is
    not decided, and the row is no surer than `partial`.
 
 8. **Identity is not content** [ruled by the user, 2026-11-02]. A reader asking
