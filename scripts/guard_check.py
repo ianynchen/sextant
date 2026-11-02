@@ -8706,6 +8706,103 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-HAND-OFF-into-a-body-we-have-is-walked-into": Guard(
+        what="a call in the `escapes` window that hands the value to a body `call_edges` "
+        "resolves is walked into, and what the body does to its parameter is judged by the "
+        "same window rule, in order, at the hand-off's place (spec 2026-11-02 rule 1)",
+        why='`o = new Options().setHost("search"); configure(o); WebClient.create(vertx, o)` '
+        "with `configure` setting the port publishes peer `search` at `resolved`, a value the "
+        "code changed before it was used",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            events.append((ordinal, self._handed_to(method, ordinal, slot)))\n",
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-to-code-we-do-NOT-have-escapes": Guard(
+        what="a hand-off whose site `call_edges` resolves to no body (code this module does "
+        "not have) ends the path at `escapes` (spec 2026-11-02 rule 2)",
+        why="a value handed to a library method that changes it reads as untouched, so the "
+        "address composed from it is published at `resolved` for a value the code never sent",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if row is None or not callees:\n            return (((), ESCAPES),)\n",
+                replace="        if row is None or not callees:\n"
+                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-DYNAMIC-hand-off-escapes": Guard(
+        what="a hand-off at a `dynamic` site ends the path at `escapes`, whatever body it names "
+        "(spec 2026-11-02 rule 2)",
+        why="a capture's arguments land on parameters the facts do not name, so walking the "
+        "lambda body's parameter at the capture's slot reads the wrong parameter and calls the "
+        "value untouched",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if row.get("invoke_kind") == "dynamic":\n            return (((), ESCAPES),)\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return (((), ESCAPES),)\n",
+            ),
+        ),
+    ),
+    "values.a-FIELD-WRITE-of-a-handed-value-escapes": Guard(
+        what="inside a body the value was handed to, a field write of it ends the path at "
+        "`escapes` (spec 2026-11-02 rule 2)",
+        why="a value parked in a field can be changed later by anything that reads the field, "
+        "and reading it as untouched publishes what it held before at `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if stored and in_body:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-IMMUTABLE-hand-off-is-not-a-hand-off": Guard(
+        what="an argument the site's own descriptor types as a primitive, `String` or a boxed "
+        "primitive is not a hand-off (spec 2026-11-02 rule 3)",
+        why="`log.info(url)` before `client.get(url)` makes the commonest readable address "
+        "`escapes`, a miss on every logged value the callee cannot change",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if slot < len(slots) and slots[slot] in _UNCHANGEABLE:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.several-CALLEES-of-one-hand-off-are-several-paths": Guard(
+        what="a hand-off whose call reaches several bodies is one path per body, never one "
+        "answer for all (spec 2026-11-02 rules 1 and 4)",
+        why="reading one body for a call that dispatches to two publishes that body's effect "
+        "as the effect of every call, at `resolved`, on the path where the other one runs",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            for callee in callees\n",
+                replace="            for callee in callees[:1]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-REPEATED-on-its-own-path-is-a-cycle": Guard(
+        what="entering a body for a parameter already being read on this path answers `cycle` "
+        "(spec 2026-11-02 rule 1)",
+        why="a recursive helper read as doing nothing on its repeat gives a finite chain for a "
+        "value the recursion may change any number of times",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if key in self._entering:\n            return (((), CYCLE),)\n",
+                replace="        if key in self._entering:\n"
+                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "arguments.a-lifted-parameter-is-typed-by-its-own-signature": Guard(
         what="a payload read from a parameter is typed by the signature of the method the "
         "argument was lifted from, not the chain's enclosing method",

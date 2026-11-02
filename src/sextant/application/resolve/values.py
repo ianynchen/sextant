@@ -138,6 +138,7 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
+    descriptor_slots,
     method_descriptor,
     method_name,
     owner_of,
@@ -238,6 +239,37 @@ _WRITE_OF = "write-of"
 _ELEMENT_OF = "element-of"
 # Which candidate of a merge with no root a path took (ruling 7, `_Walk._branched`).
 _BRANCH_OF = "branch-of"
+# Which body a hand-off with several callees ran (spec 2026-11-02 rule 1, `_Walk._handed_to`):
+# one path per callee, never one answer for all of them.
+_HANDED_TO = "handed-to"
+
+# The JVM types a callee cannot change through the reference it is handed (spec 2026-11-02
+# rule 3): the primitives, `String` and the boxed primitives, as a descriptor spells a
+# parameter. A property of the TYPE, read off the site's own descriptor, never of a method.
+_UNCHANGEABLE = frozenset(
+    {
+        "Z",
+        "B",
+        "C",
+        "S",
+        "I",
+        "J",
+        "F",
+        "D",
+        "Ljava/lang/String;",
+        "Ljava/lang/Boolean;",
+        "Ljava/lang/Byte;",
+        "Ljava/lang/Character;",
+        "Ljava/lang/Short;",
+        "Ljava/lang/Integer;",
+        "Ljava/lang/Long;",
+        "Ljava/lang/Float;",
+        "Ljava/lang/Double;",
+    }
+)
+# Where in a body a field write sits, which the fact does not say (D00 §5's `field_write`
+# carries no ordinal): read only where the window runs to the body's end, it sorts last.
+_END_OF_BODY = 2**63 - 1
 
 # §2's `identified_by` table, as the walk is handed it: `{owner?, method, arg, arity?,
 # descriptor?, role?}` per producing call, built once by the loader (`yaml_source
@@ -510,6 +542,31 @@ class ValueIndex:
     constructed_below: Mapping[str, frozenset[str]] = dataclass_field(
         init=False, compare=False, repr=False
     )
+    # **Where a value is HANDED to another method** (spec 2026-11-02 rules 1-3, `_Walk._window`),
+    # read off the projected rows, so a slot here is the callee's parameter (the module
+    # docstring's invariant): (method, value id) -> `(ordinal, slot)` of every argument whose
+    # `source` is the value, and (method, parameter index) -> the same for an argument of kind
+    # `parameter`. A slot the site's own descriptor types as one a callee cannot change
+    # (`_UNCHANGEABLE`) is left out: it is not a hand-off.
+    handed: Mapping[tuple[str, int], tuple[tuple[int, int], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    handed_parameters: Mapping[tuple[str, int], tuple[tuple[int, int], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # (method, parameter index) -> the ordinals of calls made ON that parameter
+    # (`receiver_parameter`): the calls a body the value was handed to makes on it.
+    parameter_receivers: Mapping[tuple[str, int], tuple[int, ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # (caller, ordinal) -> every body `call_edges` resolves the site to, in its own order. A
+    # site with none is absent: code this module does not have.
+    callees: Mapping[tuple[str, int], tuple[str, ...]] = dataclass_field(default_factory=dict)
+    # `(writer, value id)` and `(writer, parameter index)` for every field write of that value
+    # (`field_writes.value.source`, `field_writes.from_parameter`): once in a field, anything
+    # can change it.
+    stored: frozenset[tuple[str, int]] = frozenset()
+    stored_parameters: frozenset[tuple[str, int]] = frozenset()
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -587,11 +644,19 @@ def value_index(workspace: Workspace) -> ValueIndex:
     # edge's callee from. Reading the raw list beside a projected callee answered the
     # bridge's receiver for the sibling's parameter 0; the module docstring has the
     # measurement and the invariant.
+    handed: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    handed_parameters: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    parameter_receivers: dict[tuple[str, int], list[int]] = {}
     for row in effective_call_sites(workspace):
         method, ordinal = str(row["caller"]), int(str(row["ordinal"]))
         sites[(method, ordinal)] = row
         if row["receiver"] is not None:
             receivers.setdefault((method, int(str(row["receiver"]))), []).append(ordinal)
+        if row.get("receiver_parameter") is not None:
+            parameter_receivers.setdefault(
+                (method, int(str(row["receiver_parameter"]))), []
+            ).append(ordinal)
+        _record_hand_offs(row, method, ordinal, handed, handed_parameters)
 
     producers: dict[tuple[str, int], list[int]] = {}
     returns: dict[tuple[str, int], list[tuple[int, str]]] = {}
@@ -712,7 +777,10 @@ def value_index(workspace: Workspace) -> ValueIndex:
     dead = private - called
     constants: dict[str, list[tuple[str | None, Mapping[str, Any]]]] = {}
     produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    stored: set[tuple[str, int]] = set()
+    stored_parameters: set[tuple[str, int]] = set()
     for row in workspace.query("field_writes"):
+        _record_store(row, stored, stored_parameters)
         written = row.get("value")
         if written is None or row["field"] is None:
             continue
@@ -756,7 +824,11 @@ def value_index(workspace: Workspace) -> ValueIndex:
         | {writer for entries in produced.values() for writer, _ in entries}
     )
     called_at: dict[str, list[tuple[str, int]]] = {}
+    callees: dict[tuple[str, int], list[str]] = {}
     for row in edges:
+        callees.setdefault((str(row["caller"]), int(str(row["ordinal"]))), []).append(
+            str(row["callee"])
+        )
         if str(row["callee"]) in writing:
             called_at.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
@@ -788,7 +860,62 @@ def value_index(workspace: Workspace) -> ValueIndex:
             bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
             for row in workspace.query("superclasses")
         },
+        handed={key: tuple(value) for key, value in handed.items()},
+        handed_parameters={key: tuple(value) for key, value in handed_parameters.items()},
+        parameter_receivers={key: tuple(value) for key, value in parameter_receivers.items()},
+        callees={key: tuple(value) for key, value in callees.items()},
+        stored=frozenset(stored),
+        stored_parameters=frozenset(stored_parameters),
     )
+
+
+def _record_hand_offs(
+    row: Mapping[str, Any],
+    method: str,
+    ordinal: int,
+    handed: dict[tuple[str, int], list[tuple[int, int]]],
+    handed_parameters: dict[tuple[str, int], list[tuple[int, int]]],
+) -> None:
+    """Every top-level argument of one projected site that hands a value or a parameter to
+    the callee, into the two maps `ValueIndex.handed` and `.handed_parameters` describe.
+
+    The parameter's type is read off THIS row's descriptor, which the projection keeps in
+    step with its argument list (a bridge row carries the sibling's descriptor beside the
+    sibling's slots), so slot *i* is descriptor parameter *i*. A slot the descriptor does not
+    reach is kept as a hand-off: nothing says it cannot be changed."""
+    arguments = row["arguments"] or []
+    slots: tuple[str, ...] | None = None
+    for slot, argument in enumerate(arguments):
+        source = argument.get("source")
+        parameter = argument.get("value") if argument.get("kind") == _PARAMETER else None
+        if source is None and parameter is None:
+            continue
+        if slots is None:
+            descriptor = row.get("descriptor")
+            slots = descriptor_slots(str(descriptor))[0] if descriptor else ()
+        if slot < len(slots) and slots[slot] in _UNCHANGEABLE:
+            continue
+        if source is not None:
+            handed.setdefault((method, int(str(source))), []).append((ordinal, slot))
+        else:
+            handed_parameters.setdefault((method, int(str(parameter))), []).append((ordinal, slot))
+
+
+def _record_store(
+    row: Mapping[str, Any], stored: set[tuple[str, int]], stored_parameters: set[tuple[str, int]]
+) -> None:
+    """One `field_writes` row into `ValueIndex.stored` / `.stored_parameters`: the writer and
+    the value id or parameter it stored. A row naming no writer stores nothing anyone can
+    place."""
+    writer = row.get("written_by")
+    if writer is None:
+        return
+    if row.get("from_parameter") is not None:
+        stored_parameters.add((str(writer), int(str(row["from_parameter"]))))
+    written = row.get("value")
+    entry = json.loads(str(written)) if isinstance(written, str) else written
+    if isinstance(entry, dict) and entry.get("source") is not None:
+        stored.add((str(writer), int(str(entry["source"]))))
 
 
 def _captures(arguments: Any) -> list[Mapping[str, Any]]:
@@ -1175,6 +1302,10 @@ class _Step:
 _Trail = tuple[_Step, ...]
 _Position = tuple[Any, ...]
 _Reached = tuple[_Trail, Answer]
+# One path through the `escapes` window (`_Walk._window`): the choices it made at hand-offs
+# with several callees, and either the configuring calls it gathered — `(method, ordinal)`, in
+# the order they run — or the reason it ended (`escapes`, `cycle`).
+_Window = tuple[_Trail, "tuple[tuple[str, int], ...] | str"]
 
 
 def _combine(left: _Trail, right: _Trail) -> _Trail | None:
@@ -1306,6 +1437,11 @@ class _Walk:
         # result that depends on one is true of THIS path and not of another that reaches
         # the same position by a different route, so it is not memoised.
         self._open: set[_Position] = set()
+        # What a body does to the parameter a value was handed to (`_entered_window`), per
+        # `(callee, parameter)`, and the ones being read right now: entering one again is
+        # `cycle`. An answer holding a `cycle` is not kept, for `_open`'s reason above.
+        self._windows: dict[tuple[str, int], tuple[_Window, ...]] = {}
+        self._entering: set[tuple[str, int]] = set()
 
     def at(self, site: Mapping[str, Any], slot: int | str) -> tuple[_Reached, ...]:
         """One slot of the site the caller handed in, on the empty path."""
@@ -1447,7 +1583,7 @@ class _Walk:
             template = argument.get("value")
             if not isinstance(template, str):
                 return _only(trail, _unresolved(NOT_READABLE))
-            joined = self._joined(template, argument, method, origin, trail, frames)
+            joined = self._joined(template, argument, method, trail, frames)
             if joined is not None:
                 return joined
             return _only(trail, Answer(kind=EXPRESSION, value=template))
@@ -1784,7 +1920,6 @@ class _Walk:
         template: str,
         argument: Mapping[str, Any],
         method: str,
-        origin: _Position,
         trail: _Trail,
         frames: "_Frames",
     ) -> tuple[_Reached, ...] | None:
@@ -1866,8 +2001,12 @@ class _Walk:
             _HOLE if at == 0 and template.startswith(_HOLE) else self._named_hole(operand, method)
             for at, operand in enumerate(operands)
         ]
-        for operand, hole in zip(operands, unfilled, strict=True):
-            reached = self._entry(operand, method, origin, trail, frames)
+        for at, (operand, hole) in enumerate(zip(operands, unfilled, strict=True)):
+            # Read where the concat USES it (spec 2026-11-02 rule 1): the concat site is the
+            # call that consumes the operand, so the `escapes` window ends there, and its own
+            # hand-off of the operand is that use rather than a call that might change it.
+            used = (_SLOT, method, int(str(site["ordinal"])), at)
+            reached = self._entry(operand, method, used, trail, frames)
             # An INEXACT literal fills its hole like an exact one — the text is the value the
             # code states, read through a merge whose root it is — and taints the result
             # below: a template filled from one is never `literal`, because part of what
@@ -2010,12 +2149,14 @@ class _Walk:
         answering a value that may have been mutated after the point it was read is the
         same defect as reading the wrong slot, and a miss is the acceptable half.
 
-        **Only a call whose RECEIVER is the value counts, and the narrowing is stated
-        because it can be wrong**: a value handed to another method as an ARGUMENT can be
-        mutated too, and no fact says whether that callee writes through the reference.
-        Counting every hand-off would make the commonest readable shape — a value logged
-        and then used — unresolved, so the wider rule needs §3a's measurement behind it
-        rather than a guess here.
+        **A value HANDED to another method is followed into it** (spec 2026-11-02 rules 1-3,
+        replacing the narrowing that counted only calls ON the value). A call in the window
+        that passes the value as an argument may change it as surely as a call on it, so a
+        body this module has — or a library named in `extract_libraries` — is walked into
+        and what it does to its parameter is judged by this same rule; code we do not have
+        ends the path at `escapes`. `_window` has the rules, and a `String`, a primitive or
+        a boxed primitive parameter is not a hand-off at all, so a value logged and then used
+        still resolves.
 
         **A CONSTRUCTOR is a producer, not a mutation** (review round 1). `produced_by` is
         read off `call_sites.result` and an `<init>` has none — D00 §5's "result is null
@@ -2029,62 +2170,184 @@ class _Walk:
         has the rule and why it is a reader's switch rather than the default.
 
         **Nor is a call that CONFIGURES the value** (ruling 4, spec 2026-10-30), for a reader
-        that declares which calls do (`configuring`): `_configured_on` has the rule. A chain
-        answered for the value gains those calls after its own, so reading `tb.build()`'s
-        receiver gives the chain `_along` puts `build` after.
+        that declares which calls do (`configuring`): `_window` has the rule. A chain
+        answered for the value gains those calls after its own — those a body it was handed
+        to makes on it at the hand-off's place — so reading `tb.build()`'s receiver gives the
+        chain `_along` puts `build` after.
+
+        **Each path through the window is its own answer.** A hand-off whose call reaches
+        two bodies is two paths, one per body, each recorded on the trail; they are never
+        folded into one.
         """
         produced = self._index.producers.get((method, value), ())
         constructed = self._construction(method, value)
         produced_at = min(produced) if produced else (-1 if constructed is None else constructed)
-        configured = self._configured_on(method, value, produced_at, used_at)
-        if configured is None:
-            return _only(trail, _unresolved(ESCAPES))
-        reached = self._resolve((_VALUE, method, value), trail, frames)
-        if not configured:
-            return reached
-        sites = tuple((method, ordinal) for ordinal in configured)
-        return tuple(
-            (
-                crossed,
-                replace(answer, value=replace(answer.value, chain=(*answer.value.chain, *sites))),
+        reached: list[_Reached] = []
+        for steps, gathered in self._window(method, (_VALUE, value), produced_at, used_at):
+            crossed = _combine(trail, steps)
+            if crossed is None:
+                # This path already chose another body at one of these hand-offs.
+                continue
+            if isinstance(gathered, str):
+                reached.append((crossed, _unresolved(gathered)))
+                continue
+            reached.extend(
+                (
+                    path,
+                    replace(
+                        answer, value=replace(answer.value, chain=(*answer.value.chain, *gathered))
+                    ),
+                )
+                if gathered and answer.kind == _PRODUCED and answer.value.chain
+                else (path, answer)
+                for path, answer in self._resolve((_VALUE, method, value), crossed, frames)
             )
-            if answer.kind == _PRODUCED and answer.value.chain
-            else (crossed, answer)
-            for crossed, answer in reached
-        )
+        return tuple(reached)
 
-    def _configured_on(
-        self, method: str, value: int, after: int, used_at: int | None
-    ) -> tuple[int, ...] | None:
-        """The ordinals of the calls made on `value` after `after` and before `used_at`
-        that CONFIGURE it, in order — or None where one of them is neither that nor an
-        accessor, which is `escapes`.
+    def _window(
+        self,
+        method: str,
+        held: tuple[str, int],
+        after: int,
+        used_at: int | None,
+        in_body: bool = False,
+    ) -> tuple[_Window, ...]:
+        """Every path through the window over `held` — a value id `(_VALUE, id)` or a parameter
+        `(_PARAMETER, index)` of `method` — from after `after` to before `used_at` (None: to
+        the end of the body). Each is the configuring calls it gathered, in the order they run,
+        or the reason it ended.
 
-        **A call that returns the object it was called on configures that object** (ruling
-        4, spec 2026-10-30): the reader declared it so (`configuring`), and its result is
-        the same object, so what is called on that result in the window is gathered too,
-        under the same rule. The chain reader appends these to the chain of the call that
-        produced the value (`_through`); for every other reader they only stay out of
-        `escapes`, since which call built the value is unchanged."""
+        **A call made ON the value** configures it, is an accessor, or ends the path at
+        `escapes` (`_events`).
+
+        **A call that CONFIGURES the value returns the object it was called on** (ruling 4,
+        spec 2026-10-30): the reader declared it so (`configuring`), and its result is the
+        same object, so what is called on that result in the window is gathered too, under the
+        same rule. The chain reader appends these to the chain of the call that produced the
+        value (`_through`); for every other reader they only stay out of `escapes`, since which
+        call built the value is unchanged.
+
+        **A call that HANDS the value on** (spec 2026-11-02 rule 1) is walked into
+        (`_handed_to`): the calls the body makes on its parameter are judged by this rule, in
+        their order, at the hand-off's place in this one; its own hand-offs are followed the
+        same way. Several bodies at one call are several paths. A body that cannot be read
+        (rule 2) ends the path at `escapes`.
+
+        **A field write of the value ends the path at `escapes`** (rule 2) inside a body the
+        value was handed to (`in_body`), whose window is the whole body — the fact carries no
+        ordinal, so only there is a write known to be inside the window. In the method the
+        walk started from it is not read: where the window ends at a use, a write may come
+        after it, and where it runs to the end the value may be reached THROUGH that very
+        write (`_binding_writes`), which is its use, not a change.
+
+        The object reader (`which_object`) reads no window: no call changes which construction
+        an object IS."""
         if self._which_object:
-            return ()
-        found: list[int] = []
-        for ordinal in self._index.receivers.get((method, value), ()):
+            return (((), ()),)
+        paths: list[_Window] = [((), ())]
+        for _, outcomes in self._events(method, held, after, used_at, in_body):
+            following: list[_Window] = []
+            for steps, gathered in paths:
+                if isinstance(gathered, str):
+                    following.append((steps, gathered))
+                    continue
+                for more_steps, more in outcomes:
+                    merged = _combine(steps, more_steps)
+                    if merged is not None:
+                        following.append(
+                            (merged, more if isinstance(more, str) else (*gathered, *more))
+                        )
+            paths = list(dict.fromkeys(following))
+        return tuple(paths)
+
+    def _events(
+        self, method: str, held: tuple[str, int], after: int, used_at: int | None, in_body: bool
+    ) -> list[tuple[int, tuple[_Window, ...]]]:
+        """What happens to `held` in the window `_window` reads, as `(ordinal, outcomes)` in the
+        order it happens: each outcome is one path's step — a gathered call, a reason, or one
+        body's whole window."""
+        kind, key = held
+        if kind == _VALUE:
+            on = self._index.receivers.get((method, key), ())
+            handed = self._index.handed.get((method, key), ())
+            stored = (method, key) in self._index.stored
+        else:
+            on = self._index.parameter_receivers.get((method, key), ())
+            handed = self._index.handed_parameters.get((method, key), ())
+            stored = (method, key) in self._index.stored_parameters
+        events: list[tuple[int, tuple[_Window, ...]]] = []
+        for ordinal in on:
             if ordinal <= after or (used_at is not None and ordinal >= used_at):
                 continue
             if self._accessor((method, ordinal)):
                 continue
             row = self._index.sites.get((method, ordinal))
             if row is None or _call_of(row) not in self._configuring:
-                return None
-            found.append(ordinal)
+                events.append((ordinal, (((), ESCAPES),)))
+                continue
+            events.append((ordinal, (((), ((method, ordinal),)),)))
             result = row.get("result")
             if result is not None:
-                further = self._configured_on(method, int(str(result)), ordinal, used_at)
-                if further is None:
-                    return None
-                found.extend(further)
-        return tuple(sorted(found))
+                events.extend(
+                    self._events(method, (_VALUE, int(str(result))), ordinal, used_at, in_body)
+                )
+        for ordinal, slot in handed:
+            if ordinal <= after or (used_at is not None and ordinal >= used_at):
+                continue
+            events.append((ordinal, self._handed_to(method, ordinal, slot)))
+        if stored and in_body:
+            events.append((_END_OF_BODY, (((), ESCAPES),)))
+        return sorted(events, key=lambda event: event[0])
+
+    def _handed_to(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
+        """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one body's
+        window per callee `call_edges` resolves (rule 1), or `escapes` where there is none —
+        code this module does not have — or the site is `dynamic`, whose arguments are a
+        lambda's captures and land on parameters the facts do not name (rule 2).
+
+        Bodies that all do the same thing are one path; otherwise each path records which
+        body it took (`_HANDED_TO`), so two reads of one hand-off agree on the body."""
+        row = self._index.sites.get((method, ordinal))
+        callees = self._index.callees.get((method, ordinal), ())
+        if row is None or not callees:
+            return (((), ESCAPES),)
+        if row.get("invoke_kind") == "dynamic":
+            return (((), ESCAPES),)
+        found = [
+            (callee, steps, outcome)
+            for callee in callees
+            for steps, outcome in self._entered_window(callee, slot)
+        ]
+        alike = tuple(dict.fromkeys((steps, outcome) for _, steps, outcome in found))
+        if len(alike) == 1:
+            return alike
+        context = (_HANDED_TO, method, ordinal)
+        return tuple(
+            dict.fromkeys(
+                (merged, outcome)
+                for callee, steps, outcome in found
+                if (merged := _combine((_Step(context, callee),), steps)) is not None
+            )
+        )
+
+    def _entered_window(self, callee: str, parameter: int) -> tuple[_Window, ...]:
+        """What `callee` does to its `parameter` over its whole body — the window of a value
+        handed to it, since the body runs to its end before the caller's next call. Entering
+        one already being read on this path is `cycle`."""
+        key = (callee, parameter)
+        cached = self._windows.get(key)
+        if cached is not None:
+            return cached
+        if key in self._entering:
+            return (((), CYCLE),)
+        self._entering.add(key)
+        try:
+            found = self._window(callee, (_PARAMETER, parameter), -1, None, in_body=True)
+        finally:
+            self._entering.discard(key)
+        if all(outcome != CYCLE for _, outcome in found):
+            self._windows[key] = found
+        return found
 
     def _accessor(self, site_key: tuple[str, int]) -> bool:
         """Whether a call made ON a value is an accessor: it takes no argument and hands back

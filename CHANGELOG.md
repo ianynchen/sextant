@@ -17,6 +17,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The value walk follows a value HANDED to another method before it is used** (spec
+  2026-11-02 rules 1-3). Its `escapes` window counted only calls made ON the value, so
+  `o = new Options().setHost("search"); configure(o); WebClient.create(vertx, o)` read
+  `search` as the whole story while `configure` set the port. A hand-off into a body this
+  module (or an `extract_libraries` jar) has is now walked into and judged by the same rule —
+  configuring calls join the chain at the hand-off's place, one path per callee, a repeat is
+  `cycle`; a hand-off into code we do not have, a `dynamic` site, or a field write inside the
+  entered body is `escapes`; a `String`, primitive or boxed-primitive parameter is not a
+  hand-off. Measured: the six field pins and the 30-fixture value-boundary snapshot are
+  unchanged.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was

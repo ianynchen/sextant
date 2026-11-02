@@ -4892,3 +4892,327 @@ def test_a_handler_that_is_itself_a_lambda_ends_at_the_lambdas_own_parameter(cha
     the framework's to supply, and the end names the lambda body's own parameter."""
     own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
     assert _ends(chained, own, 0) == (Producer(reason="external", parameter=(own, 0)),)
+
+
+# **Per-path truth, rules 1-3** (spec 2026-11-02): a value HANDED to another method inside
+# its `escapes` window. `Options` is built by an unscanned static factory, so the value walk
+# answers `external` for it where nothing touches it, and the chain reader names the factory.
+# Each `Uses#<name>()` builds one, does one thing with it, and hands it to `Client.of` — the
+# use. `Setup` holds the module's own methods the value is handed to.
+_OPTIONS = _PKG + "Options#"
+_OPTIONS_TYPE = "L" + _OPTIONS[:-1] + ";"
+_TAKES_OPTIONS = "(" + _OPTIONS_TYPE + ")V"
+_CREATE = (_OPTIONS, "create", "()" + _OPTIONS_TYPE)
+_SET_HOST = (_OPTIONS, "setHost", "(Ljava/lang/String;)" + _OPTIONS_TYPE)
+_SET_PORT = (_OPTIONS, "setPort", "(I)" + _OPTIONS_TYPE)
+_CLIENT_OF = (_PKG + "Client#", "of", _TAKES_OPTIONS)
+_SETUP = _PKG + "Setup#"
+_TUNER = _PKG + "Tuner#"
+_SILENT_TUNER = _PKG + "SilentTuner#"
+_USES = _PKG + "Uses#"
+_OPTIONS_SETTERS = frozenset({_SET_HOST, _SET_PORT})
+
+
+def _setup(name: str, *sites: Fact, owner: str = _SETUP) -> list[Fact]:
+    """`void <owner>.<name>(Options o) { … }`: a body this module has, so `call_edges`
+    resolves a call to it."""
+    return [_declared(owner, name, _TAKES_OPTIONS), _void(owner, name, _TAKES_OPTIONS), *sites]
+
+
+def _on_parameter(method: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """A call made on `method`'s parameter 0."""
+    return _site(method, ordinal, target, kind="virtual", receiver_parameter=0, **given)
+
+
+def _hands_parameter(method: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """`method` hands its parameter 0 on, as argument 0 of `target`."""
+    return _site(
+        method, ordinal, target, arguments=[CallArgument(kind="parameter", value=0)], **given
+    )
+
+
+def _uses(name: str, *between: Fact, last: int) -> list[Fact]:
+    """`void Uses.<name>() { Options o = Options.create(); <between>; Client.of(o); }` — the
+    value is id 1, `between` occupies ordinals 1..`last - 1`, and the use is at `last`."""
+    caller = _symbol(_USES, name, "()V")
+    return [
+        _declared(_USES, name, "()V"),
+        _site(caller, 0, _CREATE, result=1),
+        *between,
+        _site(caller, last, _CLIENT_OF, arguments=_results(1)),
+    ]
+
+
+def _handed(name: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """`Uses.<name>` hands the value (id 1) to `target` as argument 0."""
+    return _site(_symbol(_USES, name, "()V"), ordinal, target, arguments=_results(1), **given)
+
+
+def _handoff_facts() -> list[Fact]:
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    relay = _symbol(_SETUP, "relay", _TAKES_OPTIONS)
+    leak = _symbol(_SETUP, "leak", _TAKES_OPTIONS)
+    loop = _symbol(_SETUP, "loop", _TAKES_OPTIONS)
+    tune = _symbol(_TUNER, "tune", _TAKES_OPTIONS)
+    ordered = _symbol(_USES, "ordered", "()V")
+    return [
+        _type(_SETUP),
+        _type(_USES),
+        _type(_TUNER),
+        # `SilentTuner extends Tuner` and overrides `tune` with a body that does nothing, so
+        # a virtual `tuner.tune(o)` runs one of two bodies.
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _SILENT_TUNER,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _TUNER,
+        ),
+        # `configure(o) { o.setPort(9090); }`
+        *_setup(
+            "configure",
+            _on_parameter(
+                configure, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=9090)]
+            ),
+        ),
+        # `relay(o) { configure(o); o.setHost("relayed"); }` — hands it on again.
+        *_setup(
+            "relay",
+            _hands_parameter(relay, 0, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _on_parameter(relay, 1, _SET_HOST, arguments=_string("relayed")),
+        ),
+        # `leak(o) { Registry.keep(o); }` — into code this module does not have.
+        *_setup("leak", _hands_parameter(leak, 0, (_REGISTRY, "keep", "(Ljava/lang/Object;)V"))),
+        # `loop(o) { o.setPort(1); loop(o); }`
+        *_setup(
+            "loop",
+            _on_parameter(loop, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=1)]),
+            _hands_parameter(loop, 1, (_SETUP, "loop", _TAKES_OPTIONS)),
+        ),
+        # `store(o) { this.options = o; }`
+        *_setup("store"),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SETUP + "options.",
+            from_parameter=0,
+            written_by=_symbol(_SETUP, "store", _TAKES_OPTIONS),
+        ),
+        # `Tuner.tune(o) { o.setPort(8080); }` and `SilentTuner.tune(o) { }`.
+        *_setup(
+            "tune",
+            _on_parameter(tune, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=8080)]),
+            owner=_TUNER,
+        ),
+        *_setup("tune", owner=_SILENT_TUNER),
+        _declared(_SILENT_TUNER, "<init>", "()V"),
+        # Nothing between the factory and the use: the near-miss every arm below is read
+        # against.
+        *_uses("untouched", last=1),
+        # `configure(o)` alone, and `configure(o)` between two calls made on the value.
+        *_uses(
+            "configured", _handed("configured", 1, (_SETUP, "configure", _TAKES_OPTIONS)), last=2
+        ),
+        *_uses(
+            "ordered",
+            _site(
+                ordered, 1, _SET_HOST, kind="virtual", receiver=1, arguments=_string("a"), result=2
+            ),
+            _handed("ordered", 2, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _site(
+                ordered, 3, _SET_HOST, kind="virtual", receiver=1, arguments=_string("b"), result=3
+            ),
+            last=4,
+        ),
+        *_uses("relayed", _handed("relayed", 1, (_SETUP, "relay", _TAKES_OPTIONS)), last=2),
+        *_uses("leaked", _handed("leaked", 1, (_SETUP, "leak", _TAKES_OPTIONS)), last=2),
+        *_uses("kept", _handed("kept", 1, (_REGISTRY, "keep", "(Ljava/lang/Object;)V")), last=2),
+        *_uses("looped", _handed("looped", 1, (_SETUP, "loop", _TAKES_OPTIONS)), last=2),
+        *_uses("stored", _handed("stored", 1, (_SETUP, "store", _TAKES_OPTIONS)), last=2),
+        *_uses(
+            "tuned",
+            _site(
+                _symbol(_USES, "tuned", "()V"),
+                1,
+                (_TUNER, "tune", _TAKES_OPTIONS),
+                kind="virtual",
+                receiver_field=_USES + "tuner.",
+                arguments=_results(1),
+            ),
+            last=2,
+        ),
+        # `Runnable r = () -> touch(o);` — a capture, at an `invokedynamic` site naming a body
+        # this module has, which does nothing to the value: only the site's dynamic form
+        # separates it from a hand-off `call_edges` resolves.
+        *_uses(
+            "captured",
+            _handed(
+                "captured",
+                1,
+                (
+                    "java/lang/invoke/LambdaMetafactory#",
+                    "metafactory",
+                    "(" + _OPTIONS_TYPE + ")Ljava/lang/Runnable;",
+                ),
+                kind="dynamic",
+                result=4,
+            ).model_copy(
+                update={
+                    "implementation": method_descriptor(_USES, "lambda$captured$0", _TAKES_OPTIONS)
+                }
+            ),
+            last=2,
+        ),
+        *_setup("lambda$captured$0", owner=_USES),
+        # The value handed to code this module does not have, where the parameter it lands on
+        # cannot be changed by anything (rule 3), and the same with an `Object` parameter.
+        *[
+            fact
+            for name, descriptor in (
+                ("logged", "(Ljava/lang/String;)V"),
+                ("counted", "(J)V"),
+                ("boxed", "(Ljava/lang/Integer;)V"),
+                ("objected", "(Ljava/lang/Object;)V"),
+            )
+            for fact in _uses(name, _handed(name, 1, (_PKG + "Log#", "info", descriptor)), last=2)
+        ],
+    ]
+
+
+@pytest.fixture(scope="module")
+def handoffs(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_handoffs")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "handoffs.jsonl", _document(), _handoff_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _use_of(workspace: DuckDbWorkspace, name: str, configuring: frozenset = frozenset()):
+    """The chain reader on `Uses.<name>`'s use of the value, with `configuring` declared."""
+    caller = _symbol(_USES, name, "()V")
+    last = max(row["ordinal"] for row in workspace.query("call_sites") if row["caller"] == caller)
+    return producers_of(
+        value_index(workspace),
+        _at(workspace, caller, last),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=configuring,
+    )
+
+
+def _walked_use(workspace: DuckDbWorkspace, name: str) -> list[str | None]:
+    """The value walk's reasons at `Uses.<name>`'s use of the value."""
+    caller = _symbol(_USES, name, "()V")
+    last = max(row["ordinal"] for row in workspace.query("call_sites") if row["caller"] == caller)
+    return _reasons(_bindings(workspace, caller, last))
+
+
+def test_a_value_nothing_is_done_to_resolves_as_before(handoffs):
+    """The control every hand-off test below is read against: factory, then use."""
+    caller = _symbol(_USES, "untouched", "()V")
+    assert _walked_use(handoffs, "untouched") == ["external"]
+    [producer] = _use_of(handoffs, "untouched", _OPTIONS_SETTERS)
+    assert producer.chain == ((caller, 0),)
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_hand_off_into_a_configuring_method_joins_the_chain_at_its_place(handoffs):
+    """`o = create(); o.setHost("a"); configure(o); o.setHost("b"); Client.of(o)`, where
+    `configure` calls `o.setPort(9090)`: the hand-off is walked into, and the call it makes
+    on its parameter takes the hand-off's place in the chain — between the two `setHost`s."""
+    ordered = _symbol(_USES, "ordered", "()V")
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    [producer] = _use_of(handoffs, "ordered", _OPTIONS_SETTERS)
+    assert (producer.chain, producer.rooted) == (
+        ((ordered, 0), (ordered, 1), (configure, 0), (ordered, 3)),
+        True,
+    )
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_hand_off_handed_on_again_is_followed_in_order(handoffs):
+    """`relay(o) { configure(o); o.setHost("relayed"); }`: the second hand-off is followed
+    too, and its call lands where `relay` makes it — before `relay`'s own `setHost`."""
+    relayed = _symbol(_USES, "relayed", "()V")
+    [producer] = _use_of(handoffs, "relayed", _OPTIONS_SETTERS)
+    assert producer.chain == (
+        (relayed, 0),
+        (_symbol(_SETUP, "configure", _TAKES_OPTIONS), 0),
+        (_symbol(_SETUP, "relay", _TAKES_OPTIONS), 1),
+    )
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_body_that_does_to_the_value_what_no_reader_declared_is_an_escape(handoffs):
+    """**Rule 1 is the general walk rule, not a chain-reader feature.** `configure(o)` sets
+    the port, and a reader that declares no configuring call — the value walk itself, and a
+    producer reader asking only which call built the value — reads that as a call nothing
+    says the effect of: `escapes`, exactly as if `o.setPort(9090)` were written in place.
+    Before rule 1 both answered as though `configure(o)` were not there."""
+    assert _walked_use(handoffs, "configured") == ["escapes"]
+    assert _use_of(handoffs, "configured") == (Producer(reason="escapes"),)
+    [producer] = _use_of(handoffs, "configured", _OPTIONS_SETTERS)
+    assert producer.chain[-1] == (_symbol(_SETUP, "configure", _TAKES_OPTIONS), 0)
+
+
+@pytest.mark.pins("values.a-hand-off-to-code-we-do-NOT-have-escapes")
+def test_a_hand_off_to_code_this_module_does_not_have_escapes(handoffs):
+    """`Registry.keep(o)` — a callee `call_edges` leaves NULL — directly, and from inside a
+    body the value was handed to (`leak(o)`): what that code does to `o` is unknown, so the
+    path is `escapes`, never "nothing happened"."""
+    for name in ("kept", "leaked"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
+
+
+@pytest.mark.pins("values.a-DYNAMIC-hand-off-escapes")
+def test_a_value_captured_at_a_dynamic_site_escapes(handoffs):
+    """A capture into a lambda at an `invokedynamic` site: the facts do not say which
+    parameter of the body it lands on, so the path is `escapes`."""
+    assert _walked_use(handoffs, "captured") == ["escapes"]
+    assert _use_of(handoffs, "captured", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+@pytest.mark.pins("values.a-FIELD-WRITE-of-a-handed-value-escapes")
+def test_a_body_that_stores_the_value_in_a_field_escapes(handoffs):
+    """`store(o) { this.options = o; }`: once in a field, anything can change it later."""
+    assert _walked_use(handoffs, "stored") == ["escapes"]
+    assert _use_of(handoffs, "stored", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+@pytest.mark.pins("values.an-IMMUTABLE-hand-off-is-not-a-hand-off")
+def test_a_value_handed_where_it_cannot_be_changed_is_not_a_hand_off(handoffs):
+    """Rule 3: read off the SITE's descriptor, a `String`, a primitive or a boxed primitive
+    parameter cannot be changed by the callee, so `log.info(url)` before `client.get(url)`
+    keeps the value. The same hand-off typed `Object` is a hand-off into code we do not
+    have, and escapes."""
+    for name in ("logged", "counted", "boxed"):
+        assert _walked_use(handoffs, name) == ["external"], name
+        assert [p.chain[-1][1] for p in _use_of(handoffs, name, _OPTIONS_SETTERS)] == [0], name
+    assert _walked_use(handoffs, "objected") == ["escapes"]
+
+
+@pytest.mark.pins("values.several-CALLEES-of-one-hand-off-are-several-paths")
+def test_a_hand_off_with_two_callees_is_two_paths_never_one(handoffs):
+    """`tuner.tune(o)` dispatches to `Tuner.tune` (sets port 8080) or `SilentTuner.tune`
+    (does nothing): two paths, each its own chain — never one chain merging both."""
+    tuned = _symbol(_USES, "tuned", "()V")
+    chains = sorted(producer.chain for producer in _use_of(handoffs, "tuned", _OPTIONS_SETTERS))
+    assert chains == [
+        ((tuned, 0),),
+        ((tuned, 0), (_symbol(_TUNER, "tune", _TAKES_OPTIONS), 0)),
+    ]
+    caller = _symbol(_USES, "tuned", "()V")
+    bindings = _bindings(handoffs, caller, 2)
+    assert sorted(_reasons(bindings), key=str) == ["escapes", "external"]
+    assert len({binding.path for binding in bindings}) == 2
+
+
+@pytest.mark.pins("values.a-hand-off-REPEATED-on-its-own-path-is-a-cycle")
+def test_a_hand_off_that_returns_to_itself_is_a_cycle(handoffs):
+    """`loop(o) { o.setPort(1); loop(o); }`: the second entry into `loop` is a repeat."""
+    assert _use_of(handoffs, "looped", _OPTIONS_SETTERS) == (Producer(reason="cycle"),)
