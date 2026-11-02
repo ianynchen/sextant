@@ -1375,12 +1375,19 @@ class Path:
         merged = _combine(self.trail, (step,))
         return None if merged is None else Path(merged, self.entered | {step})
 
-    def stated(self) -> tuple[tuple[str, int, int], ...]:
+    def stated(self) -> tuple[tuple[str, int, int, tuple[tuple[str, int], ...]], ...]:
         """The hand-offs this path passed whose effect a catalog states (spec 2026-11-02
-        rule 7, `ValueIndex.stated`), as `(caller, ordinal, slot)`, in the order the path
-        met them: what a reader of the part such a call binds applies, in turn."""
+        rule 7, `ValueIndex.stated`), as `(caller, ordinal, slot, entered)`, in the order the
+        path met them: what a reader of the part such a call binds applies, in turn.
+        `entered` is the calls that entered the body the stated call is in, innermost first
+        (review 2, C1): the frame its arguments are read in."""
         return tuple(
-            (str(step.context[1]), int(step.context[2]), int(step.context[3]))
+            (
+                str(step.context[1]),
+                int(step.context[2]),
+                int(step.context[3]),
+                tuple(step.context[4:]),
+            )
             for step in self.trail
             if step.context[0] == _STATED
         )
@@ -1513,6 +1520,17 @@ _Reached = tuple[_Trail, Answer]
 # with several callees, and either the configuring calls it gathered — `(method, ordinal)`, in
 # the order they run — or the reason it ended (`escapes`, `cycle`).
 _Window = tuple[_Trail, tuple[tuple[str, int], ...] | str]
+
+
+def _entered_through(steps: _Trail, method: str, ordinal: int) -> _Trail:
+    """`steps`, read in a body a hand-off at `(method, ordinal)` entered, with that call
+    added to each stated step's frame (`Path.stated`'s `entered`), outermost last."""
+    return tuple(
+        _Step((*step.context, (method, ordinal)), step.label)
+        if step.context[0] == _STATED
+        else step
+        for step in steps
+    )
 
 
 def _combine(left: _Trail, right: _Trail) -> _Trail | None:
@@ -1649,6 +1667,10 @@ class _Walk:
         # `cycle`. An answer holding a `cycle` is not kept, for `_open`'s reason above.
         self._windows: dict[tuple[str, int], tuple[_Window, ...]] = {}
         self._entering: set[tuple[str, int]] = set()
+        # `_touched_in`'s memo and its guard: the bodies read for what they do to a parameter,
+        # and those being read now.
+        self._touched: dict[tuple[str, int], str | None] = {}
+        self._entering_bodies: set[tuple[str, int]] = set()
 
     def at(self, site: Mapping[str, Any], slot: int | str) -> tuple[_Reached, ...]:
         """One slot of the site the caller handed in, on the empty path."""
@@ -2626,11 +2648,12 @@ class _Walk:
             stated = (*_call_of(row), slot)
             if stated in self._index.stated_hands:
                 bodies = self._index.stated_hands[stated]
-                if bodies is None or any(
-                    self._events(body, (_PARAMETER, parameter), -1, None, True)
-                    for body, parameter in bodies
-                ):
+                if bodies is None:
                     return (((), ESCAPES),)
+                for body, parameter in bodies:
+                    touched = self._touched_in(body, parameter)
+                    if touched is not None:
+                        return (((), touched),)
             return (((_Step((_STATED, method, ordinal, slot), _STATED),), ()),)
         if row is not None and row.get("invoke_kind") == "dynamic":
             return self._captured(method, ordinal, slot)
@@ -2638,8 +2661,12 @@ class _Walk:
             return (((), ESCAPES),)
         if str(row.get("owner")) in self._index.lambda_types:
             return (((), ESCAPES),)
+        # A stated call inside the entered body records the call that ENTERED it (review 2,
+        # C1): each call of one helper is its own execution, so a reader of what that stated
+        # call was handed reads it through this hand-off, never through another call of the
+        # helper (`Path.stated`).
         found = [
-            (callee, steps, outcome)
+            (callee, _entered_through(steps, method, ordinal), outcome)
             for callee in callees
             for steps, outcome in self._entered_window(callee, slot)
         ]
@@ -2666,10 +2693,30 @@ class _Walk:
         mapped = self._index.captured_as.get((method, ordinal, slot))
         if mapped is None:
             return (((), ESCAPES),)
-        body, parameter = mapped
-        if self._events(body, (_PARAMETER, parameter), -1, None, True):
-            return (((), ESCAPES),)
+        touched = self._touched_in(*mapped)
+        if touched is not None:
+            return (((), touched),)
         return (((), ()),)
+
+    def _touched_in(self, body: str, parameter: int) -> str | None:
+        """Whether a body that runs at a time the window cannot place — a lambda's, a
+        listener's — does anything to its `parameter`: None where it does nothing, `escapes`
+        where it does, and `cycle` where the walk is already reading that body for that
+        parameter (review 2, M2: a listener that schedules the job it is handed is handed it
+        again). Read once per walk, as `_entered_window` is, and guarded the same way."""
+        key = (body, parameter)
+        if key in self._touched:
+            return self._touched[key]
+        if key in self._entering_bodies:
+            return CYCLE
+        self._entering_bodies.add(key)
+        try:
+            events = self._events(body, (_PARAMETER, parameter), -1, None, True)
+        finally:
+            self._entering_bodies.discard(key)
+        found = ESCAPES if events else None
+        self._touched[key] = found
+        return found
 
     def _type_of(self, method: str, held: tuple[str, int]) -> str | None:
         """`held`'s own type, in a descriptor's spelling, where the facts state it: what its

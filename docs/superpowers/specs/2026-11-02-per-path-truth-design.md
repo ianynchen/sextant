@@ -125,7 +125,16 @@ publishes `search` while its port is unknown.
    binding as its FIRST bind on the path — the builder's `forJob(…)` (every overload) where
    there is one, else the first stated call that binds it — and marks a later call refused
    where its job's key is not the bound one (`scheduled_chain._refusal`): `forJob(X)` then
-   `scheduleJob(Y, t)` marks Y refused (CP-55 row 44).
+   `scheduleJob(Y, t)` marks Y refused (CP-55 row 44). After review 2 (2026-11-02): an
+   earlier stated call inside a helper is read through the call that ENTERED the helper, so
+   two calls of one helper are two executions (C1); one `build()` site is one job only in one
+   execution (C2); a job `forJob` names takes the refusal where every call that would store
+   the trigger on the path is refused — nothing is stored, so it never runs (M1), unless a
+   call the reader does not pair may store it; a listener or capture body re-entered while it
+   is read is `cycle` (M2); and a path ending `cycle` keeps its row as `escapes` does (M3).
+   That an earlier call runs before a later one rests on the window alone today
+   (`scheduled_chain._ran_before`), pending the user's ruling on control flow (review 2, C3,
+   M4).
 
    **The job argument** [ruled by the user, 2026-11-02, "option B"]: measured in 2.5.1 and
    2.3.2 (CP-55 rows 27, 32, 35, 49-73), Quartz's own code reads the job and never changes

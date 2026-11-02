@@ -279,12 +279,12 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        found.extend((job, path, _ACCEPTED) for job in (context.jobs_by_key "
-                "or {}).get(named, ()))",
-                replace="        found.extend((job, path, _ACCEPTED) for key, jobs in "
+                find="            (job, path, stored(path)) for job in (context.jobs_by_key "
+                "or {}).get(named, ())\n",
+                replace="            (job, path, stored(path)) for key, jobs in "
                 '(context.jobs_by_key or {}).items() if key.rsplit(".", 1)[-1] == '
-                'named.rsplit(".", 1)[-1] for job in jobs)  # guard disabled by '
-                "scripts/guard_check.py",
+                'named.rsplit(".", 1)[-1] for job in jobs  # guard disabled by '
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -438,11 +438,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="            continue\n        found.extend((job, path, _ACCEPTED) for job in "
-                "(context.jobs_by_key or {}).get(named, ()))",
-                replace="            continue\n        found.extend((job, _ANY_PATH, _ACCEPTED) "
-                "for job in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
-                "scripts/guard_check.py",
+                find="            (job, path, stored(path)) for job in (context.jobs_by_key "
+                "or {}).get(named, ())\n",
+                replace="            (job, _ANY_PATH, stored(_ANY_PATH)) for job in "
+                "(context.jobs_by_key or {}).get(named, ())  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8745,10 +8745,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if self._events(body, (_PARAMETER, parameter), -1, None, True):\n"
-                "            return (((), ESCAPES),)\n",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
-                "            return (((), ESCAPES),)\n",
+                find="        touched = self._touched_in(*mapped)\n        if touched is not None:\n",
+                replace="        touched = self._touched_in(*mapped)\n"
+                "        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8814,11 +8813,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            return (((), ESCAPES),)\n        return (((), ()),)\n\n"
-                "    def _type_of(",
-                replace="            return (((), ESCAPES),)\n"
+                find="            return (((), touched),)\n        return (((), ()),)\n\n"
+                "    def _touched_in(",
+                replace="            return (((), touched),)\n"
                 "        return (((), ESCAPES),)  # guard disabled by scripts/guard_check.py\n\n"
-                "    def _type_of(",
+                "    def _touched_in(",
             ),
         ),
     ),
@@ -8859,9 +8858,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/scheduled_chain.py",
-                find="        if producer.reason == ESCAPES:\n            found.append((None, path))\n",
-                replace="        if producer.reason == ESCAPES:  # guard disabled by scripts/guard_check.py\n"
-                "            pass\n",
+                find="        if producer.reason in _UNREAD_ENDS:\n            found.append((None, path))\n",
+                replace="        if producer.reason in _UNREAD_ENDS:  # guard disabled by "
+                "scripts/guard_check.py\n            pass\n",
             ),
         ),
     ),
@@ -8873,9 +8872,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/scheduled_chain.py",
-                find="        if producer.reason == ESCAPES:\n            keys.append((None, path))\n",
-                replace="        if producer.reason == ESCAPES:  # guard disabled by scripts/guard_check.py\n"
-                "            pass\n",
+                find="        if producer.reason in _UNREAD_ENDS:\n            keys.append((None, path))\n",
+                replace="        if producer.reason in _UNREAD_ENDS:  # guard disabled by "
+                "scripts/guard_check.py\n            pass\n",
             ),
         ),
     ),
@@ -9061,6 +9060,85 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="            if stated in self._index.stated_hands:\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-binder-is-read-in-the-FRAME-that-entered-it": Guard(
+        what="a stated call inside a helper is read through the call that ENTERED the helper, "
+        "so two calls of one helper are two executions (review 2, C1)",
+        why="`sched(j, t){ scheduleJob(j, t); }` called with BJob then CJob reads the first "
+        "call's job as CJob and publishes CJob as running, though Quartz refuses it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    for outer in entered:\n",
+                replace="    for outer in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.ONE-BUILD-is-one-job-only-in-ONE-EXECUTION": Guard(
+        what="two binds at one `build()` site are one job only where both paths reached it in "
+        "one execution (review 2, C2)",
+        why="`job(c){ return newJob(c).build(); }` called twice reads as one job, so the "
+        "second `scheduleJob` is published as running though its unique key differs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            and one.path.joined(other.path) is not None\n",
+                replace="            # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-forJob-row-takes-the-refusal-of-EVERY-storing-call": Guard(
+        what="a job `forJob` names takes the refusal where every call that would store the "
+        "trigger is refused: nothing is stored (review 2, M1)",
+        why="`forJob(X)` then a refused `scheduleJob(Y, t)` publishes X as running on `t` and "
+        "makes it a root, though Quartz stores nothing",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        return replace(relevant[0], never_stored=True)\n",
+                replace="        return _ACCEPTED  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-call-the-reader-does-NOT-PAIR-may-store-the-trigger": Guard(
+        what="a call the reader does not pair (`scheduleJob(Trigger)`) may store the trigger, "
+        "so a `forJob` row keeps its standing (review 2, M1)",
+        why="a `forJob` trigger stored by the one-argument `scheduleJob` is published as never "
+        "stored, and its job loses its root",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        unsure = unsure or not paired\n",
+                replace="        # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-CYCLE-keeps-the-row-as-ESCAPES-does": Guard(
+        what="a path that ends `cycle` keeps its row with the unknown part, as `escapes` does "
+        "(rule 4; review 2, M3)",
+        why="a trigger handed through a recursive helper drops its job's row, and the job "
+        "loses its root",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="_UNREAD_ENDS = (ESCAPES, CYCLE)\n",
+                replace="_UNREAD_ENDS = (ESCAPES,)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-LISTENER-re-entered-is-a-CYCLE": Guard(
+        what="a listener or capture body read again while it is being read is `cycle` (rule 1; "
+        "review 2, M2)",
+        why="a module listener that schedules the job it is handed recurses without bound and "
+        "the module's analysis fails",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if key in self._entering_bodies:\n            return CYCLE\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return CYCLE\n",
             ),
         ),
     ),

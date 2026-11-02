@@ -43,7 +43,10 @@ here would restate those documents rather than add anything.
   bound to a job with another key. The trigger's binding is its first bind on the path —
   the builder's `forJob(…)`, else the first such call. One trigger scheduled with `BJob`
   then `CJob` is now `BJob @ c2` and `CJob @ c2` refused, where it was `CJob` with its
-  trigger unknown; a `forJob(X)` trigger handed to `scheduleJob(Y, t)` marks `Y` refused.
+  trigger unknown; a `forJob(X)` trigger handed to `scheduleJob(Y, t)` marks `Y` refused,
+  and `X` too where no call that would store the trigger accepts it. Each call of a helper
+  is its own execution, for the call that binds and for the `build()` that makes the job, and
+  a window path ending `cycle` keeps its row as `escapes` does.
   The job argument is stated too (Quartz reads it and hands it to `SchedulerListener
   .jobAdded`, CP-55 rows 49-73, 2.5.1 and 2.3.2): one job scheduled twice with one trigger is
   one row, unless a listener the module implements does something to the job.
