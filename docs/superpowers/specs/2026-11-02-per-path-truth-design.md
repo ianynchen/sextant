@@ -162,6 +162,44 @@ publishes `search` while its port is unknown.
    restores is apollo-portal's `doExecute(HttpMethod method, …)`, which runs
    `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`.
 
+9. **A call on a branch is not a call on every path** [option A ruled by the user,
+   2026-11-02: "A: fact per call"; the exact fact below is PROPOSED, awaiting approval].
+   The facts today give each call its `ordinal` (instruction order) and nothing else, so
+   `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
+   `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
+   when `tls` is false (review 2, M4). D00 reserved this as "an enrichment of this same field
+   in a later phase".
+
+   **The fact.** Each `call_site` gains two fields, computed by the extractor from the
+   method's control-flow graph (ASM's `Analyzer`, exception-handler edges included):
+   - `dominator`: the `ordinal` of the nearest call site in the same method that runs
+     before this call on EVERY path from the method's entry to this call; absent where none
+     does. Following `dominator` from a call lists every call that always runs before it.
+   - `on_every_exit`: true where this call runs on every path from the entry to a normal
+     return. An exception that leaves the method is not a normal return: the value it carried
+     is never used.
+
+   **The readers.** Both sit in the one place each reader decides order (`_ran_before`, the
+   walk's window):
+   - *Before, in one method.* Call `a` ran before call `b` on every path exactly when `a`
+     is on `b`'s `dominator` chain.
+   - *Before, across a hand-off.* A call `s` inside a callee ran before the caller's later
+     call `c` exactly when `s` is `on_every_exit` in the callee and the hand-off call is on
+     `c`'s chain. Anything else is undecided.
+   - *Quartz (C3).* A pairing call is refused only where the binding call ran before it on
+     every path. Where it is undecided, the row is `partial`, unmarked.
+   - *A configuring call (M4).* A call between a value's producer and its use that is not
+     on every path to the use splits the path: one path where it ran, one where it did not.
+     Each path composes its own row (rule 4), so `search:443` and `search:80` are two rows,
+     both `resolved`: the fact proves a run reaches the use with the call and a run reaches
+     it without. A call inside a callee that is not `on_every_exit` splits in the same way.
+
+   **Not claimed.** The fact does not say WHICH branch a call is on. Where two or more
+   split calls set the same part (`if (x) setPort(1); else setPort(2);`), the split gives
+   every combination, including ones no run makes (neither, both) and an order no run has.
+   Every row from such a split is `partial`, never `resolved`. Branch structure (option B)
+   is a later enrichment of the same field.
+
 ## 3. Not changed
 
 - The Ktor block ladder (`_Ladder.base_of`) answers `non_enumerable` for two bases (ruling M-1).
@@ -177,3 +215,7 @@ publishes `search` while its port is unknown.
   module, never re-pinned silently.
 - D02 (the options `client_base`, `unset`), the Vert.x spec (§2a, §3d, item 23), the client
   model and COVERAGE's WebClient row say the new rules.
+- Rule 9: D00 gains `dominator` and `on_every_exit` on `call_site`, and the fact schema
+  version goes from 5 to 6 (every workspace is re-extracted; every fixture is rebuilt with
+  JDK 21). The extractor has a unit test for each shape: straight line, `if`, `if/else`,
+  early return, loop, `try/catch`. C3 and M4 each have a test with the review's shape.
