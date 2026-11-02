@@ -2339,7 +2339,7 @@ class _Walk:
                 # This path already chose another body at one of these hand-offs.
                 continue
             if isinstance(gathered, str):
-                reached.append((crossed, _unresolved(gathered)))
+                reached.extend(self._identities_past(gathered, position, crossed, frames))
                 continue
             reached.extend(
                 (
@@ -2353,6 +2353,38 @@ class _Walk:
                 for path, answer in self._resolve(position, crossed, frames)
             )
         return tuple(reached)
+
+    def _identities_past(
+        self, reason: str, position: _Position, trail: _Trail, frames: "_Frames"
+    ) -> list[_Reached]:
+        """A window path that ended at `reason` (`escapes`, `cycle`): the reason, except where
+        the value IS a declaration the code names (rule 8, ruled by the user 2026-11-02:
+        "identity is not content").
+
+        **Which declaration a value is cannot be changed by anything done to it.** The JVM hands
+        a callee a copy of the reference, so no hand-off and no call on the value can make the
+        caller's variable another object; rules 1-3 are about an object's CONTENTS. A `symbol`
+        answer is the walk saying the value IS a declaration (`_DECLARATION_KINDS`: an enum
+        constant, a class, the type a value was built from), never what an object holds, so
+        each path's symbol answer stands and every other answer on the path is `reason`.
+        apollo-portal's `doExecute(HttpMethod method, …)` runs `HttpMethod.GET.equals(method)`
+        before `exchange(…, method, …)`: the verb is the constant each caller hands in.
+
+        **Only `symbol`, not every literal.** A string or number answer may be an object's
+        contents read through an identity arm — `new Name("x")` IS `"x"` until something
+        changes it (`test_a_value_written_to_between_its_construction_and_its_use_escapes`)
+        — and a `String` value no call can change already has an empty window (rule 3). One
+        rule on the answer's kind, so no reader and no type is named."""
+        found: list[_Reached] = []
+        other = False
+        for path, answer in self._resolve(position, trail, frames):
+            if answer.kind == LITERAL and answer.literal_kind == SYMBOL:
+                found.append((path, answer))
+            else:
+                other = True
+        if other or not found:
+            found.append((trail, _unresolved(reason)))
+        return found
 
     def _window(
         self,

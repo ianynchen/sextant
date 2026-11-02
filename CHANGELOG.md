@@ -34,6 +34,14 @@ here would restate those documents rather than add anything.
   compiler's own null checks (`kotlin.jvm.internal.Intrinsics`, declared in
   `value-models/compiler-null-checks.yml`) are not hand-offs, and a Quartz job whose trigger
   read ends `escapes` keeps its row with the trigger unknown, `partial`.
+- **A hand-off no longer hides which constant a value is** (spec 2026-11-02 rule 8, ruled by
+  the user that day: "identity is not content"). Java hands a callee a copy of the reference,
+  so no hand-off can make a variable another constant; where the walk reads a value as a
+  declaration (an enum constant, a class), a window path that ends `escapes` or `cycle` still
+  answers it. apollo-portal's `RetryableRestTemplate#doExecute(HttpMethod method, …)`, which
+  runs `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`, has its verbs back:
+  76 outbound rows, every one with a verb, as before the hand-off rule. An object's contents
+  are unchanged: still `escapes`.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was

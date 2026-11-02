@@ -5597,6 +5597,92 @@ def test_a_methods_own_parameter_is_windowed_from_entry_to_the_use(handoffs):
     assert producer.chain == ((_symbol(_USES, "viaTunedSend", "()V"), 0), (tuned, 0))
 
 
+_VERBS = _PKG + "Verbs#"
+_HTTP_METHOD = "org/springframework/http/HttpMethod#"
+_DO_EXECUTE = "(Lorg/springframework/http/HttpMethod;)V"
+
+
+def _identity_facts() -> list[Fact]:
+    """apollo-portal's `RetryableRestTemplate#doExecute(HttpMethod method, …)`, cut down:
+    `HttpMethod.GET.equals(method)` — a hand-off of `method` to code this module does not
+    have — then `Rest.exchange("/q", method)`; `get()` calls it with `HttpMethod.GET` and
+    `put()` with `HttpMethod.PUT`. And `handed()`, the same hand-off of an `Options` object
+    whose contents the reader asks for."""
+    execute = _symbol(_VERBS, "doExecute", _DO_EXECUTE)
+    exchange = (_PKG + "Rest#", "exchange", "(Ljava/lang/String;" + _DO_EXECUTE[1:])
+    facts: list[Fact] = [
+        _type(_VERBS),
+        _declared(_VERBS, "doExecute", _DO_EXECUTE),
+        _void(_VERBS, "doExecute", _DO_EXECUTE),
+        _site(
+            execute,
+            0,
+            (_HTTP_METHOD, "equals", "(Ljava/lang/Object;)Z"),
+            kind="virtual",
+            receiver_field=_HTTP_METHOD + "GET.",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            execute,
+            1,
+            exchange,
+            arguments=[
+                CallArgument(kind="string", value="/q"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+    ]
+    for name, verb in (("get", "GET"), ("put", "PUT")):
+        facts += [
+            _declared(_VERBS, name, "()V"),
+            _void(_VERBS, name, "()V"),
+            _site(
+                _symbol(_VERBS, name, "()V"),
+                0,
+                (_VERBS, "doExecute", _DO_EXECUTE),
+                arguments=[CallArgument(kind="enum", symbol=f"{_HTTP_METHOD}{verb}.")],
+            ),
+        ]
+    return facts
+
+
+@pytest.mark.pins("values.WHICH-CONSTANT-a-value-is-is-not-changed-by-a-hand-off")
+def test_which_constant_a_value_is_survives_a_hand_off(tmp_path: Path):
+    """Rule 8 (ruled by the user 2026-11-02, "identity is not content"): Java hands a callee a
+    copy of the reference, so no callee can make the caller's `method` another constant.
+    `HttpMethod.GET.equals(method)` hands `method` to the JDK, which rule 2 reads as
+    `escapes` for a reader of an object's CONTENTS — but the answer here is WHICH constant
+    the value is, and that is `GET` on one path and `PUT` on the other, whatever `equals`
+    did. Before rule 8 both paths answered `escapes` and apollo-portal lost 51 verbs."""
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "identity.jsonl", _document(), _identity_facts())
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.load_facts(facts)
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        bindings = _bindings(workspace, _symbol(_VERBS, "doExecute", _DO_EXECUTE), 1)
+        assert sorted(
+            (binding.slots[1].kind, binding.slots[1].literal_kind, binding.slots[1].value)
+            for binding in bindings
+        ) == [
+            ("literal", "symbol", f"{_HTTP_METHOD}GET."),
+            ("literal", "symbol", f"{_HTTP_METHOD}PUT."),
+        ]
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("values.only-a-DECLARATION-answer-passes-a-hand-off")
+def test_an_objects_contents_still_escape_a_hand_off(handoffs):
+    """The near-miss for rule 8: `Registry.keep(o)` hands an `Options` object to code this
+    module does not have. Its CONTENTS may have changed, and the answer is about them (the
+    value walk's `external` producer, a chain reader's chain), so the path stays `escapes`."""
+    assert _walked_use(handoffs, "kept") == ["escapes"]
+    assert _use_of(handoffs, "kept", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
 @pytest.mark.pins("values.a-COMPILER-NULL-CHECK-is-not-a-hand-off")
 def test_a_compiler_null_check_is_not_a_hand_off(handoffs):
     """**The user's ruling of 2026-11-02**: `Intrinsics.checkNotNullParameter(o, "o")`, which

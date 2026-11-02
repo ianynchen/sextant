@@ -8894,6 +8894,35 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.WHICH-CONSTANT-a-value-is-is-not-changed-by-a-hand-off": Guard(
+        what="a window path that ends `escapes` or `cycle` still answers a value the walk reads "
+        "as a declaration (`symbol`): no hand-off can make a variable another constant (spec "
+        "2026-11-02 rule 8, ruled by the user 2026-11-02)",
+        why="`HttpMethod.GET.equals(method)` before `exchange(url, method, …)` loses the verb "
+        "on every path — apollo-portal's 51 outbound rows without a verb",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                reached.extend(self._identities_past(gathered, position, "
+                "crossed, frames))\n",
+                replace="                reached.append((crossed, _unresolved(gathered)))  "
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.only-a-DECLARATION-answer-passes-a-hand-off": Guard(
+        what="rule 8 lets past a hand-off only a `symbol` answer, which names a declaration; "
+        "an object's contents, or a string an identity arm read, stays `escapes`",
+        why="an options object handed to code this module does not have publishes its "
+        "producer's contents as though nothing had changed them",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if answer.kind == LITERAL and answer.literal_kind == SYMBOL:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
         what="a method's own parameter is windowed from the method's entry to the use: calls "
         "on it and hand-offs of it inside the method are read by the same rules (spec "

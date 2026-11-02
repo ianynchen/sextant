@@ -102,10 +102,17 @@ publishes `search` while its port is unknown.
    scheduled with `BJob` then `CJob` is `BJob @ c2` resolved and `CJob @ c2` refused. The store's
    own refusals (a job or trigger key already stored) are measured the same way, per job store
    the module uses, before they are stated.
-8. **Identity is not content** [proposed 2026-11-02, awaiting the user's ruling]. A reader asking
+8. **Identity is not content** [ruled by the user, 2026-11-02]. A reader asking
    WHICH object or constant a value is (an `HttpMethod` constant, a class, the call that built
    it) is unaffected by a hand-off: Java hands a method a copy of the reference, so no callee can
    make the caller's variable another object. Rules 1-3 apply to readers of an object's CONTENTS.
+   As built (`values._Walk._identities_past`): a window path that ends `escapes` or `cycle`
+   still answers where the walk reads the value as a declaration (a `symbol` answer: an enum
+   constant, a class, the type a value was built from); every other answer on that path keeps
+   the reason. Only `symbol`: a string an identity arm reads off a constructor is the
+   object's contents, and a `String` value already has an empty window (rule 3). The case it
+   restores is apollo-portal's `doExecute(HttpMethod method, …)`, which runs
+   `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`.
 
 ## 3. Not changed
 

@@ -620,7 +620,8 @@ A source that declares no `value-models/` and writes no hop declaration contribu
 one, which is the state of a repository's own catalog set (§6) that declares neither.
 
 **`not_hand_offs` — owners whose calls take a value without handing it off** (spec
-2026-11-02, the user's ruling of that day). A `value-models/` file may also declare
+2026-11-02, the user's ruling of that day; the key itself, as built here, approved by the user
+on 2026-11-02). A `value-models/` file may also declare
 `not_hand_offs: [{owner, by}]`, the owner dotted as every catalog spells a type. The value walk's `escapes` window reads every call that takes
 a value as a hand-off (rules 1-3 of that spec); a call to one of these OWNER classes is not
 one. One structural rule per owner, never per method. The one shipped entry is
