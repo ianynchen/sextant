@@ -39,14 +39,38 @@ publishes `search` while its port is unknown.
    `extract_libraries` — is walked into. Inside that body, the calls made on the parameter
    (`receiver_parameter`) are read by the same window rule, in their order, at the hand-off's
    position in the caller's order; a further hand-off of the parameter is followed the same way
-   (a cycle is `cycle`). A call with several resolved callees is several paths.
+   (a cycle is `cycle`). A call with several resolved callees is several paths. A method's OWN
+   parameter is a value produced when the method is entered: its window runs from the entry to
+   the use, so `send(o) { configure(o); create(vertx, o); }` reads the hand-off inside `send`
+   (fix round 1, C1).
 2. **A hand-off into code we do not have is unknown.** A callee `call_edges` leaves NULL (the JDK,
-   a library not named, another module), a `dynamic` site (a lambda capture — the facts do not
-   say which parameter a capture lands on), or a write of the value into a field, ends the path
-   with `escapes`. Never "nothing happened".
+   a library not named, another module), a write of the value into a field, a call that reaches
+   the value below the top level of an argument (an array element, a merge candidate), an
+   instance call on the value's own type whose receiver the facts cannot name (a parameter
+   reassigned on a branch), and a call through a type a lambda or method reference in the
+   module implements (`dispatch` lists no such body) end the path with `escapes`. Never
+   "nothing happened".
+
+   **A lambda capture** (a `dynamic` site) is followed through the capture fold (OI-150/OI-266,
+   `value_index`), which DOES say which parameter of which body a capture lands on — this rule
+   first said the facts do not, which was stale. A body that does nothing to that parameter (no
+   call on it, no hand-off of it, no field write) cannot change the value, so the capture is
+   not a hand-off. A body that does anything is `escapes`: when the body runs is not known, so
+   what it does cannot be placed in the window. A capture the fold does not map is `escapes`
+   (fix round 1, M6).
 3. **An immutable value cannot be changed by a hand-off.** A hand-off whose parameter type (read
    off the site's own descriptor) is a primitive, `java.lang.String`, or a boxed primitive is not
-   a hand-off for this rule. This is a property of the JVM type, not of any method, so it is one
+   a hand-off for this rule; nor is any hand-off of, or call on, a value whose OWN type the facts
+   state is one of those (its producer's declared return, a concat's `String`, a construction's
+   type, a parameter's declared type) — SLF4J's `info(String, Object)` types a logged `String`
+   `Object` (fix round 1, M1). **A compiler's null checks are not hand-offs either** — ruled
+   by the user on 2026-11-02: a call to `kotlin.jvm.internal.Intrinsics`
+   (`checkNotNullParameter`, `checkNotNullExpressionValue`, `checkNotNull`,
+   `checkParameterIsNotNull`, `checkExpressionValueIsNotNull`) takes the value without
+   handing it off, because the compiler, not the author, inserts these and they only check
+   for null and throw. Recognised by the owner class alone, declared as catalog data
+   (`value-models/compiler-null-checks.yml`, D02 §1f's `not_hand_offs`), since the walk names
+   no language. This is a property of the JVM type, not of any method, so it is one
    structural rule (OI-143's ruling allows it), and it keeps `log.info(url)` before
    `client.get(url)` resolved.
 4. **Paths are never merged into one answer.** Each path composes its own address; paths giving

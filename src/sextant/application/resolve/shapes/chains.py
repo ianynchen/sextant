@@ -295,7 +295,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # url is `base + "/path"` could never reach it (`OI-138`, ruling 1). Sharing the index
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
-    walk_index = cached_value_index(workspace)
+    walk_index = cached_value_index(workspace, catalog.not_hand_offs)
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.

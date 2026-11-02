@@ -25,8 +25,15 @@ here would restate those documents rather than add anything.
   configuring calls join the chain at the hand-off's place, one path per callee, a repeat is
   `cycle`; a hand-off into code we do not have, a `dynamic` site, or a field write inside the
   entered body is `escapes`; a `String`, primitive or boxed-primitive parameter is not a
-  hand-off. Measured: the six field pins and the 30-fixture value-boundary snapshot are
-  unchanged.
+  hand-off. Fix round 1 closes what review found: a method's own parameter is windowed from
+  its entry to the use; a value whose own type is immutable (a `String` logged through
+  `info(String, Object)`) is not handed off; a value inside an array or merge argument, a
+  call on the value's type whose receiver the facts cannot name, and a call through a type a
+  lambda implements are `escapes`; a lambda capture is followed through the capture fold and
+  is no hand-off where the body does nothing to it. Per the user's rulings of 2026-11-02, a
+  compiler's own null checks (`kotlin.jvm.internal.Intrinsics`, declared in
+  `value-models/compiler-null-checks.yml`) are not hand-offs, and a Quartz job whose trigger
+  read ends `escapes` keeps its row with the trigger unknown, `partial`.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was

@@ -265,6 +265,31 @@ class YamlCatalogSource:
                 )
         return model
 
+    def not_hand_offs(self) -> tuple[str, ...]:
+        """Every owner `value-models/*.yml` declares under `not_hand_offs`, as a type symbol (spec 2026-11-02,
+        the user's ruling on compiler null checks): a call to one of these classes takes a
+        value without being a hand-off of it, so the value walk's `escapes` window reads it as
+        nothing. Each entry is `{owner, by}`, `by` required as `identified_by`'s is; sorted,
+        so two runs build one tuple (NFR-1)."""
+        owners: set[str] = set()
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("not_hand_offs") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list):
+                raise CatalogError(f"loading value model {path}: `not_hand_offs` must be a list")
+            for entry in declared:
+                if not isinstance(entry, dict) or not entry.get("owner") or not entry.get("by"):
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry needs an `owner` "
+                        f"and the `by` that justifies it, got {entry!r}"
+                    )
+                # Dotted, as every catalog spells a type (2E-prep §1c); the facts' symbol
+                # form is what a call site's `owner` carries.
+                owners.add(type_descriptor(str(entry["owner"])))
+        return tuple(sorted(owners))
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -351,6 +376,9 @@ class YamlCatalogSource:
         # 0.8 s — and that buys the two readings staying independent, which is what lets
         # Task 10 delete the hop keys from the catalogs without touching this loop.
         identities = self.value_model()
+        # The owners whose calls take a value without handing it off (`value-models/`'s
+        # `not_hand_offs`, the user's ruling of 2026-11-02), read once like the table above.
+        not_hand_offs = self.not_hand_offs()
         # The conformance table, read once per source for the same reason: it is
         # knowledge about TYPES rather than about any one catalog, and the engines need
         # it to refuse a producer whose return type cannot be the declared parameter
@@ -454,6 +482,7 @@ class YamlCatalogSource:
                     bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
+                    not_hand_offs=not_hand_offs,
                     # The source's own type-conformance table, built above.
                     type_model=conformance,
                     # The server's own prefix keys, built above.

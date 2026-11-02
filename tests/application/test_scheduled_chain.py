@@ -1925,9 +1925,18 @@ def test_a_trigger_handed_to_a_scheduling_helper_keeps_its_cron(tmp_path: Path):
     ]
 
 
+@pytest.mark.pins("scheduled_chain.a-job-whose-trigger-ESCAPES-keeps-its-row")
 def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
     """P4: `x()` schedules `trigger("c1")` with AJob; `y()` schedules `trigger("c2")` with
-    BJob AND CJob: A@c1, B@c2, C@c2."""
+    BJob AND then CJob: A@c1, B@c2, and C with its trigger UNKNOWN, `partial`.
+
+    **Re-pinned by the user's ruling of 2026-11-02** ("keep the row, make the trigger
+    unknown"). The first `scheduleJob` hands the trigger to code this module does not have
+    (spec 2026-11-02 rule 2), and that code changes it: Quartz 2.3.2's
+    `QuartzScheduler.scheduleJob(JobDetail, Trigger)` calls `OperableTrigger.setJobKey` on
+    it, and throws "Trigger does not reference given job!" when it already names another
+    job. So the trigger CJob is scheduled with is not known to be `c2` — the row stays (rule
+    4's own row with an unknown part), and says so rather than repeating B's cron."""
     trigger_jvm, trigger = _cron_helper()
     facts = [*_classes("AJob", "BJob", "CJob"), *trigger]
     for name, jobs, cron in (("x", ["AJob"], "c1"), ("y", ["BJob", "CJob"], "c2")):
@@ -1976,7 +1985,7 @@ def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
     assert _rows_of(_scheduled(tmp_path, facts)) == [
         ("None", "AJob#execute", "c1", "resolved"),
         ("None", "BJob#execute", "c2", "resolved"),
-        ("None", "CJob#execute", "c2", "resolved"),
+        ("None", "CJob#execute", "None", "partial"),
     ]
 
 

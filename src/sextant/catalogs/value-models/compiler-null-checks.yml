@@ -1,0 +1,26 @@
+id: compiler-null-checks
+displayName: Calls a compiler inserts that take a value without being a hand-off of it
+
+# WHAT THIS FILE IS. The value walk's `escapes` window (spec 2026-11-02, rules 1-3) reads
+# every call that takes a value as a HAND-OFF: code that might change it. A call into code
+# this module does not have ends the path at `escapes`.
+#
+# `not_hand_offs` names the OWNER classes whose calls are not hand-offs at all. One
+# structural rule per owner, never per method: the owner is recognised, and every call to
+# it is read as taking the value without changing it.
+#
+# RULED BY THE USER, 2026-11-02 (per-path truth, fix round 1, review M2): Kotlin's
+# compiler-inserted null checks are NOT a hand-off. `kotlin.jvm.internal.Intrinsics` is the
+# class the Kotlin compiler calls — `checkNotNullParameter(p, "p")` at the top of every
+# non-private function, `checkNotNullExpressionValue(v, "…")` after a platform call,
+# `checkNotNull`, `checkParameterIsNotNull`, `checkExpressionValueIsNotNull`. The COMPILER
+# writes these, not the author, and each only checks for null and throws; none can change
+# the value it is handed. Read as hand-offs, every Kotlin function's parameters and every
+# platform-typed local became `escapes`.
+#
+# Kept here rather than in the walk because it names a language (ARCHITECTURE §10): the
+# walk reads the owners it is handed and names none.
+
+not_hand_offs:
+  - owner: kotlin.jvm.internal.Intrinsics
+    by: docs/superpowers/specs/2026-11-02-per-path-truth-design.md

@@ -438,9 +438,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="    for named, path in keys:\n        found.extend((job, path) for job in "
+                find="            continue\n        found.extend((job, path) for job in "
                 "(context.jobs_by_key or {}).get(named, ()))",
-                replace="    for named, path in keys:\n        found.extend((job, _ANY_PATH) for job "
+                replace="            continue\n        found.extend((job, _ANY_PATH) for job "
                 "in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
                 "scripts/guard_check.py",
             ),
@@ -4240,8 +4240,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        ends = producers_of(self._index, site, RECEIVER, self._index.unscanned)\n",
-                replace="        ends = producers_of(self._index, site, RECEIVER, frozenset())  # guard disabled\n",
+                find="                self._index, site, RECEIVER, self._index.unscanned, which_object=True\n",
+                replace="                self._index, site, RECEIVER, frozenset(), which_object=True"
+                "  # guard disabled\n",
             ),
         ),
     ),
@@ -8736,15 +8737,16 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "values.a-DYNAMIC-hand-off-escapes": Guard(
-        what="a hand-off at a `dynamic` site ends the path at `escapes`, whatever body it names "
-        "(spec 2026-11-02 rule 2)",
-        why="a capture's arguments land on parameters the facts do not name, so walking the "
-        "lambda body's parameter at the capture's slot reads the wrong parameter and calls the "
-        "value untouched",
+        what="a capture at a `dynamic` site whose lambda body does anything to the captured "
+        "parameter ends the path at `escapes` (spec 2026-11-02 rule 2, amended in fix round 1)",
+        why="when the body runs is not known, so reading what it does as nothing — or as a "
+        "configuring call at the capture's place — publishes a value the lambda may change "
+        "before the use",
         edits=(
             Edit(
                 path=_VALUES,
-                find='        if row.get("invoke_kind") == "dynamic":\n            return (((), ESCAPES),)\n',
+                find="        if self._events(body, (_PARAMETER, parameter), -1, None, True):\n"
+                "            return (((), ESCAPES),)\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n"
                 "            return (((), ESCAPES),)\n",
             ),
@@ -8800,6 +8802,155 @@ GUARDS: dict[str, Guard] = {
                 find="        if key in self._entering:\n            return (((), CYCLE),)\n",
                 replace="        if key in self._entering:\n"
                 "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-capture-the-body-does-NOTHING-with-is-not-a-hand-off": Guard(
+        what="a capture whose lambda body does nothing to the captured parameter (no call on "
+        "it, no hand-off, no field write) is not a hand-off (spec 2026-11-02 rule 2, fix round "
+        "1 M6)",
+        why="every value a lambda closes over reads as `escapes` at every later use — a client "
+        "captured by one route handler loses its address in the next",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return (((), ESCAPES),)\n        return (((), ()),)\n\n"
+                "    def _type_of(",
+                replace="            return (((), ESCAPES),)\n"
+                "        return (((), ESCAPES),)  # guard disabled by scripts/guard_check.py\n\n"
+                "    def _type_of(",
+            ),
+        ),
+    ),
+    "values.a-COMPILER-NULL-CHECK-is-not-a-hand-off": Guard(
+        what="a call to an owner the catalogs declare in `not_hand_offs` (a compiler's null "
+        "checks) takes the value without handing it off (user ruling 2026-11-02)",
+        why='every Kotlin function opens with `Intrinsics.checkNotNullParameter(p, "p")`, so '
+        "every Kotlin parameter and platform-typed local reads as `escapes` and no Kotlin value "
+        "the walk follows resolves",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    if owner in shapes.not_hand_offs:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-job-whose-trigger-ESCAPES-keeps-its-row": Guard(
+        what="a pairing call whose trigger argument the walk answers `escapes` keeps a row for "
+        "the job it is handed, the trigger unknown, `partial` (user ruling 2026-11-02)",
+        why="a job scheduled with a trigger something unread may have changed disappears from "
+        "the document entirely, though the code schedules it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            if not escaped:\n                continue\n            handlers:",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n            handlers:",
+            ),
+        ),
+    ),
+    "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
+        what="a method's own parameter is windowed from the method's entry to the use: calls "
+        "on it and hand-offs of it inside the method are read by the same rules (spec "
+        "2026-11-02 rule 1, fix round 1 C1)",
+        why="`send(o) { configure(o); WebClient.create(vertx, o); }` publishes the caller's "
+        "options as the client's, at `resolved`, though `configure` changed them first",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return self._windowed(\n"
+                "            method, (_PARAMETER, index), -1, used_at, (_PARAMETER, method, index), "
+                "trail, frames\n        )\n",
+                replace="        return self._resolve((_PARAMETER, method, index), trail, frames)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-IMMUTABLE-VALUE-is-not-handed-off": Guard(
+        what="a value whose own type is a primitive, `String` or a boxed primitive has an "
+        "empty window, whatever parameter it is handed to (spec 2026-11-02 rule 3, fix round 1 "
+        "M1)",
+        why='`log.info("{}", url)` through SLF4J\'s `info(String, Object)` before '
+        "`client.get(url)` turns the commonest readable address into `escapes`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._which_object or self._type_of(method, held) in _UNCHANGEABLE:\n",
+                replace="        if self._which_object:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-value-NESTED-in-an-argument-escapes": Guard(
+        what="a call reaching the value below the top level of an argument (an array element, "
+        "a merge candidate) ends the path at `escapes` (spec 2026-11-02 rule 2, fix round 1 M3)",
+        why="`mutateAll(new Options[]{o})` before the use reads as nothing happened, and the "
+        "options are published at `resolved` though the callee may have changed them",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            nested = self._index.nested.get((method, key), ())\n",
+                replace="            nested = ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="            nested = self._index.nested_parameters.get((method, key), ())\n",
+                replace="            nested = ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-UNREAD-RECEIVER-of-the-values-type-escapes": Guard(
+        what="in a window, an instance call on the value's own type whose receiver the facts "
+        "cannot name ends the path at `escapes` (fix round 1 M4)",
+        why="`if (o == null) o = new Options(); o.setPort(1)` merges the parameter away from "
+        "the receiver, so the body reads as doing nothing and the caller's port is published",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            () if held_type is None else self._index.unread_receivers.get("
+                "(method, held_type), ())\n",
+                replace="            ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-through-a-LAMBDA-IMPLEMENTED-type-escapes": Guard(
+        what="a hand-off through a type a lambda or method reference in the module implements "
+        "ends the path at `escapes` (fix round 1 M5)",
+        why="`dispatch` lists no lambda body as a candidate, so the class bodies it does list "
+        "read as the whole story, and a lambda that sets the port is never seen",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if str(row.get("owner")) in self._index.lambda_types:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-reads-the-PROJECTED-row": Guard(
+        what="hand-offs are read off the projected call sites, where slot i is the callee's "
+        "parameter i (fix round 1 M8; the module docstring's invariant)",
+        why="through a `$default` bridge the raw slot is shifted by the receiver, so the value "
+        "lands on the wrong parameter of the sibling and what the sibling does to it is missed",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    for row in effective_call_sites(workspace):\n",
+                replace='    for row in workspace.query("call_sites"):  # guard disabled by '
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONCAT-OPERAND-is-used-at-the-concat": Guard(
+        what="a concat's operand is read where the concat uses it, so the window ends at the "
+        "concat site (spec 2026-11-02 rule 1)",
+        why="the concat's own hand-off of an object operand opens `escapes`, and a call on the "
+        "operand after the string was built hides an address the code states",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='            used = (_SLOT, method, int(str(site["ordinal"])), at)\n',
+                replace="            used = (_SLOT, method, 2**62, at)  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),

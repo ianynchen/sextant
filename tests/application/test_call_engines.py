@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_module import declared_parameters
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
@@ -237,6 +238,7 @@ def _declared_method(owner: str, name: str, jvm: str) -> SymbolFact:
         symbol=_MODULE + method_descriptor(owner, name, jvm),
         construct_kind="method",
         enclosing=_MODULE + owner,
+        signature=Signature(parameters=declared_parameters(jvm), returns=TypeRef(symbol="void#")),
     )
 
 

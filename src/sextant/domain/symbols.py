@@ -379,6 +379,25 @@ def descriptor_slots(descriptor: str) -> tuple[tuple[str, ...], str]:
     return tuple(slots), descriptor[descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1 :]
 
 
+def returned_slot(descriptor: str) -> str:
+    """What a method descriptor returns, in the descriptor's OWN spelling (`I`, `V`,
+    `Lx/Y;`, `[B`) — `descriptor_slots`' second half, without reading the parameters."""
+    return descriptor[descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1 :]
+
+
+def slot_of_type(symbol: str) -> str:
+    """A type symbol (`int#`, `x/Y#`, `x/Y#[]`, as an erased parameter type or a call's
+    owner spells one) in a descriptor's own spelling (`I`, `Lx/Y;`, `[Lx/Y;`), so the two can
+    be compared. The inverse of how the facts turn a descriptor slot into a symbol."""
+    depth = 0
+    while symbol.endswith(_ARRAY_SUFFIX):
+        symbol = symbol[: -len(_ARRAY_SUFFIX)]
+        depth += 1
+    name = symbol.removesuffix(_TYPE_MARKER)
+    element = _BASE_TYPES.get(name) or f"L{name};"
+    return "[" * depth + element
+
+
 def returned_type(descriptor: str) -> str | None:
     """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
     returns a primitive, `void` or an array.

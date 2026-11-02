@@ -287,6 +287,12 @@ class Catalog:
     # entry are passed over and where the reason for each is stated.
     value_model: list[dict[str, Any]] = field(default_factory=list)
 
+    # The owner classes whose calls take a value WITHOUT handing it off (`value-models/`'s
+    # `not_hand_offs`): the value walk's `escapes` window reads a call to one as nothing.
+    # The user's ruling of 2026-11-02 on a compiler's null checks is the one entry shipped.
+    # The source reads it once and hands every catalog the same tuple, as `value_model`.
+    not_hand_offs: tuple[str, ...] = ()
+
     # Which types may stand where another is declared (`type-models/*.yml`), as
     # `{subtype, supertype, by}`. The source reads it once and hands every catalog the
     # same list, exactly as `value_model` above.

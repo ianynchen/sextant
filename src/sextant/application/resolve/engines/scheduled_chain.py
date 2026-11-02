@@ -109,6 +109,7 @@ from sextant.application.resolve.shapes.chain_text import chain_text
 from sextant.application.resolve.shapes.chains import ChainEnd, chain_ends, configuring_calls
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
+    ESCAPES,
     EXPRESSION,
     LITERAL,
     RECEIVER,
@@ -207,7 +208,7 @@ def entries(
     opener = placeholder_rule(config_model_of(catalogs if catalogs is not None else [catalog]))[0][
         "open"
     ]
-    index = cached_value_index(workspace)
+    index = cached_value_index(workspace, catalog.not_hand_offs)
     job_ends = list(chain_ends(workspace, job_walk))
     context = _Context(
         workspace=workspace,
@@ -256,7 +257,9 @@ def entries(
         if key is not None:
             by_key.setdefault(key, []).append(job)
     context = replace(context, jobs_by_key=by_key)
-    return [entry for end in ends for entry in _entries_of(end, context)]
+    return [entry for end in ends for entry in _entries_of(end, context)] + _unread_triggers(
+        context
+    )
 
 
 @dataclass(frozen=True)
@@ -480,6 +483,82 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
         )
 
 
+def _unread_triggers(context: _Context) -> list[TriggerEntry]:
+    """**A job whose trigger the walk cannot read keeps its row, the trigger unknown** — the
+    user's ruling of 2026-11-02 (spec 2026-11-02 rule 4's "own row, unknown part", applied to
+    this reader). A pairing call in the module whose trigger argument the walk answers
+    `escapes` on some path — something it cannot follow may have changed the trigger first —
+    still schedules the job it is handed: one row per job class, its trigger, name and
+    expression NULL, `partial`. Such a call is no chain end's consumer (the execute-join
+    walks the same way and stops at the same place), so it is read here, once per call,
+    rather than dropped.
+
+    The case that found it: one `Trigger` scheduled with two jobs. Quartz 2.3.2's
+    `QuartzScheduler.scheduleJob(JobDetail, Trigger)` calls `setJobKey` on the trigger and
+    throws "Trigger does not reference given job!" when it already names another, so after
+    the first `scheduleJob` the trigger is not what the code built, and the second job's
+    trigger is unknown rather than the cron the first one ran on."""
+    entries: list[TriggerEntry] = []
+    for key, consumer in sorted(context.index.sites.items()):
+        for pairing in context.rules.pairing:
+            if not (
+                consumer["owner"] in pairing.owners
+                and consumer["name"] == pairing.method
+                and consumer.get("descriptor") == pairing.descriptor
+            ):
+                continue
+            escaped = [
+                path
+                for producer, path in producer_paths(
+                    context.index,
+                    consumer,
+                    pairing.trigger,
+                    context.built,
+                    past_accessors=context.dispatch.ancestors,
+                )
+                if producer.reason == ESCAPES
+            ]
+            if not escaped:
+                continue
+            handlers: dict[str | None, bool] = {}
+            for job, path in _built_jobs(consumer, pairing.job, context):
+                if job is None or context.rules.class_arg >= len(job.root["arguments"] or []):
+                    continue
+                anchors = [both for one in escaped if (both := one.joined(path)) is not None]
+                for anchor in anchors or [path]:
+                    read = resolve_positions(
+                        context.workspace,
+                        {_CLASS: (job.root, context.rules.class_arg)},
+                        context.index,
+                        within=anchor,
+                    )
+                    for answers in read or [{}]:
+                        job_class, _ = _job_class(answers.get(_CLASS))
+                        handlers.setdefault(
+                            None if job_class is None else _handler(job_class, context), True
+                        )
+            entries.extend(
+                TriggerEntry(
+                    caller=key[0],
+                    row={
+                        "handler": handler,
+                        "trigger": None,
+                        "name": None,
+                        "expression": None,
+                        "expression_source": None,
+                        "resolution": _PARTIAL,
+                        "evidence": "compiler",
+                        "catalog_id": context.catalog.id,
+                        "untied": None,
+                    },
+                )
+                # Neither a kind nor a job says nothing (§3a), as in `_entries_of`.
+                for handler in handlers
+                if handler is not None
+            )
+    return entries
+
+
 def _positions(
     end: ChainEnd, schedule: _Schedule, job: ChainEnd | None, context: _Context
 ) -> tuple[dict[str, tuple[Mapping[str, Any], int | str]], Mapping[str, Any] | None]:
@@ -682,10 +761,13 @@ def _pairings(end: ChainEnd, context: _Context) -> list[tuple[ChainEnd | None, P
     # the walk took to that call (`_built_keys`).
     key = _key(end.captures.get(_JOB_NAME), end.captures.get(_JOB_GROUP), context)
     position = _position(end.captures.get(_JOB_KEY_FIELD), context)
-    keys = [(key, _ANY_PATH)] if key is not None else []
+    keys: list[tuple[str | None, Path]] = [(key, _ANY_PATH)] if key is not None else []
     if position is not None:
         keys.extend(_built_keys(*position, context))
     for named, path in keys:
+        if named is None:
+            found.append((None, path))
+            continue
         found.extend((job, path) for job in (context.jobs_by_key or {}).get(named, ()))
     unique = {
         (None if job is None or job.terminal is None else _site_key(job.terminal), path): (
@@ -721,23 +803,31 @@ def _trigger_paths(
 
 def _built_jobs(
     site: Mapping[str, Any], slot: int, context: _Context
-) -> list[tuple[ChainEnd, Path]]:
+) -> list[tuple[ChainEnd | None, Path]]:
     """The job chains whose `build()` the value walk from `site`'s argument at `slot`
     reaches, in this method or across returns and parameters, each with its path.
 
     An accessor on the built detail is let past (`past_accessors`): RuoYi's
     `jobDetail.getJobDataMap().put(KEY, job)` does not change which `build()` made it.
-    `_trigger_paths` asks the same question of the trigger and walks the same way."""
+    `_trigger_paths` asks the same question of the trigger and walks the same way.
+
+    **A path the walk answers `escapes` is a job on that path that cannot be read: `None`**
+    (the user's ruling of 2026-11-02, rule 4's own row with an unknown part), so the pairing
+    still gives that path its row, naming no job, rather than losing it."""
     ends = {_site_key(job.terminal): job for job in context.job_ends if job.terminal}
-    return [
-        (ends[(producer.caller, producer.ordinal)], path)
-        for producer, path in producer_paths(
-            context.index, site, slot, context.built, past_accessors=context.dispatch.ancestors
-        )
-        if producer.caller is not None
-        and producer.ordinal is not None
-        and (producer.caller, producer.ordinal) in ends
-    ]
+    found: list[tuple[ChainEnd | None, Path]] = []
+    for producer, path in producer_paths(
+        context.index, site, slot, context.built, past_accessors=context.dispatch.ancestors
+    ):
+        if producer.reason == ESCAPES:
+            found.append((None, path))
+        elif (
+            producer.caller is not None
+            and producer.ordinal is not None
+            and (producer.caller, producer.ordinal) in ends
+        ):
+            found.append((ends[(producer.caller, producer.ordinal)], path))
+    return found
 
 
 def _injected_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> list[ChainEnd]:
@@ -779,18 +869,25 @@ def _injected_jobs(site: Mapping[str, Any], slot: int, context: _Context) -> lis
     ]
 
 
-def _built_keys(site: Mapping[str, Any], slot: int, context: _Context) -> list[tuple[str, Path]]:
+def _built_keys(
+    site: Mapping[str, Any], slot: int, context: _Context
+) -> list[tuple[str | None, Path]]:
     """The keys a `JobKey` argument is built from, each with the path the walk took to it:
     the value walk to the catalog's `job_key` call that made it, and that call's name and
     group as constants on that path. A key handed into a helper by several callers is one
-    key per caller, and the path keeps each with its own caller's other arguments."""
+    key per caller, and the path keeps each with its own caller's other arguments. A path the
+    walk answers `escapes` is a key it cannot read, `None`: its row stays, naming no job
+    (the user's ruling of 2026-11-02)."""
     declared = {
         (owner, builder.method)
         for builder in context.rules.key_builders
         for owner in builder.owners
     }
-    keys: list[tuple[str, Path]] = []
+    keys: list[tuple[str | None, Path]] = []
     for producer, path in producer_paths(context.index, site, slot, declared):
+        if producer.reason == ESCAPES:
+            keys.append((None, path))
+            continue
         if producer.caller is None or producer.ordinal is None or producer.identity is None:
             continue
         built = context.index.sites[(producer.caller, producer.ordinal)]
@@ -955,18 +1052,24 @@ def _schedules(captures: Mapping[str, Any], context: _Context) -> list[_Schedule
     site, slot = position
     declared_kind = _declared_kind(site, slot, context)
     found: list[_Schedule] = []
-    chains = [
-        (producer, path)
-        for producer, path in producer_paths(
-            context.index,
-            site,
-            slot,
-            context.builder_calls,
-            along_receivers=True,
-            configuring=context.configuring,
+    ends = producer_paths(
+        context.index,
+        site,
+        slot,
+        context.builder_calls,
+        along_receivers=True,
+        configuring=context.configuring,
+    )
+    chains = [(producer, path) for producer, path in ends if producer.chain]
+    # A path the walk answers `escapes` is a schedule it cannot read: its own row, the kind
+    # the producing call is declared to return and no expression (the user's ruling of
+    # 2026-11-02), never dropped because another path read one.
+    if chains:
+        found.extend(
+            _Schedule(declared_kind, path=path)
+            for producer, path in ends
+            if producer.reason == ESCAPES
         )
-        if producer.chain
-    ]
     for producer, path in chains:
         sites = [context.index.sites[key] for key in producer.chain]
         if not producer.rooted:

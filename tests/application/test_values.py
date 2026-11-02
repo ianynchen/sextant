@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fixture_module import write_fixture_module_fact
+from fixture_module import declared_parameters, write_fixture_module_fact
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve import path_prefix
@@ -40,6 +40,7 @@ from sextant.application.resolve.values import (
     Answer,
     Binding,
     Producer,
+    producer_paths,
     producers_of,
     resolve_site,
     value_index,
@@ -60,6 +61,8 @@ from sextant.domain.facts import (
     TypeRef,
 )
 from sextant.domain.symbols import method_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -88,6 +91,9 @@ _BUFFER = _PKG + "Buffer#"
 # `Buffer`'s supertype, as the hierarchy a producer-identity reader hands the walk names it.
 _BASE = _PKG + "Base#"
 _BUFFER_ANCESTORS = {_BUFFER: [(_BASE, "extends", True)]}
+# What the mutation fixtures' producer hands back: a `Buffer`, the type every call made on the
+# value is made on — a `String` cannot be changed by any call (spec 2026-11-02 rule 3).
+_MAKES_BUFFER = "()L" + _BUFFER[:-1] + ";"
 _BINDER = _PKG + "Binder#"
 # A binding whose WRITER the facts name — the sixth edge's own shape (spec
 # 2026-10-18). `Written#<init>(String)` assigns its parameter to the field, and two
@@ -205,12 +211,17 @@ def _type(owner: str) -> SymbolFact:
 
 
 def _declared(owner: str, name: str, jvm: str) -> SymbolFact:
+    """A method as a real scan declares it: one parameter per descriptor slot, each with the
+    erased type the descriptor names — the type a parameter value has to the walk."""
     return SymbolFact(
         document_id="doc_values",
         symbol=_symbol(owner, name, jvm),
         construct_kind=ConstructKind.METHOD,
         enclosing=_MODULE + owner,
-        signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+        signature=Signature(
+            parameters=declared_parameters(jvm),
+            returns=TypeRef(symbol="java/lang/String#"),
+        ),
     )
 
 
@@ -287,7 +298,7 @@ def _accessed(name: str, jvm: str, call: str = "contents") -> list[Fact]:
     given = [CallArgument(kind="string", value="k")] if not jvm.startswith("()") else []
     return [
         _declared(_MUTATOR, name, "()V"),
-        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(caller, 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         _site(
             caller,
             1,
@@ -339,7 +350,7 @@ def _configured(name: str, second: str, second_jvm: str = _APPENDS) -> list[Fact
 
     return [
         _declared(_MUTATOR, name, "()V"),
-        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(caller, 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         call(1, "append", 7, "x"),
         call(2, second, 11, "y", second_jvm),
         _site(
@@ -485,7 +496,7 @@ def _facts() -> list[Fact]:
         # A value handed to a method that might mutate it, and the same shape
         # with nothing in between.
         _declared(_MUTATOR, "escaped", "()V"),
-        _site(_symbol(_MUTATOR, "escaped", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(_symbol(_MUTATOR, "escaped", "()V"), 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         _site(
             _symbol(_MUTATOR, "escaped", "()V"),
             1,
@@ -1219,7 +1230,7 @@ def _facts() -> list[Fact]:
         # A value MUTATED inside the callee before the `return`, and its twin that is not.
         _declared(_NAMES, "built", _MAKES_STRING),
         _site(
-            _symbol(_NAMES, "built", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_STRING), result=21
+            _symbol(_NAMES, "built", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_BUFFER), result=21
         ),
         _site(
             _symbol(_NAMES, "built", _MAKES_STRING),
@@ -4784,12 +4795,20 @@ def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
 def _ends(
     workspace: DuckDbWorkspace, method: str, ordinal: int, stop: frozenset[str] = frozenset()
 ) -> tuple[Producer, ...]:
-    return producers_of(
-        value_index(workspace),
-        _at(workspace, method, ordinal),
-        RECEIVER,
-        frozenset(),
-        stop_at_parameters_of=stop,
+    """The pass-through reader's question (`pass_through.py`): which object — whose
+    parameter — the receiver is, so calls made on it on the way are let past."""
+    return tuple(
+        dict.fromkeys(
+            producer
+            for producer, _ in producer_paths(
+                value_index(workspace),
+                _at(workspace, method, ordinal),
+                RECEIVER,
+                frozenset(),
+                stop_at_parameters_of=stop,
+                which_object=True,
+            )
+        )
     )
 
 
@@ -4948,6 +4967,331 @@ def _handed(name: str, ordinal: int, target: tuple[str, str, str], **given: Any)
     return _site(_symbol(_USES, name, "()V"), ordinal, target, arguments=_results(1), **given)
 
 
+def _capture(name: str, *body: Fact, mapped: bool = True) -> list[Fact]:
+    """`void Uses.<name>() { o = create(); Runnable r = () -> lambda$<name>$0(o); run(r);
+    Client.of(o); }`: the capture site hands `o` to the `dynamic` site (result 4), whose body
+    `lambda$<name>$0(Options)` holds `body`. `mapped` False leaves out the `lambda` entry the
+    capture fold reads, so nothing says which parameter `o` lands on."""
+    caller = _symbol(_USES, name, "()V")
+    lambda_body = method_descriptor(_USES, f"lambda${name}$0", _TAKES_OPTIONS)
+    run = _site(
+        caller,
+        2,
+        (_PKG + "Executor#", "run", "(Ljava/lang/Runnable;)V"),
+        arguments=[CallArgument(kind="lambda", symbol=lambda_body, captures=1, source=4)]
+        if mapped
+        else [CallArgument(kind="unresolved", source=4)],
+    )
+    return [
+        *_uses(
+            name,
+            _handed(
+                name,
+                1,
+                (
+                    "java/lang/invoke/LambdaMetafactory#",
+                    "metafactory",
+                    "(" + _OPTIONS_TYPE + ")Ljava/lang/Runnable;",
+                ),
+                kind="dynamic",
+                result=4,
+            ).model_copy(update={"implementation": lambda_body}),
+            run,
+            last=3,
+        ),
+        *_setup(f"lambda${name}$0", *body, owner=_USES),
+    ]
+
+
+# Fix round 1's shapes. `Setup.send(o)` takes the value and uses it itself (C1); a String
+# logged through SLF4J's `info(String, Object)` (M1); a value inside an array or a merge (M3);
+# a body whose call on its parameter cannot name its receiver (M4); a functional interface a
+# lambda implements (M5); a hand-off through a compiler-emitted default-argument bridge (M8);
+# and a concat operand changed before and after the concat (`_joined`).
+_CUSTOMIZER = _PKG + "Customizer#"
+_NOOP_CUSTOMIZER = _PKG + "NoopCustomizer#"
+_QUIET = _PKG + "Quiet#"
+_NOOP_QUIET = _PKG + "NoopQuiet#"
+_OTHER_QUIET = _PKG + "OtherQuiet#"
+_TUNING = _PKG + "Tuning#"
+_TUNE = "(" + _OPTIONS_TYPE + "I)V"
+_TUNE_BRIDGE = "(L" + _TUNING[:-1] + ";" + _OPTIONS_TYPE + "IILjava/lang/Object;)V"
+_SLF4J_INFO = ("org/slf4j/Logger#", "info", "(Ljava/lang/String;Ljava/lang/Object;)V")
+_NULL_CHECK = (
+    "kotlin/jvm/internal/Intrinsics#",
+    "checkNotNullParameter",
+    "(Ljava/lang/Object;Ljava/lang/String;)V",
+)
+_JOINED = _PKG + "Joined#"
+_CONCAT_OBJECT = (
+    "java/lang/invoke/StringConcatFactory#",
+    "makeConcatWithConstants",
+    "(Ljava/lang/Object;)Ljava/lang/String;",
+)
+
+
+def _interface(owner: str, implementation: str) -> list[Fact]:
+    """`interface <owner> { void customize(Options o); }` and a class implementing it with a
+    body that does nothing."""
+    return [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + owner,
+            construct_kind=ConstructKind.INTERFACE,
+        ),
+        _declared(owner, "customize", _TAKES_OPTIONS),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + implementation,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[_MODULE + owner],
+        ),
+        *_setup("customize", owner=implementation),
+    ]
+
+
+def _through_interface(name: str, owner: str) -> list[Fact]:
+    """`Uses.<name>`: `customizer.customize(o)` through the interface, the customizer a field."""
+    return _uses(
+        name,
+        _site(
+            _symbol(_USES, name, "()V"),
+            1,
+            (owner, "customize", _TAKES_OPTIONS),
+            kind="interface",
+            receiver_field=_USES + "customizer.",
+            arguments=_results(1),
+        ),
+        last=2,
+    )
+
+
+def _joined_facts(name: str, touched_at: int, concat_at: int) -> list[Fact]:
+    """`Joined.<name>`: `n = Name.of("raw-notify")`, `n + "/orders"` and a call made on `n`,
+    in the order the two ordinals say, then the address used."""
+    caller = _symbol(_JOINED, name, "()V")
+    return [
+        _declared(_JOINED, name, "()V"),
+        _site(caller, 0, (_NAME, "of", _OF_ONE), arguments=_string("raw-notify"), result=5),
+        _site(caller, touched_at, (_NAME, "touch", "()V"), kind="virtual", receiver=5),
+        _site(caller, concat_at, _CONCAT_OBJECT, kind="dynamic", arguments=_results(5), result=12),
+        _site(
+            caller,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", source=12, value="{}/orders")],
+        ),
+    ]
+
+
+def _fix_round_facts() -> list[Fact]:
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    tuned_send = _symbol(_SETUP, "tunedSend", _TAKES_OPTIONS)
+    checked = _symbol(_SETUP, "checkedSend", _TAKES_OPTIONS)
+    defaulting = _symbol(_SETUP, "defaulting", _TAKES_OPTIONS)
+    own = _symbol(_SETUP, "ownCall", _TAKES_OPTIONS)
+    stored_result = _symbol(_SETUP, "storeResult", _TAKES_OPTIONS)
+    named = _symbol(_SETUP, "logName", _TAKES_STRING)
+    return [
+        # `send(o) { configure(o); Client.of(o); }` and `tunedSend(o) { o.setHost("t");
+        # Client.of(o); }`, each called once with a fresh `Options`.
+        *_setup(
+            "send",
+            _hands_parameter(send, 0, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _hands_parameter(send, 1, _CLIENT_OF),
+        ),
+        *_setup(
+            "tunedSend",
+            _on_parameter(tuned_send, 0, _SET_HOST, arguments=_string("t")),
+            _hands_parameter(tuned_send, 1, _CLIENT_OF),
+        ),
+        *_uses("viaSend", _handed("viaSend", 1, (_SETUP, "send", _TAKES_OPTIONS)), last=2),
+        *_uses(
+            "viaTunedSend",
+            _handed("viaTunedSend", 1, (_SETUP, "tunedSend", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        # `checkedSend(o) { Intrinsics.checkNotNullParameter(o, "o"); Client.of(o); }` — the
+        # null check a compiler writes at the top of every non-private function.
+        *_setup(
+            "checkedSend",
+            _site(
+                checked,
+                0,
+                _NULL_CHECK,
+                arguments=[CallArgument(kind="parameter", value=0), *_string("o")],
+            ),
+            _hands_parameter(checked, 1, _CLIENT_OF),
+        ),
+        # `logName(String name) { log.info("{}", name); Client.named(name); }`, and a String
+        # value handed to the same `info(String, Object)`, from a call and from a concat.
+        _declared(_SETUP, "logName", _TAKES_STRING),
+        _void(_SETUP, "logName", _TAKES_STRING),
+        _site(
+            named,
+            0,
+            _SLF4J_INFO,
+            kind="interface",
+            receiver_field=_SETUP + "log.",
+            arguments=[*_string("{}"), CallArgument(kind="parameter", value=0)],
+        ),
+        _site(named, 1, _ONE_TARGET, arguments=[CallArgument(kind="parameter", value=0)]),
+        *[
+            fact
+            for name, producer, kind in (
+                ("slf4j", (_NAMES, "one", _MAKES_STRING), "static"),
+                (
+                    "slf4jConcat",
+                    ("java/lang/invoke/StringConcatFactory#", "make", "()Ljava/lang/String;"),
+                    "dynamic",
+                ),
+            )
+            for fact in (
+                _declared(_USES, name, "()V"),
+                _site(_symbol(_USES, name, "()V"), 0, producer, kind=kind, result=1),
+                _site(
+                    _symbol(_USES, name, "()V"),
+                    1,
+                    _SLF4J_INFO,
+                    kind="interface",
+                    receiver_field=_USES + "log.",
+                    arguments=[*_string("{}"), CallArgument(kind="unresolved", source=1)],
+                ),
+                _site(_symbol(_USES, name, "()V"), 2, _ONE_TARGET, arguments=_results(1)),
+            )
+        ],
+        # `Lib.mutateAll(new Options[]{o})` and `configure(flag ? o : other)`.
+        *_uses(
+            "arrayed",
+            _site(
+                _symbol(_USES, "arrayed", "()V"),
+                1,
+                (_PKG + "Lib#", "mutateAll", "([" + _OPTIONS_TYPE + ")V"),
+                arguments=[CallArgument(kind="array", elements=_results(1))],
+            ),
+            last=2,
+        ),
+        *_uses(
+            "merged",
+            _site(
+                _symbol(_USES, "merged", "()V"),
+                1,
+                (_SETUP, "configure", _TAKES_OPTIONS),
+                arguments=[CallArgument(kind="merge", candidates=_results(1, 9))],
+            ),
+            last=2,
+        ),
+        # `defaulting(o) { if (o == null) o = new Options(); o.setPort(1); }` — the call's
+        # receiver merges the parameter with the `new`, so the facts name neither — and
+        # `ownCall(o) { this.helper(); }`, a call on a receiver of another type.
+        *_setup(
+            "defaulting",
+            _site(
+                defaulting,
+                0,
+                _SET_PORT,
+                kind="virtual",
+                arguments=[CallArgument(kind="int", value=1)],
+            ),
+        ),
+        *_setup("ownCall", _site(own, 0, (_SETUP, "helper", "()V"), kind="virtual")),
+        *_uses(
+            "defaulted", _handed("defaulted", 1, (_SETUP, "defaulting", _TAKES_OPTIONS)), last=2
+        ),
+        *_uses("ownCalled", _handed("ownCalled", 1, (_SETUP, "ownCall", _TAKES_OPTIONS)), last=2),
+        # `storeResult(o) { this.options = o.setPort(1); }` — a configuring call's result,
+        # stored.
+        *_setup(
+            "storeResult",
+            _on_parameter(
+                stored_result, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=1)], result=3
+            ),
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SETUP + "options.",
+            value=CallArgument(kind="unresolved", source=3),
+            written_by=stored_result,
+        ),
+        *_uses(
+            "storedResult",
+            _handed("storedResult", 1, (_SETUP, "storeResult", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        # `Customizer` is implemented by a lambda somewhere in the module; `Quiet` is not.
+        *_interface(_CUSTOMIZER, _NOOP_CUSTOMIZER),
+        *_interface(_QUIET, _NOOP_QUIET),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _OTHER_QUIET,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[_MODULE + _QUIET],
+        ),
+        *_setup("customize", owner=_OTHER_QUIET),
+        _declared(_USES, "lambdas", "()V"),
+        _site(
+            _symbol(_USES, "lambdas", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "metafactory", "()L" + _CUSTOMIZER[:-1] + ";"),
+            kind="dynamic",
+            result=1,
+        ).model_copy(
+            update={"implementation": method_descriptor(_USES, "lambda$lambdas$0", _TAKES_OPTIONS)}
+        ),
+        *_setup(
+            "lambda$lambdas$0",
+            _on_parameter(
+                _symbol(_USES, "lambda$lambdas$0", _TAKES_OPTIONS),
+                0,
+                _SET_PORT,
+                arguments=[CallArgument(kind="int", value=443)],
+            ),
+            owner=_USES,
+        ),
+        *_through_interface("customized", _CUSTOMIZER),
+        *_through_interface("quieted", _QUIET),
+        # `tuning.tune(o)` with its `port` left to its default: the compiler calls the static
+        # `tune$default(tuning, o, 0, 2, null)`, and `tune(o, port)` sets the port on `o`.
+        _type(_TUNING),
+        _declared(_TUNING, "tune", _TUNE),
+        _void(_TUNING, "tune", _TUNE),
+        _on_parameter(
+            _symbol(_TUNING, "tune", _TUNE),
+            0,
+            _SET_PORT,
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_TUNING, "tune$default", _TUNE_BRIDGE),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _TUNING,
+            modifiers={"static": True, "synthetic": True},
+            bridge_of="tune",
+        ),
+        *_uses(
+            "bridged",
+            _site(
+                _symbol(_USES, "bridged", "()V"),
+                1,
+                (_TUNING, "tune$default", _TUNE_BRIDGE),
+                arguments=[
+                    CallArgument(kind="instance", symbol=_TUNING, source=70),
+                    CallArgument(kind="unresolved", source=1),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="int", value=2),
+                    CallArgument(kind="null"),
+                ],
+            ),
+            last=2,
+        ),
+        # The concat operand touched AFTER the concat built the string, and BEFORE.
+        *_joined_facts("after", touched_at=2, concat_at=1),
+        *_joined_facts("before", touched_at=1, concat_at=2),
+    ]
+
+
 def _handoff_facts() -> list[Fact]:
     configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
     relay = _symbol(_SETUP, "relay", _TAKES_OPTIONS)
@@ -5039,29 +5383,21 @@ def _handoff_facts() -> list[Fact]:
             ),
             last=2,
         ),
-        # `Runnable r = () -> touch(o);` — a capture, at an `invokedynamic` site naming a body
-        # this module has, which does nothing to the value: only the site's dynamic form
-        # separates it from a hand-off `call_edges` resolves.
-        *_uses(
-            "captured",
-            _handed(
-                "captured",
-                1,
-                (
-                    "java/lang/invoke/LambdaMetafactory#",
-                    "metafactory",
-                    "(" + _OPTIONS_TYPE + ")Ljava/lang/Runnable;",
-                ),
-                kind="dynamic",
-                result=4,
-            ).model_copy(
-                update={
-                    "implementation": method_descriptor(_USES, "lambda$captured$0", _TAKES_OPTIONS)
-                }
+        # `Runnable r = () -> …o…; executor.run(r);` — a capture at an `invokedynamic` site,
+        # mapped to the body's parameter by the capture fold (the lambda entry `run` takes), and
+        # the same capture with nothing naming its body's parameters.
+        *_capture("captured"),
+        *_capture(
+            "capturedBusy",
+            _on_parameter(
+                _symbol(_USES, "lambda$capturedBusy$0", _TAKES_OPTIONS),
+                0,
+                _SET_PORT,
+                arguments=[CallArgument(kind="int", value=443)],
             ),
-            last=2,
         ),
-        *_setup("lambda$captured$0", owner=_USES),
+        *_capture("capturedUnmapped", mapped=False),
+        *_fix_round_facts(),
         # The value handed to code this module does not have, where the parameter it lands on
         # cannot be changed by anything (rule 3), and the same with an `Object` parameter.
         *[
@@ -5169,12 +5505,24 @@ def test_a_hand_off_to_code_this_module_does_not_have_escapes(handoffs):
         assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
 
 
+@pytest.mark.pins("values.a-capture-the-body-does-NOTHING-with-is-not-a-hand-off")
+def test_a_capture_the_lambda_does_nothing_with_is_not_a_hand_off(handoffs):
+    """A capture into a lambda whose body does nothing to the captured parameter cannot
+    change the value (spec rule 2 as amended in fix round 1, M6): the capture fold names the
+    parameter it lands on, and the body's window over it is empty."""
+    assert _walked_use(handoffs, "captured") == ["external"]
+    caller = _symbol(_USES, "captured", "()V")
+    assert [p.chain for p in _use_of(handoffs, "captured", _OPTIONS_SETTERS)] == [((caller, 0),)]
+
+
 @pytest.mark.pins("values.a-DYNAMIC-hand-off-escapes")
-def test_a_value_captured_at_a_dynamic_site_escapes(handoffs):
-    """A capture into a lambda at an `invokedynamic` site: the facts do not say which
-    parameter of the body it lands on, so the path is `escapes`."""
-    assert _walked_use(handoffs, "captured") == ["escapes"]
-    assert _use_of(handoffs, "captured", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+def test_a_capture_the_lambda_does_anything_with_escapes(handoffs):
+    """When the body runs is not known, so a body that does anything to the captured value —
+    here a configuring `setPort`, which a chain reader would otherwise gather — is `escapes`;
+    and a capture nothing maps to a parameter is `escapes` too."""
+    for name in ("capturedBusy", "capturedUnmapped"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
 
 
 @pytest.mark.pins("values.a-FIELD-WRITE-of-a-handed-value-escapes")
@@ -5216,3 +5564,133 @@ def test_a_hand_off_with_two_callees_is_two_paths_never_one(handoffs):
 def test_a_hand_off_that_returns_to_itself_is_a_cycle(handoffs):
     """`loop(o) { o.setPort(1); loop(o); }`: the second entry into `loop` is a repeat."""
     assert _use_of(handoffs, "looped", _OPTIONS_SETTERS) == (Producer(reason="cycle"),)
+
+
+@pytest.mark.pins("values.a-method-reads-its-OWN-PARAMETER-window")
+def test_a_methods_own_parameter_is_windowed_from_entry_to_the_use(handoffs):
+    """C1: `send(o) { configure(o); Client.of(o); }` called with a fresh `Options`. The
+    window of `o` runs from `send`'s entry to the use, so the hand-off inside `send` is read
+    exactly as the caller's would be — the spec's own §1 example moved into a helper."""
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    via = _symbol(_USES, "viaSend", "()V")
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    site = _at(handoffs, send, 1)
+    assert _reasons(resolve_site(handoffs, site)) == ["escapes"]
+    [producer] = producers_of(
+        value_index(handoffs),
+        site,
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert (producer.chain, producer.rooted) == (((via, 0), (configure, 0)), True)
+    tuned = _symbol(_SETUP, "tunedSend", _TAKES_OPTIONS)
+    [producer] = producers_of(
+        value_index(handoffs),
+        _at(handoffs, tuned, 1),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert producer.chain == ((_symbol(_USES, "viaTunedSend", "()V"), 0), (tuned, 0))
+
+
+@pytest.mark.pins("values.a-COMPILER-NULL-CHECK-is-not-a-hand-off")
+def test_a_compiler_null_check_is_not_a_hand_off(handoffs):
+    """**The user's ruling of 2026-11-02**: `Intrinsics.checkNotNullParameter(o, "o")`, which
+    the compiler (not the author) writes at the top of every non-private function and which
+    only tests for null and throws, is not a hand-off. Recognised by its OWNER class, which the
+    shipped `value-models/compiler-null-checks.yml` declares, so a walk handed the shipped
+    catalogs' `not_hand_offs` reads past it; the same call with no owner declared is a call
+    into code this module does not have, `escapes`, as every such call is."""
+    checked = _symbol(_SETUP, "checkedSend", _TAKES_OPTIONS)
+    owners = YamlCatalogSource(catalogs_dir()).not_hand_offs()
+    assert _NULL_CHECK[0] in owners
+    ruled = resolve_site(handoffs, _at(handoffs, checked, 1), value_index(handoffs, owners))
+    assert _reasons(ruled) == ["external"]
+    unruled = resolve_site(handoffs, _at(handoffs, checked, 1), value_index(handoffs))
+    assert _reasons(unruled) == ["escapes"]
+
+
+@pytest.mark.pins("values.an-IMMUTABLE-VALUE-is-not-handed-off")
+def test_a_string_handed_to_an_object_parameter_is_not_a_hand_off(handoffs):
+    """M1: rule 3 is about the VALUE. SLF4J's `info(String, Object)` types the value's
+    parameter `Object`, but a `String` — from a call declared to return one, from a concat,
+    or a parameter declared as one — cannot be changed by anything, so `log.info("{}", url)`
+    before the use keeps it."""
+    for name in ("slf4j", "slf4jConcat"):
+        assert _reasons(_bindings(handoffs, _symbol(_USES, name, "()V"), 2)) == ["external"], name
+    assert _reasons(_bindings(handoffs, _symbol(_SETUP, "logName", _TAKES_STRING), 1)) == [
+        "external"
+    ]
+
+
+@pytest.mark.pins("values.a-value-NESTED-in-an-argument-escapes")
+def test_a_value_inside_an_array_or_a_merge_escapes(handoffs):
+    """M3: `Lib.mutateAll(new Options[]{o})` and `configure(flag ? o : other)` reach the value
+    below the top level of an argument, where no body can be followed per element: never
+    "nothing happened"."""
+    for name in ("arrayed", "merged"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
+
+
+@pytest.mark.pins("values.an-UNREAD-RECEIVER-of-the-values-type-escapes")
+def test_a_call_whose_receiver_may_be_the_reassigned_parameter_escapes(handoffs):
+    """M4: `defaulting(o) { if (o == null) o = new Options(); o.setPort(1); }` — the receiver
+    merges the parameter with the `new`, so the facts name neither; a call on an `Options`
+    whose receiver they cannot name may be a call on the value. A call on a receiver of
+    another type (`this.helper()`) is not."""
+    assert _walked_use(handoffs, "defaulted") == ["escapes"]
+    assert _use_of(handoffs, "defaulted", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+    assert _walked_use(handoffs, "ownCalled") == ["external"]
+
+
+@pytest.mark.pins("values.a-hand-off-through-a-LAMBDA-IMPLEMENTED-type-escapes")
+def test_a_hand_off_through_an_interface_a_lambda_implements_escapes(handoffs):
+    """M5: `dispatch` lists no lambda as a candidate, so `customizer.customize(o)` on a type a
+    lambda in this module implements reaches a body `call_edges` does not name: `escapes`.
+    The same call through an interface no lambda implements is walked into, and its one
+    body does nothing."""
+    assert _walked_use(handoffs, "customized") == ["escapes"]
+    assert _walked_use(handoffs, "quieted") == ["external"]
+
+
+@pytest.mark.pins("values.a-hand-off-reads-the-PROJECTED-row")
+def test_a_hand_off_through_a_default_argument_bridge_lands_on_the_siblings_parameter(handoffs):
+    """M8: `tuning.tune(o)` compiled as `tune$default(tuning, o, 0, 2, null)`. Read raw, the
+    value is slot 1, which is the sibling's `port`; read off the projection it is the
+    sibling's parameter 0, the `Options` `tune` calls `setPort` on — so the call joins the
+    chain."""
+    bridged = _symbol(_USES, "bridged", "()V")
+    [producer] = _use_of(handoffs, "bridged", _OPTIONS_SETTERS)
+    assert producer.chain == ((bridged, 0), (_symbol(_TUNING, "tune", _TUNE), 0))
+
+
+@pytest.mark.pins("values.a-CONCAT-OPERAND-is-used-at-the-concat")
+def test_a_concat_operand_is_read_where_the_concat_uses_it(handoffs):
+    """The concat site consumes its operand: a call on the operand AFTER it cannot change
+    the string already built, so the address joins; the same call BEFORE it may have
+    changed what was rendered, so the hole stays a hole."""
+    identities = [_ADDRESS_IDENTITY]
+    after = _identified(handoffs, _symbol(_JOINED, "after", "()V"), 3, identities)
+    before = _identified(handoffs, _symbol(_JOINED, "before", "()V"), 3, identities)
+    assert [b.slots[0].value for b in after] == ["raw-notify/orders"]
+    assert [b.slots[0].value for b in before] == ["{}/orders"]
+
+
+def test_bodies_that_all_do_the_same_are_one_path(handoffs):
+    """Two callees that do the same thing to the value — `Quiet`'s two implementations both
+    do nothing — are one path with no choice on it, not two bindings saying one thing."""
+    caller = _symbol(_USES, "quieted", "()V")
+    assert len(value_index(handoffs).callees[(caller, 1)]) == 2
+    bindings = _bindings(handoffs, _symbol(_USES, "quieted", "()V"), 2)
+    assert [(b.path, _reasons([b])) for b in bindings] == [((), ["external"])]
+
+
+def test_a_configuring_result_stored_in_a_field_escapes(handoffs):
+    """`storeResult(o) { this.options = o.setPort(1); }`: the stored result is the same
+    object, now in a field."""
+    assert _use_of(handoffs, "storedResult", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)

@@ -122,7 +122,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # sharing it landed in `fluent` alone and was not carried here — the same
         # cross-engine miss `OI-143` records for the url reader, in the same file pair.
         if index is None:
-            index = cached_value_index(workspace)
+            index = cached_value_index(workspace, catalog.not_hand_offs)
         # **The backward walk, in place of this engine's own copy of `single_call`'s
         # `channel_of`-then-`linked_channels`** (spec §2b, Task 7). The ladder it replaces
         # was two rungs, each capped at one hop: the literal at the declared position, then

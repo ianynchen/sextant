@@ -619,6 +619,17 @@ only thing an engine is handed, and every catalog of one source carries the iden
 A source that declares no `value-models/` and writes no hop declaration contributes an empty
 one, which is the state of a repository's own catalog set (§6) that declares neither.
 
+**`not_hand_offs` — owners whose calls take a value without handing it off** (spec
+2026-11-02, the user's ruling of that day). A `value-models/` file may also declare
+`not_hand_offs: [{owner, by}]`, the owner dotted as every catalog spells a type. The value walk's `escapes` window reads every call that takes
+a value as a hand-off (rules 1-3 of that spec); a call to one of these OWNER classes is not
+one. One structural rule per owner, never per method. The one shipped entry is
+`value-models/compiler-null-checks.yml`: the class a JVM language's compiler calls to check
+a parameter or a platform result for null — the compiler, not the author, writes those
+calls, and each only checks and throws. `by` is required, as for `identified_by`. The loader
+reads it into `Catalog.not_hand_offs` (every catalog of a source carries the same tuple) and
+each engine hands it to `values.cached_value_index`.
+
 **What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
 takes the table as data and uses it where a value's producer is a call this module could not
 read through. The walk has found the call (distance); the table says which of its arguments
