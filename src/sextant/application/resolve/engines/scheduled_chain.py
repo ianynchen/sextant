@@ -829,8 +829,10 @@ def _pairings(
                     refusal = _refusal(consumer, pairing, job, path, apart[0], for_job, context)
                     found.append((job, None, refusal))
                     storing.append((apart[0], refusal))
-            # A pairing call the walk read no pairing from may store the trigger all the same.
-            unsure = unsure or len(storing) == before
+            # A pairing call the walk read no pairing from may store the trigger all the same,
+            # and whether Quartz refuses it is not known (review 2, N3): undecided on any path.
+            if len(storing) == before:
+                storing.append((_ANY_PATH, _UNDECIDED))
         # A call the reader does not pair (`scheduleJob(Trigger)`) may store the trigger.
         unsure = unsure or not paired
     stored = _stored_by(storing, unsure)
@@ -941,6 +943,29 @@ def _bound_of(job: ChainEnd, context: _Context, path: Path = _ANY_PATH) -> _Boun
     )
 
 
+def _first_binder(
+    trigger: Path,
+    effects: Mapping[tuple[str, str, str, int], Mapping[str, Any]],
+    context: _Context,
+) -> tuple[str, int, int, tuple[tuple[str, int], ...]] | None:
+    """The stated call that bound the trigger FIRST on `trigger`'s path, in RUN order (review
+    2, N1), or None where no stated call on it binds. One of the two places order is decided
+    for a refusal, beside `_ran_before`.
+
+    The walk meets frames backward (`Path.stated_by_frame`): each frame it crosses out to or
+    descends into ran before the one met just before it — `y(){ scheduleJob(B, t); h(t); }`
+    ran `y`'s call before any of `h`'s. So the frames are read last-met first, and within a
+    frame its calls in the window's order, which is the run order the window itself assumes
+    (review 2, C3/M4: no control-flow fact yet)."""
+    for frame in reversed(trigger.stated_by_frame()):
+        for caller, ordinal, slot, entered in frame:
+            site = context.index.sites.get((caller, ordinal))
+            effect = None if site is None else effects.get((*_call_of(site), slot))
+            if effect is not None and effect["binds"] is not None:
+                return caller, ordinal, slot, entered
+    return None
+
+
 def _ran_before(binder: tuple[str, int], consumer: Mapping[str, Any], trigger: Path) -> bool:
     """Whether the call at `binder` runs before `consumer` on every path that reaches both —
     the one place a refusal from an EARLIER call rests on order (C1, C2 and M1 of review 2).
@@ -949,8 +974,8 @@ def _ran_before(binder: tuple[str, int], consumer: Mapping[str, Any], trigger: P
     ordinal, and an entered body runs to its end before its caller's next call. The facts
     carry no control flow (review 2, C3, and M4: a call on one branch is gathered as though
     it ran on every path), so this answers True wherever the window put the binder on the
-    path. A fact that proves order (dominance, a block per call) is to be read HERE, and
-    nowhere else, when the user rules on it."""
+    path. A fact that proves order (dominance, a block per call) is to be read HERE and in
+    `_first_binder`, and nowhere else, when the user rules on it."""
     return True
 
 
@@ -1034,14 +1059,13 @@ def _refusal(
         else:
             bound = next(iter(binds.values()))
     else:
-        for caller, ordinal, slot, entered in trigger.stated():
-            site = context.index.sites.get((caller, ordinal))
-            effect = None if site is None else effects.get((*_call_of(site), slot))
-            if site is None or effect is None or effect["binds"] is None:
-                continue
-            if not _ran_before((caller, ordinal), consumer, trigger):
-                known = False
-                break
+        first = _first_binder(trigger, effects, context)
+        if first is not None and not _ran_before(first[:2], consumer, trigger):
+            known = False
+        elif first is not None:
+            caller, ordinal, slot, entered = first
+            site = context.index.sites[(caller, ordinal)]
+            effect = effects[(*_call_of(site), slot)]
             read_at, to = _binder_site(site, int(effect["binds"]["to"]), entered, context)
             binders: dict[Any, _Bound | None] = {
                 None if one is None else (built := _bound_of(one, context, path)).identity: (
@@ -1054,7 +1078,6 @@ def _refusal(
                 known = False
             else:
                 bound = next(iter(binders.values()))
-            break
     if known and bound is None:
         return _ACCEPTED
     own = effects.get((*_call_of(consumer), pairing.trigger))

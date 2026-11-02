@@ -132,9 +132,12 @@ publishes `search` while its port is unknown.
    the trigger on the path is refused — nothing is stored, so it never runs (M1), unless a
    call the reader does not pair may store it; a listener or capture body re-entered while it
    is read is `cycle` (M2); and a path ending `cycle` keeps its row as `escapes` does (M3).
-   That an earlier call runs before a later one rests on the window alone today
-   (`scheduled_chain._ran_before`), pending the user's ruling on control flow (review 2, C3,
-   M4).
+   The first binder is the first stated call in RUN order: the walk meets frames backward,
+   so a frame it crosses out to or descends into ran before the one met before it (re-review
+   N1, `scheduled_chain._first_binder`); a pairing call the walk reads no pairing from leaves
+   a `forJob` row undecided (N3). That an earlier call runs before a later one rests on the
+   window alone today (`_first_binder`, `_ran_before`, the two places order is decided),
+   pending the user's ruling on control flow (review 2, C3, M4).
 
    **The job argument** [ruled by the user, 2026-11-02, "option B"]: measured in 2.5.1 and
    2.3.2 (CP-55 rows 27, 32, 35, 49-73), Quartz's own code reads the job and never changes

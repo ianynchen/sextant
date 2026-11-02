@@ -2403,6 +2403,128 @@ def test_one_build_site_reached_through_two_calls_is_two_jobs(tmp_path: Path):
     ]
 
 
+def _built_job(caller: str, at: int, cls: str) -> tuple[list, int]:
+    """`newJob(<cls>.class).build()` at ordinals `at`, `at + 2`; its value is `at + 2`."""
+    return [
+        _site(
+            caller,
+            at,
+            JOB_BUILDER,
+            "newJob",
+            f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+            result=at,
+            arguments=(_class(cls),),
+        ),
+        _site(
+            caller,
+            at + 2,
+            JOB_BUILDER,
+            "build",
+            "()Lorg/quartz/JobDetail;",
+            receiver=at,
+            result=at + 2,
+        ),
+    ], at + 2
+
+
+def _schedule_job(caller: str, ordinal: int, job: CallArgument, trigger: CallArgument):
+    return _site(
+        caller,
+        ordinal,
+        "org/quartz/Scheduler#",
+        "scheduleJob",
+        _SCHEDULE_JVM,
+        receiver=99,
+        result=ordinal,
+        arguments=(job, trigger),
+    )
+
+
+def _outer_binds_first(inner: tuple[str, str]) -> list:
+    """Review 2's re-review N1/N2 shape: `y(){ t = trigger("c2"); scheduleJob(newJob(BJob)
+    .build(), t); h(t); }`, where `h(Trigger t)` makes two `scheduleJob` calls with `t`:
+    `inner` names their jobs — `("CJob", "CJob")` is ONE `c = newJob(CJob).build()` handed to
+    both, `("DJob", "CJob")` two jobs built in turn."""
+    trigger_jvm, trigger = _cron_helper()
+    y = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    h_jvm = "(Lorg/quartz/Trigger;)V"
+    h = _MODULE + method_descriptor(_TRIGGERS, "h", h_jvm)
+    facts = [
+        *_classes("BJob", "CJob", "DJob"),
+        *trigger,
+        _method_symbol("y", "()V"),
+        _site(y, 0, _TRIGGERS, "trigger", trigger_jvm, result=1, arguments=(_string("c2"),)),
+        _method_symbol("h", h_jvm),
+        MethodReturnFact(document_id="doc_1", method=h, ordinal=20, value=None),
+    ]
+    parameter = CallArgument(kind="parameter", value=0)
+    if inner[0] == inner[1]:
+        sites, c = _built_job(h, 0, inner[0])
+        facts += [
+            *sites,
+            _schedule_job(h, 5, CallArgument(kind="unresolved", source=c), parameter),
+            _schedule_job(h, 6, CallArgument(kind="unresolved", source=c), parameter),
+        ]
+    else:
+        for at, cls in ((0, inner[0]), (10, inner[1])):
+            sites, made = _built_job(h, at, cls)
+            facts += [
+                *sites,
+                _schedule_job(h, at + 5, CallArgument(kind="unresolved", source=made), parameter),
+            ]
+    sites, b = _built_job(y, 10, "BJob")
+    facts += [
+        *sites,
+        _schedule_job(
+            y,
+            15,
+            CallArgument(kind="unresolved", source=b),
+            CallArgument(kind="unresolved", source=1),
+        ),
+        _site(y, 16, _TRIGGERS, "h", h_jvm, arguments=(CallArgument(kind="unresolved", source=1),)),
+    ]
+    return facts
+
+
+@pytest.mark.pins("scheduled_chain.the-FIRST-BINDER-is-first-in-RUN-order")
+def test_a_call_in_the_outer_frame_binds_before_the_calls_of_a_helper(tmp_path: Path):
+    """Re-review N1: `y` binds `t` to BJob, THEN calls `h(t)`, whose two calls schedule one
+    CJob detail. The walk meets `h`'s frame first and `y`'s after, but `y`'s call RAN first:
+    both of `h`'s calls name a job whose key is not BJob's, so both are refused (CP-55 rows
+    40-41), and CJob has no row that runs."""
+    assert _refused_rows(_scheduled(tmp_path, _outer_binds_first(("CJob", "CJob")))) == [
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.the-FIRST-BINDER-is-first-in-RUN-order")
+def test_a_refusal_names_the_job_bound_first_in_run_order(tmp_path: Path):
+    """Re-review N2: `h` schedules DJob then CJob after `y` bound BJob. Both are refused, and
+    each names BJob — the job the trigger is truly bound to — never DJob, which `h`'s own
+    first call only tried to bind."""
+    assert _refused_rows(_scheduled(tmp_path, _outer_binds_first(("DJob", "CJob")))) == [
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+        ("DJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-pairing-call-with-NO-PAIRING-is-undecided")
+def test_a_forJob_row_whose_only_storing_call_is_unread_is_partial(tmp_path: Path):
+    """Re-review N3: `forJob("x")`, then `Lib.touch(t)` (a jar may re-bind it), then the only
+    storing call `scheduleJob(newJob(YJob).build(), t)`. Whether Quartz refuses that call is
+    not known, so whether XJob ever runs on `t` is not known either: XJob is `partial`, not
+    `resolved`, and not marked."""
+    facts = _for_job_then_schedule("YJob", None)
+    caller = _MODULE + method_descriptor(_TRIGGERS, "m", "()V")
+    facts.append(_touched(caller, 15, 5, "Lorg/quartz/Trigger;"))
+    assert _refused_rows(_scheduled(tmp_path, facts)) == [
+        ("XJob#execute", "0 0 * * * ?", "partial", "None"),
+        ("YJob#execute", "None", "partial", "None"),
+    ]
+
+
 @pytest.mark.pins("scheduled_chain.a-CYCLE-keeps-the-row-as-ESCAPES-does")
 def test_a_trigger_through_a_recursive_helper_keeps_its_jobs_row(tmp_path: Path):
     """Review 2, M3: `rec(Trigger t) { rec(t); }` before `scheduleJob(newJob(CJob).build(),
@@ -2484,9 +2606,11 @@ def test_a_listener_that_schedules_the_job_it_is_handed_does_not_recurse(tmp_pat
             arguments=[CallArgument(kind="parameter", value=0), CallArgument(kind="unresolved")],
         )
     )
-    rows = _refused_rows(_scheduled(tmp_path, facts))
-    assert ("BJob#execute", "c2", "resolved", "None") in rows
-    assert ("None", "c2", "partial", "None") in rows
+    assert _refused_rows(_scheduled(tmp_path, facts)) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("None", "c2", "partial", "None"),
+    ]
 
 
 @pytest.mark.pins("scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal")

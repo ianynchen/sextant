@@ -1375,22 +1375,36 @@ class Path:
         merged = _combine(self.trail, (step,))
         return None if merged is None else Path(merged, self.entered | {step})
 
-    def stated(self) -> tuple[tuple[str, int, int, tuple[tuple[str, int], ...]], ...]:
+    def stated_by_frame(
+        self,
+    ) -> tuple[tuple[tuple[str, int, int, tuple[tuple[str, int], ...]], ...], ...]:
         """The hand-offs this path passed whose effect a catalog states (spec 2026-11-02
-        rule 7, `ValueIndex.stated`), as `(caller, ordinal, slot, entered)`, in the order the
-        path met them: what a reader of the part such a call binds applies, in turn.
+        rule 7, `ValueIndex.stated`), as `(caller, ordinal, slot, entered)`, grouped by the
+        FRAME whose window met them, frames in the order the walk met them (review 2, N1).
+
+        The walk runs backward: from the use it reads the use's own frame first, then the
+        frame it crosses out to (a caller, through a parameter) or descends into (a call that
+        returned the value), each of which RAN before the frame met just before it. Within a
+        frame the window's calls are in their run order, a body a hand-off entered included.
+        Which call ran first is the reader's to decide from this; the walk names no order.
         `entered` is the calls that entered the body the stated call is in, innermost first
         (review 2, C1): the frame its arguments are read in."""
-        return tuple(
-            (
-                str(step.context[1]),
-                int(step.context[2]),
-                int(step.context[3]),
-                tuple(step.context[4:]),
-            )
-            for step in self.trail
-            if step.context[0] == _STATED
-        )
+        frames: list[list[tuple[str, int, int, tuple[tuple[str, int], ...]]]] = [[]]
+        for step in self.trail:
+            if step.context[0] in (_CALLER_OF, _RETURN_OF):
+                if frames[-1]:
+                    frames.append([])
+                continue
+            if step.context[0] == _STATED:
+                frames[-1].append(
+                    (
+                        str(step.context[1]),
+                        int(step.context[2]),
+                        int(step.context[3]),
+                        tuple(step.context[4:]),
+                    )
+                )
+        return tuple(tuple(frame) for frame in frames if frame)
 
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value

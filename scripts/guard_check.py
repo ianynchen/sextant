@@ -9142,6 +9142,32 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "scheduled_chain.the-FIRST-BINDER-is-first-in-RUN-order": Guard(
+        what="the trigger's first binder is the first stated call in RUN order: frames the "
+        "walk met later ran earlier (review 2 re-review, N1)",
+        why="`y(){ scheduleJob(B, t); h(t); }` with two CJob calls in `h` takes `h`'s first "
+        "call as the binder and publishes CJob as running, though Quartz refuses both",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    for frame in reversed(trigger.stated_by_frame()):\n",
+                replace="    for frame in trigger.stated_by_frame():  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-pairing-call-with-NO-PAIRING-is-undecided": Guard(
+        what="a pairing call the walk reads no pairing from leaves a `forJob` row undecided, "
+        "not standing (review 2 re-review, N3)",
+        why="a `forJob` job whose only storing call may be refused is published `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="                storing.append((_ANY_PATH, _UNDECIDED))\n",
+                replace="                unsure = True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
         what="a method's own parameter is windowed from the method's entry to the use: calls "
         "on it and hand-offs of it inside the method are read by the same rules (spec "
