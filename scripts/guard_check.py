@@ -8802,8 +8802,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find='        and inside(int(site["ordinal"]))\n',
-                replace="        and False  # guard disabled\n",
+                find="        and (_chain_key(site) is None or _configures(site, context))\n"
+                '        and inside(int(site["ordinal"]))\n',
+                replace="        and (_chain_key(site) is None or _configures(site, context))\n"
+                "        and False  # guard disabled\n",
             ),
         ),
     ),
@@ -9003,6 +9005,33 @@ GUARDS: dict[str, Guard] = {
                 path=_FLUENT,
                 find='                row["resolution"] = resolution\n',
                 replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-child-is-absorbed-only-BEFORE-THE-USE": Guard(
+        what="a call on a configuring call's result is absorbed into it only before the use; "
+        "one after the use in its loop keeps its own split, never proven (review 3 re-review 3, "
+        "N-1)",
+        why='`for (…) { r = b.setUri("/b"); execute(b.build()); r.setUri("/c"); }` publishes '
+        "`/c` `resolved` and drops `/b`, which every request is sent to",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if parent is None or (used_at is not None and ordinal > used_at):\n",
+                replace="            if parent is None:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-HAND-OFF-after-the-use-in-its-LOOP-forks": Guard(
+        what="a hand-off of the chain's value after the fork by ordinal that shares its loop "
+        "group forks the chain, its with-side never proven (review 3 re-review 3, N-2)",
+        why="`for (…) { execute(b.build()); setBthenC(b); }` drops the `/c` every later "
+        "request is sent to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        for site, outcomes in handed\n",
+                replace="        for site, outcomes in ()  # guard disabled\n",
             ),
         ),
     ),

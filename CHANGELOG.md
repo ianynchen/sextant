@@ -17,6 +17,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A call on a configuring call's result is absorbed into it only before the use, and the
+  forward walk reads a hand-off after the use in its loop** (rule 9 fix round 5, review 3
+  re-review 3). The user ruled on 2026-11-03 that the m-1 child rule stands and that a request
+  whose paths differ in a published part or header stays one `partial` row (option A, no schema
+  change). `for (…) { r = b.setUri("/b"); execute(b.build()); r.setUri("/c"); }` published `/c`
+  `resolved` alone, dropping `/b`, which every request goes to: the child now keeps its own
+  split after the use, never proven, in both walks (`/b` `resolved`, `/c` `partial`). `for (…)
+  { execute(b.build()); setBthenC(b); }` dropped the `/c` row; the loop-later hand-off now forks
+  the chain as a direct setter there does (`/a` `resolved`, `/c` `partial`).
 - **The forward chain walk follows a hand-off of the chain's value, and counts what it cannot
   see** (rule 9 fix round 4, review 3 re-review 2). `setB(b){ b.setUri("/b"); }` then `b =
   get("/a"); setB(b); http.execute(b.build())` published `GET /a`, `resolved`, which no run

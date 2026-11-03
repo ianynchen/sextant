@@ -1237,7 +1237,7 @@ def _fold_or_fork(
                 forked = forked or forked_on_it or bool(handed_on)
             continue
         forked = True
-        for next_captures in _forked(next_site, captures, nexts, context):
+        for next_captures in _forked(next_site, captures, nexts, context, handed):
             _fold_site(next_site, next_captures, context)
             _walk(next_site, next_captures, terminal, context)
     return forked, terminal
@@ -1363,6 +1363,7 @@ def _forked(
     captures: dict[str, Any],
     siblings: Sequence[dict[str, Any]],
     context: _ChainContext,
+    handed: Sequence[tuple[dict[str, Any], _Outcomes]] = (),
 ) -> list[dict[str, Any]]:
     """The captures a chain carries on to `use` (a fork, a consumer it is handed to, or None:
     the chain's end, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
@@ -1370,8 +1371,8 @@ def _forked(
 
     Each call folded in place since the last fork (`_FOLDS`), and each hand-off of the value with
     the paths its body takes, is one event; a configuring call AFTER the use by ordinal that
-    shares its `loop_group` (`siblings`) can run before a later run of the use, so it is one
-    too. `Flow.paths` splits each event not on every path to the use, proves each side, makes a
+    shares its `loop_group` (`siblings`), or a hand-off of the value there (`handed`), can run
+    before a later run of the use, so it is one too. `Flow.paths` splits each event not on every path to the use, proves each side, makes a
     call on a configuring call's result run where that call did, collapses two or more counted
     splits, and caps the paths the chain holds (`_WIDTH`, with a walk back's). Each path's
     captures are rebuilt from those before the first event, folding what it gathered in order;
@@ -1402,6 +1403,13 @@ def _forked(
         and int(site["ordinal"]) > used_at
         and (_chain_key(site) is None or _configures(site, context))
         and inside(int(site["ordinal"]))
+    ]
+    # A hand-off of the value after the use in its loop is one more such call (review 3
+    # re-review 3, N-2), read by the same `HandOffs` paths and the same `Flow.inside` test.
+    events += [
+        (int(site["ordinal"]), outcomes, None)
+        for site, outcomes in handed
+        if used_at is not None and int(site["ordinal"]) > used_at and inside(int(site["ordinal"]))
     ]
     if not events:
         return [base]

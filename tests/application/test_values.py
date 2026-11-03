@@ -5956,6 +5956,30 @@ def _loop_facts() -> list[Fact]:
         _placed(_site(plain, 1, _CLIENT_OF, arguments=_results(1)), 0, True, 2, True),
         _placed(_set("plain", 2, _SET_PORT, port, result=2), 1, True, None, True),
     ]
+    # Review 3 re-review 3, N-1 (`Child.java`, javac 21): `for (…) { r = o.setPort(80);
+    # Client.of(o); r.<setter>(…); }` — the second call is made on the first's result, which it
+    # post-dominates, but it runs AFTER the use, reaching it only on a later pass.
+    for name, (target, argument) in (
+        ("loopChildSame", (_SET_PORT, port)),
+        ("loopChild", (_SET_HOST, _string("h")[0])),
+    ):
+        caller = _symbol(_USES, name, "()V")
+        in_loop = lambda fact, dominator, post: fact.model_copy(
+            update={
+                "dominator": dominator,
+                "on_every_exit": False,
+                "post_dominator": post,
+                "reaches_return": True,
+                "loop_group": 1,
+            }
+        )
+        facts += [
+            _declared(_USES, name, "()V"),
+            _placed(_site(caller, 0, _CREATE, result=1), None, True, None, True),
+            in_loop(_set(name, 1, _SET_PORT, CallArgument(kind="int", value=80), result=2), 0, 2),
+            in_loop(_site(caller, 2, _CLIENT_OF, arguments=_results(1)), 1, 3),
+            in_loop(_set(name, 3, target, argument, receiver=2, result=3), 2, None),
+        ]
     send_it = _symbol(_SETUP, "sendIt", _TAKES_OPTIONS)
     send_looped = _symbol(_USES, "sendLooped", "()V")
     facts += [
@@ -6500,6 +6524,18 @@ def test_a_setter_after_the_use_in_a_loop_is_a_row_of_its_own(branches):
     `resolved`; port 443 `partial`, since nothing proves the loop goes round twice (the use is
     not on the setter's `post_dominator` chain: the loop may exit)."""
     assert _loop_chains(branches, "looped") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.a-child-is-absorbed-only-BEFORE-THE-USE")
+def test_a_child_after_the_use_in_its_loop_keeps_its_own_split(branches):
+    """Review 3 re-review 3, N-1: `for (…) { r = o.setPort(80); Client.of(o); r.setPort(443);
+    }`. The child post-dominates its parent but runs after the use: it reaches the use only on a
+    later pass, so it is not absorbed into the parent (the m-1 rule holds only before the use)
+    and keeps its own split, never proven (C-A). Port 80 exact; 443 `partial`. Before, one
+    exact chain ending at 443, which no use sees."""
+    assert _loop_chains(branches, "loopChildSame", use=2) == [((0, 1), False), ((0, 1, 3), True)]
+    # The child setting another part: the row without the host is kept, exact.
+    assert _loop_chains(branches, "loopChild", use=2) == [((0, 1), False), ((0, 1, 3), True)]
 
 
 def test_a_setter_after_the_use_with_no_loop_is_not_in_its_window(branches):

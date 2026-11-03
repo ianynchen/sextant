@@ -2004,9 +2004,10 @@ class Flow:
           reader, `_counted`), each side proven or marked `_UNPROVEN` (`reaches_use`). An event
           that changes nothing on any path (`(((), ()),)`) is no split.
         - **A call made on a configuring call's result** (`parent`) runs only where that call
-          did, and where it is on that call's `post_dominator` chain it runs wherever that call
-          does: it is no split of its own (review 3 re-review 2, m-1). `if (x)
-          b.setUri("/b").setUri("/c")` is ONE split.
+          did, and where it is on that call's `post_dominator` chain BEFORE the use it runs
+          wherever that call does: it is no split of its own (review 3 re-review 2, m-1,
+          accepted by the user 2026-11-03). `if (x) b.setUri("/b").setUri("/c")` is ONE split.
+          A child after the use in its loop keeps its own split (re-review 3, N-1).
         - **Two or more counted splits** make every path inexact whatever each call did
           (`_unsure`), so the choices are not recorded one by one: one `_SEVERAL` mark, and
           paths that gather the same calls are one (review 3, M2).
@@ -2016,7 +2017,10 @@ class Flow:
         always = self.always(method, used_at)
 
         def follows(parent: int | None, ordinal: int) -> bool:
-            if parent is None:
+            # Only BEFORE the use (review 3 re-review 3, N-1): a child after the use by ordinal
+            # reaches it only on a later pass of a loop, so it keeps its own split, never
+            # proven (`reaches_use`, C-A), however surely it follows its parent.
+            if parent is None or (used_at is not None and ordinal > used_at):
                 return False
             chain = _post_dominators(self._index, method, parent)
             return chain is not None and ordinal in chain

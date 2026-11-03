@@ -8887,6 +8887,164 @@ def test_a_call_on_a_skipped_calls_result_is_no_split_of_its_own(tmp_path: Path)
     ]
 
 
+@pytest.mark.pins("values.a-child-is-absorbed-only-BEFORE-THE-USE")
+def test_a_child_after_the_build_in_its_loop_keeps_its_own_split(tmp_path: Path):
+    """Review 3 re-review 3, N-1, `Calls5.loopChild`: `for (…) { r = b.setUri("/b");
+    http.execute(b.build()); r.setUri("/c"); }`. Every build sees `/b`, set just before it; `/c`
+    reaches a build only on a later pass, and `/b` overwrites it first. The child is absorbed
+    into its parent only before the use, so here it keeps its own split, never proven: `/b`
+    `resolved`, `/c` `partial`. Before, `/c resolved` alone, with the true `/b` row dropped."""
+    facts = _apache_handing(
+        "loopChild",
+        [("chained", "http://svc/b", "http://svc/c")],
+        {0: (None, True, None), 1: (0, False, 2, True, 1), 2: (1, False, 3, True, 1)},
+    )
+    caller = _http_method("loopChild")
+    # Rebuilt in the loop's order: `setUri("/b")` 1, `build` 2, `execute` 3, `setUri("/c")` 4.
+    facts = [
+        fact
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller)
+        else {
+            0: lambda f: f,
+            1: lambda f: f,
+            2: lambda f: _placed_at(
+                _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=21),
+                1,
+                False,
+                3,
+                True,
+                1,
+            ),
+            3: lambda f: _placed_at(
+                _call(
+                    caller,
+                    APACHE_CLIENT,
+                    "execute",
+                    3,
+                    receiver=19,
+                    result=22,
+                    arguments=[CallArgument(kind="unresolved", source=21)],
+                ),
+                2,
+                False,
+                4,
+                True,
+                1,
+            ),
+            4: lambda f: _placed_at(
+                _call(
+                    caller,
+                    APACHE_BUILDER,
+                    "setUri",
+                    4,
+                    receiver=11,
+                    result=26,
+                    arguments=[CallArgument(kind="string", value="http://svc/c")],
+                ),
+                3,
+                False,
+                None,
+                True,
+                1,
+            ),
+        }[fact.ordinal](fact)
+        for fact in facts
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/b", "resolved"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-after-the-use-in-its-LOOP-forks")
+def test_a_hand_off_after_the_build_in_its_loop_gives_its_row_partial(tmp_path: Path):
+    """Review 3 re-review 3, N-2, `Calls6.helperLoopLater`: `for (…) {
+    http.execute(b.build()); setBthenC(b); }` with `setBthenC(b){ b.setUri("/b");
+    b.setUri("/c"); }`. The hand-off comes after the build but shares its loop group, so it can
+    run before a later build, as a direct setter there does (`loopFork`): `/a` `resolved` (the
+    first time round), `/c` `partial`. Before, `/a resolved` alone, the `/c` row dropped."""
+    helper = _http_method("setBthenC", _SET_B_JVM)
+    caller = _http_method("helperLoopLater")
+    setter = lambda at, uri, dominator, post: _placed_at(
+        _call(
+            helper,
+            APACHE_BUILDER,
+            "setUri",
+            at,
+            receiver=None,
+            result=4 + 4 * at,
+            arguments=[CallArgument(kind="string", value=uri)],
+        ).model_copy(update={"receiver_parameter": 0}),
+        dominator,
+        True,
+        post,
+    )
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, "setBthenC", _SET_B_JVM),
+        setter(0, "http://svc/b", None, 1),
+        setter(1, "http://svc/c", 0, None),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=0, value=None),
+        _declared_method(_HTTP_OWNER, "helperLoopLater", "(Z)V"),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "get",
+                0,
+                receiver=None,
+                result=3,
+                arguments=[CallArgument(kind="string", value="http://svc/a")],
+                invoke_kind="static",
+            ),
+            None,
+            True,
+            None,
+        ),
+        _placed_at(
+            _call(caller, APACHE_BUILDER, "build", 1, receiver=3, result=15), 0, False, 2, True, 1
+        ),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_CLIENT,
+                "execute",
+                2,
+                receiver=13,
+                result=16,
+                arguments=[CallArgument(kind="unresolved", source=15)],
+            ),
+            1,
+            False,
+            3,
+            True,
+            1,
+        ),
+        _placed_at(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=caller,
+                target=CallTarget(owner=_HTTP_OWNER, name="setBthenC", descriptor=_SET_B_JVM),
+                invoke_kind="static",
+                ordinal=3,
+                receiver=None,
+                result=None,
+                arguments=[CallArgument(kind="unresolved", source=3)],
+            ),
+            2,
+            False,
+            None,
+            True,
+            1,
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "resolved"),
+        ("GET", "/c", "partial"),
+    ]
+
+
 def _apache_sent_by_a_helper(senders: dict[str, tuple[list[tuple], dict[int, tuple]]]) -> list:
     """`send2(ClassicRequestBuilder b) { http.execute(b.build()); }` and, per entry of
     `senders`, `name(x){ b = get("/a"); <events>; send2(b); }` — the builder handed to a module

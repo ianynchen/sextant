@@ -321,6 +321,17 @@ publishes `search` while its port is unknown.
      reads it. M-1 (a builder handed to a module method that builds and sends it) already kept
      its row through the walk back (ruling 5) once `call_edges` are derived, as the pipeline
      derives them; the review's probe had not derived them.
+   - *Fix round 5* (review 3 re-review 3). **Ruled by the user 2026-11-03:** m-2 keeps option
+     A — a request whose paths differ in a published part or a header is one `partial` row, no
+     schema change, no separate rows; and the m-1 child rule is accepted — a call on a
+     configuring call's result that always follows it (`post_dominator`) is no split of its own.
+     **The child rule holds only before the use** (N-1): a child after the use by ordinal in its
+     loop reaches the use only on a later pass, so it keeps its own split, whose with-side is
+     never proven (C-A). `for (…) { r = b.setUri("/b"); execute(b.build()); r.setUri("/c"); }`
+     is `/b` `resolved`, `/c` `partial`. **A hand-off of the chain's value after the use in its
+     loop** (N-2) is one more event of the fork, read by the same `HandOffs` paths and the same
+     `Flow.inside` test a direct loop-later setter is: `for (…) { execute(b.build());
+     setBthenC(b); }` is `/a` `resolved`, `/c` `partial`.
    - *Rows of one identity* (fix round 4, m-2; rule 4). The published table holds one row per
      identity (protocol, direction, verb, path, and caller and peer, or handler inbound), its
      metadata keyed to it, so two chains that differ only in a published column or in metadata
