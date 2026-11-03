@@ -5825,6 +5825,110 @@ _DONE = (_PKG + "Log#", "done", "()V")
 _MAKES = "()" + _OPTIONS_TYPE
 
 
+def _frame_facts() -> list[Fact]:
+    """Review 3's C1 and m2 shapes, at the positions javac 21 gives them (the reviewer's
+    `Frames.java` and `Shapes.throwsAfter`, read off the real extractor's output).
+
+    - `send(o) { if (z) o.setPort(1); Client.of(o); }` and `y() { o = create(); if (z)
+      o.setHost("h"); send(o); }`: one branched call in each of two frames, one use.
+    - `Options makeZ() { o = create(); if (z) o.setPort(1); return o; }` and `viaMake() { o =
+      makeZ(); if (z) o.setHost("h"); Client.of(o); }`: a factory's split and the caller's.
+    - `boomed() { o = create(); if (tls) { o.setPort(443); Setup.boom(); } Client.of(o); }`,
+      where `boom()` always throws: its body has a throw and no normal return.
+    """
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    y = _symbol(_USES, "y", "()V")
+    make_z = _symbol(_SETUP, "makeZ", _MAKES)
+    via_make = _symbol(_USES, "viaMake", "()V")
+    boomed = _symbol(_USES, "boomed", "()V")
+    boom = _symbol(_SETUP, "boom", "()V")
+    one = CallArgument(kind="int", value=1)
+    return [
+        *_setup(
+            "send",
+            _placed(
+                _on_parameter(send, 0, _SET_PORT, arguments=[one], result=1), None, False, 1, True
+            ),
+            _placed(
+                _site(send, 1, _CLIENT_OF, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        ),
+        _declared(_USES, "y", "()V"),
+        _placed(_site(y, 0, _CREATE, result=1), None, True, 2, True),
+        _placed(_set("y", 1, _SET_HOST, _string("h")[0], result=2), 0, False, 2, True),
+        _placed(
+            _site(y, 2, (_SETUP, "send", _TAKES_OPTIONS), arguments=_results(1)),
+            0,
+            True,
+            None,
+            True,
+        ),
+        _declared(_SETUP, "makeZ", _MAKES),
+        _placed(_site(make_z, 0, _CREATE, result=1), None, True, None, True),
+        _placed(
+            _site(make_z, 1, _SET_PORT, kind="virtual", receiver=1, arguments=[one], result=2),
+            0,
+            False,
+            None,
+            True,
+        ),
+        _returns(_SETUP, "makeZ", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        _declared(_USES, "viaMake", "()V"),
+        _placed(_site(via_make, 0, (_SETUP, "makeZ", _MAKES), result=1), None, True, 2, True),
+        _placed(_set("viaMake", 1, _SET_HOST, _string("h")[0], result=2), 0, False, 2, True),
+        _placed(_site(via_make, 2, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+        _declared(_SETUP, "boom", "()V"),
+        CallSiteFact(
+            document_id="doc_values",
+            caller=boom,
+            target=CallTarget(owner="java/lang/IllegalStateException#"),
+            invoke_kind="throw",
+            ordinal=0,
+            on_every_exit=False,
+            reaches_return=False,
+        ),
+        _declared(_USES, "boomed", "()V"),
+        _placed(_site(boomed, 0, _CREATE, result=1), None, True, 3, True),
+        _placed(
+            _set("boomed", 1, _SET_PORT, CallArgument(kind="int", value=443), result=2),
+            0,
+            False,
+            2,
+            True,
+        ),
+        _placed(_site(boomed, 2, (_SETUP, "boom", "()V")), 1, False, 3, True),
+        _placed(_site(boomed, 3, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+    ]
+
+
+def _many_facts(count: int) -> list[Fact]:
+    """`many<count>() { o = create(); if (f0) o.setPort(0); … if (fN) o.setPort(N); Client.of(o);
+    }` — review 3's M2 input: `count` guarded setters on one object, as config mapping code
+    writes them."""
+    name = f"many{count}"
+    caller = _symbol(_USES, name, "()V")
+    last = count + 1
+    return [
+        _declared(_USES, name, "()V"),
+        _placed(_site(caller, 0, _CREATE, result=1), None, True, last, True),
+        *[
+            _placed(
+                _set(name, at, _SET_PORT, CallArgument(kind="int", value=at), result=100 + at),
+                0,
+                False,
+                last,
+                True,
+            )
+            for at in range(1, last)
+        ],
+        _placed(_site(caller, last, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+    ]
+
+
 def _branch_facts() -> list[Fact]:
     names = ("tls", "early", "either", "fluent", "made", "madeLogged", "madeOther", "madeThrows")
     caller = {name: _symbol(_USES, name, "()V") for name in names}
@@ -5966,7 +6070,11 @@ def _branch_facts() -> list[Fact]:
 def branches(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_branches")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "branches.jsonl", _document(), straight_line(_branch_facts()))
+    write_fact_file(
+        facts / "branches.jsonl",
+        _document(),
+        straight_line([*_branch_facts(), *_frame_facts(), *_many_facts(3), *_many_facts(9)]),
+    )
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -6110,3 +6218,61 @@ def test_a_setter_followed_only_by_a_throw_stays_partial(branches):
         False,
         True,
     ]
+
+
+@pytest.mark.pins("values.several-splits-are-counted-over-the-whole-PATH")
+def test_two_branched_calls_in_two_frames_make_every_row_partial(branches):
+    """Review 3's C1, ruled by the user 2026-11-03 ("A: every row partial", per PATH from the
+    producer to the use): `y() { o = create(); if (z) o.setHost("h"); send(o); }` and
+    `send(o) { if (z) o.setPort(1); Client.of(o); }`. Each frame's window holds one split, but
+    the path holds two, so "port without host" and "host without port" — runs nobody makes
+    where `z` is shared — are never `resolved`: all four rows are `partial`."""
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    found = producers_of(
+        value_index(branches),
+        _at(branches, send, 1),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert len(found) == 4
+    assert all(producer.inexact for producer in found), found
+
+
+@pytest.mark.pins("values.several-splits-are-counted-over-the-whole-PATH")
+def test_a_factorys_split_and_its_callers_split_make_every_row_partial(branches):
+    """Review 3's C1, the factory and its caller: `makeZ() { …; if (z) o.setPort(1); return o; }`
+    and `viaMake() { o = makeZ(); if (z) o.setHost("h"); Client.of(o); }` — two splits on the
+    path, so all four rows are `partial`."""
+    assert [inexact for _, inexact in _chains(_use_of(branches, "viaMake", _OPTIONS_SETTERS))] == [
+        True,
+        True,
+        True,
+        True,
+    ]
+
+
+@pytest.mark.pins("values.a-call-that-NEVER-RETURNS-blocks-the-path-to-the-use")
+def test_a_setter_followed_by_a_call_that_never_returns_never_reaches_the_use(branches):
+    """Review 3's m2: `if (tls) { o.setPort(443); Setup.boom(); } Client.of(o);`, where
+    `boom`'s body throws and has no normal return. The method's own facts read `boom()` as a
+    call that returns, so the use post-dominates the setter there — but no run gets past
+    `boom`. The 443 row is `partial`; the row without it is exact."""
+    assert _chains(_use_of(branches, "boomed", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), True)]
+
+
+def test_a_few_branched_setters_are_each_their_own_partial_row(branches):
+    """The near-miss for the cap: three guarded setters on one object give 2^3 paths, each its
+    own row, all `partial` (two or more splits)."""
+    found = _use_of(branches, "many3", _OPTIONS_SETTERS)
+    assert len(found) == 8
+    assert all(producer.inexact for producer in found)
+
+
+@pytest.mark.pins("values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row")
+def test_a_window_with_too_many_paths_is_one_row_with_a_stated_reason(branches):
+    """Review 3's M2: nine guarded setters give 512 paths, every one `partial` by the ruling,
+    and the count doubles with each setter (twenty took 30.9 s and 2.15 GB). Past the cap the
+    window is ONE row whose parts are unknown, with the reason stated — never a silent drop."""
+    assert _use_of(branches, "many9", _OPTIONS_SETTERS) == (Producer(reason="non_enumerable"),)
