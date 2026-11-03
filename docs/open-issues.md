@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-280 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-282 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -283,6 +283,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-277 | [SEXTANT-271](https://app.plane.so/portolan/browse/SEXTANT-271/) | Per-path truth review 2 minors (m1-m10) |
 | OI-278 | [SEXTANT-272](https://app.plane.so/portolan/browse/SEXTANT-272/) | Rule 9 review 3 minors: a finally copy counts as a split; Kotlin `?.` untested end to end |
 | OI-279 | [SEXTANT-273](https://app.plane.so/portolan/browse/SEXTANT-273/) | Give the request shape its own resolution, apart from the address (Ktor `setBody` branches) |
+| OI-280 | [SEXTANT-274](https://app.plane.so/portolan/browse/SEXTANT-274/) | An escape on one branch adds a separate `GET None None unresolved` row beside the resolved rows |
+| OI-281 | [SEXTANT-275](https://app.plane.so/portolan/browse/SEXTANT-275/) | Vert.x routes registered through `setupCallback(route)` derive no row |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
