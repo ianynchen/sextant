@@ -173,7 +173,9 @@ here would restate those documents rather than add anything.
 - **Each call site states its place in the method's control flow** (spec
   2026-11-02-per-path-truth rule 9; the fact approved by the user 2026-11-02, "Approve, build
   it"). `call_site` gains `dominator`, the nearest call that ran before it on every path, and
-  `on_every_exit`, whether it runs on every path to a normal return, both read off the
+  `on_every_exit`, whether it runs on every path to a normal return, and — ruled by the user
+  2026-11-03, "A: add post_dominator" — `post_dominator`, the nearest call that runs after it
+  on every path to a normal return (a path ending in a throw reaches none), all read off the
   method's control-flow graph with exception-handler edges (D00 §5). Until now `a; b;` and
   `if (x) a; else b;` were the same facts. The fact schema goes from 5 to 6, so every fact set
   is re-extracted.

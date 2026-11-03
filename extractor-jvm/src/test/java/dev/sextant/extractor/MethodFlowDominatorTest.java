@@ -68,6 +68,21 @@ class MethodFlowDominatorTest {
         return Boolean.parseBoolean(matcher.group(1));
     }
 
+    /** The site's `post_dominator`, or null where the key is absent. */
+    static Integer postDominator(String line) {
+        Matcher matcher = Pattern.compile("\"post_dominator\":(\\d+)").matcher(line);
+        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+    }
+
+    private static void followedBy(List<String> lines, String call, String by) {
+        assertEquals(ordinal(site(lines, by)), postDominator(site(lines, call)),
+            call + " is post-dominated by " + by + " in " + lines);
+    }
+
+    private static void followedByNothing(List<String> lines, String call) {
+        assertNull(postDominator(site(lines, call)), call + " in " + lines);
+    }
+
     private static void dominatedBy(List<String> lines, String call, String by) {
         assertEquals(ordinal(site(lines, by)), dominator(site(lines, call)),
             call + " is dominated by " + by + " in " + lines);
@@ -188,6 +203,84 @@ class MethodFlowDominatorTest {
     }
 
     /** Kotlin's `other?.go()` jumps around the call when `other` is null. */
+    // `post_dominator` (rule 9, ruled by the user 2026-11-03, "A: add post_dominator"): the
+    // nearest call that completes on every path from this one to a normal return.
+
+    @Test
+    void in_a_straight_line_each_call_is_followed_by_the_next() throws Exception {
+        List<String> lines = callSites("straightLine");
+        followedBy(lines, "a", "b");
+        followedBy(lines, "b", "c");
+        followedByNothing(lines, "c");
+    }
+
+    @Test
+    void a_call_under_an_if_and_the_call_before_it_are_followed_by_the_join() throws Exception {
+        List<String> lines = callSites("ifThen");
+        followedBy(lines, "a", "c");
+        followedBy(lines, "b", "c");
+    }
+
+    @Test
+    void both_branches_of_an_if_else_are_followed_by_the_join() throws Exception {
+        List<String> lines = callSites("ifElse");
+        followedBy(lines, "a", "d");
+        followedBy(lines, "b", "d");
+        followedBy(lines, "c", "d");
+    }
+
+    /** `a(); if (x) { b(); return; } c();` — the early return leaves without `c`, so
+     *  nothing follows `a` or `b` on every path, and the use after the `if` is NOT reached
+     *  from `b`. */
+    @Test
+    void a_call_before_an_early_return_is_followed_by_nothing() throws Exception {
+        List<String> lines = callSites("earlyReturn");
+        followedByNothing(lines, "a");
+        followedByNothing(lines, "b");
+        followedByNothing(lines, "c");
+    }
+
+    @Test
+    void a_loop_body_is_followed_by_its_condition_and_the_condition_by_the_exit_call()
+            throws Exception {
+        List<String> whileLines = callSites("whileLoop");
+        followedBy(whileLines, "a", "more");
+        followedBy(whileLines, "b", "more");
+        followedBy(whileLines, "more", "c");
+        List<String> doLines = callSites("doWhileLoop");
+        followedBy(doLines, "a", "b");
+        followedBy(doLines, "b", "more");
+        followedBy(doLines, "more", "c");
+    }
+
+    /** `e(); try { a(); b(); } catch (…) { c(); } d();` — `b` may be skipped by the handler
+     *  edge, so `a` is followed by `d`, not `b`. */
+    @Test
+    void a_handler_edge_skips_the_rest_of_a_try() throws Exception {
+        List<String> lines = callSites("tryCatch");
+        followedBy(lines, "e", "d");
+        followedBy(lines, "a", "d");
+        followedBy(lines, "b", "d");
+        followedBy(lines, "c", "d");
+    }
+
+    @Test
+    void every_case_of_a_switch_is_followed_by_the_join() throws Exception {
+        List<String> lines = callSites("switched");
+        for (String call : List.of("a", "b", "c", "d")) {
+            followedBy(lines, call, "e");
+        }
+        followedByNothing(lines, "e");
+    }
+
+    /** No normal return is reachable: nothing follows, and the throw follows nothing. */
+    @Test
+    void a_call_from_which_every_path_throws_is_followed_by_nothing() throws Exception {
+        List<String> lines = callSites("alwaysThrows");
+        followedByNothing(lines, "a");
+        followedByNothing(lines, "<init>");
+    }
+
     @Test
     void a_kotlin_safe_call_is_on_one_branch() throws Exception {
         List<String> lines = KotlinMetadataTest.scan("KotlinBranchSample").stream()
@@ -199,5 +292,6 @@ class MethodFlowDominatorTest {
         assertFalse(onEveryExit(go));
         assertTrue(onEveryExit(after));
         assertTrue(dominator(after) == null || dominator(after) != ordinal(go), after);
+        assertEquals(ordinal(after), postDominator(go), go);
     }
 }

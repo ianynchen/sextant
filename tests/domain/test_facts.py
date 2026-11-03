@@ -720,7 +720,7 @@ def test_a_call_site_round_trips_its_receiver_parameter_and_a_lambdas_captures(t
     assert json.loads(plain_line).get("receiver_parameter") is None
 
 
-def test_a_call_site_round_trips_its_dominator_and_on_every_exit(tmp_path: Path):
+def test_a_call_site_round_trips_its_control_flow_position(tmp_path: Path):
     """Rule 9's two keys (spec 2026-11-02-per-path-truth, D00 §5): the nearest call that ran
     before this one on every path, and whether this one runs on every path to a normal
     return. Both default to None, which a reader takes as "not computed", never as "runs on
@@ -734,6 +734,7 @@ def test_a_call_site_round_trips_its_dominator_and_on_every_exit(tmp_path: Path)
         ordinal=3,
         dominator=1,
         on_every_exit=False,
+        post_dominator=5,
     )
     plain = CallSiteFact(
         document_id="doc_1",
@@ -748,12 +749,10 @@ def test_a_call_site_round_trips_its_dominator_and_on_every_exit(tmp_path: Path)
     _document_line, site_line, _plain_line = path.read_text(encoding="utf-8").splitlines()
     _document, facts = read_fact_file(path)
 
-    assert (json.loads(site_line)["dominator"], json.loads(site_line)["on_every_exit"]) == (
-        1,
-        False,
-    )
+    line = json.loads(site_line)
+    assert (line["dominator"], line["on_every_exit"], line["post_dominator"]) == (1, False, 5)
     assert facts == [site, plain]
-    assert (plain.dominator, plain.on_every_exit) == (None, None)
+    assert (plain.dominator, plain.on_every_exit, plain.post_dominator) == (None, None, None)
 
 
 def test_a_constant_fact_keeps_its_value_in_the_type_the_class_file_recorded():

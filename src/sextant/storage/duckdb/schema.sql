@@ -1272,10 +1272,12 @@ SELECT document_id,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments,
        -- Rule 9 (spec 2026-11-02-per-path-truth, D00 §5): the nearest call that ran before
-       -- this one on every path, NULL where none did; and whether this one runs on every path
-       -- to a normal return, NULL only where the position was never computed.
+       -- this one on every path, NULL where none did; whether this one runs on every path to
+       -- a normal return, NULL only where the position was never computed; and the nearest
+       -- call that runs after this one on every path to a normal return, NULL where none does.
        (payload ->> 'dominator')::INTEGER      AS dominator,
-       (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit
+       (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit,
+       (payload ->> 'post_dominator')::INTEGER AS post_dominator
 FROM raw_facts WHERE kind = 'call_site'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

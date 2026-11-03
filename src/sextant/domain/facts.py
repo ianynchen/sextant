@@ -485,6 +485,10 @@ class CallSiteFact(BaseModel):
     # Rule 9: whether this call runs on every path from the entry to a normal return. Written
     # on every site the extractor reaches, so None is "not computed" — never "every path".
     on_every_exit: bool | None = None
+    # Rule 9 (ruled by the user 2026-11-03, "A: add post_dominator"): the `ordinal` of the
+    # nearest call site in this method that runs after this one on EVERY path from it to a
+    # normal return, absent where none does — including where no normal return is reachable.
+    post_dominator: int | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM
     # `invokedynamic` bootstrapped by `LambdaMetafactory`, whose second

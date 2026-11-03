@@ -66,8 +66,8 @@ OUT = Path("/tmp/a1-proof")
 # fact, per kind, and `captures` from a `lambda` entry of the argument grammar wherever the
 # grammar recurs — and nowhere else.
 #
-# `dominator` and `on_every_exit` (2026-11-02, rule 9, fact schema 6) are of the first kind:
-# keys on call sites the before jar already wrote.
+# `dominator`, `on_every_exit` and `post_dominator` (2026-11-02/03, rule 9, fact schema 6) are
+# of the first kind: keys on call sites the before jar already wrote.
 FACT_KEYS = {
     "call_site": frozenset(
         {
@@ -76,6 +76,7 @@ FACT_KEYS = {
             "receiver_field_kind",
             "dominator",
             "on_every_exit",
+            "post_dominator",
         }
     ),
     "field_write": frozenset({"written_by", "value"}),
