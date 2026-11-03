@@ -5905,6 +5905,80 @@ def _frame_facts() -> list[Fact]:
     ]
 
 
+def _looped(fact: Fact, dominator: int | None, group: int | None) -> Fact:
+    """`fact` in a loop body's position (`for (…) { … }`): not on every exit, no call follows on
+    every path, a normal return reachable, in the loop group `group`."""
+    assert isinstance(fact, CallSiteFact)
+    return fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": False,
+            "post_dominator": None,
+            "reaches_return": True,
+            "loop_group": group,
+        }
+    )
+
+
+def _loop_facts() -> list[Fact]:
+    """M1 (ruled by the user 2026-11-03, option A: `loop_group`). Each `Uses#<name>()`:
+
+    - `looped`: `o = create(); for (…) { Client.of(o); o.setPort(443); }`;
+    - `plain`: `o = create(); Client.of(o); o.setPort(443);` — no loop;
+    - `apart`: `o = create(); for (…) { Client.of(o); } for (…) { o.setPort(443); }`;
+    - `nested`: `o = create(); for (…) { for (…) { Client.of(o); } o.setPort(443); }`;
+    - `fresh`: `for (…) { o = create(); Client.of(o); o.setPort(443); }` — a new object each
+      time round, so the setter's object is never used again;
+    - `sendLooped`: `o = create(); for (…) { sendIt(o); o.setPort(443); }`, where
+      `sendIt(o) { Client.of(o); }` — the use in a callee called from the loop."""
+    port = CallArgument(kind="int", value=443)
+    facts: list[Fact] = []
+    for name, groups in (
+        ("looped", (None, 1, 1)),
+        ("apart", (None, 1, 2)),
+        ("nested", (None, 1, 1)),
+        ("fresh", (0, 0, 0)),
+    ):
+        caller = _symbol(_USES, name, "()V")
+        create, use, setter = groups
+        facts += [
+            _declared(_USES, name, "()V"),
+            _looped(_site(caller, 0, _CREATE, result=1), None, create)
+            if create is not None
+            else _placed(_site(caller, 0, _CREATE, result=1), None, True, None, True),
+            _looped(_site(caller, 1, _CLIENT_OF, arguments=_results(1)), 0, use),
+            _looped(_set(name, 2, _SET_PORT, port, result=2), 1 if name != "apart" else 0, setter),
+        ]
+    plain = _symbol(_USES, "plain", "()V")
+    facts += [
+        _declared(_USES, "plain", "()V"),
+        _placed(_site(plain, 0, _CREATE, result=1), None, True, 1, True),
+        _placed(_site(plain, 1, _CLIENT_OF, arguments=_results(1)), 0, True, 2, True),
+        _placed(_set("plain", 2, _SET_PORT, port, result=2), 1, True, None, True),
+    ]
+    send_it = _symbol(_SETUP, "sendIt", _TAKES_OPTIONS)
+    send_looped = _symbol(_USES, "sendLooped", "()V")
+    facts += [
+        *_setup(
+            "sendIt",
+            _placed(
+                _site(send_it, 0, _CLIENT_OF, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        ),
+        _declared(_USES, "sendLooped", "()V"),
+        _placed(_site(send_looped, 0, _CREATE, result=1), None, True, None, True),
+        _looped(
+            _site(send_looped, 1, (_SETUP, "sendIt", _TAKES_OPTIONS), arguments=_results(1)), 0, 1
+        ),
+        _looped(_set("sendLooped", 2, _SET_PORT, port, result=2), 1, 1),
+    ]
+    return facts
+
+
 def _many_facts(count: int) -> list[Fact]:
     """`many<count>() { o = create(); if (f0) o.setPort(0); … if (fN) o.setPort(N); Client.of(o);
     }` — review 3's M2 input: `count` guarded setters on one object, as config mapping code
@@ -6073,7 +6147,9 @@ def branches(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     write_fact_file(
         facts / "branches.jsonl",
         _document(),
-        straight_line([*_branch_facts(), *_frame_facts(), *_many_facts(3), *_many_facts(9)]),
+        straight_line(
+            [*_branch_facts(), *_frame_facts(), *_loop_facts(), *_many_facts(3), *_many_facts(9)]
+        ),
     )
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -6276,3 +6352,75 @@ def test_a_window_with_too_many_paths_is_one_row_with_a_stated_reason(branches):
     and the count doubles with each setter (twenty took 30.9 s and 2.15 GB). Past the cap the
     window is ONE row whose parts are unknown, with the reason stated — never a silent drop."""
     assert _use_of(branches, "many9", _OPTIONS_SETTERS) == (Producer(reason="non_enumerable"),)
+
+
+def _loop_chains(workspace: DuckDbWorkspace, name: str, use: int = 1, method: str | None = None):
+    """The chain reader's paths at `Client.of` in `Uses.<name>` (or `method`, at `use`)."""
+    at = _at(workspace, method or _symbol(_USES, name, "()V"), use)
+    return _chains(
+        producers_of(
+            value_index(workspace),
+            at,
+            0,
+            {(_CREATE[0], _CREATE[1])},
+            along_receivers=True,
+            configuring=_OPTIONS_SETTERS,
+        )
+    )
+
+
+@pytest.mark.pins("values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window")
+def test_a_setter_after_the_use_in_a_loop_is_a_row_of_its_own(branches):
+    """Review 3's M1, ruled by the user 2026-11-03 (option A, `loop_group`):
+    `for (…) { Client.of(o); o.setPort(443); }`. The setter comes after the use in the body, but
+    shares its loop group, so it can run before a later run of the use: it splits the path.
+    Two rows, never one: port unset — the first time round, which the facts prove a run makes —
+    `resolved`; port 443 `partial`, since nothing proves the loop goes round twice (the use is
+    not on the setter's `post_dominator` chain: the loop may exit)."""
+    assert _loop_chains(branches, "looped") == [((0,), False), ((0, 2), True)]
+
+
+def test_a_setter_after_the_use_with_no_loop_is_not_in_its_window(branches):
+    """The near-miss: `Client.of(o); o.setPort(443);` with no loop — the setter never runs
+    before the use, so one row, as before."""
+    assert _loop_chains(branches, "plain") == [((0,), False)]
+
+
+@pytest.mark.pins("values.a-later-call-in-ANOTHER-loop-is-not-in-the-window")
+def test_a_setter_in_another_loop_after_the_use_is_not_in_its_window(branches):
+    """`for (…) { Client.of(o); } for (…) { o.setPort(443); }`: two groups, so the setter cannot
+    run before the use: one row."""
+    assert _loop_chains(branches, "apart") == [((0,), False)]
+
+
+def test_a_setter_in_an_outer_loop_reaches_a_use_in_the_inner_one(branches):
+    """`for (…) { for (…) { Client.of(o); } o.setPort(443); }`: the inner loop lies in the outer
+    loop's group, so the setter can run before a later run of the use: two rows."""
+    assert _loop_chains(branches, "nested") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.a-value-PRODUCED-in-the-loop-is-new-each-time-round")
+def test_a_setter_on_an_object_built_each_time_round_is_not_read_back(branches):
+    """`for (…) { o = create(); Client.of(o); o.setPort(443); }`: the object is built again
+    before every use, so the setter's object is never used: one row."""
+    assert _loop_chains(branches, "fresh") == [((0,), False)]
+
+
+@pytest.mark.pins("values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window")
+def test_a_setter_after_a_loops_call_to_the_use_is_a_row_of_its_own(branches):
+    """`for (…) { sendIt(o); o.setPort(443); }`, where `sendIt(o) { Client.of(o); }`: the call
+    that leads on to the use shares the setter's loop group, so the same holds: two rows."""
+    assert _loop_chains(branches, "", use=0, method=_symbol(_SETUP, "sendIt", _TAKES_OPTIONS)) == [
+        ((0,), False),
+        ((0, 2), True),
+    ]
+
+
+@pytest.mark.pins("values.paths-that-gather-the-same-calls-are-ONE")
+def test_paths_that_end_alike_are_one_however_the_choices_went(branches):
+    """The merge the M2 bound rests on: with nine guarded setters and no configuring call
+    declared, each setter is a call nothing says the effect of, so every path that ran one ends
+    `escapes`. Recorded choice by choice they are nine paths ending alike; merged, two
+    bindings — `escapes`, and the value with nothing done to it."""
+    caller = _symbol(_USES, "many9", "()V")
+    assert len(_bindings(branches, caller, 10)) == 2

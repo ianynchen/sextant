@@ -165,14 +165,15 @@ publishes `search` while its port is unknown.
 9. **A call on a branch is not a call on every path** [option A ruled by the user,
    2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it";
    `post_dominator` ruled 2026-11-03: "A: add post_dominator"; several splits ruled 2026-11-03:
-   "A: every row partial"; `reaches_return` ruled 2026-11-03: option A].
+   "A: every row partial"; `reaches_return` ruled 2026-11-03: option A; `loop_group` ruled
+   2026-11-03: option A for review 3's M1].
    The facts today give each call its `ordinal` (instruction order) and nothing else, so
    `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
    `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
    when `tls` is false (review 2, M4). D00 reserved this as "an enrichment of this same field
    in a later phase".
 
-   **The fact.** Each `call_site` gains four fields, computed by the extractor from the
+   **The fact.** Each `call_site` gains five fields, computed by the extractor from the
    method's control-flow graph (ASM's `Analyzer`, exception-handler edges included):
    - `dominator`: the `ordinal` of the nearest call site in the same method that runs
      before this call on EVERY path from the method's entry to this call; absent where none
@@ -187,6 +188,12 @@ publishes `search` while its port is unknown.
    - `reaches_return` (ruled 2026-11-03, option A): true where every path from the call ends
      at a normal return; false where any path ends in a throw or loops forever. Absent
      `post_dominator` alone cannot tell "no call follows" from "no return follows"; this does.
+   - `loop_group` (ruled 2026-11-03, option A for review 3's M1): the loop a call is in — the
+     non-trivial strongly connected component of the method's instruction graph, exception
+     edges included — identified by the lowest call ordinal in it; absent where the call is in
+     no cycle. Two calls with one group can each run again after the other; without a shared
+     group, neither reaches back. Exact for nested loops: an inner loop lies in the outer
+     loop's component.
 
    **The readers.** Both sit in the one place each reader decides order (`_ran_before`, the
    walk's window):
@@ -249,6 +256,16 @@ publishes `search` while its port is unknown.
      anywhere on the path from the producer to the use — in one window, or one in a helper's
      window and one in its caller's, or one in a factory and one in the code using what it
      returns — make every row of the path `partial` (`values._unsure`).
+   - *A call after the use in its loop* (ruled 2026-11-03, `loop_group`, review 3's M1): the
+     window takes a call after the use by ordinal where it shares the use's `loop_group` — it
+     can run before a later run of the use — as a call on a branch (it is never on the use's
+     `dominator` chain), so it splits and counts toward the several-splits rule; not where the
+     value was produced in that same loop (a new object each time round), and not in another
+     loop. `for (…) { Client.of(o); o.setPort(443); }` gives two rows: port unset `resolved`
+     (the first time round, which the facts prove a run makes) and port 443 `partial` (nothing
+     proves the loop goes round twice: the use is not on the setter's `post_dominator`
+     chain). The same holds where the use is in a callee called from the loop: the call that
+     leads on to it is the use the caller's window reads.
    - *The path bound* (review 3, M2): a window with two or more splits records one mark
      instead of each choice, so paths that gather the same calls are one; a window whose paths
      still pass 256 is one path ending `non_enumerable`, its parts unknown, stated. Twenty
@@ -262,7 +279,9 @@ publishes `search` while its port is unknown.
      use's method or one enclosing it; inside a callee whose return the path read,
      `on_every_exit` there and that call ran before. Anything else is undecided.
    - *Cost*, measured: the extractor on `spring-core-7.0.9.jar` (29,432 call sites), 5 runs
-     each: 1.00-1.11 s before, 1.18-1.27 s with three fields, and 1.17-1.25 s with all four (0.99-1.08 s before in the same runs),
+     each: 1.00-1.11 s before, 1.18-1.27 s with three fields, 1.17-1.25 s with four (0.99-1.08 s
+     before in the same runs), and 1.21-1.27 s with all five (1.18-1.24 s with four in the same
+     runs),
      JVM start included; the facts are strictly additive. `mall-admin`, the largest field corpus: scan 1.3-1.5 s
      before and 1.4 s after, resolve 3.9 s before and 3.9-4.0 s after. Per window, the worst
      seen on eleven corpora is 4 split calls and 5 paths (`yudao-module-infra`); no cap is

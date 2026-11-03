@@ -8770,6 +8770,59 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window": Guard(
+        what="a call after the use by ordinal that shares the use's `loop_group` is in its "
+        "window: it can run before a later run of the use (rule 9, ruled by the user "
+        "2026-11-03, option A for review 3's M1)",
+        why="`for (…) { use(o); o.setPort(443); }` publishes the unset port alone at "
+        "`resolved` and drops the 443 every later run sends",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and self._loop_group(method, ordinal) == group\n",
+                replace="                and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-later-call-in-ANOTHER-loop-is-not-in-the-window": Guard(
+        what="a call after the use in a loop the use is not in cannot run before it, so it is "
+        "not in the window",
+        why="`for (…) { use(o); } for (…) { o.setPort(443); }` publishes a 443 row no run sends",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and self._loop_group(method, ordinal) == group\n",
+                replace="                and self._loop_group(method, ordinal) is not None  # guard "
+                "disabled\n",
+            ),
+        ),
+    ),
+    "values.a-value-PRODUCED-in-the-loop-is-new-each-time-round": Guard(
+        what="a later call in the use's loop is not in the window where the value was produced "
+        "in that same loop: each time round is a new object",
+        why="`for (…) { o = create(); use(o); o.setPort(443); }` publishes a 443 row no run "
+        "sends, the setter's object being dropped before the next use",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and group != made_in\n",
+                replace="                # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.paths-that-gather-the-same-calls-are-ONE": Guard(
+        what="a window with two or more splits records one mark, not each choice, so paths "
+        "that gather the same calls are one (review 3, M2)",
+        why="nine guarded setters on one object enumerate a path per choice, where one per "
+        "distinct outcome says everything; the count doubles with each setter",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        several = len(splitting) > 1\n",
+                replace="        several = False  # guard disabled\n",
+            ),
+        ),
+    ),
     "values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row": Guard(
         what="a window whose paths pass the cap is one path ending `non_enumerable`, stated, "
         "never enumerated on (review 3, M2)",

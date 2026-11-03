@@ -32,7 +32,10 @@ here would restate those documents rather than add anything.
   its caller make every row `partial` too; a branched setter followed by a call to a body
   that never returns normally is `partial`; and a window whose paths pass 256 (twenty
   guarded setters on one object were a million) is one row ending `non_enumerable`, its
-  parts unknown, rather than 30 s and 2 GB for one site. Quartz
+  parts unknown, rather than 30 s and 2 GB for one site. A call after the use that shares
+  its `loop_group` (ruled 2026-11-03) is in the window, so
+  `for (…) { Client.of(o); o.setPort(443); }` gives the unset row `resolved` and the 443 row
+  `partial`, never dropping either. Quartz
   marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
   every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
   unmarked, and C stays a root.
@@ -186,8 +189,8 @@ here would restate those documents rather than add anything.
   2026-11-03, "A: add post_dominator" — `post_dominator`, the nearest call that runs after it
   on every path to a normal return (a path ending in a throw reaches none), and
   `reaches_return`, whether every path from it ends at a normal return (ruled 2026-11-03,
-  option A), all read off the method's control-flow graph with exception-handler edges
-  (D00 §5). Until now `a; b;` and
+  option A), and `loop_group`, the loop it is in (ruled 2026-11-03, option A for M1), all read
+  off the method's control-flow graph with exception-handler edges (D00 §5). Until now `a; b;` and
   `if (x) a; else b;` were the same facts. The fact schema goes from 5 to 6, so every fact set
   is re-extracted.
 - **Vert.x Web and Vert.x WebClient** (spec 2026-10-30-vertx-web; probe CP-56, Vert.x 4.5.10,

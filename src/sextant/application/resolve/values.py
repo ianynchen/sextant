@@ -2891,12 +2891,20 @@ class _Walk:
         return lambda ordinal: chain is not None and ordinal in chain
 
     def _events(
-        self, method: str, held: tuple[str, int], after: int, used_at: int | None, in_body: bool
+        self,
+        method: str,
+        held: tuple[str, int],
+        after: int,
+        used_at: int | None,
+        in_body: bool,
+        origin: int | None = None,
     ) -> list[tuple[int, tuple[_Window, ...], int | None]]:
         """What happens to `held` in the window `_window` reads, as `(ordinal, outcomes,
         parent)` in the order it happens: each outcome is one path's step — a gathered call, a
         reason, or one body's whole window — and `parent` the configuring call whose result a
-        call is made on, None for a call on `held` itself."""
+        call is made on, None for a call on `held` itself. `origin` is where the value the
+        window is about was produced (`after`, unless this reads a configuring call's result)."""
+        inside = self._inside(method, after, used_at, after if origin is None else origin)
         kind, key = held
         if kind == _VALUE:
             on = self._index.receivers.get((method, key), ())
@@ -2917,11 +2925,11 @@ class _Walk:
         # receiver the facts cannot name, of the value's own type (M4): either may be what
         # changes it, and neither can be followed.
         for ordinal in (*nested, *unread):
-            if ordinal <= after or (used_at is not None and ordinal >= used_at):
+            if not inside(ordinal):
                 continue
             events.append((ordinal, (((), ESCAPES),), None))
         for ordinal in on:
-            if ordinal <= after or (used_at is not None and ordinal >= used_at):
+            if not inside(ordinal):
                 continue
             if self._accessor((method, ordinal)):
                 continue
@@ -2935,16 +2943,57 @@ class _Walk:
                 events.extend(
                     (later, outcomes, ordinal if parent is None else parent)
                     for later, outcomes, parent in self._events(
-                        method, (_VALUE, int(str(result))), ordinal, used_at, in_body
+                        method,
+                        (_VALUE, int(str(result))),
+                        ordinal,
+                        used_at,
+                        in_body,
+                        after if origin is None else origin,
                     )
                 )
         for ordinal, slot in handed:
-            if ordinal <= after or (used_at is not None and ordinal >= used_at):
+            if not inside(ordinal):
                 continue
             events.append((ordinal, self._handed_to(method, ordinal, slot), None))
         if stored and in_body:
             events.append((_END_OF_BODY, (((), ESCAPES),), None))
         return sorted(events, key=lambda event: event[0])
+
+    def _inside(
+        self, method: str, after: int, used_at: int | None, origin: int
+    ) -> Callable[[int], bool]:
+        """Whether a call at an ordinal of `method` is in the window from after `after` to the
+        use at `used_at` (None: the end of the body).
+
+        **Ordinal order, and the loop** (rule 9, ruled by the user 2026-11-03, option A for
+        review 3's M1). Between the producer and the use by ordinal is in the window. A call
+        AFTER the use by ordinal is too where it shares the use's `loop_group`: it can run before
+        a later run of the use — `for (…) { use(o); o.setPort(443); }` — so it is one more call
+        on a branch for that use (it is never on the use's `dominator` chain, so it splits).
+        Not where the value was produced in that same loop (`origin`): a value built again each
+        time round is a new object before every use, and the call's is never used again."""
+        group = None if used_at is None else self._loop_group(method, used_at)
+        made_in = None if origin < 0 else self._loop_group(method, origin)
+
+        def inside(ordinal: int) -> bool:
+            if ordinal <= after:
+                return False
+            if used_at is None or ordinal < used_at:
+                return True
+            return (
+                ordinal != used_at
+                and group is not None
+                and group != made_in
+                and self._loop_group(method, ordinal) == group
+            )
+
+        return inside
+
+    def _loop_group(self, method: str, ordinal: int) -> int | None:
+        """The `loop_group` of the call at `(method, ordinal)`, None where it is in no loop."""
+        row = self._index.sites.get((method, ordinal))
+        group = None if row is None else row.get("loop_group")
+        return None if group is None else int(str(group))
 
     def _handed_to(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
         """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one step where
