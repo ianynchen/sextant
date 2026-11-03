@@ -76,6 +76,14 @@ SEXTANT_VERSION = version("sextant")
 #             strings "false" and "null" with no code path able to set either,
 #             so `partial_documents` reached the rendered gaps list and a
 #             bundle's `coverage.partial` as a number that could only be zero.
+#     6       `call_site` gains `dominator` (the nearest call that ran before it on
+#             every path) and `on_every_exit` (whether it runs on every path to a
+#             normal return), read off the method's control-flow graph (spec
+#             2026-11-02-per-path-truth rule 9, the fact approved by the user
+#             2026-11-02). A fact set of the older vintage has neither, and a reader
+#             takes an absent `on_every_exit` as "not computed": it would read every
+#             call as undecided rather than as one on a branch or not, so it is
+#             refused and re-extracted, never read as "no branches".
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -184,6 +192,6 @@ SEXTANT_VERSION = version("sextant")
 #             rule 7, the `scheduled_work.refused` column ruled by the user 2026-11-02). A
 #             consumer reading a schedule without it would take a refused one for work that
 #             runs.
-FACT_SCHEMA_VERSION = 5
+FACT_SCHEMA_VERSION = 6
 GRAPH_SCHEMA_VERSION = 14
 BOUNDARY_VOCABULARY_VERSION = 4

@@ -720,6 +720,42 @@ def test_a_call_site_round_trips_its_receiver_parameter_and_a_lambdas_captures(t
     assert json.loads(plain_line).get("receiver_parameter") is None
 
 
+def test_a_call_site_round_trips_its_dominator_and_on_every_exit(tmp_path: Path):
+    """Rule 9's two keys (spec 2026-11-02-per-path-truth, D00 §5): the nearest call that ran
+    before this one on every path, and whether this one runs on every path to a normal
+    return. Both default to None, which a reader takes as "not computed", never as "runs on
+    every path" — `on_every_exit` is written on every site the extractor reaches, so only a
+    fact that never had the position computed lacks it."""
+    site = CallSiteFact(
+        document_id="doc_1",
+        caller="c",
+        target=CallTarget(owner="o", name="n", descriptor="()V"),
+        invoke_kind="static",
+        ordinal=3,
+        dominator=1,
+        on_every_exit=False,
+    )
+    plain = CallSiteFact(
+        document_id="doc_1",
+        caller="c",
+        target=CallTarget(owner="o", name="n", descriptor="()V"),
+        invoke_kind="static",
+        ordinal=0,
+    )
+    path = tmp_path / "Branches.jsonl"
+
+    write_fact_file(path, DOCUMENT, [site, plain])
+    _document_line, site_line, _plain_line = path.read_text(encoding="utf-8").splitlines()
+    _document, facts = read_fact_file(path)
+
+    assert (json.loads(site_line)["dominator"], json.loads(site_line)["on_every_exit"]) == (
+        1,
+        False,
+    )
+    assert facts == [site, plain]
+    assert (plain.dominator, plain.on_every_exit) == (None, None)
+
+
 def test_a_constant_fact_keeps_its_value_in_the_type_the_class_file_recorded():
     """D00 §5's `constant` gained its first producer in W4 and had no model test.
 

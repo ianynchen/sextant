@@ -160,6 +160,13 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Each call site states its place in the method's control flow** (spec
+  2026-11-02-per-path-truth rule 9; the fact approved by the user 2026-11-02, "Approve, build
+  it"). `call_site` gains `dominator`, the nearest call that ran before it on every path, and
+  `on_every_exit`, whether it runs on every path to a normal return, both read off the
+  method's control-flow graph with exception-handler edges (D00 §5). Until now `a; b;` and
+  `if (x) a; else b;` were the same facts. The fact schema goes from 5 to 6, so every fact set
+  is re-extracted.
 - **Vert.x Web and Vert.x WebClient** (spec 2026-10-30-vertx-web; probe CP-56, Vert.x 4.5.10,
   5.0.0 and 5.2.1; catalogs `vertx-web.yml`, `vertx-webclient.yml` and
   `client-models/vertx-web.yml`). COVERAGE §5.1 and §5.2 read `✅` for both, with fifteen

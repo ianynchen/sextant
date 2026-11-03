@@ -65,8 +65,19 @@ OUT = Path("/tmp/a1-proof")
 # "differs beyond the keys" on every such line. So a fact's own keys are stripped from the
 # fact, per kind, and `captures` from a `lambda` entry of the argument grammar wherever the
 # grammar recurs — and nowhere else.
+#
+# `dominator` and `on_every_exit` (2026-11-02, rule 9, fact schema 6) are of the first kind:
+# keys on call sites the before jar already wrote.
 FACT_KEYS = {
-    "call_site": frozenset({"receiver_parameter", "receiver_field", "receiver_field_kind"}),
+    "call_site": frozenset(
+        {
+            "receiver_parameter",
+            "receiver_field",
+            "receiver_field_kind",
+            "dominator",
+            "on_every_exit",
+        }
+    ),
     "field_write": frozenset({"written_by", "value"}),
 }
 LAMBDA_KEYS = frozenset({"captures"})

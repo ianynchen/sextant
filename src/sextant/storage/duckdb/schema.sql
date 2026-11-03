@@ -1270,7 +1270,12 @@ SELECT document_id,
        payload ->> 'receiver_field'            AS receiver_field,
        payload ->> 'receiver_field_kind'       AS receiver_field_kind,
        (payload ->> 'result')::INTEGER         AS result,
-       payload ->  'arguments'                 AS arguments
+       payload ->  'arguments'                 AS arguments,
+       -- Rule 9 (spec 2026-11-02-per-path-truth, D00 §5): the nearest call that ran before
+       -- this one on every path, NULL where none did; and whether this one runs on every path
+       -- to a normal return, NULL only where the position was never computed.
+       (payload ->> 'dominator')::INTEGER      AS dominator,
+       (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit
 FROM raw_facts WHERE kind = 'call_site'
   AND document_id IN (SELECT document_id FROM selected_documents);
 
