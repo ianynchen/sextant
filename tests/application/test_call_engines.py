@@ -8135,6 +8135,54 @@ def test_a_constructed_request_never_executed_derives_nothing(tmp_path: Path):
     assert rows == []
 
 
+@pytest.mark.pins("catalog.apache-httpclient.setUri-RETURNS-its-receiver")
+def test_a_statement_style_set_uri_is_the_request_built(tmp_path: Path):
+    """Review 3 re-review (out of scope, a false `resolved`): `b = ClassicRequestBuilder.get(
+    "http://svc/a"); b.setUri("http://svc/b"); http.execute(b.build());`. `setUri` returns the
+    builder it was called on (`aload_0; areturn`, `javap -c` of httpcore5 5.2.4), so the
+    statement-style call configures the request: it is sent to `/b`, and no `/a` row is
+    published."""
+    caller = "com/acme/http/Client#stmt()."
+    facts = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=1,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "setUri",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="http://svc/b")],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=1, result=3),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=4,
+            arguments=[CallArgument(kind="unresolved", source=3)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, straight_line(facts), _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "svc", "/b", "resolved")
+    ]
+
+
 def _apache_builder_chain(caller: str) -> list:
     """`ClassicRequestBuilder.get("https://h/p").build()`, not yet executed."""
     return [

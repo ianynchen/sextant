@@ -17,6 +17,14 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A statement-style `setUri` on an Apache HttpClient builder is the request sent** (review 3
+  re-review, out of scope; audited 2026-11-03). `b = ClassicRequestBuilder.get("…/a");
+  b.setUri("…/b"); http.execute(b.build());` published `GET /a`, `resolved`: the `setUri` step
+  did not declare `returns_receiver`, so the statement forked a chain of its own.
+  `ClassicRequestBuilder.setUri` ends `aload_0; areturn` (javap, httpcore5 5.1.3-5.4.3), so the
+  step now says so (ruling 4). Every other builder step of every fluent catalog was audited the
+  same way: each step not flagged returns `void`, a different object, or — the Mutiny
+  `send…AndForget` terminals — its receiver as an ACTION that sends, which stays unflagged.
 - **A call on one branch is no longer read as a call on every path** (spec 2026-11-02 rule 9,
   review 2's C3 and M4). Reading each call site's new `dominator` and `on_every_exit`: the
   value walk SPLITS a path at a call between a value's producer and its use that is not on

@@ -1952,6 +1952,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "catalog.apache-httpclient.setUri-RETURNS-its-receiver": Guard(
+        what="`ClassicRequestBuilder.setUri` is flagged `returns_receiver` (`aload_0; areturn`, "
+        "httpcore5 5.1.3-5.4.3; audited 2026-11-03)",
+        why='`b.setUri("…/b");` written as a statement forks a branch of its own, and the '
+        "request `execute(b.build())` sends is published at the root's `/a`, `resolved`",
+        edits=(
+            Edit(
+                path="sextant/catalogs/apache-httpclient.yml",
+                find="    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms, "
+                "returns_receiver: true }",
+                replace="    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms }",
+            ),
+        ),
+    ),
     "vertx-webclient.a-statement-style-put-header-returns-its-receiver": Guard(
         what="`HttpRequest.putHeader` is flagged `returns_receiver` (Vert.x plan, Task 12 review; "
         "CP-56 row 111)",
