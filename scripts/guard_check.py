@@ -146,6 +146,7 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+_CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
 _MOUNTS = "sextant/application/resolve/shapes/mounts.py"
@@ -4026,33 +4027,18 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "fluent.a-default-set-and-unread-leaves-no-peer": Guard(
-        what="a client default a request takes that was set and not read, or disputed, leaves "
-        "the row's peer NULL at its own resolution (D02's options-object rung; final review I3)",
+        what="a client default a request takes that was set and not read, or is not known on the "
+        "path, leaves the row's peer NULL, `partial` (D02's options-object rung; final review I3; "
+        "spec 2026-11-02 rule 4)",
         why='without it `setDefaultHost("search").setDefaultPort(config.port())` publishes the '
         "peer `search` at `resolved`, where Vert.x sends to `search:<unread>`",
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        text = defaults[part]\n        if text is None:\n            return None\n",
-                replace="        text = defaults[part]\n        if text is None:\n"
-                "            continue  # guard disabled\n",
-            ),
-        ),
-    ),
-    "client_base.a-default-the-paths-dispute-is-set-and-unread": Guard(
-        what="a part every path to the options sets, and two read otherwise, is set and not "
-        "read (None), never absent (final review I3)",
-        why="without it two factories naming two default ports read as no port set, and the "
-        "row publishes the host alone at `resolved`",
-        edits=(
-            Edit(
-                path="sextant/application/resolve/shapes/client_base.py",
-                find="        part: value if all(other[part] == value for other in rest) else None\n"
-                "        for part, value in first.items()\n"
-                "        if all(part in other for other in rest)\n",
-                replace="        part: value\n"
-                "        for part, value in first.items()\n"
-                "        if all(part in other and other[part] == value for other in rest)\n",
+                find="        if any(text is None for text in texts):\n"
+                "            readings.append((None, defaults.exact))\n",
+                replace="        if any(text is None for text in texts):\n"
+                "            pass  # guard disabled\n",
             ),
         ),
     ),
@@ -8009,8 +7995,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find='            each.append(self.parts_of(built, int(rung["options_arg"])))\n',
-                replace="            each.append({})  # guard disabled by scripts/guard_check.py\n",
+                find='                    for read, options_path in self.paths_of(built, int(rung["options_arg"]))\n',
+                replace="                    for read, options_path in ()  # guard disabled\n",
             ),
         ),
     ),
@@ -8071,23 +8057,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if peer is not None or context.workspace is None:\n        return captures\n",
+                find="    if peer is not None or context.workspace is None:\n        return [(captures, True)]\n",
                 replace="    if context.workspace is None:  # guard disabled by scripts/guard_check.py\n"
-                "        return captures\n",
-            ),
-        ),
-    ),
-    "fluent.an-unread-default-leaves-the-resolution-alone": Guard(
-        what="a client default that was set and not read fills nothing (Q4 ruling 2026-10-31)",
-        why="Vert.x never rewrites the path, so an unread default host leaves only the peer "
-        "unread; filled as an unread part it would mark a fully read path `partial`",
-        edits=(
-            Edit(
-                path=_FLUENT,
-                find="        if text is None:\n            return None\n"
-                "        filled[part] = _part_argument(text)\n",
-                replace="        filled[part] = _UNRESOLVED_ARGUMENT if text is None else "
-                "_part_argument(text)  # guard disabled\n",
+                "        return [(captures, True)]\n",
             ),
         ),
     ),
@@ -8099,8 +8071,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if _OPTIONS in captures:\n        captures = _with_request_options(captures, context)\n",
-                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+                find="    if _OPTIONS not in captures:\n        _derive_captured(end, captures, context)\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        _derive_captured(end, captures, context)\n",
             ),
         ),
     ),
@@ -8138,18 +8111,6 @@ GUARDS: dict[str, Guard] = {
                 path=_FLUENT,
                 find='        if field == "url":\n',
                 replace='        if field == "url" and text is not None:  # guard disabled\n',
-            ),
-        ),
-    ),
-    "client_base.paths-must-agree-on-a-default": Guard(
-        what="a client default is filled only where every path to the client agrees on it",
-        why="a client one of two factories built has no one default host; filling either "
-        "publishes a peer the module may not call",
-        edits=(
-            Edit(
-                path="sextant/application/resolve/shapes/client_base.py",
-                find="        part: value if all(other[part] == value for other in rest) else None\n",
-                replace="        part: value  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8205,8 +8166,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    client = _client_of(captures, context)\n",
-                replace="    client = None  # guard disabled by scripts/guard_check.py\n",
+                find="    client = _client_of(captures, context)\n    # The decision is the shared one",
+                replace="    client = None  # guard disabled by scripts/guard_check.py\n"
+                "    # The decision is the shared one",
             ),
         ),
     ),
@@ -9074,6 +9036,137 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "client_base.each-PATH-to-the-options-is-its-own-READING": Guard(
+        what="a client's defaults are read once per path to its options, never merged (spec "
+        "2026-11-02 rule 4)",
+        why="two factories, one setting port 8443 and one setting none, published `two`, "
+        "`resolved` — false for the first; or a port the paths disputed hid both",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="        return tuple(dict.fromkeys(found)) or (PathParts(_UNKNOWN),)\n",
+                replace="        return tuple(dict.fromkeys(found))[:1] or (PathParts(_UNKNOWN),)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-UNSET-part-takes-the-FRAMEWORKS-default": Guard(
+        what="a part a path proves unset takes the framework's own value, the client model's "
+        "`unset` (spec 2026-11-02 rule 5; Vert.x `localhost`, 80, CP-56 row 132)",
+        why="options setting no host send to `localhost`; without it the row has no peer",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="                        else self._unset.get(part)\n",
+                replace="                        else None  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-unset-part-is-the-default-only-where-PROVEN": Guard(
+        what="the framework default is used only where the no-argument constructor built the "
+        "options and every call on them was read (spec 2026-11-02 rule 5)",
+        why="`new WebClientOptions(json)` reads its port from configuration; without it the "
+        "row publishes port 80, `resolved`, an address the JSON may not name",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find='            row.get("name") == "<init>"\n            and row.get("descriptor") == "()V"\n',
+                replace='            row.get("name") == "<init>"  # guard disabled\n',
+            ),
+        ),
+    ),
+    "client_base.the-options-reader-counts-only-PUBLISHED-parts": Guard(
+        what="a split on an options call that sets no part the rows publish (`setSsl`) is no "
+        "split for the several-splits rule (ruled 2026-11-03, option A)",
+        why="`if (a) setSsl(true); if (b) setDefaultPort(443)` makes both rows `partial` though "
+        "only one call moves the address",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            counting=self._counts,\n",
+                replace="            counting=None,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-setter-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF": Guard(
+        what="a setter gathered in a body a hand-off entered reads a parameter of that body at "
+        "the call that entered it on the path (item 1's review, concern 6)",
+        why="`port(o, 1001)` and `port(o, 1002)` read the helper's parameter across both "
+        "callers, which disagree, and each row loses its peer",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="        for entered in path.entered_into(caller, ordinal) or ((),):\n",
+                replace="        for entered in ((),):  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-GATHERED-call-names-the-hand-off-that-ENTERED-its-body": Guard(
+        what="the walk writes, for each configuring call gathered inside an entered body, the "
+        "call that entered it (`_GATHERED`, item 1's review, concern 6)",
+        why="without it a reader of the call's argument has no hand-off to read it through, "
+        "and a helper's setter crosses to every caller of the helper",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                _entered_through((*steps, *_gathered_steps(callee, outcome)), method, ordinal),\n",
+                replace="                _entered_through(steps, method, ordinal),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.a-default-read-on-an-INEXACT-path-is-partial": Guard(
+        what="a row composed from defaults read on a path rule 9 cannot call exact is no surer "
+        "than `partial` (several splits setting an address part)",
+        why='`if (a) setDefaultPort(1); if (b) setDefaultHost("h")` publishes `h:1` '
+        "`resolved`, a combination no run may make",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                if not exact:\n                    resolution = weaker(resolution, str(Resolution.PARTIAL))\n",
+                replace="                if False:  # guard disabled\n"
+                "                    resolution = weaker(resolution, str(Resolution.PARTIAL))\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row": Guard(
+        what="a walk back from a rootless terminal that ends `escapes` or `cycle` keeps the "
+        "terminal's row, its parts unread (spec 2026-11-02 rule 4; item 2's B list)",
+        why="`send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` derives no row "
+        "for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)\n",
+                replace="_UNREAD_WALKS = (NON_ENUMERABLE,)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-request-executed-only-through-an-UNREAD-window-keeps-its-row": Guard(
+        what="a terminal the value walk pairs with its executing call only by identity — the "
+        "built value handed to code we do not have before it is sent — keeps its row, "
+        "`partial` (spec 2026-11-02 rules 4 and 8; item 2's B list)",
+        why="`req = make(); Objects.requireNonNull(req); http.execute(req, h)` derives no row "
+        "for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if not found:\n        found = list(context.identified.get(_site_key(site), ()))\n",
+                replace="    if False:  # guard disabled\n"
+                "        found = list(context.identified.get(_site_key(site), ()))\n",
+            ),
+        ),
+    ),
+    "chains.a-request-executed-only-through-an-UNREAD-window-is-PARTIAL": Guard(
+        what="a row whose terminal is executed only through a pairing by identity is no surer "
+        "than `partial` (rule 2)",
+        why="what the JDK call did to the request is not known; `resolved` would claim it",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                    or _executed_unread(terminal, context),\n",
+                replace="                    or False,  # guard disabled\n",
+            ),
+        ),
+    ),
     "chains.a-CAPPED-walk-back-keeps-the-terminals-row": Guard(
         what="a walk back past the path cap keeps the terminal's row, its parts unread "
         "(review 3 re-review, M-B)",
@@ -9081,7 +9174,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        if not producer.chain and producer.reason == NON_ENUMERABLE:\n",
+                find="        if not producer.chain and producer.reason in _UNREAD_WALKS:\n",
                 replace="        if False:  # guard disabled\n",
             ),
         ),
@@ -9644,9 +9737,10 @@ GUARDS: dict[str, Guard] = {
         "call's job as CJob and publishes CJob as running, though Quartz refuses it",
         edits=(
             Edit(
-                path="sextant/application/resolve/engines/scheduled_chain.py",
-                find="    for outer in entered:\n",
-                replace="    for outer in ():  # guard disabled by scripts/guard_check.py\n",
+                path=_VALUES,
+                find='    for outer in entered:\n        arguments = site["arguments"] or []\n',
+                replace="    for outer in ():  # guard disabled by scripts/guard_check.py\n"
+                '        arguments = site["arguments"] or []\n',
             ),
         ),
     ),

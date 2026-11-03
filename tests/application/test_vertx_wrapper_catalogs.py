@@ -702,7 +702,9 @@ def test_a_wrapper_body_carrying_send_names_the_body_it_sends(tmp_path: Path, wr
 @WRAPPERS
 def test_a_wrapper_uri_template_form_reads_its_template(tmp_path: Path, wrapper: Wrapper):
     """`client.get(UriTemplate.of("/stock/{id}"))`: the wrapper's own `UriTemplate` (row 177)
-    and its `of(String)` factory, which `javap` shows on the RxJava 3 and Mutiny jars."""
+    and its `of(String)` factory, which `javap` shows on the RxJava 3 and Mutiny jars. The
+    client is a value the walk does not reach, so who is called is not known: peer NULL,
+    `partial` (spec 2026-11-02 rule 4)."""
     calls = _Calls(wrapper)
     template_type = wrapper.jvm(wrapper.template)
     made = calls.call(
@@ -712,7 +714,7 @@ def test_a_wrapper_uri_template_form_reads_its_template(tmp_path: Path, wrapper:
     request = calls.get(template_type, [CallArgument(kind="unresolved", source=made)])
     calls.send(request)
 
-    assert _rows(tmp_path, calls) == [("GET", None, "/stock/{id}", "resolved")]
+    assert _rows(tmp_path, calls) == [("GET", None, "/stock/{id}", "partial")]
 
 
 @WRAPPERS

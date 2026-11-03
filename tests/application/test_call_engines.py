@@ -9120,6 +9120,137 @@ def test_a_builder_handed_to_a_module_method_that_sends_it_keeps_its_row(tmp_pat
     assert _apache_walked_rows(tmp_path, facts) == [("GET", "/a", "resolved")]
 
 
+_REQUIRE_NON_NULL = CallTarget(
+    owner="java/util/Objects#",
+    name="requireNonNull",
+    descriptor="(Ljava/lang/Object;)Ljava/lang/Object;",
+)
+
+
+@pytest.mark.pins("chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row")
+def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_its_row(
+    tmp_path: Path,
+):
+    """Item 2's B list, `chains._walk_back` (spec 2026-11-02 rule 4, "never drop a row"):
+    `sendEscaping(b) { Objects.requireNonNull(b); http.execute(b.build()); }`, called with
+    `get("/a")`. The JDK call is code we do not have, so the walk back from `build()` ends at
+    `escapes` (rule 2) and reads no chain — but the request is sent: one row, its parts the walk
+    did not read, never surer than `partial`. Measured on real javac 21 bytecode before the
+    change: no row at all."""
+    send = _http_method("sendEscaping", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendEscaping", _SET_B_JVM),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=_REQUIRE_NON_NULL,
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(send, APACHE_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+    ]
+    handing = _apache_handing("callsEscaping", [("hand", "sendEscaping", _SET_B_JVM)], {})
+    caller = _http_method("callsEscaping")
+    facts += [
+        fact
+        for fact in handing
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 1)
+    ]
+
+    rows = _apache_walked_rows(tmp_path, facts)
+    assert len(rows) == 1, rows
+    assert rows[0][2] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("chains.a-request-executed-only-through-an-UNREAD-window-keeps-its-row")
+@pytest.mark.pins("chains.a-request-executed-only-through-an-UNREAD-window-is-PARTIAL")
+def test_a_built_request_handed_to_code_we_do_not_have_before_it_is_sent_keeps_its_row(
+    tmp_path: Path,
+):
+    """Item 2's B list, `chains._joined_through_values` (rules 4 and 8): `makeOnce()` returns
+    `get("http://svc/b").build()`, and `joinEscaping()` does `req = makeOnce();
+    Objects.requireNonNull(req); http.execute(req, h)`. Which `build()` made the request is
+    identity, which no hand-off changes (rule 8), so the join pairs them; what the JDK call did
+    to the request is not known (rule 2), so the row is no surer than `partial`. Measured on
+    real javac 21 bytecode before the change: no row at all."""
+    make = _http_method("makeOnce", "()Lorg/apache/hc/core5/http/ClassicHttpRequest;")
+    join = _http_method("joinEscaping", "()V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(
+            _HTTP_OWNER, "makeOnce", "()Lorg/apache/hc/core5/http/ClassicHttpRequest;"
+        ),
+        _declared_method(_HTTP_OWNER, "joinEscaping", "()V"),
+        _call(
+            make,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/b")],
+            invoke_kind="static",
+        ),
+        _call(make, APACHE_BUILDER, "build", 1, receiver=3, result=4),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=make,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=4),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=join,
+            target=CallTarget(
+                owner=_HTTP_OWNER,
+                name="makeOnce",
+                descriptor="()Lorg/apache/hc/core5/http/ClassicHttpRequest;",
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=join,
+            target=_REQUIRE_NON_NULL,
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=6,
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _call(
+            join,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=7,
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=join, ordinal=0, value=None),
+    ]
+
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/b", "partial")]
+
+
 def test_two_forks_across_a_consumer_hand_off_make_every_row_partial(tmp_path: Path):
     """The review's "two forks across a consumer hand-off" check, `Calls3.acrossConsumer`'s
     shape on `send3`: `if (x) b.setUri("/c"); send3(b, y)` with `send3` doing `if (y)

@@ -121,6 +121,7 @@ from sextant.application.resolve.values import (
     Path,
     ValueIndex,
     cached_value_index,
+    entered_position,
     producer_paths,
     producers_of,
     resolve_positions,
@@ -1045,7 +1046,7 @@ def _refusal(
 
     **An earlier call's arguments are read in the frame that ran it** (review 2, C1): a
     stated call inside a helper the trigger was handed to is read through the call that
-    ENTERED the helper (`Path.stated`'s `entered`, `_binder_site`), so two calls of one
+    ENTERED the helper (`Path.stated`'s `entered`, `values.entered_position`), so two calls of one
     helper are two executions. **One `build()` is one job only in one execution** (C2,
     `_same_job`). That the earlier call runs first is `_ran_before`'s.
 
@@ -1076,7 +1077,7 @@ def _refusal(
             caller, ordinal, slot, entered = first
             site = context.index.sites[(caller, ordinal)]
             effect = effects[(*_call_of(site), slot)]
-            read_at, to = _binder_site(site, int(effect["binds"]["to"]), entered, context)
+            read_at, to = entered_position(context.index, site, int(effect["binds"]["to"]), entered)
             binders: dict[Any, _Bound | None] = {
                 None if one is None else (built := _bound_of(one, context, path)).identity: (
                     None if one is None else built
@@ -1099,25 +1100,6 @@ def _refusal(
     if same or own["refuses"] != "bound_elsewhere":
         return _ACCEPTED
     return _Refusal(bound_to=bound)
-
-
-def _binder_site(
-    site: Mapping[str, Any], slot: int, entered: tuple[tuple[str, int], ...], context: _Context
-) -> tuple[Mapping[str, Any], int]:
-    """Where a stated call's argument at `slot` is read: at the call itself, or — while that
-    argument is a parameter of the body the call is in, and the path records which call
-    entered that body (`entered`, innermost first) — at that entering call's own argument, in
-    ITS frame (review 2, C1). So a helper called twice reads each call's own job."""
-    for outer in entered:
-        arguments = site["arguments"] or []
-        argument = arguments[slot] if slot < len(arguments) else None
-        if not isinstance(argument, Mapping) or argument.get("kind") != "parameter":
-            break
-        entering = context.index.sites.get(outer)
-        if entering is None:
-            break
-        site, slot = entering, int(argument["value"])
-    return site, slot
 
 
 def _same_job(one: _Bound, other: _Bound) -> bool | None:

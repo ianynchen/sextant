@@ -71,12 +71,15 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
+    CYCLE,
+    ESCAPES,
     NON_ENUMERABLE,
     RECEIVER,
     Counting,
     Flow,
     HandOffs,
     Path,
+    Producer,
     ValueIndex,
     cached_value_index,
     counts_split,
@@ -358,7 +361,7 @@ def chain_ends(
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
-    joined = _joined_through_values(workspace, walk_index, via_argument_names)
+    joined, identified = _joined_through_values(workspace, walk_index, via_argument_names)
     # The steps that join through an argument (`receiver_arg`), by name — empty for every
     # catalog declaring none, which then indexes each site by its own `receiver` exactly as
     # before and pays nothing for the rule (GUIDELINES §8.7).
@@ -418,6 +421,7 @@ def chain_ends(
             via_argument_names=via_argument_names,
             receiver_terminals=receiver_terminals,
             joined=joined,
+            identified=identified,
             catalog=catalog,
             facts=facts,
             field_sources=field_sources,
@@ -727,6 +731,10 @@ class _ChainContext:
     # The executing calls the value walk pairs with a terminal site, by that site's
     # `(caller, ordinal)` (`_joined_through_values`) — the module's, not this caller's.
     joined: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
+    # The executing calls the value walk pairs with a terminal site only by identity, its window
+    # not read (`escapes`, `cycle`; `_joined_through_values`): read only where nothing else
+    # executes the terminal (`_executing_calls`), and then its rows are no surer than `partial`.
+    identified: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
     catalog: Catalog
     facts: CallFacts
     # The field ladder's facts, read by the bean hop (`_literal_of`) alone — None for a
@@ -1017,9 +1025,11 @@ def _walk_back(
     is shared by several branches. The chain read on it is the calls that path ran; the row is
     the terminal's, which the code does make, so it is kept and its resolution capped.
 
-    **A walk that passed the path cap (`non_enumerable`) read no chain**: the terminal is still
-    a call to this catalog's terminal, so it is one row of its own, its parts the walk did not
-    read, `partial` at best — never dropped."""
+    **A walk that passed the path cap (`non_enumerable`), or that ended where the receiver was
+    handed to code we do not have or re-entered (`escapes`, `cycle`; spec 2026-11-02 rule 2),
+    read no chain**: the terminal is still a call to this catalog's terminal, so it is one row of
+    its own, its parts the walk did not read, `partial` at best — never dropped (rule 4, item 2's
+    B list: `send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` derived nothing)."""
     if not rootless.declared:
         return
     assert context.values is not None
@@ -1032,7 +1042,15 @@ def _walk_back(
         configuring=rootless.configuring,
         counting=context.counting,
     ):
-        if not producer.chain and producer.reason == NON_ENUMERABLE:
+        if not producer.chain and producer.reason in _UNREAD_WALKS:
+            # Where the walk ended at `escapes` or `cycle`, the terminal is this catalog's chain
+            # only where the object it is called on was built from one of the catalog's roots —
+            # identity, which no hand-off changes (rule 8). A `build()` of another builder the
+            # walk merely names alike derives nothing here, as it did before.
+            if producer.reason != NON_ENUMERABLE and not _rooted_object(
+                terminal, context, context_of, rootless
+            ):
+                continue
             captures: dict[str, Any] = {}
             _fold_site(terminal, captures, context)
             _walk(
@@ -1065,6 +1083,35 @@ def _walk_back(
             terminal=None,
             context=replace(context, root=chain[0], path=path, inexact=producer.inexact),
         )
+
+
+def _rooted_object(
+    terminal: dict[str, Any],
+    context: _ChainContext,
+    context_of: Callable[[str], _ChainContext],
+    rootless: _RootlessWalk,
+) -> bool:
+    """Whether the object `terminal` is called on was built by a chain starting at one of the
+    catalog's roots, read as WHICH object it is (`which_object`: no window, so no hand-off ends
+    the read) along the declared calls on its receivers."""
+    assert context.values is not None
+    return any(
+        producer.chain
+        and _matching_root(_site_at(*producer.chain[0], context_of), context.roots) is not None
+        for producer, _ in producer_paths(
+            context.values,
+            terminal,
+            RECEIVER,
+            rootless.declared,
+            along_receivers=True,
+            which_object=True,
+        )
+    )
+
+
+# Where a walk back reads no chain although the terminal is called (`_walk_back`): past the path
+# cap, a hand-off into code we do not have, a body re-entered while it is read.
+_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)
 
 
 def _site_at(
@@ -1162,7 +1209,9 @@ def _walk(
                     _without_rule_9(variant),
                     _end_consumers(terminal, context),
                     context.path,
-                    context.inexact or _unsure(variant, context),
+                    context.inexact
+                    or _unsure(variant, context)
+                    or _executed_unread(terminal, context),
                 )
             )
 
@@ -2667,19 +2716,42 @@ def _executing_calls(site: dict[str, Any], context: _ChainContext) -> list[dict[
     same-method consumers `_consumers` finds through an argument's own `source`, then those
     the value walk pairs with `site` across returns and parameters (`context.joined`) — a
     request built in a helper and returned to the method that sends it. One record per
-    call, by `(caller, ordinal)`; same-method calls first, in ordinal order (NFR-1)."""
+    call, by `(caller, ordinal)`; same-method calls first, in ordinal order (NFR-1).
+
+    Where neither finds one, those the value walk pairs only by identity (`context.identified`,
+    spec 2026-11-02 rules 4 and 8): the value is executed, though what was done to it before is
+    not read — the row is kept, `_executed_unread` capping it at `partial`."""
     found = _consumers(site, context.sites, context.via_argument_names[str(site["name"])])
     seen = {_site_key(consumer) for consumer in found}
     for consumer in context.joined.get(_site_key(site), ()):
         if _site_key(consumer) not in seen:
             seen.add(_site_key(consumer))
             found.append(consumer)
+    if not found:
+        found = list(context.identified.get(_site_key(site), ()))
     return found
+
+
+def _executed_unread(terminal: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether `terminal` is executed only by calls the value walk paired with it by identity,
+    its window not read (`_executing_calls`): what was done to the built value before it was
+    executed is not known, so the row is no surer than `partial` (rule 2)."""
+    if str(terminal["name"]) not in context.via_argument_names:
+        return False
+    key = _site_key(terminal)
+    if key not in context.identified:
+        return False
+    return not _consumers(
+        terminal, context.sites, context.via_argument_names[str(terminal["name"])]
+    ) and not context.joined.get(key)
 
 
 def _joined_through_values(
     workspace: Workspace, values: ValueIndex, via_argument_names: dict[str, _JoinFilter | None]
-) -> dict[tuple[str, int], tuple[dict[str, Any], ...]]:
+) -> tuple[
+    dict[tuple[str, int], tuple[dict[str, Any], ...]],
+    dict[tuple[str, int], tuple[dict[str, Any], ...]],
+]:
     """The execute-join, found through the value walk: each terminal site, by `(caller,
     ordinal)`, mapped to the declared executing calls whose arguments `values.producers_of`
     traces back to it — in the same method or across returns and parameters.
@@ -2709,14 +2781,22 @@ def _joined_through_values(
 
     **The walk lets an accessor on the built value past** (`past_accessors`): the join asks
     only WHICH `build()` made the argument, and `request.headers().put(k, v)` between the
-    build and the send writes into the request without changing which call built it."""
+    build and the send writes into the request without changing which call built it.
+
+    **A path the window cannot read still pairs** (spec 2026-11-02 rules 4 and 8; item 2's B
+    list): where the walk ends at `escapes` or `cycle` — the request handed to code we do not
+    have between the build and the send — which `build()` made it is identity, which no
+    hand-off changes, so the pair is read by the object reader (`which_object`) and returned in
+    the second map. It is read only where nothing else executes the terminal
+    (`_executing_calls`): what was done to the request is not known, so the row is no surer
+    than `partial` (`_executed_unread`). Before, the request derived no row at all."""
     declared = {
         name: join_filter
         for name, join_filter in via_argument_names.items()
         if join_filter is not None and not join_filter.continues
     }
     if not declared:
-        return {}
+        return {}, {}
     ancestors = workspace.once(dispatch_of).ancestors
     terminals: set[tuple[str, str]] = set()
     in_module: set[tuple[str, str]] = set()
@@ -2733,19 +2813,33 @@ def _joined_through_values(
             executing.append(site)
     terminals -= in_module
     joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    identified: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for consumer in executing:
         for slot in range(len(consumer["arguments"] or [])):
-            for producer in producers_of(
-                values, consumer, slot, terminals, past_accessors=ancestors
+            producers = producers_of(values, consumer, slot, terminals, past_accessors=ancestors)
+            by_identity: tuple[Producer, ...] = ()
+            if any(producer.reason in (ESCAPES, CYCLE) for producer in producers):
+                by_identity = tuple(
+                    producer
+                    for producer, _ in producer_paths(
+                        values, consumer, slot, terminals, which_object=True
+                    )
+                )
+            for producer, into in (
+                *((producer, joined) for producer in producers),
+                *((producer, identified) for producer in by_identity),
             ):
                 if producer.caller is None or producer.ordinal is None or producer.identity is None:
                     continue
                 if not _joins(consumer, declared[producer.identity[1]]):
                     continue
-                pairs = joined.setdefault((producer.caller, producer.ordinal), [])
+                pairs = into.setdefault((producer.caller, producer.ordinal), [])
                 if all(_site_key(paired) != _site_key(consumer) for paired in pairs):
                     pairs.append(dict(consumer))
-    return {key: tuple(pairs) for key, pairs in joined.items()}
+    return (
+        {key: tuple(pairs) for key, pairs in joined.items()},
+        {key: tuple(pairs) for key, pairs in identified.items()},
+    )
 
 
 def _joins(site: Mapping[str, Any], join_filter: _JoinFilter) -> bool:

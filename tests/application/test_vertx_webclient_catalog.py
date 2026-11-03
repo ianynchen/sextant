@@ -15,6 +15,7 @@ from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent, _resolve_f
 from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.shapes.chains import chain_ends
+from sextant.application.resolve.shapes.client_base import client_base_of
 from sextant.domain.facts import (
     CallArgument,
     CallSiteFact,
@@ -136,8 +137,10 @@ def _calls(rows: list[dict]) -> list[tuple]:
 def test_parts_and_absolute_forms_give_one_peer(tmp_path: Path):
     """`client.get(8080, "inventory", "/stock")` and `client.getAbs("http://inventory:8080/
     stock")` are one call, so they have one peer: `inventory:8080`, the authority CP-2 splits
-    the absolute URL into. `client.get("inventory", "/stock")` names no port, so its peer is
-    the host alone (the client's default port is not read here, spec §2a)."""
+    the absolute URL into. `client.post("inventory", "/stock")` names no port and takes the
+    client's default, and this client is a value the walk does not reach, so its port is not
+    known: peer NULL, the path kept, `partial` (spec 2026-11-02 rule 4) — never the host alone
+    at `resolved`, as though the port were the host's."""
     body = _Body()
     body.chain(
         ("get", _PORT_HOST_URI, [_int(8080), _string("inventory"), _string("/stock")]), _send()
@@ -147,7 +150,7 @@ def test_parts_and_absolute_forms_give_one_peer(tmp_path: Path):
 
     assert _calls(_rows(tmp_path, body)) == [
         ("GET", "inventory:8080", "/stock", "resolved"),
-        ("POST", "inventory", "/stock", "resolved"),
+        ("POST", None, "/stock", "partial"),
     ]
 
 
@@ -171,12 +174,13 @@ def test_a_host_or_port_step_replaces_that_part_of_an_absolute_urls_authority(tm
 
 
 def test_a_port_on_a_request_naming_no_host_publishes_no_peer(tmp_path: Path):
-    """`client.get("/x").port(9)`: the host is the client's default, which is not read here,
-    and a port is not a peer (spec §2a: an unset default is never published)."""
+    """`client.get("/x").port(9)`: the host is the client's default, and this client is a value
+    the walk does not reach, so the host is not known and a port is not a peer: peer NULL, the
+    path kept, `partial` (spec 2026-11-02 rule 4)."""
     body = _Body()
     body.chain(("get", _URI, [_string("/x")]), ("port", f"(I){_RETURNS}", [_int(9)]), _send())
 
-    assert _calls(_rows(tmp_path, body)) == [("GET", None, "/x", "resolved")]
+    assert _calls(_rows(tmp_path, body)) == [("GET", None, "/x", "partial")]
 
 
 @pytest.mark.pins("fluent.an-unread-host-leaves-the-peer-unread")
@@ -309,15 +313,20 @@ def test_a_destination_word_other_than_unread_is_refused(tmp_path: Path):
 
 @pytest.mark.pins("vertx-webclient.a-uri-step-names-an-address")
 def test_a_request_options_form_derives_nothing_until_a_uri_names_an_address(tmp_path: Path):
-    """`client.request(GET, options).send()` with an options object nothing here reads names no
-    address, so it is no row; a later `uri("/y")` names one (spec §3d)."""
+    """`client.request(GET, options).send()` with an options object nothing here reads: the
+    request is there and its address is not known, so it is a row with nothing read, `unresolved`
+    — never dropped (spec 2026-11-02 rule 4). A later `uri("/y")` names the path; the host and
+    port the options may set are still not known: peer NULL, `partial` (spec §3d)."""
     body = _Body()
     verb = CallArgument(kind="enum", symbol=f"{HTTP_METHOD}GET.")
     options = CallArgument(kind="unresolved")
     body.chain(("request", _OPTIONS, [verb, options]), _send())
     body.chain(("request", _OPTIONS, [verb, options]), ("uri", _URI, [_string("/y")]), _send())
 
-    assert _calls(_rows(tmp_path, body)) == [("GET", None, "/y", "resolved")]
+    assert _calls(_rows(tmp_path, body)) == [
+        ("GET", None, "/y", "partial"),
+        ("GET", None, None, "unresolved"),
+    ]
 
 
 @pytest.mark.pins("fluent.a-host-or-port-is-traced-as-the-url-is")
@@ -824,7 +833,8 @@ def test_options_configured_statement_by_statement_beside_other_settings_are_rea
     """Hono's shape: `o = new WebClientOptions(); o.setConnectTimeout(5);
     o.setDefaultHost("search"); WebClient.create(vertx, o)`, each result dropped. A call on
     the options that returns them configures them (CP-56 rows 103, 112), so the timeout is
-    not read as the object escaping, and the host is read."""
+    not read as the object escaping, and the host is read. Every call on the object is read
+    and none sets the port, so it is Vert.x's own, 80 (spec 2026-11-02 rule 5)."""
     body = _Client()
     made = body.new(OPTIONS)
     body.call(OPTIONS, "setConnectTimeout", _SET_TIMEOUT, made, [_int(5)], invoke_kind="virtual")
@@ -832,14 +842,16 @@ def test_options_configured_statement_by_statement_beside_other_settings_are_rea
     client = body.create(CallArgument(kind="unresolved", source=made))
     body.on(client, ("get", _URI, [_string("/q")]), _send())
 
-    assert _calls(_rows(tmp_path, body)) == [("GET", "search", "/q", "resolved")]
+    assert _calls(_rows(tmp_path, body)) == [("GET", "search:80", "/q", "resolved")]
 
 
-@pytest.mark.pins("fluent.an-unread-default-leaves-the-resolution-alone")
-def test_an_unset_or_unread_default_keeps_the_path_with_no_peer(tmp_path: Path):
-    """Options setting no default host (only a port), or a host nothing here reads: Vert.x
-    would send to `localhost`, which cannot be proven, and the host it reads is unknown, so the
-    peer is NULL. The path is Vert.x's as written, so the row keeps it at its own resolution."""
+@pytest.mark.pins("client_base.an-UNSET-part-takes-the-FRAMEWORKS-default")
+def test_an_unset_default_is_the_frameworks_and_an_unread_one_leaves_no_peer(tmp_path: Path):
+    """Spec 2026-11-02 rules 4 and 5. Options built by the no-argument constructor setting only
+    a port: every call on them is read and none sets the host, so Vert.x sends to its own,
+    `localhost` (CP-56 row 132, the client model's `unset`) — `localhost:9200`. Options setting
+    a host nothing here reads: who is called is not known, so the peer is NULL, the path kept,
+    and the row `partial`."""
     body = _Client()
     port_only = body.create(
         CallArgument(
@@ -856,8 +868,8 @@ def test_an_unset_or_unread_default_keeps_the_path_with_no_peer(tmp_path: Path):
     body.on(unread, ("post", _URI, [_string("/b")]), _send())
 
     assert _calls(_rows(tmp_path, body)) == [
-        ("GET", None, "/a", "resolved"),
-        ("POST", None, "/b", "resolved"),
+        ("GET", "localhost:9200", "/a", "resolved"),
+        ("POST", None, "/b", "partial"),
     ]
 
 
@@ -865,8 +877,8 @@ def test_an_unset_or_unread_default_keeps_the_path_with_no_peer(tmp_path: Path):
 def test_a_default_port_set_and_unread_leaves_no_peer(tmp_path: Path):
     """Final review I3, D02's options-object rung: `setDefaultHost("search")
     .setDefaultPort(config.port())`. Vert.x sends `get("/q")` to `search:<unread>` and
-    `get("h", "/b")` to `h:<unread>`, so neither peer is known: each row keeps its path and
-    resolution with `peer` NULL, never the host alone at `resolved`."""
+    `get("h", "/b")` to `h:<unread>`, so neither peer is known: each row keeps its path with
+    `peer` NULL, `partial` (spec 2026-11-02 rule 4), never the host alone at `resolved`."""
     body = _Client()
     made = body.options(
         ("setDefaultHost", _SET_HOST, _string("search")),
@@ -877,16 +889,18 @@ def test_a_default_port_set_and_unread_leaves_no_peer(tmp_path: Path):
     body.on(client, ("post", _HOST_URI, [_string("h"), _string("/b")]), _send())
 
     assert _calls(_rows(tmp_path, body)) == [
-        ("GET", None, "/q", "resolved"),
-        ("POST", None, "/b", "resolved"),
+        ("GET", None, "/q", "partial"),
+        ("POST", None, "/b", "partial"),
     ]
 
 
-@pytest.mark.pins("client_base.a-default-the-paths-dispute-is-set-and-unread")
-def test_two_factories_disputing_the_default_port_leave_no_peer(tmp_path: Path):
-    """`this.client` written by two methods whose options name one default host and two
-    default ports: which port a request goes to is not known, so `get("/a")` has no peer —
-    not `same`, the host alone, at `resolved`, as though no port had been set."""
+@pytest.mark.pins("client_base.each-PATH-to-the-options-is-its-own-READING")
+def test_two_factories_naming_two_default_ports_are_a_row_each(tmp_path: Path):
+    """Spec 2026-11-02 rule 4: `this.client` written by two methods whose options name one
+    default host and two default ports. Each factory is a path, and each path composes its own
+    address — `same:9200` and `same:9300`, both `resolved` (enumerable is exact) — never one
+    merged answer: not `same`, the host alone, as though no port had been set, and not a NULL
+    peer, as though neither port were read."""
     owner = "com/acme/vertx/Search#"
     first = _MODULE + method_descriptor(owner, "first", "()V")
     second = _MODULE + method_descriptor(owner, "second", "()V")
@@ -918,7 +932,10 @@ def test_two_factories_disputing_the_default_port_leave_no_peer(tmp_path: Path):
     rows = [dict(row) for row in workspace.query("endpoints")]
     workspace.close()
 
-    assert _calls(rows) == [("GET", None, "/a", "resolved")]
+    assert _calls(rows) == [
+        ("GET", "same:9200", "/a", "resolved"),
+        ("GET", "same:9300", "/a", "resolved"),
+    ]
 
 
 @pytest.mark.pins(
@@ -1000,14 +1017,14 @@ def test_a_request_options_uri_set_and_not_read_is_still_a_row(tmp_path: Path):
     assert _calls(_rows(tmp_path, body)) == [("GET", None, None, "unresolved")]
 
 
-@pytest.mark.pins("client_base.paths-must-agree-on-a-default")
-def test_two_factories_reaching_one_client_fill_only_the_defaults_they_agree_on(
+@pytest.mark.pins("client_base.each-PATH-to-the-options-is-its-own-READING")
+def test_two_factories_reaching_one_client_are_a_row_each_where_they_differ(
     tmp_path: Path,
 ):
-    """`this.client` written by two methods, each building it from options naming another
-    default host and the same default port: which client a request goes out on is not known,
-    so the host is not filled — `get("/a")` has no peer — while the port both agree on is:
-    `get("h", "/b")` goes to `h:9200`."""
+    """Spec 2026-11-02 rule 4: `this.client` written by two methods, each building it from
+    options naming another default host and the same default port. `get("/a")` is a row per
+    factory, `one:9200` and `two:9200`; `get("h", "/b")` takes only the port, which both give
+    alike, so it is one row, `h:9200`."""
     owner = "com/acme/vertx/Search#"
     first = _MODULE + method_descriptor(owner, "first", "()V")
     second = _MODULE + method_descriptor(owner, "second", "()V")
@@ -1042,7 +1059,8 @@ def test_two_factories_reaching_one_client_fill_only_the_defaults_they_agree_on(
 
     assert _calls(rows) == [
         ("GET", "h:9200", "/b", "resolved"),
-        ("GET", None, "/a", "resolved"),
+        ("GET", "one:9200", "/a", "resolved"),
+        ("GET", "two:9200", "/a", "resolved"),
     ]
 
 
@@ -1057,3 +1075,14 @@ def test_a_request_naming_its_host_takes_the_default_port_though_its_uri_is_unre
     body.on(client, ("get", _HOST_URI, [_string("h"), CallArgument(kind="unresolved")]), _send())
 
     assert _calls(_rows(tmp_path, body)) == [("GET", "h:9200", None, "unresolved")]
+
+
+@pytest.mark.parametrize("unset", [{"scheme": "http"}, {"port": "80"}, {"host": ""}, ["host"]])
+def test_an_unset_default_names_a_part_and_the_frameworks_value_of_it(unset: object):
+    """The client model's `unset` (spec 2026-11-02 rule 5, D02) maps an address part to the
+    framework's own value of it — a port a port number, a host a non-empty string — and a model
+    declaring anything else is refused at load, never read as "no default"."""
+    declared = dict(_vertx_webclient().matches["client_base"])
+    assert declared["unset"] == {"host": "localhost", "port": 80}
+    with pytest.raises(CatalogError, match="`unset`"):
+        client_base_of({"client_base": {**declared, "unset": unset}}, "vertx-web")

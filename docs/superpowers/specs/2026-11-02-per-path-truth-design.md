@@ -85,6 +85,29 @@ publishes `search` while its port is unknown.
    delegation, not the user's.
 6. **A setter whose own argument has several values is unread** (`_Options._value`, unchanged):
    pairing two independent setters' candidates would publish combinations no path makes.
+
+   **As built for rules 4-6** (item 2, 2026-11-03). `client_base._Options` reads the client's
+   factories (`producer_paths`, `which_object`) and the options each was handed
+   (`producer_paths` along receivers, with rule 9's splits, `Flow.paths`) path by path, a pair
+   kept only where the two paths agree, and returns one `PathParts` per distinct path:
+   `client_defaults` and `options_parts`. `fluent._with_client_defaults` and
+   `_with_request_options` return one reading per path, and the destinations loop one row per
+   distinct (peer, path, resolution). Proven unset is `_built_bare` (the options type's `<init>`
+   with descriptor `()V` at the chain's root) on a path that read every call; `unset` is the
+   client model's (`client-models/vertx-web.yml`, D02). The options reader declares the parts its
+   rows publish (`client_base.PUBLISHED_PARTS`, held complete by
+   `tests/architecture/test_published_parts_are_complete.py`) and counts only splits that set one.
+   **Concern 6** (a setter gathered inside a callee read across every caller) was not met by
+   `HandOffs` alone: the walk now writes, for each configuring call a body gathered, the hand-off
+   that entered that body (`_GATHERED`, `_entered_through`), `Path.entered_into` returns it, and
+   the setter's argument is read at the entering call (`values.entered_position`, the Quartz
+   binder's rule, moved there so one copy serves both). **The B list**: the walk back from a
+   rootless terminal keeps the terminal's row where it ends `escapes` or `cycle`, as past the cap
+   (`chains._UNREAD_WALKS`); an executing call the value walk pairs with a `build()` only by
+   identity (rule 8) executes a terminal nothing else executes, its row no surer than `partial`
+   (`chains._executing_calls`, `_executed_unread`); the mount reader already asked which object
+   (`which_object`), so a router handed away before its mount kept its prefix — measured, not
+   changed.
 7. **A hand-off to a call a catalog declares takes its effect from the catalog** [ruled by the
    user, 2026-11-02: "predict the framework's behavior exactly, including its errors", DR-6].
    A catalog-declared call is not code we do not have: the catalog is the measured statement of

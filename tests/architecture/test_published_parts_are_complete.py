@@ -8,11 +8,16 @@ row varying in it would stay `resolved` beside a combination no run makes. This 
 omission fail here instead: each capture a step sets — its `captures`, `collects` (as
 `collected`), its `poisons` and the catalog's poisons for an undeclared member — is in
 `PUBLISHED_PARTS` or in `fluent.UNPUBLISHED_PARTS`, whose entries each say why.
+
+The options reader (`shapes/client_base.py`) counts its own splits by the parts ITS rows show
+(`client_base.PUBLISHED_PARTS`, item 2 of the per-path-truth work): every part a client model's
+setter declares must be one of them, or a split on that setter would not count.
 """
 
 from pathlib import Path
 
 from sextant.application.resolve.engines.fluent import PUBLISHED_PARTS, UNPUBLISHED_PARTS
+from sextant.application.resolve.shapes import client_base
 from sextant.application.resolve.shapes.chains import _declared_entries, _undeclared_steps
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 
@@ -53,3 +58,16 @@ def test_every_part_a_fluent_step_sets_is_published_or_named_unpublished():
 
 def test_the_two_sets_are_apart():
     assert PUBLISHED_PARTS & UNPUBLISHED_PARTS == frozenset()
+
+
+def test_every_part_an_options_setter_sets_is_one_the_options_reader_publishes():
+    setters = {
+        (catalog.id, setter["method"], setter["part"])
+        for catalog in YamlCatalogSource(CATALOGS).load()
+        for setter in (catalog.matches.get("client_base") or {}).get("setters", ())
+    }
+    assert setters, "no options-object client model was read"
+    stray = sorted(entry for entry in setters if entry[2] not in client_base.PUBLISHED_PARTS)
+    assert stray == [], (
+        f"an options setter sets a part `client_base.PUBLISHED_PARTS` omits: {stray}"
+    )

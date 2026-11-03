@@ -17,6 +17,34 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Vert.x client's defaults are one answer per path, and Vert.x's own defaults are used
+  where a path proves them** (spec 2026-11-02-per-path-truth rules 4-6, item 2). The options
+  reader merged its paths: a part two paths read differently was unread, and a part one path
+  did not set was absent, so a client field written by two factories, one setting port 8443
+  and one setting none, published `two`, `resolved` — false for the first — and options it
+  could not read at all (`new WebClientOptions(json)`, an unrooted chain, an unlisted factory
+  overload) read as "nothing set". Now every path composes its own row: `two:8443` and
+  `two:80`; `if (tls) o.setDefaultPort(443)` gives `branched:443` and `branched:80`; a part the
+  path proves unset (the no-argument constructor, every call read) is Vert.x's own, `localhost`
+  or 80, declared in the client model as `unset` (CP-56 row 132; reverses the Vert.x spec's
+  §2a / item 23); a part set and unread, or unknown, leaves the row with its path, peer NULL,
+  `partial`. A request's own `RequestOptions` is read per path the same way, and an options
+  object nothing reads is a row, `unresolved`, not dropped. A setter inside a helper reads the
+  value its own caller hands in: the walk now names, for each configuring call gathered in a
+  body a hand-off entered, the call that entered it (`values.Path.entered_into`,
+  `entered_position`, shared with the Quartz binder). Two or more guarded calls setting an
+  address part make every row `partial`; the options reader declares its published parts
+  (`client_base.PUBLISHED_PARTS`), so a guarded `setSsl` is no split. `WebClient.create(vertx)`
+  is a factory overload no rung declares, so its rows' default host is unknown: `partial`.
+- **A request handed to code we do not have before it is sent keeps its row** (rule 4, item 2's
+  B list). `send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` and `req = make();
+  Objects.requireNonNull(req); http.execute(req, h)` derived no row. The walk back from a
+  rootless terminal that ends `escapes` or `cycle` now keeps the terminal's row with its parts
+  unread, as one past the path cap already did; and an executing call the value walk can pair
+  with a `build()` only by identity (rule 8) — the window not read — executes it, the row no
+  surer than `partial`. A Vert.x mount whose router is handed away before it is mounted already
+  kept its prefix (the mount reader asks which object, `which_object`); measured, not changed.
+
 - **A call on a configuring call's result is absorbed into it only before the use, and the
   forward walk reads a hand-off after the use in its loop** (rule 9 fix round 5, review 3
   re-review 3). The user ruled on 2026-11-03 that the m-1 child rule stands and that a request

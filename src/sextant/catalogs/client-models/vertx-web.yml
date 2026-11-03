@@ -27,8 +27,12 @@ measured:
 # and at send time a request's own `host(…)`/`port(…)` wins (row 130). A request sent to a
 # `SocketAddress` goes to that address (rows 325-326) and joins no default.
 #
-# Unset defaults are `localhost` and 80 (row 132) and are never published: that a client sets
-# none cannot be proven from the bytecode (spec §2a), as for Ktor.
+# Unset defaults are `localhost` and 80 (row 132), declared below as `unset` (spec
+# 2026-11-02-per-path-truth rule 5, which reverses the Vert.x spec's §2a / item 23): they are
+# published only on a path whose options object the NO-ARGUMENT constructor built and every call
+# on which was read, so no setter reached proves the part unset. Anywhere else — options built
+# from JSON or copied, a chain the walk did not root, a factory overload no rung declares, a
+# client not reached — the part is unknown: the row keeps its path, peer NULL, `partial`.
 #
 # The client's construction is found by the value walk's producer reader (a client in a field
 # of `this` through the field's write, D00 §5's `receiver_field`; one handed in through its
@@ -118,4 +122,6 @@ client_base:
     - { owner: io.vertx.ext.web.client.WebClientConfig,
         returns: [io.vertx.ext.web.client.WebClientConfig] }
     - { owner: io.vertx.core.http.RequestOptions, returns: [io.vertx.core.http.RequestOptions] }
+  # What Vert.x sends to where the options set no default (CP-56 row 132): `localhost` and 80.
+  unset: { host: localhost, port: 80 }
   join: fill_authority

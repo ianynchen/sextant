@@ -2377,6 +2377,7 @@ client_base:
   ladder:  [{ owner, method, options_arg, descriptor? }]   # the factory, the options argument
   setters: [{ owner, method, part: host | port | uri, value_arg, descriptor? }]
   configures: [{ owner, returns: [types] }]   # optional: calls handing back the same object
+  unset: { host: localhost, port: 80 }        # optional: the framework's own value of a part
   join: fill_authority
 ```
 
@@ -2389,22 +2390,39 @@ it is (`which_object`: the requests sent on it do not make it another client); t
 options argument by the chain reader, every call `configures` names — a call on an options type
 declared to return one of `returns` (an inherited setter returns a supertype) — gathered as the
 object configured rather than escaping (ruling 4). Each setter's value is traced by the value
-walk: a string or integer literal, or a configuration expression; any other answer leaves that
-part set and unread. Every path must agree on a part: one every path sets and two read
-otherwise is set and unread too, and a part one path does not reach is absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
-and the port a request names none of, each on its own, and the request's own parts — root
-arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address was not
-read, takes neither. The filled parts compose one peer as stated ones do. A default set and not
-read, or never reached, fills nothing: the row keeps its path and resolution with `peer` NULL,
-since the framework never rewrites the path and an unset default cannot be proven. That holds
-for a request naming its own host too: with its default port set and unread, its peer is
-NULL, never the host alone.
+walk on the path the object was reached by — a setter gathered inside a body a hand-off entered
+reads a parameter of that body at the call that entered it on that path (`values.Path.entered_into`,
+`entered_position`) — as a string or integer literal, or a configuration expression; any other
+answer, or several values, leaves that part set and unread.
+
+**One reading per path, never merged** (spec 2026-11-02-per-path-truth rules 4-6). The client's
+factories and the options each was handed are read path by path (`values.producer_paths`, with
+rule 9's splits), and each path composes its own address: two factories, one setting port 8080
+and one setting none, are two rows; paths giving one address are one row. On a path a part is
+the text read, set and unread, proven unset, or unknown. **Proven unset** needs the object built
+by the options type's NO-ARGUMENT constructor and every call on it read; such a part takes the
+framework's own value, `unset` (Vert.x: `localhost`, 80, CP-56 row 132), a map from a part to a
+port number or a non-empty string, refused at load otherwise. Optional: a part with no `unset`
+value is unknown. A constructor handed anything (`new WebClientOptions(json)`), an unrooted
+chain, a path ending `escapes` or `cycle`, a factory overload no rung declares and a client the
+walk does not reach leave every part not set by a read call unknown. A path rule 9 cannot call
+exact (a side of a split no fact proves; two or more splits that set a part the reader's rows
+publish, `client_base.PUBLISHED_PARTS` — a guarded `setSsl` is no split for them) gives rows no
+surer than `partial`. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults
+fill the host and the port a request names none of, each on its own, and the request's own parts
+— root arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address
+was not read, takes neither. The filled parts compose one peer as stated ones do. A default the
+request takes that is set and unread, or unknown on the path, leaves the row with its path,
+`peer` NULL, `partial` — never the other part alone: with its default port unread, a request
+naming its own host has no peer.
 
 **An `options: argN` capture** reads an options object a REQUEST is made from (Vert.x's
-`request(m, RequestOptions)`) with the same `setters`: its `uri` part is the `url`, its `host`
-and `port` the request's own, each only where the chain captured none of that field itself (a
-later step wins), and a read uri sets `serves: true`. Refused at load in a catalog whose
-`client_base` declares no `setters`.
+`request(m, RequestOptions)`) with the same `setters`, one reading per path as above: its `uri`
+part is the `url`, its `host` and `port` the request's own, each only where the chain captured
+none of that field itself (a later step wins), and a uri set — read, unread or unknown — sets
+`serves: true`. A part proven unset is left to the client's defaults (CP-56 row 126); no `unset`
+value is applied to a request's own options. Refused at load in a catalog whose `client_base`
+declares no `setters`.
 
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is

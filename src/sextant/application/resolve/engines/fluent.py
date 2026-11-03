@@ -585,15 +585,25 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     `evidence` is a closed set, so the reason stays in the walk, not the
     row."""
     captures = dict(end.captures)
+    if _COMPOSE in captures:
+        composed_field, halves, join = captures[_COMPOSE]
+        captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
+    if _OPTIONS not in captures:
+        _derive_captured(end, captures, context)
+        return
+    # A request made from an options object (spec 2026-11-02 rule 4): one reading per path the
+    # object is read on, each its own row, never one merged answer. An inexact path is no surer
+    # than `partial`, as a chain the walk back reached inexactly is.
+    for filled, exact in _with_request_options(captures, context):
+        _derive_captured(end if exact else replace(end, inexact=True), filled, context)
+
+
+def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveContext") -> None:
+    """`_derive`'s row for one reading of the chain's captures."""
     # Spec 2026-09-21 §4: the root's own direction where it declared one,
     # the catalog's otherwise — read once, because every column and key
     # below that names a direction names this one.
     direction = captures.get(_DIRECTION, context.catalog.direction)
-    if _COMPOSE in captures:
-        composed_field, halves, join = captures[_COMPOSE]
-        captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
-    if _OPTIONS in captures:
-        captures = _with_request_options(captures, context)
     # The consumer the chain captured, whatever the direction (read on the row
     # for an inbound one alone, below); and — fix round 1, finding 4 — a
     # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
@@ -737,10 +747,17 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # (`pathless_serves`), read in full: the framework stores no path, and that is exact.
         destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]
     else:
-        destinations = [
-            _composed_address(captures, context, url_argument)
-            for url_argument in (_url_arguments(captures, context) if "url" in captures else [None])
-        ]
+        # One per url argument, and per path the client's defaults are read on (rule 4): a
+        # destination two paths give alike is one.
+        destinations = list(
+            dict.fromkeys(
+                destination
+                for url_argument in (
+                    _url_arguments(captures, context) if "url" in captures else [None]
+                )
+                for destination in _composed_address(captures, context, url_argument)
+            )
+        )
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -1697,7 +1714,7 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
 
 def _composed_address(
     captures: dict[str, Any], context: _DeriveContext, url_argument: dict[str, Any] | None
-) -> tuple[str | None, str | None, str]:
+) -> list[tuple[str | None, str | None, str]]:
     """One chain's peer/path/resolution from its `base` and `url` captures
     together (2F design §4's base composition), `url_argument` being one of
     the addresses `_url_arguments` reads the `url` capture as (None without one).
@@ -1716,7 +1733,10 @@ def _composed_address(
 
     The composed string is then read by `_address_of`, so a composed absolute
     literal splits by CP-2 exactly as a written one does and a composition
-    carrying an expression stays whole."""
+    carrying an expression stays whole.
+
+    One answer, except where a client's defaults fill the address (`fill_authority`): one per
+    path the defaults are read on (spec 2026-11-02 rule 4, `_with_client_defaults`)."""
     if "base" not in captures:
         if context.workspace is None or context.values is None:
             read = url_of(url_argument)
@@ -1739,24 +1759,34 @@ def _composed_address(
         # rows 325-326) names no peer, whatever its URL's authority or a later host or port
         # step says, and no client base is joined to it. The path is the address's own.
         if captures.get(_DESTINATION) == _UNREAD_DESTINATION:
-            return None, read[1], read[2]
+            return [(None, read[1], read[2])]
         if context.client_base is not None and context.client_base["join"] == FILL_AUTHORITY:
-            filled = _with_client_defaults(read, captures, context)
-            composed = _with_stated_authority(read, captures if filled is None else filled, context)
-            # A default the request takes was set and not read: WHO is called is not known.
-            return composed if filled is not None else (None, composed[1], composed[2])
-        return _against_client_base(
-            _with_stated_authority(read, captures, context), captures, context
-        )
+            found = []
+            for filled, exact in _with_client_defaults(read, captures, context):
+                peer, path, resolution = _with_stated_authority(
+                    read, captures if filled is None else filled, context
+                )
+                # A default the request takes was set and not read, or is not known on this
+                # path: WHO is called is not known — peer NULL, the path kept, `partial` (rule 4).
+                if filled is None:
+                    peer, resolution = None, weaker(resolution, str(Resolution.PARTIAL))
+                # A path rule 9 cannot call exact is no surer than `partial`.
+                if not exact:
+                    resolution = weaker(resolution, str(Resolution.PARTIAL))
+                found.append((peer, path, resolution))
+            return found
+        return [
+            _against_client_base(_with_stated_authority(read, captures, context), captures, context)
+        ]
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
-        return None, None, "unresolved"
+        return [(None, None, "unresolved")]
     if "url" not in captures:
-        return _address_of(base)
+        return [_address_of(base)]
     path = _string_value(url_argument)
     if path is None:
-        return None, None, "unresolved"
-    return _address_of(base + path)
+        return [(None, None, "unresolved")]
+    return [_address_of(base + path)]
 
 
 def _with_stated_authority(
@@ -1865,7 +1895,7 @@ def _with_client_defaults(
     address: tuple[str | None, str | None, str],
     captures: dict[str, Any],
     context: _DeriveContext,
-) -> dict[str, Any] | None:
+) -> list[tuple[dict[str, Any] | None, bool]]:
     """`captures` with the client's default host and port filling the parts the request does
     not name — the `fill_authority` join, Vert.x's (CP-56 row group (e)): `x(uri)` takes both,
     `x(host, uri)` the port only, `x(port, host, uri)` neither, and a `host(…)` or `port(…)`
@@ -1873,60 +1903,81 @@ def _with_client_defaults(
     url reader) takes neither, and neither does an address whose path was not read and which
     names no host of its own, since nothing then says it was not absolute.
 
-    The defaults are the client's options object's (`client_defaults`). A default that was set
-    and not read, or that the paths dispute, is one Vert.x sends to: None, and the row keeps its
-    path and its resolution with no peer (D02, final review I3), never the other part alone.
-    One no setter reached fills nothing, because Vert.x never rewrites the path and an unset
-    default (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed
-    into one peer by `_with_stated_authority`, as a request's own parts are."""
+    **One reading per path** (spec 2026-11-02 rule 4), each `(captures, exact)`: the defaults
+    are the client's options object's, read per path (`client_defaults`), never merged — two
+    factories, one setting port 8080 and one setting none, are two readings. On a path a default
+    is the text a setter was handed, the framework's own value where the path proves the part
+    unset (`localhost`, 80; rule 5), or not known; a default the request takes that is not
+    known is None in place of the captures, and that row keeps its path with no peer, `partial`
+    (D02, final review I3), never the other part alone. The filled parts are then composed into
+    one peer by `_with_stated_authority`, as a request's own parts are. `exact` is False where
+    rule 9 makes the path inexact."""
     peer, path, _ = address
     if peer is not None or context.workspace is None:
-        return captures
+        return [(captures, True)]
     # An unread path may have been absolute, unless the request names its own host: the
     # `x(host, uri)` form is never absolute, so its port is still the default.
     if path is None and "host" not in captures:
-        return captures
+        return [(captures, True)]
     missing = [part for part in ("host", "port") if part not in captures]
-    client = _client_of(captures, context) if missing else None
+    if not missing:
+        return [(captures, True)]
+    client = _client_of(captures, context)
+    # A client the chain holds no executing call for is not reached: its defaults are unknown.
     if client is None:
-        return captures
-    defaults = client_defaults(context.workspace, context.values, client, context.client_base or {})
-    filled = dict(captures)
-    for part in missing:
-        if part not in defaults:
+        return [(None, True)]
+    readings: list[tuple[dict[str, Any] | None, bool]] = []
+    for defaults in client_defaults(
+        context.workspace, context.values, client, context.client_base or {}, context.path
+    ):
+        texts = [defaults.parts.get(part) for part in missing]
+        if any(text is None for text in texts):
+            readings.append((None, defaults.exact))
             continue
-        text = defaults[part]
-        if text is None:
-            return None
-        filled[part] = _part_argument(text)
-    return filled
+        readings.append(
+            (
+                {
+                    **captures,
+                    **{part: _part_argument(str(text)) for part, text in zip(missing, texts)},
+                },
+                defaults.exact,
+            )
+        )
+    return readings
 
 
-def _with_request_options(captures: dict[str, Any], context: _DeriveContext) -> dict[str, Any]:
+def _with_request_options(
+    captures: dict[str, Any], context: _DeriveContext
+) -> list[tuple[dict[str, Any], bool]]:
     """`captures` with the options object a request is made from read into the request's own
-    parts (Vert.x's `request(m, RequestOptions)`, spec §3d): its `uri` the address, its `host`
-    and `port` the request's own, each only where no step after the root captured that part
-    (a step on the request runs later, so it wins). The object is read by the catalog's
-    `client_base` setters, the reader of a client's own options. A part set to a value not read
-    here is captured unread, so the row says who is called went unread. A read uri makes the
-    chain a row (`serves`), where the root alone named no address, and so does a uri set and
-    not read: the row then carries the address reader's word for it."""
+    parts (Vert.x's `request(m, RequestOptions)`, spec §3d), ONE reading per path the object is
+    read on (spec 2026-11-02 rule 4), each `(captures, exact)`: its `uri` the address, its
+    `host` and `port` the request's own, each only where no step after the root captured that
+    part (a step on the request runs later, so it wins). The object is read by the catalog's
+    `client_base` setters, the reader of a client's own options. A part proven unset on a path is
+    left to the client's defaults (CP-56 row 126); one set to a value not read here, or not known
+    on that path (an object built from JSON, one the walk did not reach), is captured unread, so
+    the row says who is called went unread. A read uri makes the chain a row (`serves`), where
+    the root alone named no address, and so does a uri set and not read or not known: the row
+    then carries the address reader's word for it."""
     if context.workspace is None or context.client_base is None:
-        return captures
-    parts = options_parts(
-        context.workspace, context.values, captures[_OPTIONS], context.client_base
-    )
-    filled = dict(captures)
-    for part, field in _OPTION_CAPTURES.items():
-        if part not in parts or field in captures:
-            continue
-        text = parts[part]
-        filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
-        if field == "url":
-            # The object names an address whether or not it was read here: an unread one is a
-            # row the address reader marks, never a request dropped.
-            filled[_SERVES] = True
-    return filled
+        return [(captures, True)]
+    readings: list[tuple[dict[str, Any], bool]] = []
+    for each in options_parts(
+        context.workspace, context.values, captures[_OPTIONS], context.client_base, context.path
+    ):
+        filled = dict(captures)
+        for part, field in _OPTION_CAPTURES.items():
+            if part not in each.parts or field in captures:
+                continue
+            text = each.parts[part]
+            filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
+            if field == "url":
+                # The object names an address whether or not it was read here: an unread one is
+                # a row the address reader marks, never a request dropped.
+                filled[_SERVES] = True
+        readings.append((filled, each.exact))
+    return readings
 
 
 def _part_argument(text: str) -> dict[str, Any]:

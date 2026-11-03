@@ -109,8 +109,13 @@ defaults when it builds the request:** `x(uri)` takes the default host and port;
 uri)` the default port only; `x(port, host, uri)` neither; `request(m, RequestOptions)`
 fills a null host and a null port separately; `xAbs` reads neither. At send time a request's
 own `host`, `port` (≥ 0) and `ssl` steps overwrite what an absolute URL parsed. Unset
-defaults are `localhost` and `80`, which — as for Ktor (D02) — are never published, since
-that a client sets no default cannot be proven from bytecode.
+defaults are `localhost` and `80`. ~~They are never published, since that a client sets no
+default cannot be proven from bytecode.~~ **Reversed 2026-11-02** (spec
+2026-11-02-per-path-truth rule 5, approved by the user; this sentence was a ruling made under
+the delegation): on a path whose options object the no-argument constructor built and every call
+on which was read, an unset part IS proven unset and takes these values, declared in the client
+model as `unset: {host: localhost, port: 80}`; anywhere else the part is unknown, and the row has
+no peer, `partial`.
 
 **`HttpMethod`** (vertx-core) is a class with **31** static constants (32 at 5.2.1, which
 adds `QUERY`) and `valueOf(String)` for any other token; it is not an enum, so the set a route with no verb
@@ -460,6 +465,13 @@ method are built (rulings 1 and 2, PRs #84 and #78). This catalog uses them.
   port fill a request that names none; a request naming its own host or port keeps it; an
   absolute (`*Abs`) request ignores both. The probe pins it against `HttpRequestImpl`.
   Where the options object is not reached, the row's peer is NULL, as Ktor's is.
+  **Per path** (spec 2026-11-02-per-path-truth rules 4-6, item 2, 2026-11-03): the factories and
+  the options each was handed are read one path at a time, never merged — two factories, one
+  setting port 8080 and one setting none, are two rows (`search:8080`, `search:80`); a part
+  proven unset takes `localhost`/80 (§2a, reversed); one set and unread, or unknown (options
+  built from JSON, an unrooted chain, `WebClient.create(vertx)` and any other factory overload
+  no rung declares, a client not reached) leaves the row with its path, peer NULL, `partial`. A
+  `RequestOptions` object is read per path the same way, its unset parts left to the client.
 - **A request built in a helper and sent by its caller** — Hono's
   `request = client.post(QUERY_URI)…; return request.as(…)` then `.send()` in the caller —
   is reached by ruling 5's walk, given the flags above.
@@ -865,7 +877,9 @@ three-run re-timing is in `docs/performance.md`, "After the Vert.x catalogs, re-
     and a regex `@Route`.
 22. Candidate chains sharing one handler are one row, `resolved`; `narrowed` only between
     different handlers.
-23. Unset WebClient defaults (`localhost:80`) are never published, as Ktor's.
+23. ~~Unset WebClient defaults (`localhost:80`) are never published, as Ktor's.~~ Reversed
+    2026-11-02 (spec 2026-11-02-per-path-truth rule 5): published where a path proves them
+    unset (the no-argument constructor, every call read), unknown elsewhere (§2a, §3d).
 24. The fixture's dependency jar is built by a generalised `fixture_stub`, whose fingerprint
     hashes a library jar only for fixtures whose POM names it.
 25. A partial row's reason needed a carrier (Task 10 added the `handler_pass_through` question).

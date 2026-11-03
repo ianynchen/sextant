@@ -249,6 +249,12 @@ _HANDED_TO = "handed-to"
 # `Catalog.hand_off_effects`): no `escapes`, a step of its own on the path, so a reader of
 # the part the call binds finds the call (`Path.stated`).
 _STATED = "stated"
+# A configuring call gathered INSIDE a body a hand-off entered (spec 2026-11-02 rule 1;
+# item 1's review, concern 6): `(_GATHERED, method, ordinal, *entered)`, the calls that entered
+# that body innermost first, as `_STATED` carries them. A reader of the call's own arguments
+# reads a parameter of that body at the call that entered it on THIS path
+# (`Path.entered_into`, `entered_position`), never across every caller of the body.
+_GATHERED = "gathered"
 # Whether a call that is NOT on every path to the use ran on this path (spec 2026-11-02 rule
 # 9, `Flow.paths`): one path where it ran, one where it did not, recorded as a choice so two
 # reads on one path agree on it. The context is `(_SPLIT, method, ordinal, counts)`: whether
@@ -1440,6 +1446,20 @@ class Path:
                 )
         return tuple(tuple(frame) for frame in frames if frame)
 
+    def entered_into(self, caller: str, ordinal: int) -> tuple[tuple[tuple[str, int], ...], ...]:
+        """For a configuring call at `(caller, ordinal)` that this path gathered inside a body a
+        hand-off entered, the calls that entered that body, innermost first — one tuple per
+        time the path gathered it (a helper handed the value twice gathers its call twice).
+        Empty where the path gathered it in no entered body. `entered_position` reads the
+        call's argument through them (item 1's review, concern 6)."""
+        return tuple(
+            dict.fromkeys(
+                tuple(step.context[3:])
+                for step in self.trail
+                if step.context[0] == _GATHERED and step.context[1:3] == (caller, ordinal)
+            )
+        )
+
     def ran_before(
         self,
         index: "ValueIndex",
@@ -1657,13 +1677,49 @@ _Event = tuple[int, tuple[_Window, ...], int | None]
 def _entered_through(steps: _Trail, method: str, ordinal: int) -> _Trail:
     """`steps`, read in a body a hand-off at `(method, ordinal)` entered, with that call
     added to each stated step's frame (`Path.stated`'s `entered`), outermost last — and to
-    each split's (rule 9), so two calls of one helper choose apart whether its call ran."""
+    each split's (rule 9), so two calls of one helper choose apart whether its call ran, and to
+    each gathered call's (`_GATHERED`), so its arguments are read through this call."""
     return tuple(
         _Step((*step.context, (method, ordinal)), step.label)
-        if step.context[0] in (_STATED, _SPLIT)
+        if step.context[0] in (_STATED, _SPLIT, _GATHERED)
         else step
         for step in steps
     )
+
+
+def _gathered_steps(body: str, outcome: tuple[tuple[str, int], ...] | str) -> _Trail:
+    """A `_GATHERED` step for each call `body` itself gathered on one path through it, for
+    `_entered_through` to name the call that entered `body`. A call gathered deeper already has
+    its step, written where the hand-off into that deeper body was read."""
+    if isinstance(outcome, str):
+        return ()
+    return tuple(
+        _Step((_GATHERED, made_in, at), _GATHERED) for made_in, at in outcome if made_in == body
+    )
+
+
+def entered_position(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int,
+    entered: tuple[tuple[str, int], ...],
+) -> tuple[Mapping[str, Any], int]:
+    """Where a call's argument at `slot` is read when the call is inside a body a hand-off
+    entered: at the call itself, or — while that argument is a parameter of the body the call
+    is in, and the path records which call entered that body (`entered`, innermost first) — at
+    that entering call's own argument, in ITS frame (review 2, C1; item 1's review, concern 6).
+    So a helper called twice reads each call's own value. A stated call's `entered` comes from
+    `Path.stated_by_frame`, a gathered call's from `Path.entered_into`."""
+    for outer in entered:
+        arguments = site["arguments"] or []
+        argument = arguments[slot] if slot < len(arguments) else None
+        if not isinstance(argument, Mapping) or argument.get("kind") != "parameter":
+            break
+        entering = index.sites.get(outer)
+        if entering is None:
+            break
+        site, slot = entering, int(argument["value"])
+    return site, slot
 
 
 def _dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[int] | None:
@@ -3260,8 +3316,14 @@ class _Walk:
         # C1): each call of one helper is its own execution, so a reader of what that stated
         # call was handed reads it through this hand-off, never through another call of the
         # helper (`Path.stated`).
+        # So does each call the body itself gathered (concern 6): its arguments are read through
+        # this hand-off.
         found = [
-            (callee, _entered_through(steps, method, ordinal), outcome)
+            (
+                callee,
+                _entered_through((*steps, *_gathered_steps(callee, outcome)), method, ordinal),
+                outcome,
+            )
             for callee in callees
             for steps, outcome in self._entered_window(callee, slot)
         ]
