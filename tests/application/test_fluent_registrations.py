@@ -3669,9 +3669,12 @@ def test_a_void_call_that_sets_nothing_on_a_branch_is_no_split(tmp_path: Path):
     ]
     workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
     rows = _rows(workspace)
+    # A reader stating no published parts counts every split it is given; `touch` is still none.
+    unstated = {end.inexact for end in chain_ends(workspace, _catalog(_ADAPTER_MATCHES))}
     workspace.close()
 
     assert sorted((row["path"], row["handler"] is not None, row["resolution"]) for row in rows) == [
         (SUBSCRIPTION, False, "resolved"),
         (SUBSCRIPTION, True, "resolved"),
     ]
+    assert unstated == {False}
