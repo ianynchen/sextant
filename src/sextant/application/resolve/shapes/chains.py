@@ -74,14 +74,17 @@ from sextant.application.resolve.values import (
     NON_ENUMERABLE,
     PATH_CAP,
     RECEIVER,
+    Counting,
     Flow,
     Path,
     ValueIndex,
     cached_value_index,
+    counts_split,
     path_splits,
     producer_paths,
     producers_of,
     several_or_unproven,
+    split_sites,
 )
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
@@ -189,6 +192,9 @@ _FOLDS = "\x00folds"
 _SPLITS = "\x00splits"
 _UNPROVEN = "\x00unproven"
 _RULE_9 = (_FOLDS, _SPLITS, _UNPROVEN)
+# The part a `collects` step sets (headers, query parameters), as a reader names it among the
+# parts its rows show (`chain_ends`' `published`).
+_COLLECTED_PART = "collected"
 # What a capture holds where the walk passed the path cap (`PATH_CAP`): the part is not read.
 _CAPPED = MappingProxyType({"kind": "unresolved", "reason": NON_ENUMERABLE})
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
@@ -232,7 +238,9 @@ class ChainEnd:
     inexact: bool = False
 
 
-def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
+def chain_ends(
+    workspace: Workspace, catalog: Catalog, published: frozenset[str] | None = None
+) -> Iterator[ChainEnd]:
     """Every executable chain's end in the module, in the walk's order (ordinal order
     per caller, NFR-1): the walk over one caller's own `call_sites` from each declared
     root, through bean hops, lambda bodies and continuations, recording each chain that
@@ -240,7 +248,11 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
 
     Validates and reads `roots`, `steps`, `terminal`, `beans`, `undeclared_steps` and the
     join keys (`via_argument_of`/`continue`, `terminal_via_argument`), refusing a broken
-    one before any chain is walked. Every other key of `matches` is its consumer's."""
+    one before any chain is walked. Every other key of `matches` is its consumer's.
+
+    `published` is the capture names the caller's rows show (the user's ruling of 2026-11-03,
+    option A): a call on a branch that sets none of them is no split for the several-splits
+    rule. None, a reader that states none: every split counts."""
     matches = catalog.matches
     roots, bean_roots, steps = _declared_entries(catalog)
     _validate_steps(steps, catalog)
@@ -317,6 +329,19 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # index five times before.
     walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
     flow = Flow(walk_index)
+    # Which splits count for the caller's rows: those whose call sets a part they show,
+    # read off the same steps and capture names the walk folds (`_parts_set`).
+    counting = (
+        None
+        if published is None
+        else lambda method, ordinal: _counts(
+            walk_index.sites.get((method, ordinal)),
+            published,
+            steps,
+            undeclared_owners,
+            undeclared_poisons,
+        )
+    )
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
@@ -368,6 +393,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
             workspace=workspace,
             values=walk_index,
             flow=flow,
+            counting=counting,
             caller=caller,
             sites=sites,
             by_receiver=by_receiver,
@@ -748,6 +774,8 @@ class _ChainContext:
     path: Path | None = None
     # Rule 9's split and proof, the value walk's own (`values.Flow`), one per run.
     flow: Flow | None = None
+    # Which splits count for the caller's rows (`chain_ends`' `published`); None, every one.
+    counting: Counting = None
     # `ChainEnd.inexact`: the walk back reached this chain on an inexact path.
     inexact: bool = False
 
@@ -978,6 +1006,7 @@ def _walk_back(
         rootless.declared,
         along_receivers=True,
         configuring=rootless.configuring,
+        counting=context.counting,
     ):
         if not producer.chain and producer.reason == NON_ENUMERABLE:
             captures: dict[str, Any] = {}
@@ -1219,7 +1248,13 @@ def _forked(
         return [base]
     calls = [folds[index][0] for index in branched] + later
     splits = frozenset(captures.get(_SPLITS, frozenset())) | {_site_key(site) for site in calls}
-    if 2 ** len(calls) > PATH_CAP:
+    # The cap counts the WHOLE path, as the value walk's does (`_windowed`): every split this
+    # chain made at an earlier fork, across a continuation, or on the walk back to its root,
+    # whatever it sets — the paths multiply whether or not a split counts toward the row.
+    behind = len(captures.get(_SPLITS, ())) + (
+        0 if context.path is None else split_sites(context.path)
+    )
+    if 2 ** (behind + len(calls)) > PATH_CAP:
         capped = _replayed(base, folds, {_site_key(folds[index][0]) for index in branched}, context)
         for site in calls:
             unread: dict[str, Any] = {}
@@ -1284,10 +1319,38 @@ def _unsure(captures: Mapping[str, Any], context: _ChainContext) -> bool:
     """Whether a chain end is inexact by rule 9: the calls on branches its own walk split at,
     with the value walk's back to its root where it walked back (`path_splits`), counted by the
     one rule (`values.several_or_unproven`)."""
-    splits = len(captures.get(_SPLITS, ())) + (
-        0 if context.path is None else path_splits(context.path)
-    )
+    counting = context.counting
+    splits = sum(
+        1
+        for method, ordinal in captures.get(_SPLITS, ())
+        if counting is None or counting(method, ordinal)
+    ) + (0 if context.path is None else path_splits(context.path, counting))
     return several_or_unproven(splits, bool(captures.get(_UNPROVEN)))
+
+
+def _counts(
+    site: Mapping[str, Any] | None,
+    published: frozenset[str],
+    steps: list[dict[str, Any]],
+    undeclared_owners: tuple[str, ...],
+    undeclared_poisons: tuple[str, ...],
+) -> bool:
+    """Whether a split at `site` counts for rows showing `published` (`values.counts_split`):
+    the parts it sets are the capture names its step declares (`collects` as `collected`), or
+    the poisons an undeclared member sets — the same data the walk folds. A site this run
+    cannot read sets parts not known, so it counts."""
+    if site is None:
+        return True
+    step = _matching_step(dict(site), steps)
+    if step is None:
+        parts = set(undeclared_poisons) if site.get("owner") in undeclared_owners else set()
+    else:
+        parts = set(step["captures"])
+        if step.get("collects"):
+            parts.add(_COLLECTED_PART)
+        if step.get("poisons"):
+            parts.update(step["poisons"])
+    return counts_split(parts, published)
 
 
 def _without_rule_9(captures: dict[str, Any]) -> dict[str, Any]:

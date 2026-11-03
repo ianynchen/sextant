@@ -309,6 +309,11 @@ Identities = Sequence[Mapping[str, Any]]
 # reader that turns `past_accessors` on; this module never reads the hierarchy itself.
 Ancestors = Mapping[str, Sequence[tuple[str, str, bool]]]
 
+# Which splits count for a reader's row (ruled by the user 2026-11-03, option A): a call on a
+# branch at `(method, ordinal)` counts toward the several-splits rule only where it sets a part
+# the reader's row publishes. None, a reader that states no published parts: every split counts.
+Counting = Callable[[str, int], bool] | None
+
 # The key a hoisted WRAPPER entry carries and a `_via` entry deliberately does not, and
 # what it decides here. `role` says "argument N of this producer is the CHANNEL" or "the
 # PAYLOAD" — a statement about one of several things a constructed value holds, which the
@@ -1295,6 +1300,7 @@ def producers_of(
     past_accessors: Ancestors | None = None,
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
     stop_at_parameters_of: AbstractSet[str] = frozenset(),
+    counting: Counting = None,
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -1363,6 +1369,7 @@ def producers_of(
         configuring=configuring,
         stop_at_parameters_of=stop_at_parameters_of,
         parameters_apart=True,
+        counting=counting,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -1536,6 +1543,7 @@ def producer_paths(
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
     stop_at_parameters_of: AbstractSet[str] = frozenset(),
     which_object: bool = False,
+    counting: Counting = None,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1567,6 +1575,7 @@ def producer_paths(
         configuring=configuring,
         stop_at_parameters_of=stop_at_parameters_of,
         parameters_apart=True,
+        counting=counting,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1675,29 +1684,52 @@ def several_or_unproven(splits: int, unproven: bool) -> bool:
     return splits > 1 or unproven
 
 
-def path_splits(path: "Path") -> int:
-    """How many calls on branches a value walk's `path` split at, a window that held two or
-    more (`_SEVERAL`) counting as two — for a reader adding its own splits to the path's."""
-    return _split_count(path.trail)
+def counts_split(parts: AbstractSet[str] | None, published: AbstractSet[str] | None) -> bool:
+    """Whether a split whose call sets `parts` counts for a row publishing `published` (the
+    user's ruling of 2026-11-03, option A): it does where it sets a part the row shows. Where
+    either is not known — a reader that states no published parts, a call whose parts are not
+    read — it counts, the conservative default."""
+    return published is None or parts is None or bool(set(parts) & set(published))
 
 
-def _split_count(trail: _Trail) -> int:
-    splits = len({step.context for step in trail if step.context[0] == _SPLIT})
+def path_splits(path: "Path", counting: Counting = None) -> int:
+    """How many calls on branches a value walk's `path` split at that count for the reader
+    (`counting`), a window that held two or more such (`_SEVERAL`) counting as two — for a
+    reader adding its own splits to the path's. `split_sites` lists them all."""
+    return _split_count(path.trail, counting)
+
+
+def split_sites(path: "Path") -> int:
+    """How many calls on branches a value walk's `path` split at, whatever they set — the
+    count the path cap bounds."""
+    return _split_count(path.trail, None)
+
+
+def _split_count(trail: _Trail, counting: Counting) -> int:
+    splits = len(
+        {
+            step.context
+            for step in trail
+            if step.context[0] == _SPLIT
+            and (counting is None or counting(str(step.context[1]), int(step.context[2])))
+        }
+    )
     return splits + (2 if any(step.context[0] == _SEVERAL for step in trail) else 0)
 
 
-def _unsure(path: _Trail) -> bool:
+def _unsure(path: _Trail, counting: Counting = None) -> bool:
     """Whether an answer on `path` is inexact by rule 9 (`_Walk._window`).
 
     - **Two or more calls on branches anywhere on the PATH** (ruled by the user 2026-11-03,
       "A: every row partial", per path from the producer to the use — review 3, C1): the
       facts say whether a call is on every path, never which branch it is on, so the splits
-      give every combination, including ones no run makes, whichever parts the calls set and
-      whichever frames they are in. A window that held two or more itself is marked once
-      (`_SEVERAL`).
+      give every combination, including ones no run makes, whichever PUBLISHED parts the calls
+      set (narrowed by the user's ruling of 2026-11-03, option A: a split that sets no part the
+      reader's row publishes does not count, `counting`) and whichever frames they are in. A
+      window that held two or more counted splits itself is marked once (`_SEVERAL`).
     - **A side of a split the facts do not prove a run takes to the use** (`_UNPROVEN`)."""
     return several_or_unproven(
-        _split_count(path), any(step.context[0] == _UNPROVEN for step in path)
+        _split_count(path, counting), any(step.context[0] == _UNPROVEN for step in path)
     )
 
 
@@ -1940,6 +1972,7 @@ class _Walk:
         asking: frozenset[tuple[str, tuple[str, int]]] = frozenset(),
         stop_at_parameters_of: AbstractSet[str] = frozenset(),
         parameters_apart: bool = False,
+        counting: Counting = None,
     ) -> None:
         self._index = index
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
@@ -1968,6 +2001,8 @@ class _Walk:
         # the parameter an `external` answer ended at are two ends (`_distinct`). False for
         # every other reader, whose answers stay exactly what they were.
         self._parameters_apart = parameters_apart
+        # Which splits count for the reader's row (`counts_split`); None, every one.
+        self._counting = counting
         # The object reader (`_Walk._objects`): which construction a receiver IS. No call made
         # on an object changes which `new` built it, so the `escapes` window does not apply.
         self._which_object = which_object
@@ -2794,7 +2829,7 @@ class _Walk:
                 reached.extend(self._identities_past(gathered, position, crossed, frames))
                 continue
             reached.extend(
-                (path, replace(answer, inexact=True) if _unsure(path) else answer)
+                (path, replace(answer, inexact=True) if _unsure(path, self._counting) else answer)
                 for path, answer in (
                     (
                         path,
@@ -2932,7 +2967,14 @@ class _Walk:
         # Two or more splits here make every path from this window inexact whatever each call
         # did (`_unsure`), so the choices are not recorded one by one: one `_SEVERAL` mark, and
         # paths that gather the same calls collapse into one (review 3, M2).
-        several = len(splitting) > 1
+        several = (
+            sum(
+                1
+                for ordinal in splitting
+                if self._counting is None or self._counting(method, ordinal)
+            )
+            > 1
+        )
         # Which ordinals a later event is made on the result of: only those need remembering
         # as skipped, so two paths differing only in a skip nothing reads are one.
         parents = {parent for _, _, parent in events if parent is not None}

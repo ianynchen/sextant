@@ -205,6 +205,42 @@ _LAST = "last"
 _UNREAD_ORDER = "unread"
 
 
+# The capture names this engine's rows SHOW (the user's ruling of 2026-11-03, option A: a call on
+# a branch that sets none of them is no split for the several-splits rule, `chain_ends`). Each is
+# read into a column of `endpoints` or `endpoint_metadata` in `_derive`: the verb (`method`), the
+# address (`path`, `peer`, `path_kind`, from the url, its parts, the options object a client was
+# built from and the channel a messaging chain names), the payloads (`request_shape`,
+# `response_shape`), the handler and its media (`consumes`, `produces`), whether and in which order
+# the chain derives a row at all (`serves`, `order`), and what a `collects` step gathers
+# (`collected`, the metadata). A column added to the row adds its capture here.
+PUBLISHED_PARTS = frozenset(
+    {
+        "http_method",
+        "url",
+        "url_is",
+        "base",
+        "host",
+        "port",
+        "destination",
+        "options",
+        "channel",
+        "channel_link",
+        "channel_source",
+        "routing_key",
+        "exchange",
+        "body",
+        "response",
+        "response_is",
+        "handler",
+        "consumes",
+        "produces",
+        "serves",
+        "order",
+        "collected",
+    }
+)
+
+
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per chain reaching a terminal, via the same
     `call_endpoints` insert-if-absent every style uses (D02 §5). `caller` is
@@ -297,7 +333,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # Spec §3b: which handler on a chain answers, judged once for every handler the chains
     # name, before any row is derived — the chains are read whole first, because each
     # handler's outcome is one backward walk per `passes_on` call over the whole module.
-    ends: Iterable[ChainEnd] = chain_ends(workspace, catalog)
+    ends: Iterable[ChainEnd] = chain_ends(workspace, catalog, PUBLISHED_PARTS)
     judged: dict[Any, _Judged] | None = None
     candidates: list[_Candidate] | None = None
     unread: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}

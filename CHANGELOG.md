@@ -24,8 +24,13 @@ here would restate those documents rather than add anything.
   carries on to — a row with it and a row without — by the value walk's own split and proof,
   lifted into one shared place (`values.Flow`): the `post_dominator` proof, `reaches_return`,
   the loop-later rule, the several-splits count across the whole path (`several_or_unproven`)
-  and the path cap. A fold that changes nothing is no split. Ktor's inline `setBody` compiles
-  to two `setBody` calls on two branches, so a Ktor request with a body is now `partial`.
+  and the path cap, which counts the whole path across chained forks and continuations. A
+  fold that changes nothing is no split, and (ruled by the user 2026-11-03, option A) a call on
+  a branch that sets no part the row publishes does not count toward the several-splits rule —
+  each reader states its published parts (`fluent.PUBLISHED_PARTS`); one that states none
+  counts every split. Ktor's inline `setBody` compiles to two `setBody` calls on two branches,
+  and the body is a published part (`request_shape`), so a Ktor request with a body is
+  `partial`.
 - **A statement-style `setUri` on an Apache HttpClient builder is the request sent** (review 3
   re-review, out of scope; audited 2026-11-03). `b = ClassicRequestBuilder.get("…/a");
   b.setUri("…/b"); http.execute(b.build());` published `GET /a`, `resolved`: the `setUri` step

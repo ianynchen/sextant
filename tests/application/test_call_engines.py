@@ -8388,6 +8388,170 @@ def test_an_okhttp_post_on_one_branch_gives_a_get_row_and_a_post_row(tmp_path: P
     assert rows == [("GET", "/orders", "resolved"), ("POST", "/orders", "resolved")]
 
 
+# The several-splits rule counts only the splits that set a part the row publishes (ruled by the
+# user 2026-11-03, option A). `tag` captures `note`, a part no row of this reader shows.
+_TAGGED_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET", "url": "arg0"},
+        }
+    ],
+    "steps": [
+        {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+        {"method": "tag", "returns_receiver": True, "captures": {"note": "arg0"}},
+    ],
+    "terminal": [{"method": "build", "terminal_via_argument": True}],
+}
+
+
+def _url_and_tag_on_branches(caller: str, second: str = "tag") -> list:
+    """`b = new Builder("https://h/a"); if (x) b.url("https://h/b"); if (y) b.<second>(…);
+    newCall(b.build())`, at the positions javac gives two independent `if`s."""
+    sites = [
+        _call(
+            caller,
+            BUILDER,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/a")],
+            invoke_kind="special",
+        ),
+        _url(caller, 1, "https://h/b", result=8),
+        _call(
+            caller,
+            BUILDER,
+            second,
+            2,
+            receiver=2,
+            result=9,
+            arguments=[
+                CallArgument(kind="string", value="https://h/c" if second == "url" else "t")
+            ],
+        ),
+        _call(caller, BUILDER, "build", 3, receiver=2, result=14),
+        _new_call(caller, 4, request=14),
+    ]
+    places = {
+        0: (None, True, 3),
+        1: (0, False, 3),
+        2: (0, False, 3),
+        3: (0, True, 4),
+        4: (3, True, None),
+    }
+    return [_placed_at(site, *places[site.ordinal]) for site in sites]
+
+
+@pytest.mark.pins("chains.a-split-setting-NO-PUBLISHED-part-does-not-count")
+def test_a_branched_call_setting_no_published_part_leaves_one_split(tmp_path: Path):
+    """`if (x) b.url(".../b"); if (y) b.tag("t");`: `tag` sets `note`, which no column of the
+    row shows, so it is no split for that row (the user's ruling of 2026-11-03, option A). One
+    split remains, and the one-split rules apply: `/a` and `/b`, both `resolved`."""
+    rows = _rows_of(
+        tmp_path, _url_and_tag_on_branches("com/acme/http/Client#tagged()."), _TAGGED_MATCHES
+    )
+    assert sorted(rows) == [
+        ("GET", "/a", "h", "resolved"),
+        ("GET", "/b", "h", "resolved"),
+    ]
+
+
+def test_two_branched_calls_setting_the_path_still_make_every_row_partial(tmp_path: Path):
+    """The near-miss: `if (x) b.url(".../b"); if (y) b.url(".../c");` — both set the path,
+    which the row publishes: every row `partial`."""
+    rows = _rows_of(
+        tmp_path,
+        _url_and_tag_on_branches("com/acme/http/Client#twoUrls().", second="url"),
+        _TAGGED_MATCHES,
+    )
+    assert {resolution for _, _, _, resolution in rows} == {"partial"}
+
+
+@pytest.mark.pins("chains.a-reader-with-NO-DECLARED-PARTS-counts-every-split")
+def test_a_reader_stating_no_published_parts_counts_every_split(tmp_path: Path):
+    """A reader that states no published parts (`chain_ends(…, published=None)`) keeps counting
+    every split: the same `url` + `tag` chain ends inexact, both ends."""
+    workspace = _resolve_fluent(
+        tmp_path,
+        _url_and_tag_on_branches("com/acme/http/Client#tagged()."),
+        _fluent_catalog(_TAGGED_MATCHES, "invented-receiver"),
+    )
+    catalog = _fluent_catalog(_TAGGED_MATCHES, "invented-receiver")
+    counted_all = {end.inexact for end in chain_ends(workspace, catalog)}
+    stated = {end.inexact for end in chain_ends(workspace, catalog, published=frozenset({"url"}))}
+    workspace.close()
+    assert (counted_all, stated) == ({True}, {False})
+
+
+@pytest.mark.pins("chains.the-PATH-CAP-counts-splits-across-CHAINED-forks")
+def test_the_path_cap_counts_splits_across_chained_forks(tmp_path: Path):
+    """The forward walk's cap counts the WHOLE path, as the value walk's does: five guarded
+    `tag` calls before a forking `url`, and five more on its result before `build()` — 2^10
+    paths on the whole chain. The second fork passes the cap and gives one path for each the
+    first gave: 32 chain ends, never 1,024."""
+    caller = "com/acme/http/Client#chained()."
+    matches = {
+        **_TAGGED_MATCHES,
+        "steps": [
+            {"method": "url", "captures": {"url": "arg0"}},
+            {"method": "tag", "returns_receiver": True, "captures": {"note": "arg0"}},
+        ],
+    }
+    tag = lambda at, receiver: _call(
+        caller,
+        BUILDER,
+        "tag",
+        at,
+        receiver=receiver,
+        result=100 + at,
+        arguments=[CallArgument(kind="string", value=str(at))],
+    )
+    sites = [
+        _call(
+            caller,
+            BUILDER,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/a")],
+            invoke_kind="special",
+        ),
+        *[tag(at, 2) for at in range(1, 6)],
+        _call(
+            caller,
+            BUILDER,
+            "url",
+            6,
+            receiver=2,
+            result=30,
+            arguments=[CallArgument(kind="string", value="https://h/b")],
+        ),
+        *[tag(at, 30) for at in range(7, 12)],
+        _call(caller, BUILDER, "build", 12, receiver=30, result=14),
+        _new_call(caller, 13, request=14),
+    ]
+    places = {
+        0: (None, True, 6),
+        **{at: (0, False, 6) for at in range(1, 6)},
+        6: (0, True, 12),
+        **{at: (6, False, 12) for at in range(7, 12)},
+        12: (6, True, 13),
+        13: (12, True, None),
+    }
+    workspace = _resolve_fluent(
+        tmp_path,
+        [_placed_at(site, *places[site.ordinal]) for site in sites],
+        _fluent_catalog(matches, "invented-receiver"),
+    )
+    ends = list(chain_ends(workspace, _fluent_catalog(matches, "invented-receiver")))
+    workspace.close()
+    assert len(ends) == 32
+
+
 def _apache_builder_chain(caller: str) -> list:
     """`ClassicRequestBuilder.get("https://h/p").build()`, not yet executed."""
     return [

@@ -166,7 +166,7 @@ publishes `search` while its port is unknown.
    2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it";
    `post_dominator` ruled 2026-11-03: "A: add post_dominator"; several splits ruled 2026-11-03:
    "A: every row partial"; `reaches_return` ruled 2026-11-03: option A; `loop_group` ruled
-   2026-11-03: option A for review 3's M1].
+   2026-11-03: option A for review 3's M1; published parts ruled 2026-11-03: option A].
    The facts today give each call its `ordinal` (instruction order) and nothing else, so
    `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
    `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
@@ -222,9 +222,14 @@ publishes `search` while its port is unknown.
    calls on branches are in one window (`if (x) setPort(1); else setPort(2);`, or
    `if (x) useTls(o); else usePlain(o);`), the split gives every combination, including
    ones no run makes (neither, both) and an order no run has. **Every row from such a split
-   is `partial`, whichever parts the calls set** [ruled by the user 2026-11-03, "A: every row
-   partial"]: the walk does not know which part a call sets, and different parts give
-   fabricated combinations too. Branch structure (option B) is a later enrichment of the same
+   is `partial`, whichever PUBLISHED parts the calls set** [ruled by the user 2026-11-03, "A:
+   every row partial"; narrowed the same day, option A: "whatever parts they set" became
+   "whatever published parts they set"]: different parts give fabricated combinations too, but
+   **a call on a branch that sets no part the reader's row publishes is no split for that
+   row**. Each reader states the parts its rows publish as capture names (the forward chain
+   walk's `fluent` reader, `PUBLISHED_PARTS`), read against the catalog step and capture
+   names a call's step declares (`values.counts_split`); a reader that states none counts
+   every split, the conservative default. Branch structure (option B) is a later enrichment of the same
    field.
 
    **As built** (2026-11-03).
@@ -285,6 +290,13 @@ publishes `search` while its port is unknown.
      0.1 s and 0.1 GB. The cap counts the WHOLE path across frames too (fix round 2, m-B):
      `_windowed` stops enumerating once its answers pass 256, so eight guarded setters in a
      caller and eight in its callee (65,536 paths) are one `non_enumerable` row.
+   - *The forward chain walk reads branches by the same rule* (fix round 3): `values.Flow` holds
+     the split and proof both walks call; a statement-style call the walk folds into a chain
+     forks it where it is not on every path to the fork it carries on to; the path cap counts
+     every split on the path, across chained forks, continuations and the walk back. Only the
+     splits that set a published part count toward the several-splits rule (ruled 2026-11-03,
+     option A). Ktor's inline `setBody` is two `setBody` calls on two branches, and the body is
+     a published part (`request_shape`), so a Ktor request with a body is `partial`.
    - *Readers keep every row* (fix round 2, M-B; rule 4): the rootless walk-back
      (`chains._walk_back`) keeps a producer it cannot call exact, its row no surer than
      `partial` (`ChainEnd.inexact`, read by `fluent` and the Quartz reader), and a walk back

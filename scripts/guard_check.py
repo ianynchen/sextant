@@ -8775,8 +8775,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="    splits = len({step.context for step in trail if step.context[0] == _SPLIT})\n",
-                replace="    splits = 0  # guard disabled\n",
+                find="    splits = len(\n        {\n            step.context\n            for step in trail\n",
+                replace="    splits = 0 * len(  # guard disabled\n        {\n            step.context\n"
+                "            for step in trail\n",
             ),
         ),
     ),
@@ -8815,8 +8816,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    splits = len(captures.get(_SPLITS, ())) + (\n",
-                replace="    splits = 0 * len(captures.get(_SPLITS, ())) + (  # guard disabled\n",
+                find="    return several_or_unproven(splits, bool(captures.get(_UNPROVEN)))\n",
+                replace="    return bool(captures.get(_UNPROVEN))  # guard disabled\n",
             ),
         ),
     ),
@@ -8841,6 +8842,71 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="        and _without_rule_9(snapshot) != _without_rule_9(after[index])\n",
                 replace="        # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-setting-NO-PUBLISHED-part-does-not-count": Guard(
+        what="a call on a branch that sets no part the reader's row publishes does not count "
+        "toward the several-splits rule (ruled by the user 2026-11-03, option A)",
+        why="a branched call setting only an unpublished part makes every row `partial` beside "
+        "one real split",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            and (counting is None or counting(str(step.context[1]), "
+                "int(step.context[2])))\n",
+                replace="            and True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-window-counts-only-PUBLISHED-splits-as-several": Guard(
+        what="a window is collapsed as several only where two or more of its splits count for "
+        "the reader (ruled by the user 2026-11-03, option A)",
+        why="one published split beside an unpublished one is marked several, every row `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if self._counting is None or self._counting(method, ordinal)\n",
+                replace="                if True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-split-setting-NO-PUBLISHED-part-does-not-count": Guard(
+        what="the forward walk counts only the splits whose call sets a part the reader's rows "
+        "publish (ruled by the user 2026-11-03, option A)",
+        why="`if (x) b.url(…); if (y) b.tag(…)`, `tag` setting a part no row shows, makes both "
+        "rows `partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if counting is None or counting(method, ordinal)\n",
+                replace="        if True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-reader-with-NO-DECLARED-PARTS-counts-every-split": Guard(
+        what="a reader that states no published parts counts every split (the conservative "
+        "default)",
+        why="a reader with no stated parts counts none, and two calls on branches publish "
+        "combinations no run makes at `resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        None\n        if published is None\n",
+                replace="        (lambda method, ordinal: False)  # guard disabled\n"
+                "        if published is None\n",
+            ),
+        ),
+    ),
+    "chains.the-PATH-CAP-counts-splits-across-CHAINED-forks": Guard(
+        what="the forward walk's path cap counts every split already made on the path, across "
+        "chained forks, continuations and the walk back",
+        why="five guarded calls before each of two chained forks give 1,024 chain ends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if 2 ** (behind + len(calls)) > PATH_CAP:\n",
+                replace="    if 2 ** len(calls) > PATH_CAP:  # guard disabled\n",
             ),
         ),
     ),
@@ -8966,8 +9032,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        several = len(splitting) > 1\n",
-                replace="        several = False  # guard disabled\n",
+                find="            > 1\n        )\n        # Which ordinals a later event",
+                replace="            > 99  # guard disabled\n        )\n        # Which ordinals a later event",
             ),
         ),
     ),

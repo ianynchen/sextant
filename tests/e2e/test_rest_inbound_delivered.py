@@ -1494,13 +1494,13 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     measured (`request_url: {scheme: ws}`); `client.sse("ticks")` joins as `get` does, `GET
     pricing.example.com /ticks` (rows 114-123).
 
-    **`placeOrder`'s `setBody("order")` is `partial`** (spec 2026-11-02 rule 9 in the forward
-    chain walk, the user's ruling of 2026-11-03, "A: every row partial"). Ktor's `setBody` is
-    `inline`, and kotlinc compiles its `when (body)` into two calls of `setBody(Object)` on two
-    branches of the caller (sites 3 and 5 on this bytecode). The facts say neither is on every
-    path to the request, never that exactly one runs, so the walk forks at both, and two calls
-    on branches make every row from them `partial`. Before rule 9 reached this reader the body
-    was folded unconditionally."""
+    **`placeOrder`'s `setBody("order")` is `partial`.** Ktor's `setBody` is `inline`, and
+    kotlinc compiles its `when (body)` into two calls of `setBody(Object)` on two branches of
+    the caller (sites 3 and 5 on this bytecode): two calls on branches (the ruling of
+    2026-11-03, "A: every row partial"). The body IS a part this row publishes — its
+    `request_shape`, `{"wire_type": "string"}` — so the ruling of 2026-11-03 that a split
+    setting no published part does not count (option A) leaves both counted. Whether a payload
+    split should count is open (`test_a_ktor_body_set_on_two_branches_is_resolved`)."""
     http = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in ktor_rows
@@ -2067,6 +2067,22 @@ def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
 # ---------------------------------------------------------------------------------------
 
 VERTX_WEB = FIXTURES / "orders-vertx-web"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="needs a ruling: the body sets the row's published `request_shape`, so by the "
+    "2026-11-03 ruling (a split that sets no PUBLISHED part does not count) both of Ktor's "
+    "inline `setBody` branches count (rule-9-fix-3-report.md, addendum)",
+)
+def test_a_ktor_body_set_on_two_branches_is_resolved(ktor_rows: list[dict]):
+    """The coordinator's case for the 2026-11-03 ruling: `placeOrder`'s POST `resolved` again."""
+    assert (
+        "POST",
+        "orders.example.com",
+        "/orders",
+        "resolved",
+    ) in {(r["method"], r["peer"], r["path"], r["resolution"]) for r in ktor_rows}
 
 
 @pytest.fixture(scope="module")

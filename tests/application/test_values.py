@@ -6598,3 +6598,34 @@ def test_paths_past_the_cap_across_three_frames_are_one_row(branches):
         configuring=_OPTIONS_SETTERS,
     )
     assert found == (Producer(reason="non_enumerable"),)
+
+
+@pytest.mark.pins("values.a-split-setting-NO-PUBLISHED-part-does-not-count")
+@pytest.mark.pins("values.a-window-counts-only-PUBLISHED-splits-as-several")
+def test_a_split_setting_no_published_part_does_not_count(branches):
+    """The user's ruling of 2026-11-03, option A: a reader that says only the first `setPort`
+    sets a part its row shows (`counting`) counts ONE split in `if (x) o.setPort(1); else
+    o.setPort(2);` — so the one-split rules apply and every path is exact. A reader that states
+    no parts (`counting` None) counts both: every path `partial`."""
+    either = _symbol(_USES, "either", "()V")
+    site = _at(branches, either, 3)
+    walk_args = ({(_CREATE[0], _CREATE[1])},)
+    stated = producers_of(
+        value_index(branches),
+        site,
+        0,
+        *walk_args,
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+        counting=lambda method, ordinal: ordinal == 1,
+    )
+    unstated = producers_of(
+        value_index(branches),
+        site,
+        0,
+        *walk_args,
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert {producer.inexact for producer in stated} == {False}
+    assert {producer.inexact for producer in unstated} == {True}
