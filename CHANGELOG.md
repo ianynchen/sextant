@@ -25,7 +25,9 @@ here would restate those documents rather than add anything.
   `resolved` alone, dropping `/b`, which every request goes to: the child now keeps its own
   split after the use, never proven, in both walks (`/b` `resolved`, `/c` `partial`). `for (…)
   { execute(b.build()); setBthenC(b); }` dropped the `/c` row; the loop-later hand-off now forks
-  the chain as a direct setter there does (`/a` `resolved`, `/c` `partial`).
+  the chain as a direct setter there does (`/a` `resolved`, `/c` `partial`). A call folded in place
+  after a build outside its loop (`r = b.setUri("/b"); execute(b.build()); r.setUri("/c")`) no
+  longer makes a `/c` row: the fork reads its folds by the value walk's window (`Flow.inside`).
 - **The forward chain walk follows a hand-off of the chain's value, and counts what it cannot
   see** (rule 9 fix round 4, review 3 re-review 2). `setB(b){ b.setUri("/b"); }` then `b =
   get("/a"); setB(b); http.execute(b.build())` published `GET /a`, `resolved`, which no run

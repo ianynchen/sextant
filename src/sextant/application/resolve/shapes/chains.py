@@ -1391,7 +1391,14 @@ def _forked(
     # split, as an event that changes nothing on any path is none in the value walk.
     after = [*(snapshot for _, _, snapshot, _ in folds[1:]), captures]
     events: list[tuple[int, _Outcomes, int | None]] = []
+    # The use's window, as the value walk reads it (`Flow.inside`): a call folded in place after
+    # the use by ordinal, outside its loop, runs only after it — `r = b.setUri("/b");
+    # execute(b.build()); r.setUri("/c")` sends no request to `/c` (fix round 5, concern 1).
+    outside = False
     for index, (site, parent, snapshot, outcomes) in enumerate(folds):
+        if not inside(int(site["ordinal"])):
+            outside = True
+            continue
         if outcomes is None:
             changed = _without_rule_9(snapshot) != _without_rule_9(after[index])
             outcomes = (((), (_site_key(site),)),) if changed else (((), ()),)
@@ -1411,7 +1418,7 @@ def _forked(
         for site, outcomes in handed
         if used_at is not None and int(site["ordinal"]) > used_at and inside(int(site["ordinal"]))
     ]
-    if not events:
+    if not events and not outside:
         return [base]
     held = captures.get(_WIDTH, 1)
     # The cap counts the WHOLE path, as the value walk's does (`_windowed`): every path this
@@ -1421,9 +1428,11 @@ def _forked(
     windows = flow.paths(method, None, events, used_at, use is None, context.counting, width)
     # Every event ran its first path, in place, and nothing was decided: the captures as folded.
     first = [outcomes[0] for _, outcomes, _ in events]
-    if all(
-        not steps and not isinstance(gathered, str) for steps, gathered in first
-    ) and windows == (((), tuple(call for _, gathered in first for call in gathered)),):
+    if (
+        not outside
+        and all(not steps and not isinstance(gathered, str) for steps, gathered in first)
+        and windows == (((), tuple(call for _, gathered in first for call in gathered)),)
+    ):
         return [base]
     start = {key: value for key, value in folds[0][2].items() if key != _FOLDS} if folds else base
     variants: list[dict[str, Any]] = []

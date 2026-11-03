@@ -9035,6 +9035,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-fold-AFTER-the-fork-outside-its-loop-is-not-in-its-window": Guard(
+        what="a call the forward walk folded in place after the fork by ordinal, outside the "
+        "fork's loop, is not in the fork's window (`Flow.inside`; fix round 5, concern 1)",
+        why='`r = b.setUri("/b"); execute(b.build()); r.setUri("/c");` publishes a `/c` row for '
+        "a request that never happens",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='        if not inside(int(site["ordinal"])):\n            outside = True\n',
+                replace="        if False:  # guard disabled\n            outside = True\n",
+            ),
+        ),
+    ),
     "chains.a-PARTIAL-path-keeps-its-row": Guard(
         what="the walk back from a rootless terminal keeps a path it cannot call exact: the "
         "row is the terminal's, which the code makes (review 3 re-review, M-B; rule 4)",

@@ -332,6 +332,10 @@ publishes `search` while its port is unknown.
      loop** (N-2) is one more event of the fork, read by the same `HandOffs` paths and the same
      `Flow.inside` test a direct loop-later setter is: `for (…) { execute(b.build());
      setBthenC(b); }` is `/a` `resolved`, `/c` `partial`.
+     **A fork reads its folds by the use's window** (`Flow.inside`, the value walk's own test):
+     a call the forward walk folded in place after the use by ordinal, outside its loop, runs
+     only after it, so it is no event of that fork — `r = b.setUri("/b"); execute(b.build());
+     r.setUri("/c")` is `/b` `resolved` alone, with no row for a request never sent.
    - *Rows of one identity* (fix round 4, m-2; rule 4). The published table holds one row per
      identity (protocol, direction, verb, path, and caller and peer, or handler inbound), its
      metadata keyed to it, so two chains that differ only in a published column or in metadata

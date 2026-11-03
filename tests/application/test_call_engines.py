@@ -8956,6 +8956,37 @@ def test_a_child_after_the_build_in_its_loop_keeps_its_own_split(tmp_path: Path)
     ]
 
 
+@pytest.mark.pins("chains.a-fold-AFTER-the-fork-outside-its-loop-is-not-in-its-window")
+def test_a_child_after_the_build_with_no_loop_is_no_row(tmp_path: Path):
+    """Concern 1 of fix round 5: `r = b.setUri("/b"); http.execute(b.build());
+    r.setUri("/c");` with no loop. The second `setUri` runs after the only build, so no request
+    is sent to `/c`: one row, `/b` `resolved`. The fork reads its folds by the value walk's
+    window (`Flow.inside`). Before, a `/c` row, `partial`, for a request that never happens."""
+    caller = _http_method("afterBuild")
+    facts = [
+        *_apache_handing(
+            "afterBuild",
+            [("set", "http://svc/b")],
+            {0: (None, True, 1), 1: (0, True, 2), 2: (1, True, 3), 3: (2, True, 4)},
+        ),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                4,
+                receiver=11,
+                result=26,
+                arguments=[CallArgument(kind="string", value="http://svc/c")],
+            ),
+            3,
+            True,
+            None,
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/b", "resolved")]
+
+
 @pytest.mark.pins("chains.a-HAND-OFF-after-the-use-in-its-LOOP-forks")
 def test_a_hand_off_after_the_build_in_its_loop_gives_its_row_partial(tmp_path: Path):
     """Review 3 re-review 3, N-2, `Calls6.helperLoopLater`: `for (…) {
