@@ -163,7 +163,7 @@ publishes `search` while its port is unknown.
    `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`.
 
 9. **A call on a branch is not a call on every path** [option A ruled by the user,
-   2026-11-02: "A: fact per call"; the exact fact below is PROPOSED, awaiting approval].
+   2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it"].
    The facts today give each call its `ordinal` (instruction order) and nothing else, so
    `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
    `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
