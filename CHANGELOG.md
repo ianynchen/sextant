@@ -22,8 +22,12 @@ here would restate those documents rather than add anything.
   value walk SPLITS a path at a call between a value's producer and its use that is not on
   every path to the use — one path where it ran, one where it did not — so
   `if (tls) o.setPort(443); client.get(…)` gives a path with port 443 and one with the port
-  unset, never 443 alone. Where two or more calls split one window, or the use is a return
-  (whose position the facts do not give), every path from the split is `partial`. Quartz
+  unset, never 443 alone. The path WITH the call is `resolved` only where the use is on the
+  call's `post_dominator` chain (ruled by the user 2026-11-03): in
+  `if (tls) { o.setPort(443); return; } connect(o);` no run connects with 443, so that row is
+  `partial`. A return of the value counts as the use. Where two or more calls on branches are
+  in one window, every row from the split is `partial`, whichever parts they set (ruled
+  2026-11-03, "A: every row partial"). Quartz
   marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
   every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
   unmarked, and C stays a root.

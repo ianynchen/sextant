@@ -163,14 +163,16 @@ publishes `search` while its port is unknown.
    `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`.
 
 9. **A call on a branch is not a call on every path** [option A ruled by the user,
-   2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it"].
+   2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it";
+   `post_dominator` ruled 2026-11-03: "A: add post_dominator"; several splits ruled 2026-11-03:
+   "A: every row partial"].
    The facts today give each call its `ordinal` (instruction order) and nothing else, so
    `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
    `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
    when `tls` is false (review 2, M4). D00 reserved this as "an enrichment of this same field
    in a later phase".
 
-   **The fact.** Each `call_site` gains two fields, computed by the extractor from the
+   **The fact.** Each `call_site` gains three fields, computed by the extractor from the
    method's control-flow graph (ASM's `Analyzer`, exception-handler edges included):
    - `dominator`: the `ordinal` of the nearest call site in the same method that runs
      before this call on EVERY path from the method's entry to this call; absent where none
@@ -178,6 +180,10 @@ publishes `search` while its port is unknown.
    - `on_every_exit`: true where this call runs on every path from the entry to a normal
      return. An exception that leaves the method is not a normal return: the value it carried
      is never used.
+   - `post_dominator` (ruled 2026-11-03): the `ordinal` of the nearest call site in the same
+     method that runs after this call on EVERY path from it to a normal return; absent where
+     none does. A path that ends in a throw reaches no normal return and constrains nothing,
+     so a call from which every path throws has none.
 
    **The readers.** Both sit in the one place each reader decides order (`_ran_before`, the
    walk's window):
@@ -190,15 +196,61 @@ publishes `search` while its port is unknown.
      every path. Where it is undecided, the row is `partial`, unmarked.
    - *A configuring call (M4).* A call between a value's producer and its use that is not
      on every path to the use splits the path: one path where it ran, one where it did not.
-     Each path composes its own row (rule 4), so `search:443` and `search:80` are two rows,
-     both `resolved`: the fact proves a run reaches the use with the call and a run reaches
-     it without. A call inside a callee that is not `on_every_exit` splits in the same way.
+     Each path composes its own row (rule 4). Not being on every path to the use proves only
+     that a run reaches the use WITHOUT the call; it does not prove a run reaches it WITH the
+     call — `if (tls) { o.setPort(443); return; } client.connect(o);` has no run that connects
+     with 443 (corrected 2026-11-03; this paragraph first said the fact proved both). So the
+     row with the call is `resolved` only where the use is on the call's `post_dominator`
+     chain (ruled 2026-11-03), and `partial` otherwise; the row without it is `resolved`.
+     `if (tls) o.setDefaultPort(443); client.get(…)` gives `search:443` and `search:80`, both
+     `resolved`. A call inside a callee that is not `on_every_exit` splits in the same way;
+     across frames the call's chain must reach the call that leads on to the use, or the
+     method's normal exit where the use is in a caller. A RETURN of the value counts as the
+     use.
 
    **Not claimed.** The fact does not say WHICH branch a call is on. Where two or more
-   split calls set the same part (`if (x) setPort(1); else setPort(2);`), the split gives
-   every combination, including ones no run makes (neither, both) and an order no run has.
-   Every row from such a split is `partial`, never `resolved`. Branch structure (option B)
-   is a later enrichment of the same field.
+   calls on branches are in one window (`if (x) setPort(1); else setPort(2);`, or
+   `if (x) useTls(o); else usePlain(o);`), the split gives every combination, including
+   ones no run makes (neither, both) and an order no run has. **Every row from such a split
+   is `partial`, whichever parts the calls set** [ruled by the user 2026-11-03, "A: every row
+   partial"]: the walk does not know which part a call sets, and different parts give
+   fabricated combinations too. Branch structure (option B) is a later enrichment of the same
+   field.
+
+   **As built** (2026-11-03).
+   - *The extractor* (`MethodFlow.FlowGraph`) records every normal and exception-handler edge
+     ASM's `Analyzer` follows and computes both trees with Cooper, Harvey and Kennedy's
+     iterative algorithm over two nodes per instruction (before it runs, after it completed);
+     a handler edge leaves the BEFORE node, so a call that may have thrown dominates nothing
+     in its catch and is skipped by it for `post_dominator`. The post-dominator tree is the
+     same algorithm on the reversed edges, rooted at a normal-exit node every reached
+     `*RETURN` feeds. All three fields are written on throw sites too. An unreachable invoke,
+     and a body the analyser cannot walk, emit no site at all.
+   - *The walk* (`values._Walk._window`, `_reaches_use`, `_windowed`): a split records the
+     choice on the trail (`_SPLIT`); a call made on a configuring call's result is skipped
+     with it. The side WITH the call is proven where the use (a call in the same frame) is on
+     its `post_dominator` chain; where the window runs to the end of an entered body, where
+     any `post_dominator` proves a normal return follows; where the use is a RETURN, where
+     that holds and every return of the method hands the value back (the side without the
+     call needs the latter too). An unproven side's answers are inexact (`partial`), as is
+     every path of a window with two or more splits. A fact with no `on_every_exit` is
+     undecided: every call in its window splits, unproven.
+   - *Quartz* (`scheduled_chain._ran_before`, `values.Path.ran_before`): in one method, on
+     the consumer's `dominator` chain; inside an entered body, `on_every_exit` there at each
+     level; in a caller the path crossed out to, on the chain of the call that entered the
+     use's method or one enclosing it; inside a callee whose return the path read,
+     `on_every_exit` there and that call ran before. Anything else is undecided.
+   - *Cost*, measured: the extractor on `spring-core-7.0.9.jar` (29,432 call sites), 5 runs
+     each, 1.00-1.11 s before and 1.18-1.27 s after, JVM start included (about +0.13 s); the
+     facts are strictly additive. `mall-admin`, the largest field corpus: scan 1.3-1.5 s
+     before and 1.4 s after, resolve 3.9 s before and 3.9-4.0 s after. Per window, the worst
+     seen on eleven corpora is 4 split calls and 5 paths (`yudao-module-infra`); no cap is
+     set. Every published table on the six pinned and five unpinned corpora is identical
+     before and after.
+   - *Not proven, so `partial`*: `post_dominator` is absent both where no call follows a call
+     and where no normal return can follow it, so a setter that is the last call before a
+     return (`if (tls) o.setSsl(true); return o;`) cannot be proven to reach the return, and
+     its row is `partial`.
 
 ## 3. Not changed
 
@@ -215,7 +267,7 @@ publishes `search` while its port is unknown.
   module, never re-pinned silently.
 - D02 (the options `client_base`, `unset`), the Vert.x spec (§2a, §3d, item 23), the client
   model and COVERAGE's WebClient row say the new rules.
-- Rule 9: D00 gains `dominator` and `on_every_exit` on `call_site`, and the fact schema
+- Rule 9: D00 gains `dominator`, `on_every_exit` and `post_dominator` on `call_site`, and the fact schema
   version goes from 5 to 6 (every workspace is re-extracted; every fixture is rebuilt with
   JDK 21). The extractor has a unit test for each shape: straight line, `if`, `if/else`,
   early return, loop, `try/catch`. C3 and M4 each have a test with the review's shape.

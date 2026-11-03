@@ -5789,10 +5789,12 @@ def test_a_configuring_result_stored_in_a_field_escapes(handoffs):
 # it (`dominator`, `on_every_exit`), so the branch is in the facts as it is in the bytecode.
 
 
-def _placed(fact: Fact, dominator: int | None, every: bool) -> Fact:
+def _placed(fact: Fact, dominator: int | None, every: bool, post: int | None = None) -> Fact:
     """`fact` at a stated place in its method's control flow."""
     assert isinstance(fact, CallSiteFact)
-    return fact.model_copy(update={"dominator": dominator, "on_every_exit": every})
+    return fact.model_copy(
+        update={"dominator": dominator, "on_every_exit": every, "post_dominator": post}
+    )
 
 
 def _set(name: str, ordinal: int, target: tuple[str, str, str], argument: CallArgument, **given):
@@ -5808,33 +5810,53 @@ def _set(name: str, ordinal: int, target: tuple[str, str, str], argument: CallAr
     )
 
 
+_DONE = (_PKG + "Log#", "done", "()V")
+_MAKES = "()" + _OPTIONS_TYPE
+
+
 def _branch_facts() -> list[Fact]:
-    caller = {name: _symbol(_USES, name, "()V") for name in ("tls", "either", "fluent", "made")}
+    names = ("tls", "early", "either", "fluent", "made", "madeLogged", "madeOther")
+    caller = {name: _symbol(_USES, name, "()V") for name in names}
     tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
-    make = _symbol(_SETUP, "make", "()" + _OPTIONS_TYPE)
+    tune_logged = _symbol(_SETUP, "maybeTuneLogged", _TAKES_OPTIONS)
+    make = {name: _symbol(_SETUP, name, _MAKES) for name in ("make", "makeLogged", "makeOther")}
     port = {value: CallArgument(kind="int", value=value) for value in (1, 2, 443)}
+
+    def on_made(name: str, ordinal: int) -> Fact:
+        return _site(
+            make[name], ordinal, _SET_PORT, kind="virtual", receiver=1, arguments=[port[1]]
+        )
+
     return [
         _type(_SETUP),
         _type(_USES),
-        # `o = create(); if (tls) o.setPort(443); Client.of(o);` — review 2's M4.
+        # `o = create(); if (tls) o.setPort(443); Client.of(o);` — review 2's M4. The use
+        # follows the call on every path to the return.
         _declared(_USES, "tls", "()V"),
-        _placed(_site(caller["tls"], 0, _CREATE, result=1), None, True),
-        _placed(_set("tls", 1, _SET_PORT, port[443], result=2), 0, False),
+        _placed(_site(caller["tls"], 0, _CREATE, result=1), None, True, 2),
+        _placed(_set("tls", 1, _SET_PORT, port[443], result=2), 0, False, 2),
         _placed(_site(caller["tls"], 2, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `if (tls) { o.setPort(443); return; } Client.of(o);` — the branch leaves early, so
+        # nothing follows the call: no run uses `o` with port 443.
+        _declared(_USES, "early", "()V"),
+        _placed(_site(caller["early"], 0, _CREATE, result=1), None, True),
+        _placed(_set("early", 1, _SET_PORT, port[443], result=2), 0, False),
+        _placed(_site(caller["early"], 2, _CLIENT_OF, arguments=_results(1)), 0, False),
         # `if (x) o.setPort(1); else o.setPort(2);` — two split calls setting one part.
         _declared(_USES, "either", "()V"),
-        _placed(_site(caller["either"], 0, _CREATE, result=1), None, True),
-        _placed(_set("either", 1, _SET_PORT, port[1], result=2), 0, False),
-        _placed(_set("either", 2, _SET_PORT, port[2], result=3), 0, False),
+        _placed(_site(caller["either"], 0, _CREATE, result=1), None, True, 3),
+        _placed(_set("either", 1, _SET_PORT, port[1], result=2), 0, False, 3),
+        _placed(_set("either", 2, _SET_PORT, port[2], result=3), 0, False, 3),
         _placed(_site(caller["either"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
         # `if (x) o.setHost("a").setPort(1);` — the second call is made on the first's result,
         # so it runs only where the first did.
         _declared(_USES, "fluent", "()V"),
-        _placed(_site(caller["fluent"], 0, _CREATE, result=1), None, True),
-        _placed(_set("fluent", 1, _SET_HOST, _string("a")[0], result=2), 0, False),
-        _placed(_set("fluent", 2, _SET_PORT, port[1], receiver=2, result=3), 1, False),
+        _placed(_site(caller["fluent"], 0, _CREATE, result=1), None, True, 3),
+        _placed(_set("fluent", 1, _SET_HOST, _string("a")[0], result=2), 0, False, 2),
+        _placed(_set("fluent", 2, _SET_PORT, port[1], receiver=2, result=3), 1, False, 3),
         _placed(_site(caller["fluent"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
-        # `maybeTune(o) { if (tls) o.setPort(443); }`, handed the value on a straight line.
+        # `maybeTune(o) { if (tls) o.setPort(443); }`, handed the value on a straight line:
+        # no call follows the setter, so the facts do not say a normal return does.
         *_setup(
             "maybeTune",
             _placed(
@@ -5842,21 +5864,56 @@ def _branch_facts() -> list[Fact]:
             ),
         ),
         *_uses("tuned", _handed("tuned", 1, (_SETUP, "maybeTune", _TAKES_OPTIONS)), last=2),
-        # `Options make() { o = create(); if (x) o.setPort(1); return o; }`, and
-        # `Client.of(make())`: the use is a RETURN, and which return is not in the facts.
-        _declared(_SETUP, "make", "()" + _OPTIONS_TYPE),
-        _placed(_site(make, 0, _CREATE, result=1), None, True),
-        _placed(
-            _site(make, 1, _SET_PORT, kind="virtual", receiver=1, arguments=[port[1]], result=2),
-            0,
-            False,
+        # `maybeTuneLogged(o) { if (tls) o.setPort(443); Log.done(); }`: `done` follows it on
+        # every path to the return.
+        *_setup(
+            "maybeTuneLogged",
+            _placed(
+                _on_parameter(tune_logged, 0, _SET_PORT, arguments=[port[443]], result=1),
+                None,
+                False,
+                1,
+            ),
+            _placed(_site(tune_logged, 1, _DONE), None, True),
         ),
-        _returns(
-            _SETUP, "make", "()" + _OPTIONS_TYPE, 0, CallArgument(kind="unresolved", source=1)
+        *_uses(
+            "tunedLogged",
+            _handed("tunedLogged", 1, (_SETUP, "maybeTuneLogged", _TAKES_OPTIONS)),
+            last=2,
         ),
-        _declared(_USES, "made", "()V"),
-        _site(caller["made"], 0, (_SETUP, "make", "()" + _OPTIONS_TYPE), result=1),
-        _site(caller["made"], 1, _CLIENT_OF, arguments=_results(1)),
+        # `Options make() { o = create(); if (x) o.setPort(1); return o; }` — the user's
+        # factory (ruling of 2026-11-03, test (c)).
+        _declared(_SETUP, "make", _MAKES),
+        _placed(_site(make["make"], 0, _CREATE, result=1), None, True),
+        _placed(on_made("make", 1), 0, False),
+        _returns(_SETUP, "make", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        # The same with `Log.done();` before the return: `done` follows the setter.
+        _declared(_SETUP, "makeLogged", _MAKES),
+        _placed(_site(make["makeLogged"], 0, _CREATE, result=1), None, True, 2),
+        _placed(on_made("makeLogged", 1), 0, False, 2),
+        _placed(_site(make["makeLogged"], 2, _DONE), 0, True),
+        _returns(_SETUP, "makeLogged", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        # `…; Log.done(); if (y) return other(); return o;` — not every return hands `o` back.
+        _declared(_SETUP, "makeOther", _MAKES),
+        _placed(_site(make["makeOther"], 0, _CREATE, result=1), None, True, 2),
+        _placed(on_made("makeOther", 1), 0, False, 2),
+        _placed(_site(make["makeOther"], 2, _DONE), 0, True),
+        _placed(_site(make["makeOther"], 3, _CREATE, result=4), 2, False),
+        _returns(_SETUP, "makeOther", _MAKES, 0, CallArgument(kind="unresolved", source=4)),
+        _returns(_SETUP, "makeOther", _MAKES, 1, CallArgument(kind="unresolved", source=1)),
+        *[
+            fact
+            for name, maker in (
+                ("made", "make"),
+                ("madeLogged", "makeLogged"),
+                ("madeOther", "makeOther"),
+            )
+            for fact in (
+                _declared(_USES, name, "()V"),
+                _site(caller[name], 0, (_SETUP, maker, _MAKES), result=1),
+                _site(caller[name], 1, _CLIENT_OF, arguments=_results(1)),
+            )
+        ],
     ]
 
 
@@ -5924,21 +5981,73 @@ def test_a_call_on_a_skipped_calls_result_is_skipped_with_it(branches):
 
 
 @pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+@pytest.mark.pins("values.a-split-in-an-ENTERED-body-needs-a-normal-return-after-the-call")
 def test_a_call_inside_a_callee_not_on_every_exit_splits_the_path(branches):
     """`maybeTune(o) { if (tls) o.setPort(443); }` handed the value: the call is not
-    `on_every_exit` in the callee, so the caller's use is reached with it and without it."""
+    `on_every_exit` in the callee, so the caller's use is reached with it and without it. With
+    it is not proven: no call follows the setter, and the facts cannot tell "a return follows"
+    from "a throw follows" — so that path is `partial`. Where `Log.done()` follows it on every
+    path to the return, both paths are exact."""
     tuned = _symbol(_USES, "tuned", "()V")
     tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
-    assert sorted(producer.chain for producer in _use_of(branches, "tuned", _OPTIONS_SETTERS)) == [
-        ((tuned, 0),),
-        ((tuned, 0), (tune, 0)),
+    assert sorted(
+        (producer.chain, producer.inexact)
+        for producer in _use_of(branches, "tuned", _OPTIONS_SETTERS)
+    ) == [(((tuned, 0),), False), (((tuned, 0), (tune, 0)), True)]
+    assert [
+        inexact for _, inexact in _chains(_use_of(branches, "tunedLogged", _OPTIONS_SETTERS))
+    ] == [
+        False,
+        False,
     ]
 
 
-@pytest.mark.pins("values.a-split-before-a-RETURN-is-undecided-and-inexact")
-def test_a_call_not_on_every_exit_before_a_returned_value_is_undecided(branches):
-    """`make() { o = create(); if (x) o.setPort(1); return o; }`: the use is a return, and the
-    facts do not say which return or whether the call is on every path to it — a call not on
-    every exit may still be on every path to the return that hands `o` back. Both paths are
-    kept, each `partial`."""
-    assert _chains(_use_of(branches, "made", _OPTIONS_SETTERS)) == [((0,), True), ((0, 1), True)]
+@pytest.mark.pins("values.the-path-WITH-a-split-call-needs-the-use-on-its-POST-DOMINATOR-chain")
+def test_a_call_on_a_branch_that_returns_early_never_reaches_the_use(branches):
+    """The user's ruling of 2026-11-03 ("A: add post_dominator"), case (b):
+    `if (tls) { o.setPort(443); return; } Client.of(o);`. The setter is not on the use's
+    `dominator` chain, so it splits as (a) does — but the use is not on the setter's
+    `post_dominator` chain: no run uses `o` with port 443. That path is `partial`; the path
+    without it is exact."""
+    assert _chains(_use_of(branches, "early", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), True)]
+
+
+@pytest.mark.pins("values.a-split-before-a-RETURN-needs-a-normal-return-after-the-call")
+def test_a_split_before_a_returned_value_is_exact_where_the_facts_prove_it(branches):
+    """A RETURN of the value is its use (ruling of 2026-11-03). `make() { o = create(); if (x)
+    o.setPort(1); Log.done(); return o; }`: `done` follows the setter on every path to a normal
+    return and the only return hands `o` back, so both paths are exact. Without `done`, the path
+    without the setter is exact and the one with it `partial` — no call follows the setter, so
+    the facts do not say a normal return does (test (c), below, is what the ruling asks for)."""
+    assert _chains(_use_of(branches, "madeLogged", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1), False),
+    ]
+    assert _chains(_use_of(branches, "made", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), True)]
+
+
+@pytest.mark.pins("values.a-split-before-a-RETURN-needs-EVERY-return-to-hand-back-the-value")
+def test_a_split_before_one_of_several_returns_is_partial(branches):
+    """`…; Log.done(); if (y) return other(); return o;`: which return a run takes is not in the
+    facts, so neither side of the split is proven to reach the return that hands `o` back. The
+    other return's value (`other()`, at 3) is its own exact row."""
+    assert _chains(_use_of(branches, "madeOther", _OPTIONS_SETTERS)) == [
+        ((0,), True),
+        ((0, 1), True),
+        ((3,), False),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="needs a ruling: `post_dominator` is absent both where no call follows and where "
+    "no normal return is reachable, so the facts cannot prove the factory's setter path "
+    "reaches its return (rule-9-post-dominator-report.md, Concern 1)",
+)
+def test_a_factory_setting_a_part_on_one_branch_gives_two_resolved_rows(branches):
+    """The user's ruling of 2026-11-03, case (c): `Options make(tls) { o = new; if (tls)
+    o.setSsl(true); return o; }` gives both rows resolved."""
+    assert _chains(_use_of(branches, "made", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1), False),
+    ]

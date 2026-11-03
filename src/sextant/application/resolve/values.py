@@ -255,6 +255,9 @@ _STATED = "stated"
 _SPLIT = "split"
 _RAN = "ran"
 _SKIPPED = "skipped"
+# A split path the facts do not prove a run takes to the use (rule 9, ruled by the user
+# 2026-11-03, "A: add post_dominator"): the path is kept, its answers inexact (`partial`).
+_UNPROVEN = "unproven"
 
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
@@ -1648,6 +1651,22 @@ def _dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[int] 
     return frozenset(chain)
 
 
+def _post_dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[int] | None:
+    """Every call in `method` that runs after the call at `ordinal` on EVERY path from it to
+    a normal return — its `post_dominator` chain (rule 9, ruled by the user 2026-11-03) — or
+    None where the facts do not compute the call's position."""
+    row = index.sites.get((method, ordinal))
+    if row is None or row.get("on_every_exit") is None:
+        return None
+    chain: list[int] = []
+    below = row.get("post_dominator")
+    while below is not None:
+        chain.append(int(str(below)))
+        row = index.sites.get((method, chain[-1]))
+        below = None if row is None else row.get("post_dominator")
+    return frozenset(chain)
+
+
 def _on_every_exit(index: ValueIndex, method: str, ordinal: int) -> bool:
     """Whether the call at `(method, ordinal)` runs on every path to a normal return (rule 9);
     False where the facts do not say."""
@@ -2565,17 +2584,16 @@ class _Walk:
         gathered calls appended to a chain answer, or the reason the path ended."""
         reached: list[_Reached] = []
         windows = self._window(method, held, after, used_at)
-        # Rule 9's "not claimed": the fact says whether a call is on every path, never which
-        # branch it is on. One split call gives two paths a run does make; with two or more,
-        # the split gives every combination, including ones no run makes, so every path of
-        # this window is inexact (`partial`). Counted over the whole window, the bodies it
-        # entered included. Where the use is a RETURN (`used_at` None), which return is not
-        # known, so a call not on every exit may still be on every path to that one: any
-        # split there is undecided, and inexact too.
+        # Rule 9's "not claimed" (ruled by the user 2026-11-03, "A: every row partial"): the
+        # facts say whether a call is on every path, never which branch it is on. With two or
+        # more split calls in one window, the split gives every combination, including ones no
+        # run makes, so every path of this window is inexact (`partial`), whichever parts the
+        # calls set. Counted over the whole window, the bodies it entered included. With one,
+        # each path is exact unless `_window` found no proof a run takes it to the use.
         splits = {
             step.context for steps, _ in windows for step in steps if step.context[0] == _SPLIT
         }
-        unsure = len(splits) > 1 or (bool(splits) and used_at is None)
+        several = len(splits) > 1
         for steps, gathered in windows:
             crossed = _combine(trail, steps)
             if crossed is None:
@@ -2584,6 +2602,8 @@ class _Walk:
             if isinstance(gathered, str):
                 reached.extend(self._identities_past(gathered, position, crossed, frames))
                 continue
+            # A split path the facts do not prove a run takes to the use (`_window`).
+            unsure = several or any(step.context[0] == _UNPROVEN for step in steps)
             reached.extend(
                 (path, replace(answer, inexact=True) if unsure else answer)
                 for path, answer in (
@@ -2694,8 +2714,9 @@ class _Walk:
         path where it is not on every exit there (`_always`). A call made on a configuring
         call's result runs only where that call did. An event that changes nothing on any
         path (a capture the lambda does nothing with) is no split, and a field write in an
-        entered body, which carries no ordinal, never splits. Whether a split's paths are
-        exact is `_windowed`'s.
+        entered body, which carries no ordinal, never splits. A side of the split the facts
+        do not prove a run takes to the use (`_reaches_use`, ruled 2026-11-03) carries an
+        `_UNPROVEN` step, and `_windowed` makes its answers inexact.
 
         **Cost.** Each event multiplies the paths by the distinct outcomes it has, so *n*
         sequential hand-offs each reaching bodies that disagree give up to 2^*n* paths, each
@@ -2717,11 +2738,16 @@ class _Walk:
             ((), (), frozenset())
         ]
         for ordinal, outcomes, parent in self._events(method, held, after, used_at, in_body):
-            skip: _Step | None = None
+            skip: _Trail | None = None
             if ordinal != _END_OF_BODY and outcomes != (((), ()),) and not always(ordinal):
-                ran = _Step((_SPLIT, method, ordinal), _RAN)
-                outcomes = tuple(((ran, *more_steps), more) for more_steps, more in outcomes)
-                skip = _Step((_SPLIT, method, ordinal), _SKIPPED)
+                ran_proven, skip_proven = self._reaches_use(method, held, ordinal, used_at, in_body)
+                ran: _Trail = (_Step((_SPLIT, method, ordinal), _RAN),)
+                if not ran_proven:
+                    ran += (_Step((_UNPROVEN, method, ordinal, used_at, _RAN), _UNPROVEN),)
+                outcomes = tuple(((*ran, *more_steps), more) for more_steps, more in outcomes)
+                skip = (_Step((_SPLIT, method, ordinal), _SKIPPED),)
+                if not skip_proven:
+                    skip += (_Step((_UNPROVEN, method, ordinal, used_at, _SKIPPED), _UNPROVEN),)
             following: list[tuple[_Trail, tuple[tuple[str, int], ...] | str, frozenset[int]]] = []
             for steps, gathered, skipped in paths:
                 if isinstance(gathered, str):
@@ -2736,10 +2762,50 @@ class _Walk:
                         following.append(
                             (merged, more if isinstance(more, str) else (*gathered, *more), skipped)
                         )
-                if skip is not None and (merged := _combine(steps, (skip,))) is not None:
+                if skip is not None and (merged := _combine(steps, skip)) is not None:
                     following.append((merged, gathered, skipped | {ordinal}))
             paths = list(dict.fromkeys(following))
         return tuple(dict.fromkeys((steps, gathered) for steps, gathered, _ in paths))
+
+    def _reaches_use(
+        self, method: str, held: tuple[str, int], ordinal: int, used_at: int | None, in_body: bool
+    ) -> tuple[bool, bool]:
+        """Whether the facts prove a run takes each side of a split at `ordinal` to the use:
+        `(with the call, without it)` (rule 9, ruled by the user 2026-11-03, "A: add
+        post_dominator"). The call is not on every path to the use, so a run reaches the use
+        without it wherever the use is one place — a call (`used_at`) or the end of a body a
+        hand-off entered, whose every normal return is the caller's next step. A run reaches it
+        WITH the call only where every path from the call to a normal return passes the use:
+
+        - **a call in this frame** (`used_at`): the use is on the call's `post_dominator` chain.
+          `if (tls) { o.setPort(443); return; } use(o)` fails it, so that path is `partial`;
+        - **the end of an entered body** (`in_body`): a normal return is reachable from the call,
+          which a `post_dominator` proves. Absent, the facts cannot tell "no call follows" from
+          "no normal return follows", so the path is `partial`;
+        - **a RETURN of the value** (`used_at` None otherwise): that, and every normal return of
+          the method returns the held value, so whichever return a run reaches is its use; the
+          path without the call needs the second half too.
+
+        Where the facts do not compute the call's position, neither side is proven."""
+        if used_at is not None:
+            chain = _post_dominators(self._index, method, ordinal)
+            return chain is not None and used_at in chain, True
+        returns = bool(_post_dominators(self._index, method, ordinal))
+        if in_body:
+            return returns, True
+        every = self._returned_everywhere(method, held)
+        return returns and every, every
+
+    def _returned_everywhere(self, method: str, held: tuple[str, int]) -> bool:
+        """Whether every return of `method` hands back `held` — a value id, or a parameter."""
+        kind, key = held
+        entries = self._index.returned_values.get(method, ())
+        return bool(entries) and all(
+            (entry.get("source") == key and entry.get("kind") != "parameter")
+            if kind == _VALUE
+            else (entry.get("kind") == "parameter" and entry.get("value") == key)
+            for _, entry in entries
+        )
 
     def _always(self, method: str, used_at: int | None) -> Callable[[int], bool]:
         """Whether a call at an ordinal of `method` runs on every path to the use (spec

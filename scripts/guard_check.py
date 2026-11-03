@@ -8740,28 +8740,68 @@ GUARDS: dict[str, Guard] = {
     ),
     "values.two-or-more-SPLIT-calls-make-every-path-of-the-window-inexact": Guard(
         what="where two or more calls in one window split it, every path from the split is "
-        "inexact (`partial`): the fact does not say which branch a call is on (rule 9, "
-        "not claimed)",
+        "inexact (`partial`), whichever parts they set: the fact does not say which branch a "
+        'call is on (rule 9, ruled by the user 2026-11-03, "A: every row partial")',
         why="`if (x) setPort(1); else setPort(2);` publishes `neither` and `both` at "
         "`resolved`, combinations no run makes",
         edits=(
             Edit(
                 path=_VALUES,
-                find="        unsure = len(splits) > 1 or (bool(splits) and used_at is None)\n",
-                replace="        unsure = bool(splits) and used_at is None  # guard disabled\n",
+                find="        several = len(splits) > 1\n",
+                replace="        several = False  # guard disabled\n",
             ),
         ),
     ),
-    "values.a-split-before-a-RETURN-is-undecided-and-inexact": Guard(
-        what="where the use is a RETURN, any split is undecided and inexact: which return is "
-        "not in the facts, so a call not on every exit may be on every path to that one",
-        why="`if (x) { o.setPort(1); return o; }` would publish the port-unset path at "
-        "`resolved` for a value no run returns",
+    "values.the-path-WITH-a-split-call-needs-the-use-on-its-POST-DOMINATOR-chain": Guard(
+        what="the path with a split call is exact only where the use is on the call's "
+        '`post_dominator` chain (rule 9, ruled by the user 2026-11-03, "A: add '
+        'post_dominator")',
+        why="`if (tls) { o.setPort(443); return; } connect(o);` publishes port 443 `resolved`, "
+        "though no run connects with it",
         edits=(
             Edit(
                 path=_VALUES,
-                find="        unsure = len(splits) > 1 or (bool(splits) and used_at is None)\n",
-                replace="        unsure = len(splits) > 1  # guard disabled\n",
+                find="            return chain is not None and used_at in chain, True\n",
+                replace="            return True, True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-in-an-ENTERED-body-needs-a-normal-return-after-the-call": Guard(
+        what="in a body a hand-off entered, the path with a split call is exact only where a "
+        "`post_dominator` proves a normal return follows the call",
+        why="a helper whose setter on one branch is followed only by a throw publishes the "
+        "set part `resolved` for a caller no run reaches with it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return returns, True\n",
+                replace="            return True, True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-before-a-RETURN-needs-a-normal-return-after-the-call": Guard(
+        what="where the use is a RETURN of the value, the path with a split call is exact only "
+        "where a `post_dominator` proves a normal return follows the call",
+        why="`if (x) { o.setPort(1); throw …; } return o;` publishes port 1 `resolved` for a "
+        "value no run returns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return returns and every, every\n",
+                replace="        return every, every  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-before-a-RETURN-needs-EVERY-return-to-hand-back-the-value": Guard(
+        what="where the use is a RETURN of the value, a side of a split is exact only where "
+        "every return of the method hands the value back",
+        why="a method with two returns publishes a path `resolved` that reaches the return of "
+        "another value",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return returns and every, every\n",
+                replace="        return returns, True  # guard disabled\n",
             ),
         ),
     ),
