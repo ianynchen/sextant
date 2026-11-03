@@ -72,12 +72,16 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     NON_ENUMERABLE,
+    PATH_CAP,
     RECEIVER,
+    Flow,
     Path,
     ValueIndex,
     cached_value_index,
+    path_splits,
     producer_paths,
     producers_of,
+    several_or_unproven,
 )
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
@@ -176,6 +180,17 @@ _COLLECTED = "\x00collected"
 # reached its terminal through an argument join with exactly one executing call. Read by the
 # chain's consumer, which knows what that call's arguments mean.
 _EXECUTED_BY = "\x00executed_by"
+# Rule 9 in the forward walk (spec 2026-11-02 rule 9, review 3 re-review: the walk was blind to
+# branches). The calls folded into the chain in place since its last fork, each with the call
+# whose result it was made on (or None) and the captures as they stood before it, so a fork can
+# rebuild the captures without any of them (`_forked`); the calls on branches decided on this
+# path; and whether a side of one of them no fact proves. None of the three reaches a row.
+_FOLDS = "\x00folds"
+_SPLITS = "\x00splits"
+_UNPROVEN = "\x00unproven"
+_RULE_9 = (_FOLDS, _SPLITS, _UNPROVEN)
+# What a capture holds where the walk passed the path cap (`PATH_CAP`): the part is not read.
+_CAPPED = MappingProxyType({"kind": "unresolved", "reason": NON_ENUMERABLE})
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
 # A `when` guard's own two keys (D02 §2's `fluent` style): `{arg: int,
@@ -301,6 +316,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
     walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    flow = Flow(walk_index)
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
@@ -351,6 +367,7 @@ def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
         return _ChainContext(
             workspace=workspace,
             values=walk_index,
+            flow=flow,
             caller=caller,
             sites=sites,
             by_receiver=by_receiver,
@@ -729,6 +746,8 @@ class _ChainContext:
     # The path a chain walked back across methods took (`ChainEnd.path`); None on a chain
     # walked from its root.
     path: Path | None = None
+    # Rule 9's split and proof, the value walk's own (`values.Flow`), one per run.
+    flow: Flow | None = None
     # `ChainEnd.inexact`: the walk back reached this chain on an inexact path.
     inexact: bool = False
 
@@ -1055,7 +1074,8 @@ def _walk(
     # configuring call's result on it, or a `build()`.
     consumers = _continuations(site, captures, context)
     for consumer in consumers:
-        _continue(consumer, _configured_for(site, consumer, captures, context), context)
+        for handed in _configured_for(site, consumer, captures, context):
+            _continue(consumer, handed, context)
     chain_key = _chain_key(site)
     # A void ordinary call (`result` null, D00 §5) has nothing a following
     # row's `receiver` could ever really match — `None` is not a value id,
@@ -1077,20 +1097,21 @@ def _walk(
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
     # chain end, terminal or not: a referenced bean's chain is that bean's
     # configuration, not a registration, and nothing marks it executable.
-    if context.collect is not None:
-        context.collect.append(captures)
-    elif terminal is not None:
-        context.ends.append(
-            ChainEnd(
-                context.caller,
-                context.root,
-                terminal,
-                captures,
-                _end_consumers(terminal, context),
-                context.path,
-                context.inexact,
+    for variant in _forked(None, captures, (), context):
+        if context.collect is not None:
+            context.collect.append(_without_rule_9(variant))
+        elif terminal is not None:
+            context.ends.append(
+                ChainEnd(
+                    context.caller,
+                    context.root,
+                    terminal,
+                    _without_rule_9(variant),
+                    _end_consumers(terminal, context),
+                    context.path,
+                    context.inexact or _unsure(variant, context),
+                )
             )
-        )
 
 
 def _fold_or_fork(
@@ -1098,6 +1119,7 @@ def _fold_or_fork(
     captures: dict[str, Any],
     terminal: dict[str, Any] | None,
     context: _ChainContext,
+    parent: tuple[str, int] | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     """`_walk`'s step over the rows called on one value, in ordinal order: each row that
     configures the value folds into `captures` in place, and each other row forks a walk of
@@ -1110,10 +1132,16 @@ def _fold_or_fork(
     here too, in place, before the next row on the value: `b.url(u).post(x);` configures
     `b` with both. A fork copies the captures where it is reached, so `b.url(a); r1 =
     b.build(); b.url(c); r2 = b.build()` gives r1 the address `a` and r2 the address `c`:
-    configuration after a build never reaches the request already built."""
+    configuration after a build never reaches the request already built.
+
+    **A call folded in place is one the chain may not have run** (spec 2026-11-02 rule 9, the
+    value walk's rule, `values.Flow`): `if (x) b.setUri(u)` is folded here in ordinal order and
+    LOGGED (`_FOLDS`); the next fork, or the chain's end, decides it (`_forked`), forking the
+    chain where it is not on every path to that point."""
     forked = False
     for next_site in nexts:
         if _chain_key(next_site) is None or _configures(next_site, context):
+            captures[_FOLDS] = (*captures.get(_FOLDS, ()), (next_site, parent, dict(captures)))
             _fold_site(next_site, captures, context)
             if _reaches_terminal(next_site, context):
                 terminal = next_site
@@ -1127,18 +1155,144 @@ def _fold_or_fork(
                 # as `_walk`'s does.
                 handed_on = _continuations(next_site, captures, context)
                 for consumer in handed_on:
-                    _continue(
-                        consumer, _configured_for(next_site, consumer, captures, context), context
-                    )
+                    for handed in _configured_for(next_site, consumer, captures, context):
+                        _continue(consumer, handed, context)
                 on_it = [s for s in context.by_receiver.get(same_object, []) if s is not next_site]
-                forked_on_it, terminal = _fold_or_fork(on_it, captures, terminal, context)
+                forked_on_it, terminal = _fold_or_fork(
+                    on_it, captures, terminal, context, _site_key(next_site)
+                )
                 forked = forked or forked_on_it or bool(handed_on)
             continue
         forked = True
-        next_captures = dict(captures)
-        _fold_site(next_site, next_captures, context)
-        _walk(next_site, next_captures, terminal, context)
+        for next_captures in _forked(next_site, captures, nexts, context):
+            _fold_site(next_site, next_captures, context)
+            _walk(next_site, next_captures, terminal, context)
     return forked, terminal
+
+
+def _forked(
+    use: dict[str, Any] | None,
+    captures: dict[str, Any],
+    siblings: Sequence[dict[str, Any]],
+    context: _ChainContext,
+) -> list[dict[str, Any]]:
+    """The captures a chain carries on to `use` (a fork, a consumer it is handed to, or None:
+    the chain's end, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
+    by the value walk's own split and proof (`values.Flow`), never a copy of it.
+
+    Each call folded in place since the last fork (`_FOLDS`) that is not on every path to the
+    use — not on its `dominator` chain, or not `on_every_exit` where the use is the end — FORKS
+    the chain: one path with it, one without. A configuring call AFTER the use by ordinal that
+    shares its `loop_group` (`siblings`) can run before a later run of the use, so it is a call
+    on a branch for it too, its with-side never proven. A side the facts do not prove a run
+    takes to the use (`Flow.reaches_use`) is marked, and two or more calls on branches anywhere
+    on the path make every row from it `partial` (`ChainEnd.inexact`). Past `PATH_CAP` paths,
+    one path: the parts those calls set unread, stated (`non_enumerable`). Never a row dropped.
+    The decisions are made once: each path carries on with no folds left to decide."""
+    folds = captures.get(_FOLDS, ())
+    assert context.flow is not None
+    flow = context.flow
+    method = context.caller if use is None else str(use["caller"])
+    used_at = None if use is None else int(use["ordinal"])
+    always = flow.always(method, used_at)
+    inside = flow.inside(method, -1, used_at)
+    # A fold that changed nothing (a void call no step names, which captures nothing) is no
+    # split, as an event that changes nothing on any path is none in the value walk.
+    after = [*(snapshot for _, _, snapshot in folds[1:]), captures]
+    branched = [
+        index
+        for index, (site, _, snapshot) in enumerate(folds)
+        if str(site["caller"]) == method
+        and not always(int(site["ordinal"]))
+        and _without_rule_9(snapshot) != _without_rule_9(after[index])
+    ]
+    later = [
+        site
+        for site in siblings
+        if used_at is not None
+        and int(site["ordinal"]) > used_at
+        and (_chain_key(site) is None or _configures(site, context))
+        and inside(int(site["ordinal"]))
+    ]
+    base = {key: value for key, value in captures.items() if key != _FOLDS}
+    if not branched and not later:
+        return [base]
+    calls = [folds[index][0] for index in branched] + later
+    splits = frozenset(captures.get(_SPLITS, frozenset())) | {_site_key(site) for site in calls}
+    if 2 ** len(calls) > PATH_CAP:
+        capped = _replayed(base, folds, {_site_key(folds[index][0]) for index in branched}, context)
+        for site in calls:
+            unread: dict[str, Any] = {}
+            _fold_site(site, unread, context)
+            capped.update(dict.fromkeys(unread, _CAPPED))
+        capped[_SPLITS] = splits
+        capped[_UNPROVEN] = True
+        return [capped]
+    proofs = {
+        _site_key(site): flow.reaches_use(method, None, int(site["ordinal"]), used_at, use is None)
+        for site in calls
+    }
+    variants: list[dict[str, Any]] = []
+    # Every call ran first: where two paths give one wire, the row a reader keeps (the first)
+    # carries everything the calls on it set — a header on one branch is a header the request
+    # may carry, never a header dropped.
+    for ran_mask in reversed(range(2 ** len(calls))):
+        ran = {_site_key(site) for bit, site in enumerate(calls) if ran_mask >> bit & 1}
+        skipped = {_site_key(folds[index][0]) for index in branched} - ran
+        variant = _replayed(base, folds, skipped, context)
+        for site in later:
+            if _site_key(site) in ran:
+                _fold_site(site, variant, context)
+        variant[_SPLITS] = splits
+        variant[_UNPROVEN] = bool(captures.get(_UNPROVEN)) or any(
+            not proofs[key][0 if key in ran else 1] for key in proofs
+        )
+        variants.append(variant)
+    return variants
+
+
+def _replayed(
+    base: dict[str, Any],
+    folds: Sequence[tuple[dict[str, Any], tuple[str, int] | None, dict[str, Any]]],
+    skipped: set[tuple[str, int]],
+    context: _ChainContext,
+) -> dict[str, Any]:
+    """`base` (the captures after every fold in `folds`) as it would be had the calls in
+    `skipped` not run — nor any call made on a skipped call's result: rebuilt from the captures
+    as they stood before the first skipped call, folding the ones after it again in order."""
+    first = next(
+        (index for index, (site, _, _) in enumerate(folds) if _site_key(site) in skipped), None
+    )
+    if first is None:
+        return dict(base)
+    rebuilt = {key: value for key, value in folds[first][2].items() if key != _FOLDS}
+    dropped = set(skipped)
+    for site, parent, _ in folds[first:]:
+        if _site_key(site) in dropped or parent in dropped:
+            dropped.add(_site_key(site))
+            continue
+        _fold_site(site, rebuilt, context)
+        if _reaches_terminal(site, context):
+            _hold_executing_call(site, rebuilt, context)
+    for key in (_SPLITS, _UNPROVEN):
+        if key in base:
+            rebuilt[key] = base[key]
+    return rebuilt
+
+
+def _unsure(captures: Mapping[str, Any], context: _ChainContext) -> bool:
+    """Whether a chain end is inexact by rule 9: the calls on branches its own walk split at,
+    with the value walk's back to its root where it walked back (`path_splits`), counted by the
+    one rule (`values.several_or_unproven`)."""
+    splits = len(captures.get(_SPLITS, ())) + (
+        0 if context.path is None else path_splits(context.path)
+    )
+    return several_or_unproven(splits, bool(captures.get(_UNPROVEN)))
+
+
+def _without_rule_9(captures: dict[str, Any]) -> dict[str, Any]:
+    """`captures` with the walk's own rule-9 bookkeeping taken out, as a row reads them."""
+    return {key: value for key, value in captures.items() if key not in _RULE_9}
 
 
 def _configured_for(
@@ -1146,17 +1300,20 @@ def _configured_for(
     consumer: dict[str, Any],
     captures: dict[str, Any],
     context: _ChainContext,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     """What `site`'s value carries when `consumer` takes it (ruling 4, spec 2026-10-30): a
     copy of `captures` with each call on that value made before `consumer` that configures
     it folded in, in ordinal order, with what is called on a configuring call's own result,
     which is the value again. A call configures the value as `_fold_or_fork` says: it is void,
     or it returns the object it was called on. So `spec = sink(t); spec.topic("x");
-    handle(spec)` hands `handle` the topic; a call made after `consumer` never reaches it."""
+    handle(spec)` hands `handle` the topic; a call made after `consumer` never reaches it.
+
+    One set of captures per path, as `_forked` decides them with `consumer` as the use (rule
+    9): a configuring call on one branch is handed on with it and without it."""
     handed = dict(captures)
     visited: set[Any] = set()
 
-    def fold(value: Any) -> None:
+    def fold(value: Any, parent: tuple[str, int] | None) -> None:
         if value is None or value in visited:
             return
         visited.add(value)
@@ -1166,11 +1323,12 @@ def _configured_for(
             if int(call["ordinal"]) >= int(consumer["ordinal"]):
                 continue
             if _chain_key(call) is None or _configures(call, context):
+                handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed)))
                 _fold_site(call, handed, context)
-                fold(_chain_key(call))
+                fold(_chain_key(call), _site_key(call))
 
-    fold(_chain_key(site))
-    return handed
+    fold(_chain_key(site), None)
+    return _forked(consumer, handed, (), context)
 
 
 def _hold_executing_call(

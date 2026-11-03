@@ -7,6 +7,7 @@ import pytest
 import yaml
 from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
@@ -527,7 +528,7 @@ def _controller_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrderController.jsonl", document, facts)
+    write_fact_file(root / "OrderController.jsonl", document, straight_line(facts))
 
 
 def test_derive_endpoints_finds_the_three_annotated_routes_when_the_catalog_is_annotation_driven(
@@ -607,7 +608,7 @@ def _invented_listener_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrderListener.jsonl", document, facts)
+    write_fact_file(root / "OrderListener.jsonl", document, straight_line(facts))
 
 
 # --- 2H design §1: the two naming forms, on an invented framework ---------
@@ -711,7 +712,7 @@ def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
                 use=AnnotationUse(annotation="com/acme/messaging/annotation/OnMessage#", args=args),
             )
         )
-    write_fact_file(root / "NamedHandlers.jsonl", document, facts)
+    write_fact_file(root / "NamedHandlers.jsonl", document, straight_line(facts))
 
 
 def _paths_of(tmp_path: Path, catalog: Catalog, type_scope: str | None = None) -> set[str]:
@@ -1150,7 +1151,7 @@ def _vocabulary_facts(root: Path) -> None:
             )
             for annotation, args in uses
         )
-    write_fact_file(root / "Vocabulary.jsonl", document, facts)
+    write_fact_file(root / "Vocabulary.jsonl", document, straight_line(facts))
 
 
 def _vocabulary_paths(tmp_path: Path, catalog: Catalog) -> set[str]:
@@ -1449,7 +1450,7 @@ def _accessor_facts(root: Path, name: str) -> None:
                 use=AnnotationUse(annotation=annotation, args={}),
             )
         )
-    write_fact_file(root / "Accessors.jsonl", document, facts)
+    write_fact_file(root / "Accessors.jsonl", document, straight_line(facts))
 
 
 @pytest.mark.parametrize(
@@ -1650,7 +1651,7 @@ def _qname_facts(
                 ),
             )
         )
-    write_fact_file(root / "OrderService.jsonl", document, facts)
+    write_fact_file(root / "OrderService.jsonl", document, straight_line(facts))
 
 
 def _qname_paths(tmp_path: Path, catalog: Catalog, **facts: object) -> set[str]:
@@ -2018,7 +2019,7 @@ def _member_facts(root: Path, gated: bool = True) -> None:
                 use=AnnotationUse(annotation="com/acme/rpc/annotation/Operation#", args=args),
             )
         )
-    write_fact_file(root / "MemberService.jsonl", document, facts)
+    write_fact_file(root / "MemberService.jsonl", document, straight_line(facts))
 
 
 def _member_base_facts(
@@ -2126,7 +2127,7 @@ def _member_base_facts(
                 ),
             ),
         ]
-    write_fact_file(root / "AbstractMemberService.jsonl", document, facts)
+    write_fact_file(root / "AbstractMemberService.jsonl", document, straight_line(facts))
 
 
 def _member_override_facts(root: Path, withdrawn: bool = False) -> None:
@@ -2176,7 +2177,7 @@ def _member_override_facts(root: Path, withdrawn: bool = False) -> None:
                 ),
             )
         )
-    write_fact_file(root / "MemberServiceOverride.jsonl", document, facts)
+    write_fact_file(root / "MemberServiceOverride.jsonl", document, straight_line(facts))
 
 
 def _member_rows(
@@ -2887,7 +2888,7 @@ def _contract_facts(
                 signature=_VOID,
             ),
         ]
-    write_fact_file(root / f"{name}.jsonl", document, facts)
+    write_fact_file(root / f"{name}.jsonl", document, straight_line(facts))
 
 
 def _contract_rows(tmp_path: Path, catalog: Catalog, **facts: object) -> list[tuple[str, str]]:
@@ -3185,7 +3186,7 @@ def _contract_member_facts(root: Path) -> None:
             signature=_VOID,
         ),
     ]
-    write_fact_file(root / "BillingActivities.jsonl", document, facts)
+    write_fact_file(root / "BillingActivities.jsonl", document, straight_line(facts))
 
 
 def _contract_member_paths(tmp_path: Path, members: str) -> set[str]:
@@ -4323,7 +4324,7 @@ def _jdk_client_facts(root: Path) -> None:
             ],
         ),
     ]
-    write_fact_file(root / "JdkClient.jsonl", document, facts)
+    write_fact_file(root / "JdkClient.jsonl", document, straight_line(facts))
 
 
 def test_an_outbound_row_is_per_caller_across_engines(tmp_path: Path):
@@ -4477,7 +4478,7 @@ def _scalar_path_facts(root: Path) -> None:
             use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": "/{id}"}),
         ),
     ]
-    write_fact_file(root / "OrderResource.jsonl", document, facts)
+    write_fact_file(root / "OrderResource.jsonl", document, straight_line(facts))
 
 
 _SCALAR_PATH_CATALOG = Catalog(
@@ -4591,7 +4592,7 @@ def test_a_mapping_naming_two_paths_and_two_methods_derives_all_four_identities(
             use=AnnotationUse(annotation="com/acme/rest/Mapping#", args={"value": ["/a", "/b"]}),
         ),
     ]
-    write_fact_file(tmp_path / "facts" / "OrderResource.jsonl", document, facts)
+    write_fact_file(tmp_path / "facts" / "OrderResource.jsonl", document, straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -4697,7 +4698,7 @@ def _media_reading_facts(root: Path) -> None:
             use=AnnotationUse(annotation="com/acme/rest/Get#", args={"value": ["/neither"]}),
         ),
     ]
-    write_fact_file(root / "OrderResource.jsonl", document, facts)
+    write_fact_file(root / "OrderResource.jsonl", document, straight_line(facts))
 
 
 def test_media_attributes_are_read_scalar_or_array_order_normalized_and_absence_stays_null(
@@ -4770,7 +4771,7 @@ def _one_method_two_annotations_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrderResource.jsonl", document, facts)
+    write_fact_file(root / "OrderResource.jsonl", document, straight_line(facts))
 
 
 def test_two_mapping_annotations_on_one_method_derive_one_row_with_the_media_union(
@@ -4846,7 +4847,7 @@ def _content_negotiation_sibling_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrderResource.jsonl", document, facts)
+    write_fact_file(root / "OrderResource.jsonl", document, straight_line(facts))
 
 
 def test_content_negotiation_siblings_with_different_handlers_derive_exactly_as_today(
@@ -4922,7 +4923,7 @@ def _client_facts(root: Path, type_args: dict[str, object]) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "BillingClient.jsonl", document, facts)
+    write_fact_file(root / "BillingClient.jsonl", document, straight_line(facts))
 
 
 _OUTBOUND_CATALOG = Catalog(
@@ -5029,7 +5030,7 @@ def _peer_annotation_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "PeerClient.jsonl", document, facts)
+    write_fact_file(root / "PeerClient.jsonl", document, straight_line(facts))
 
 
 _PEER_ANNOTATION_CATALOG = Catalog(
@@ -5137,7 +5138,7 @@ def _orders_controller_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrderController.jsonl", document, facts)
+    write_fact_file(root / "OrderController.jsonl", document, straight_line(facts))
 
 
 def _orders_client_facts(root: Path) -> None:
@@ -5185,7 +5186,7 @@ def _orders_client_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "OrdersClient.jsonl", document, facts)
+    write_fact_file(root / "OrdersClient.jsonl", document, straight_line(facts))
 
 
 def _two_direction_workspace(tmp_path: Path):
@@ -5270,7 +5271,7 @@ def _legacy_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "LegacyClient.jsonl", document, facts)
+    write_fact_file(root / "LegacyClient.jsonl", document, straight_line(facts))
 
 
 _UNGATED_CATALOG = Catalog(
@@ -5376,7 +5377,7 @@ def _gateless_implementer_facts(root: Path) -> None:
             signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
         ),
     ]
-    write_fact_file(root / "ClientIface.jsonl", document, facts)
+    write_fact_file(root / "ClientIface.jsonl", document, straight_line(facts))
 
 
 def test_a_gateless_catalog_never_synthesizes_onto_an_implementing_class(tmp_path):
@@ -5460,7 +5461,7 @@ def _inventory_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "InventoryClient.jsonl", document, facts)
+    write_fact_file(root / "InventoryClient.jsonl", document, straight_line(facts))
 
 
 _UNGATED_PREFIXED_CATALOG = Catalog(
@@ -5585,7 +5586,7 @@ def _sendtouser_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "StompUserHandler.jsonl", document, facts)
+    write_fact_file(root / "StompUserHandler.jsonl", document, straight_line(facts))
 
 
 def _spring_stomp_catalog() -> Catalog:
@@ -5696,7 +5697,7 @@ def _http_reply_facts(root: Path) -> None:
             ),
         ),
     ]
-    write_fact_file(root / "ReplyController.jsonl", document, facts)
+    write_fact_file(root / "ReplyController.jsonl", document, straight_line(facts))
 
 
 def _http_reply_catalog() -> Catalog:
@@ -5990,7 +5991,7 @@ def _construct_gate_facts(root: Path) -> None:
                 use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": operation}),
             ),
         ]
-    write_fact_file(root / "Surface.jsonl", _GATE_DOCUMENT, facts)
+    write_fact_file(root / "Surface.jsonl", _GATE_DOCUMENT, straight_line(facts))
 
 
 def _construct_gate_catalog(declared_on: object, direction: str, catalog_id: str) -> Catalog:
@@ -6133,7 +6134,7 @@ def _sei_facts(root: Path, with_local_impl: bool) -> None:
                 use=AnnotationUse(annotation="com/acme/wsish/Operation#", args={"name": "charge"}),
             ),
         ]
-    write_fact_file(root / "Sei.jsonl", _GATE_DOCUMENT, facts)
+    write_fact_file(root / "Sei.jsonl", _GATE_DOCUMENT, straight_line(facts))
 
 
 def _sei_rows(tmp_path: Path, with_local_impl: bool) -> list[tuple[str, str, str | None]]:
@@ -6292,7 +6293,7 @@ def _annotated_facts(
                     use=AnnotationUse(annotation=annotation, args=args),
                 )
             )
-    write_fact_file(root / "Subject.jsonl", document, facts)
+    write_fact_file(root / "Subject.jsonl", document, straight_line(facts))
 
 
 def _rows_from(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[dict[str, object]]:
@@ -7231,7 +7232,7 @@ def _stereotype_facts(root: Path, *, meta_annotated: bool) -> None:
                 use=AnnotationUse(annotation="org/springframework/stereotype/Controller#", args={}),
             ),
         )
-    write_fact_file(root / "OrderApi.jsonl", document, facts)
+    write_fact_file(root / "OrderApi.jsonl", document, straight_line(facts))
 
 
 def _stereotype_rows(tmp_path: Path, *, meta_annotated: bool) -> list[tuple]:
@@ -7388,7 +7389,7 @@ def _gate_facts(
             )
             for fqn, args in sibling_annotations.items()
         ]
-    write_fact_file(root / "Subject.jsonl", document, facts)
+    write_fact_file(root / "Subject.jsonl", document, straight_line(facts))
 
 
 def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
@@ -8137,7 +8138,7 @@ def _flip_facts(
                 signature=void,
             )
         )
-    write_fact_file(root / "OrderApi.jsonl", document, facts)
+    write_fact_file(root / "OrderApi.jsonl", document, straight_line(facts))
 
 
 def _flip_rows(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[tuple]:
@@ -9844,7 +9845,7 @@ def _temporal_facts(root: Path, catalog_id: str, *, implementor: str | None) -> 
                     use=AnnotationUse(annotation=implementor, args={"taskQueues": ["orders"]}),
                 )
             )
-    write_fact_file(root / "Contract.jsonl", document, facts)
+    write_fact_file(root / "Contract.jsonl", document, straight_line(facts))
 
 
 def _temporal_rows(tmp_path: Path, catalog_id: str, *, implementor: str | None) -> list[tuple]:

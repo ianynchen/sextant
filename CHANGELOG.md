@@ -17,6 +17,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The forward chain walk reads branches by rule 9** (review 3 re-review, the walk's branch
+  blindness). A statement-style call it folds into a chain (void, or `returns_receiver`) was
+  folded whatever branch it was on: `if (x) b.setUri("…/b"); execute(b.build())` published
+  `/b` alone, `resolved`. It now forks where the call is not on every path to the fork it
+  carries on to — a row with it and a row without — by the value walk's own split and proof,
+  lifted into one shared place (`values.Flow`): the `post_dominator` proof, `reaches_return`,
+  the loop-later rule, the several-splits count across the whole path (`several_or_unproven`)
+  and the path cap. A fold that changes nothing is no split. Ktor's inline `setBody` compiles
+  to two `setBody` calls on two branches, so a Ktor request with a body is now `partial`.
 - **A statement-style `setUri` on an Apache HttpClient builder is the request sent** (review 3
   re-review, out of scope; audited 2026-11-03). `b = ClassicRequestBuilder.get("…/a");
   b.setUri("…/b"); http.execute(b.build());` published `GET /a`, `resolved`: the `setUri` step

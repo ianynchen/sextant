@@ -16,6 +16,7 @@ import pytest
 from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 from test_call_engines import _MODULE, CATALOGS_DIR, _document, _resolve_fluent
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.pipeline import resolve
 from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN, ConstructKind
@@ -514,7 +515,7 @@ def _resolved_module(
             arguments=[],
         )
     ]
-    write_fact_file(facts / "Service.jsonl", _document(), body)
+    write_fact_file(facts / "Service.jsonl", _document(), straight_line(body))
     write_fixture_module_fact_with(facts, coordinates)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     caplog.clear()

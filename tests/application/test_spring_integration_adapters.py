@@ -14,6 +14,7 @@ import pytest
 from test_call_engines import _MODULE, CATALOGS_DIR, FLUENT_CAPABILITIES, _call, _document
 from test_fluent_registrations import BODY, _body_symbol, _lambda
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.factfile import write_fact_file
@@ -117,7 +118,7 @@ def _factory(owner: str, name: str, descriptor: str, factory_type: str) -> CallS
 
 def _derived(tmp_path: Path, facts: list, catalog_id: str) -> tuple[list[dict], list[dict]]:
     """The endpoint rows and the `channel_bindings` edges the shipped catalog derives."""
-    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_shipped(catalog_id)], capabilities=FLUENT_CAPABILITIES)

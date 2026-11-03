@@ -4870,9 +4870,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    elif terminal is not None:\n        context.ends.append(",
-                replace="    elif True:  # guard disabled by scripts/guard_check.py\n"
-                "        context.ends.append(",
+                find="        elif terminal is not None:\n            context.ends.append(",
+                replace="        elif True:  # guard disabled by scripts/guard_check.py\n"
+                "            context.ends.append(",
             ),
         ),
     ),
@@ -8699,8 +8699,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        _continue(consumer, _configured_for(site, consumer, captures, context), context)\n",
-                replace="        _continue(consumer, captures, context)  # guard disabled by scripts/guard_check.py\n",
+                find="        for handed in _configured_for(site, consumer, captures, context):\n",
+                replace="        for handed in [captures]:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8761,10 +8761,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="    return len(splits) > 1 or any(step.context[0] in (_SEVERAL, _UNPROVEN) for "
-                "step in path)\n",
-                replace="    return len(splits) > 1 or any(step.context[0] == _UNPROVEN for step in "
-                "path)  # guard disabled\n",
+                find="    return splits + (2 if any(step.context[0] == _SEVERAL for step in trail) else 0)\n",
+                replace="    return splits  # guard disabled\n",
             ),
         ),
     ),
@@ -8777,10 +8775,72 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="    return len(splits) > 1 or any(step.context[0] in (_SEVERAL, _UNPROVEN) for "
-                "step in path)\n",
-                replace="    return any(step.context[0] in (_SEVERAL, _UNPROVEN) for step in path)"
-                "  # guard disabled\n",
+                find="    splits = len({step.context for step in trail if step.context[0] == _SPLIT})\n",
+                replace="    splits = 0  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-folded-call-NOT-on-every-path-to-the-terminal-FORKS": Guard(
+        what="a call the forward chain walk folds in place that is not on every path to the "
+        "fork it carries on to forks the chain, with it and without it — the value walk's own "
+        "rule (`values.Flow`; spec 2026-11-02 rule 9)",
+        why='`if (x) b.setUri("…/b"); execute(b.build())` publishes `/b` alone, `resolved`, '
+        "false whenever `x` is false",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='        and not always(int(site["ordinal"]))\n',
+                replace="        and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-folded-call-AFTER-the-terminal-in-its-LOOP-forks": Guard(
+        what="a configuring call after the fork by ordinal that shares its loop group forks the "
+        "chain, its with-side never proven (the value walk's loop-later rule)",
+        why='`for (…) { execute(b.build()); b.setUri("…/b"); }` drops the `/b` every later '
+        "request is sent to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='        and inside(int(site["ordinal"]))\n',
+                replace="        and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.two-or-more-FORKS-make-every-row-partial": Guard(
+        what="two or more calls on branches on a chain's path make every row from it `partial` "
+        '(ruled 2026-11-03, "A: every row partial"), counted by the value walk\'s rule',
+        why="`if (x) b.setUri(b); if (y) b.setUri(c);` publishes combinations no run makes at "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    splits = len(captures.get(_SPLITS, ())) + (\n",
+                replace="    splits = 0 * len(captures.get(_SPLITS, ())) + (  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.the-row-WITH-a-forked-call-needs-the-terminal-on-its-post-dominator-chain": Guard(
+        what="a side of a fork the facts do not prove a run takes to the fork (`Flow.reaches_use`) "
+        "makes its row `partial`",
+        why='`if (x) { b.setUri("…/b"); return; } execute(b.build())` publishes `/b` '
+        "`resolved`, though no run sends there",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            not proofs[key][0 if key in ran else 1] for key in proofs\n",
+                replace="            False for key in proofs  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-fold-that-CHANGES-NOTHING-is-no-split": Guard(
+        what="a folded call that changes no capture is no split (as in the value walk)",
+        why="a void call no step names on a branch makes every row of the chain `partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        and _without_rule_9(snapshot) != _without_rule_9(after[index])\n",
+                replace="        # guard disabled\n",
             ),
         ),
     ),
@@ -8831,7 +8891,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                and self._loop_group(method, ordinal) == group\n",
+                find="                and self.loop_group(method, ordinal) == group\n",
                 replace="                and False  # guard disabled\n",
             ),
         ),
@@ -8843,8 +8903,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                and self._loop_group(method, ordinal) == group\n",
-                replace="                and self._loop_group(method, ordinal) is not None  # guard "
+                find="                and self.loop_group(method, ordinal) == group\n",
+                replace="                and self.loop_group(method, ordinal) is not None  # guard "
                 "disabled\n",
             ),
         ),
@@ -8860,7 +8920,7 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="                and group is not None\n",
                 replace="                and group is not None\n"
-                "                and group != self._loop_group(method, after)  # guard disabled\n",
+                "                and group != self.loop_group(method, after)  # guard disabled\n",
             ),
         ),
     ),
@@ -8873,8 +8933,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                        ran_proven = False\n",
-                replace="                        pass  # guard disabled\n",
+                find="        if used_at is not None and ordinal > used_at:\n            return False, True\n",
+                replace="        # guard disabled\n",
             ),
         ),
     ),
@@ -8886,12 +8946,12 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if len(reached) > _PATH_CAP:\n",
+                find="            if len(reached) > PATH_CAP:\n",
                 replace="            if False:  # guard disabled\n",
             ),
             Edit(
                 path=_VALUES,
-                find="        if len(reached) > _PATH_CAP:\n"
+                find="        if len(reached) > PATH_CAP:\n"
                 "            return ((trail, _unresolved(NON_ENUMERABLE)),)\n"
                 "        return tuple(reached)\n",
                 replace="        return tuple(reached)  # guard disabled\n",
@@ -8918,7 +8978,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if len(paths) > _PATH_CAP:\n",
+                find="            if len(paths) > PATH_CAP:\n",
                 replace="            if False:  # guard disabled\n",
             ),
         ),

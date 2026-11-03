@@ -3642,7 +3642,7 @@ def test_a_walk_past_the_path_cap_keeps_the_last_calls_row(
     and `cycle`, that is a part not read on the path, never a reason to drop a row. With the cap
     lowered to one path, the last call's trigger window (two branched calls before it) passes
     it: its job is still read, so CJob keeps its row, the trigger unknown, `partial`."""
-    monkeypatch.setattr(values, "_PATH_CAP", 1)
+    monkeypatch.setattr(values, "PATH_CAP", 1)
     rows = _scheduled(tmp_path, _scheduled_on_many_branches(2))
     assert ("CJob#execute", "None", "partial", "None") in _refused_rows(rows), _refused_rows(rows)
 

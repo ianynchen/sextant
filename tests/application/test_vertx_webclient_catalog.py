@@ -14,6 +14,7 @@ from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent, _resolve_f
 
 from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.domain.facts import (
     CallArgument,
     CallSiteFact,
@@ -514,6 +515,44 @@ def test_a_statement_style_request_keeps_what_each_statement_set(tmp_path: Path)
 
     assert _calls(rows) == [("POST", "prometheus:9090", "/q", "resolved")]
     assert entries == [("header", "X-Tenant", "acme"), ("query", "a", "b")]
+
+
+def test_a_header_put_on_one_branch_is_a_row_with_it_and_one_without(tmp_path: Path):
+    """Rule 9 in the forward chain walk: `r = client.post(q); if (x) r.putHeader("X-Tenant",
+    "acme"); r.send()`. The header is not on `send()`'s dominator chain, so the request is sent
+    with it on one run and without it on another: two chain ends, the header on one. They are
+    one wire (`POST /q`), so one row, `resolved`, carrying the header that run sets."""
+    body = _Body()
+    request = body.call(CLIENT, "postAbs", _URI, 90, [_string("http://prometheus:9090/q")])
+    body.call(REQUEST, "putHeader", _STRING_STRING, request, [_string("X-Tenant"), _string("acme")])
+    body.call(REQUEST, "send", _SEND, request, [])
+    places = {0: (None, True, 2), 1: (0, False, 2), 2: (0, True, None)}
+    sites = [
+        site.model_copy(
+            update={
+                "dominator": places[site.ordinal][0],
+                "on_every_exit": places[site.ordinal][1],
+                "post_dominator": places[site.ordinal][2],
+                "reaches_return": True,
+            }
+        )
+        for site in body.sites
+    ]
+    workspace = _resolve_fluent(tmp_path, sites, _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    entries = sorted(
+        (r["kind"], r["name"], r["value"]) for r in workspace.query("endpoint_metadata")
+    )
+    ends = [
+        bool(end.captures.get("\x00collected")) for end in chain_ends(workspace, _vertx_webclient())
+    ]
+    workspace.close()
+
+    assert sorted((r["method"], r["path"], r["resolution"]) for r in rows) == [
+        ("POST", "/q", "resolved")
+    ]
+    assert entries == [("header", "X-Tenant", "acme")]
+    assert sorted(ends) == [False, True]
 
 
 @pytest.mark.declines("vertx-webclient")

@@ -91,7 +91,7 @@ def _document(
 
 
 def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
@@ -214,7 +214,7 @@ def _resolve_walked(tmp_path: Path, facts: list):
     """`_resolve`, with the two derived tables the walk's crossing edges read built first —
     `bound_to_parameter` is derived from `call_edges`, and a test whose address lives in a
     CALLER's literal needs it (the pipeline builds both before any engine runs)."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)
@@ -701,7 +701,7 @@ def test_a_bare_ptr_carrier_resolves_an_object_descriptor_and_the_shape_expands(
             ),
         ),
     ]
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     catalog = _catalog()
@@ -808,7 +808,9 @@ def test_a_carrier_subtype_declared_in_a_different_document_still_resolves(
     `List<OrderView>` payload as unresolved instead; this test is the one
     that would fail if that regressed."""
     caller = "com/acme/http/Client#batchSettlementsAcrossDocuments()."
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document("doc_1"), _batch_facts(caller))
+    write_fact_file(
+        tmp_path / "facts" / "Client.jsonl", _document("doc_1"), straight_line(_batch_facts(caller))
+    )
     write_fact_file(
         tmp_path / "facts" / "Types.jsonl",
         _document("doc_2", relative_path="com/acme/http/Types.java"),
@@ -1050,7 +1052,7 @@ def test_a_call_only_payload_type_still_reaches_shape_expansion(tmp_path: Path):
             ],
         ),
     ]
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     catalog = _catalog()
@@ -1827,7 +1829,7 @@ def test_a_row_declaring_both_url_arg_and_channel_arg_is_refused_at_run_start(
         "methods": [{"name": "send", "http_method": "SEND", "url_arg": 0, "channel_arg": 0}],
     }
     catalog = _single_call_catalog(matches, "invented-both-args")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -1857,7 +1859,7 @@ def test_an_invalid_row_level_direction_is_refused_at_run_start(tmp_path: Path):
         ],
     }
     catalog = _single_call_catalog(matches, "invented-bad-direction")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2312,7 +2314,7 @@ def test_a_row_declaring_record_arg_with_body_arg_is_refused_at_run_start(tmp_pa
         "methods": [{"name": "send", "record_arg": 0, "body_arg": 1}],
     }
     catalog = _single_call_catalog(matches, "invented-record-body-conflict")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2353,7 +2355,7 @@ def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Pat
         "record_wrappers": [wrapper],
     }
     catalog = _single_call_catalog(matches, "invented-bad-record-wrapper")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2744,7 +2746,7 @@ def test_a_row_declaring_channel_via_without_channel_arg_or_url_arg_is_refused_a
         "methods": [{"name": "createProducer", "channel_via": _create_queue_form()}],
     }
     catalog = _channel_via_catalog(matches, "invented-channel-via-no-position", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2772,7 +2774,7 @@ def test_a_row_declaring_channel_via_together_with_url_arg_is_refused_at_run_sta
         "methods": [{"name": "createProducer", "url_arg": 0, "channel_via": _create_queue_form()}],
     }
     catalog = _channel_via_catalog(matches, "invented-channel-via-with-url-arg", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2806,7 +2808,7 @@ def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, e
         "methods": [{"name": "createProducer", "channel_arg": 0, "channel_via": entry}],
     }
     catalog = _channel_via_catalog(matches, "invented-bad-channel-via", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2983,7 +2985,7 @@ def test_a_paired_destination_declared_in_a_shape_that_cannot_be_honoured_is_ref
     declared with no paired row is the mirror case: the author believed they
     had asked for a composite identity and would silently get half of one."""
     catalog = _paired_catalog({**_PAIRED_MATCHES, **matches_edit}, "invented-paired-broken")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -3007,7 +3009,7 @@ def test_a_non_single_character_address_separator_is_refused_by_type_and_length(
     catalog = _paired_catalog(
         {**_PAIRED_MATCHES, "address_separator": separator}, "invented-paired-broken"
     )
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -4167,7 +4169,7 @@ def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catal
 
 
 def _resolve_fluent(tmp_path: Path, facts: list, catalog: Catalog):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
@@ -5246,7 +5248,7 @@ def test_two_same_named_steps_with_no_distinguishing_owner_is_refused(tmp_path: 
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-ambiguous")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -5295,7 +5297,7 @@ def test_a_capture_that_does_not_name_a_call_site_position_is_refused(
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-capture")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -5347,7 +5349,7 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     one."""
     catalogs = YamlCatalogSource(CATALOGS_DIR).load()
     granted = {capability for catalog in catalogs for capability in catalog.requires}
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6640,7 +6642,7 @@ def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: ob
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-when")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6676,7 +6678,7 @@ def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-when-on-root")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6922,7 +6924,7 @@ def _sqs_built_by_a_helper(
 def _resolve_fluent_walked(tmp_path: Path, facts: list, catalog: Catalog):
     """`_resolve_fluent`, with the two derived tables a crossing reads built first, as the
     pipeline builds them before any engine runs (`_resolve_walked`)."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)
@@ -7686,7 +7688,7 @@ def test_a_fluent_root_declaring_channel_via_without_a_channel_capture_is_refuse
         "terminal": [{"method": "build", "terminal_via_argument": True}],
     }
     catalog = _fluent_catalog(matches, "invented-pubsub-channel-via-no-position")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -7715,7 +7717,7 @@ def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(
         "terminal": [{"method": "build", "terminal_via_argument": True}],
     }
     catalog = _fluent_catalog(matches, "invented-pubsub-bad-channel-via")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8183,6 +8185,209 @@ def test_a_statement_style_set_uri_is_the_request_built(tmp_path: Path):
     ]
 
 
+# **Rule 9 in the forward chain walk** (review 3 re-review, the walk's branch blindness): a
+# statement-style call the walk folds into the chain in place (void, or `returns_receiver`)
+# that is not on the terminal's `dominator` chain forks the chain — a row with it and a row
+# without — by the same split and proof the value walk uses (`values.Flow`). Positions are the
+# ones javac 21 gives the review's `r4/src/q/Calls.java`, read off the extractor's output.
+
+
+def _placed_at(fact: CallSiteFact, dominator, every, post, returns=True, group=None):
+    return fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": every,
+            "post_dominator": post,
+            "reaches_return": returns,
+            "loop_group": group,
+        }
+    )
+
+
+def _apache_set_uris(
+    caller: str, uris: list[str], places: dict[int, tuple], build_at: int | None = None
+) -> list:
+    """`b = ClassicRequestBuilder.get("http://svc/a"); b.setUri(u1); …; http.execute(b.build())`,
+    each site at its stated place (`places[ordinal] = (dominator, on_every_exit,
+    post_dominator[, reaches_return[, loop_group]])`)."""
+    build = len(uris) + 1 if build_at is None else build_at
+    sites = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="static",
+        ),
+        *[
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                at,
+                receiver=3,
+                result=10 + at,
+                arguments=[CallArgument(kind="string", value=uri)],
+            )
+            for at, uri in enumerate(uris, start=1)
+            if at != build
+        ],
+        _call(caller, APACHE_BUILDER, "build", build, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            build + 1,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+    ]
+    if build_at is not None:
+        sites += [
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                build_at + 2,
+                receiver=3,
+                result=60,
+                arguments=[CallArgument(kind="string", value=uris[-1])],
+            )
+        ]
+    return [_placed_at(site, *places[site.ordinal]) for site in sites]
+
+
+def _apache_rows(tmp_path: Path, facts: list) -> list[tuple]:
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted((r["method"], r["path"], r["resolution"]) for r in rows)
+
+
+@pytest.mark.pins("chains.a-folded-call-NOT-on-every-path-to-the-terminal-FORKS")
+def test_a_set_uri_on_one_branch_gives_a_row_with_it_and_one_without(tmp_path: Path):
+    """`if (x) b.setUri("http://svc/b")`: the setter is not on `build()`'s dominator chain, so
+    a run builds the request with it and a run builds it without. Two rows, both `resolved`:
+    `/a` and `/b`. Before, the walk folded the setter into every path: `/b` alone."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#oneBranch().",
+        ["http://svc/b"],
+        {0: (None, True, 2), 1: (0, False, 2), 2: (0, True, 3), 3: (2, True, None)},
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "resolved")]
+
+
+@pytest.mark.pins("chains.two-or-more-FORKS-make-every-row-partial")
+def test_two_set_uris_on_branches_make_every_row_partial(tmp_path: Path):
+    """`if (x) b.setUri(".../b"); if (y) b.setUri(".../c");`: two calls on branches, so every
+    row from the fork is `partial` (ruled 2026-11-03, "A: every row partial")."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#twoBranches().",
+        ["http://svc/b", "http://svc/c"],
+        {
+            0: (None, True, 3),
+            1: (0, False, 3),
+            2: (0, False, 3),
+            3: (0, True, 4),
+            4: (3, True, None),
+        },
+    )
+    assert _apache_rows(tmp_path, facts) == [
+        ("GET", "/a", "partial"),
+        ("GET", "/b", "partial"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+@pytest.mark.pins(
+    "chains.the-row-WITH-a-forked-call-needs-the-terminal-on-its-post-dominator-chain"
+)
+def test_a_set_uri_before_an_early_return_gives_its_row_partial(tmp_path: Path):
+    """`if (x) { b.setUri(".../b"); return; } http.execute(b.build())`: `build()` is not on the
+    setter's `post_dominator` chain, so no run builds the request with `/b`: that row is
+    `partial`; `/a` is `resolved`."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#early().",
+        ["http://svc/b"],
+        {0: (None, True, None), 1: (0, False, None), 2: (0, False, 3), 3: (2, False, None)},
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "partial")]
+
+
+@pytest.mark.pins("chains.a-folded-call-AFTER-the-terminal-in-its-LOOP-forks")
+def test_a_set_uri_after_the_build_in_its_loop_gives_its_row_partial(tmp_path: Path):
+    """`for (…) { http.execute(b.build()); b.setUri(".../b"); }`: the setter comes after the
+    build but shares its loop group, so it can run before a later build (the value walk's
+    loop-later rule): two rows, `/a` `resolved` — the first time round — and `/b` `partial`."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#loop().",
+        ["http://svc/b"],
+        {
+            0: (None, True, None),
+            1: (0, False, 2, True, 1),
+            2: (1, False, 3, True, 1),
+            3: (2, False, None, True, 1),
+        },
+        build_at=1,
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "partial")]
+
+
+def test_an_okhttp_post_on_one_branch_gives_a_get_row_and_a_post_row(tmp_path: Path):
+    """The shipped `okhttp` catalog: `b = new Request.Builder(); b.url(u); if (x) b.post(body);
+    client.newCall(b.build())` — `GET` without the call, `POST` with it, both `resolved`."""
+    caller = "com/acme/http/Client#maybePost()."
+    builder = "okhttp3/Request$Builder#"
+    sites = [
+        _call(caller, builder, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            builder,
+            "url",
+            1,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="string", value="https://h/orders")],
+        ),
+        _call(
+            caller,
+            builder,
+            "post",
+            2,
+            receiver=2,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=5, symbol=ORDER_REQUEST)],
+        ),
+        _call(caller, builder, "build", 3, receiver=2, result=14),
+        _call(
+            caller,
+            "okhttp3/OkHttpClient#",
+            "newCall",
+            4,
+            receiver=99,
+            result=104,
+            arguments=[CallArgument(kind="unresolved", source=14)],
+        ),
+    ]
+    places = {
+        0: (None, True, 1),
+        1: (0, True, 3),
+        2: (1, False, 3),
+        3: (1, True, 4),
+        4: (3, True, None),
+    }
+    workspace = _resolve_fluent(
+        tmp_path, [_placed_at(site, *places[site.ordinal]) for site in sites], _shipped("okhttp")
+    )
+    rows = sorted((r["method"], r["path"], r["resolution"]) for r in workspace.query("endpoints"))
+    workspace.close()
+    assert rows == [("GET", "/orders", "resolved"), ("POST", "/orders", "resolved")]
+
+
 def _apache_builder_chain(caller: str) -> list:
     """`ClassicRequestBuilder.get("https://h/p").build()`, not yet executed."""
     return [
@@ -8294,7 +8499,7 @@ def test_a_url_via_ladder_that_reads_no_position_is_refused_at_run_start(
         "terminal": ["build"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-url-via")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8321,7 +8526,7 @@ def test_a_terminal_join_naming_no_executing_method_is_refused_at_run_start(tmp_
         ],
     }
     catalog = _fluent_catalog(matches, "invented-empty-join")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8350,7 +8555,7 @@ def test_a_url_and_a_channel_capture_on_the_same_entry_is_refused_at_run_start(
         "terminal": ["build"],
     }
     catalog = _fluent_catalog(matches, "invented-url-and-channel-same-entry")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8382,7 +8587,7 @@ def test_a_url_on_one_step_and_a_channel_on_a_different_step_is_refused_at_run_s
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-url-and-channel-different-steps")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8914,7 +9119,7 @@ def test_a_base_capture_and_a_channel_capture_together_are_refused_at_run_start(
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-base-and-channel")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8958,7 +9163,7 @@ def test_a_malformed_field_sources_block_is_refused_at_run_start(tmp_path: Path,
     catalog = _fluent_catalog(
         {**_BASE_MATCHES, "field_sources": block}, "invented-bad-field-sources"
     )
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -10236,7 +10441,7 @@ def _ws_template_catalog() -> Catalog:
 
 
 def _resolve_ws(tmp_path: Path, facts: list):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_ws_template_catalog()], capabilities=_WS_CAPABILITIES)
@@ -10391,7 +10596,7 @@ def _shipped_catalog(catalog_id: str) -> Catalog:
 def _resolve_shipped(
     tmp_path: Path, facts: list, catalog_id: str, capabilities: set[str] = CAPABILITIES
 ):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_shipped_catalog(catalog_id)], capabilities=capabilities)

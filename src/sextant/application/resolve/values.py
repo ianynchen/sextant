@@ -266,7 +266,7 @@ _SEVERAL = "several"
 # guarded setters on one object were a million paths, 30.9 s and 2.15 GB. Past it the window
 # is one path ending `non_enumerable`, stated, never dropped. Measured: the eleven corpora's
 # worst window holds 5 paths.
-_PATH_CAP = 256
+PATH_CAP = 256
 
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
@@ -1667,6 +1667,25 @@ def _dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[int] 
     return frozenset(chain)
 
 
+def several_or_unproven(splits: int, unproven: bool) -> bool:
+    """Rule 9's "not claimed" (ruled by the user 2026-11-03, "A: every row partial"): a path
+    with two or more calls on branches, or a side of a split no fact proves, is inexact
+    (`partial`). The one statement of the rule, for the value walk (`_unsure`) and the forward
+    chain walk (`shapes.chains`) alike."""
+    return splits > 1 or unproven
+
+
+def path_splits(path: "Path") -> int:
+    """How many calls on branches a value walk's `path` split at, a window that held two or
+    more (`_SEVERAL`) counting as two — for a reader adding its own splits to the path's."""
+    return _split_count(path.trail)
+
+
+def _split_count(trail: _Trail) -> int:
+    splits = len({step.context for step in trail if step.context[0] == _SPLIT})
+    return splits + (2 if any(step.context[0] == _SEVERAL for step in trail) else 0)
+
+
 def _unsure(path: _Trail) -> bool:
     """Whether an answer on `path` is inexact by rule 9 (`_Walk._window`).
 
@@ -1677,8 +1696,9 @@ def _unsure(path: _Trail) -> bool:
       whichever frames they are in. A window that held two or more itself is marked once
       (`_SEVERAL`).
     - **A side of a split the facts do not prove a run takes to the use** (`_UNPROVEN`)."""
-    splits = {step.context for step in path if step.context[0] == _SPLIT}
-    return len(splits) > 1 or any(step.context[0] in (_SEVERAL, _UNPROVEN) for step in path)
+    return several_or_unproven(
+        _split_count(path), any(step.context[0] == _UNPROVEN for step in path)
+    )
 
 
 def _post_dominators(index: ValueIndex, method: str, ordinal: int) -> list[int] | None:
@@ -1775,6 +1795,134 @@ def _fills(answer: Answer) -> bool:
     return answer.kind == EXPRESSION and carries_expression(str(answer.value))
 
 
+class Flow:
+    """Rule 9's split and proof (spec 2026-11-02 rule 9, the user's rulings of 2026-11-02 and
+    2026-11-03): the ONE place a reader asks whether a call on a value runs on every path to
+    its use, whether it is in the use's window at all, and whether the facts prove a run takes
+    each side of a split to the use. The value walk (`_Walk._window`) and the forward chain
+    walk (`shapes.chains`) both call it; neither carries a copy (review 3, the forward walk's
+    branch blindness).
+
+    Built once per walk or per chain run over one `ValueIndex`; it keeps each use's
+    `dominator` chain it has read."""
+
+    def __init__(self, index: "ValueIndex") -> None:
+        self._index = index
+        self._chains: dict[tuple[str, int], frozenset[int] | None] = {}
+
+    def reaches_use(
+        self,
+        method: str,
+        held: tuple[str, int] | None,
+        ordinal: int,
+        used_at: int | None,
+        in_body: bool,
+    ) -> tuple[bool, bool]:
+        """Whether the facts prove a run takes each side of a split at `ordinal` to the use:
+        `(with the call, without it)` (rule 9, ruled by the user 2026-11-03, "A: add
+        post_dominator"). The call is not on every path to the use, so a run reaches the use
+        without it wherever the use is one place — a call (`used_at`) or the end of a body a
+        hand-off entered, whose every normal return is the caller's next step. A run reaches it
+        WITH the call only where every path from the call to a normal return passes the use:
+
+        - **a call in this frame** (`used_at`): the use is on the call's `post_dominator` chain.
+          `if (tls) { o.setPort(443); return; } use(o)` fails it, so that path is `partial`;
+        - **the end of an entered body** (`in_body`): a normal return follows the call — proven
+          by a `post_dominator` (a return is reachable and every such path passes it) or by
+          `reaches_return` (every path ends at one; ruled by the user 2026-11-03, option A),
+          which is what a setter with no call after it has;
+        - **a call that never returns** (a body this workspace read with no normal return) on
+          the way, before the use or anywhere on the chain, fails either: the method's own facts
+          read it as a call that returns (review 3, m2);
+        - **a RETURN of the value** (`used_at` None otherwise): that, and every normal return of
+          the method returns the held value, so whichever return a run reaches is its use; the
+          path without the call needs the second half too.
+
+        - **a call AFTER the use by ordinal** (in the window only by the loop it shares with the
+          use, `inside`) is never proven WITH: the ordinal order the window gathers in is not
+          the run order across the back edge, so no proof read off it holds (review 3
+          re-review, C-A).
+
+        Where the facts do not compute the call's position, neither side is proven. `held` is
+        what a RETURN use hands back; a reader whose use is always a call passes None."""
+        if used_at is not None and ordinal > used_at:
+            return False, True
+        chain = _post_dominators(self._index, method, ordinal)
+        # A call on the way that never returns (its body has no normal return) is a throw the
+        # method's own facts cannot see (review 3, m2): no run gets past it.
+        if used_at is not None:
+            if chain is None or used_at not in chain:
+                return False, True
+            passed = chain[: chain.index(used_at)]
+            return not any(_never_returns(self._index, method, at) for at in passed), True
+        returns = (bool(chain) or _reaches_return(self._index, method, ordinal)) and not any(
+            _never_returns(self._index, method, at) for at in chain or ()
+        )
+        if in_body or held is None:
+            return returns, True
+        every = self.returned_everywhere(method, held)
+        return returns and every, every
+
+    def returned_everywhere(self, method: str, held: tuple[str, int]) -> bool:
+        """Whether every return of `method` hands back `held` — a value id, or a parameter."""
+        kind, key = held
+        entries = self._index.returned_values.get(method, ())
+        return bool(entries) and all(
+            (entry.get("source") == key and entry.get("kind") != "parameter")
+            if kind == _VALUE
+            else (entry.get("kind") == "parameter" and entry.get("value") == key)
+            for _, entry in entries
+        )
+
+    def always(self, method: str, used_at: int | None) -> Callable[[int], bool]:
+        """Whether a call at an ordinal of `method` runs on every path to the use (spec
+        2026-11-02 rule 9): on the use's `dominator` chain, or, where the window runs to the
+        end of the body (`used_at` None), `on_every_exit`. Undecided where the facts do not
+        compute the position, which is "not on every path"."""
+        if used_at is None:
+            return lambda ordinal: _on_every_exit(self._index, method, ordinal)
+        key = (method, used_at)
+        if key not in self._chains:
+            self._chains[key] = _dominators(self._index, method, used_at)
+        chain = self._chains[key]
+        return lambda ordinal: chain is not None and ordinal in chain
+
+    def inside(self, method: str, after: int, used_at: int | None) -> Callable[[int], bool]:
+        """Whether a call at an ordinal of `method` is in the window from after `after` to the
+        use at `used_at` (None: the end of the body).
+
+        **Ordinal order, and the loop** (rule 9, ruled by the user 2026-11-03, option A for
+        review 3's M1). Between the producer and the use by ordinal is in the window. A call
+        AFTER the use by ordinal is too where it shares the use's `loop_group`: it can run before
+        a later run of the use — `for (…) { use(o); o.setPort(443); }` — so it is one more call
+        on a branch for that use (it is never on the use's `dominator` chain, so it splits), and
+        a path that ran it is never exact (`reaches_use`). **Also where the value is produced in
+        that loop group** (review 3 re-review, M-A): nested loops are ONE group, so a producer in
+        the outer loop shares the group with an inner loop whose later call reaches the next use
+        on the same object, and the five facts cannot tell that from a value built again each
+        time round — so the call stays in, its path `partial`, and nothing is dropped."""
+        group = None if used_at is None else self.loop_group(method, used_at)
+
+        def inside(ordinal: int) -> bool:
+            if ordinal <= after:
+                return False
+            if used_at is None or ordinal < used_at:
+                return True
+            return (
+                ordinal != used_at
+                and group is not None
+                and self.loop_group(method, ordinal) == group
+            )
+
+        return inside
+
+    def loop_group(self, method: str, ordinal: int) -> int | None:
+        """The `loop_group` of the call at `(method, ordinal)`, None where it is in no loop."""
+        row = self._index.sites.get((method, ordinal))
+        group = None if row is None else row.get("loop_group")
+        return None if group is None else int(str(group))
+
+
 class _Walk:
     """One resolve's walk. Not reused across sites: the memo is keyed on (position, path)
     and both are meaningful only within the resolve that built them."""
@@ -1860,8 +2008,8 @@ class _Walk:
         # and those being read now.
         self._touched: dict[tuple[str, int], str | None] = {}
         self._entering_bodies: set[tuple[str, int]] = set()
-        # Each use's `dominator` chain (`_always`), read once per walk.
-        self._chains: dict[tuple[str, int], frozenset[int] | None] = {}
+        # Rule 9's split and proof, shared with the forward chain walk (`Flow`).
+        self._flow = Flow(index)
 
     def at(self, site: Mapping[str, Any], slot: int | str) -> tuple[_Reached, ...]:
         """One slot of the site the caller handed in, on the empty path."""
@@ -2633,7 +2781,7 @@ class _Walk:
         reached: list[_Reached] = []
         windows = self._window(method, held, after, used_at)
         for steps, gathered in windows:
-            if len(reached) > _PATH_CAP:
+            if len(reached) > PATH_CAP:
                 # The cap counts the WHOLE path (review 3 re-review, m-B): each window keeps
                 # under it, but the windows of the frames a path crosses multiply. Past it, one
                 # answer, the parts unknown, the reason stated — and no more enumerated.
@@ -2660,7 +2808,7 @@ class _Walk:
                     for path, answer in self._resolve(position, crossed, frames)
                 )
             )
-        if len(reached) > _PATH_CAP:
+        if len(reached) > PATH_CAP:
             return ((trail, _unresolved(NON_ENUMERABLE)),)
         return tuple(reached)
 
@@ -2774,7 +2922,7 @@ class _Walk:
         an object IS."""
         if self._which_object or self._type_of(method, held) in _UNCHANGEABLE:
             return (((), ()),)
-        always = self._always(method, used_at)
+        always = self._flow.always(method, used_at)
         events = self._events(method, held, after, used_at, in_body)
         splitting = {
             ordinal
@@ -2799,15 +2947,9 @@ class _Walk:
             if ordinal in splitting:
                 skip = ()
                 if not several:
-                    ran_proven, skip_proven = self._reaches_use(
+                    ran_proven, skip_proven = self._flow.reaches_use(
                         method, held, ordinal, used_at, in_body
                     )
-                    # A call after the use by ordinal is in the window only by the loop it
-                    # shares with the use (`_inside`): the ordinal order the window gathers in is
-                    # not the run order across the back edge, so no proof read off it holds, and
-                    # a path that ran the call is never exact (review 3 re-review, C-A).
-                    if used_at is not None and ordinal > used_at:
-                        ran_proven = False
                     ran: _Trail = (_Step((_SPLIT, method, ordinal), _RAN),)
                     if not ran_proven:
                         ran += (_Step((_UNPROVEN, method, ordinal, used_at, _RAN), _UNPROVEN),)
@@ -2833,75 +2975,11 @@ class _Walk:
                 if skip is not None and (merged := _combine(steps, skip)) is not None:
                     following.append((merged, gathered, skipped | remembered))
             paths = list(dict.fromkeys(following))
-            if len(paths) > _PATH_CAP:
+            if len(paths) > PATH_CAP:
                 # Past the bound: one path, the parts this window sets unknown, the reason
                 # stated (review 3, M2). Never dropped.
                 return (((), NON_ENUMERABLE),)
         return tuple(dict.fromkeys((steps, gathered) for steps, gathered, _ in paths))
-
-    def _reaches_use(
-        self, method: str, held: tuple[str, int], ordinal: int, used_at: int | None, in_body: bool
-    ) -> tuple[bool, bool]:
-        """Whether the facts prove a run takes each side of a split at `ordinal` to the use:
-        `(with the call, without it)` (rule 9, ruled by the user 2026-11-03, "A: add
-        post_dominator"). The call is not on every path to the use, so a run reaches the use
-        without it wherever the use is one place — a call (`used_at`) or the end of a body a
-        hand-off entered, whose every normal return is the caller's next step. A run reaches it
-        WITH the call only where every path from the call to a normal return passes the use:
-
-        - **a call in this frame** (`used_at`): the use is on the call's `post_dominator` chain.
-          `if (tls) { o.setPort(443); return; } use(o)` fails it, so that path is `partial`;
-        - **the end of an entered body** (`in_body`): a normal return follows the call — proven
-          by a `post_dominator` (a return is reachable and every such path passes it) or by
-          `reaches_return` (every path ends at one; ruled by the user 2026-11-03, option A),
-          which is what a setter with no call after it has;
-        - **a call that never returns** (a body this workspace read with no normal return) on
-          the way, before the use or anywhere on the chain, fails either: the method's own facts
-          read it as a call that returns (review 3, m2);
-        - **a RETURN of the value** (`used_at` None otherwise): that, and every normal return of
-          the method returns the held value, so whichever return a run reaches is its use; the
-          path without the call needs the second half too.
-
-        Where the facts do not compute the call's position, neither side is proven."""
-        chain = _post_dominators(self._index, method, ordinal)
-        # A call on the way that never returns (its body has no normal return) is a throw the
-        # method's own facts cannot see (review 3, m2): no run gets past it.
-        if used_at is not None:
-            if chain is None or used_at not in chain:
-                return False, True
-            passed = chain[: chain.index(used_at)]
-            return not any(_never_returns(self._index, method, at) for at in passed), True
-        returns = (bool(chain) or _reaches_return(self._index, method, ordinal)) and not any(
-            _never_returns(self._index, method, at) for at in chain or ()
-        )
-        if in_body:
-            return returns, True
-        every = self._returned_everywhere(method, held)
-        return returns and every, every
-
-    def _returned_everywhere(self, method: str, held: tuple[str, int]) -> bool:
-        """Whether every return of `method` hands back `held` — a value id, or a parameter."""
-        kind, key = held
-        entries = self._index.returned_values.get(method, ())
-        return bool(entries) and all(
-            (entry.get("source") == key and entry.get("kind") != "parameter")
-            if kind == _VALUE
-            else (entry.get("kind") == "parameter" and entry.get("value") == key)
-            for _, entry in entries
-        )
-
-    def _always(self, method: str, used_at: int | None) -> Callable[[int], bool]:
-        """Whether a call at an ordinal of `method` runs on every path to the use (spec
-        2026-11-02 rule 9): on the use's `dominator` chain, or, where the window runs to the
-        end of the body (`used_at` None), `on_every_exit`. Undecided where the facts do not
-        compute the position, which is "not on every path"."""
-        if used_at is None:
-            return lambda ordinal: _on_every_exit(self._index, method, ordinal)
-        key = (method, used_at)
-        if key not in self._chains:
-            self._chains[key] = _dominators(self._index, method, used_at)
-        chain = self._chains[key]
-        return lambda ordinal: chain is not None and ordinal in chain
 
     def _events(
         self,
@@ -2915,7 +2993,7 @@ class _Walk:
         parent)` in the order it happens: each outcome is one path's step — a gathered call, a
         reason, or one body's whole window — and `parent` the configuring call whose result a
         call is made on, None for a call on `held` itself."""
-        inside = self._inside(method, after, used_at)
+        inside = self._flow.inside(method, after, used_at)
         kind, key = held
         if kind == _VALUE:
             on = self._index.receivers.get((method, key), ())
@@ -2964,41 +3042,6 @@ class _Walk:
         if stored and in_body:
             events.append((_END_OF_BODY, (((), ESCAPES),), None))
         return sorted(events, key=lambda event: event[0])
-
-    def _inside(self, method: str, after: int, used_at: int | None) -> Callable[[int], bool]:
-        """Whether a call at an ordinal of `method` is in the window from after `after` to the
-        use at `used_at` (None: the end of the body).
-
-        **Ordinal order, and the loop** (rule 9, ruled by the user 2026-11-03, option A for
-        review 3's M1). Between the producer and the use by ordinal is in the window. A call
-        AFTER the use by ordinal is too where it shares the use's `loop_group`: it can run before
-        a later run of the use — `for (…) { use(o); o.setPort(443); }` — so it is one more call
-        on a branch for that use (it is never on the use's `dominator` chain, so it splits), and
-        a path that ran it is never exact (`_window`). **Also where the value is produced in
-        that loop group** (review 3 re-review, M-A): nested loops are ONE group, so a producer in
-        the outer loop shares the group with an inner loop whose later call reaches the next use
-        on the same object, and the five facts cannot tell that from a value built again each
-        time round — so the call stays in, its path `partial`, and nothing is dropped."""
-        group = None if used_at is None else self._loop_group(method, used_at)
-
-        def inside(ordinal: int) -> bool:
-            if ordinal <= after:
-                return False
-            if used_at is None or ordinal < used_at:
-                return True
-            return (
-                ordinal != used_at
-                and group is not None
-                and self._loop_group(method, ordinal) == group
-            )
-
-        return inside
-
-    def _loop_group(self, method: str, ordinal: int) -> int | None:
-        """The `loop_group` of the call at `(method, ordinal)`, None where it is in no loop."""
-        row = self._index.sites.get((method, ordinal))
-        group = None if row is None else row.get("loop_group")
-        return None if group is None else int(str(group))
 
     def _handed_to(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
         """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one step where
