@@ -1,6 +1,7 @@
 package dev.sextant.extractor;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -62,10 +63,18 @@ public final class MethodFlow {
         // A body the analyser cannot walk yields no call facts. The method's
         // own symbol was already emitted, so the loss is bounded and visible
         // as "a method with no call sites", never as a missing method.
-        Frame<SourceValue>[] frames = analyze(callerSymbol, method);
+        //
+        // The same walk records the method's control-flow graph (`FlowGraph`), which is
+        // where each site's `dominator` and `on_every_exit` come from (spec
+        // 2026-11-02-per-path-truth rule 9). So a body the analyser cannot walk emits
+        // neither — no site at all — and a reader never sees a site whose position in
+        // control flow was not computed.
+        FlowGraph graph = new FlowGraph(new CopyTransparentSourceInterpreter());
+        Frame<SourceValue>[] frames = analyze(callerSymbol, method, graph);
         if (frames == null) return List.of();
         InsnList instructions = method.instructions;
         AbstractInsnNode[] insns = instructions.toArray();
+        Dominance dominance = graph.dominance(insns, frames);
         List<String> lines = new ArrayList<>();
         int ordinal = 0;
         for (int i = 0; i < insns.length; i++) {
@@ -97,7 +106,7 @@ public final class MethodFlow {
                     continue;
                 }
                 lines.add(throwSiteJson(documentId, callerSymbol, ordinal++,
-                    thrownType(throwFrame)));
+                    thrownType(throwFrame), dominance.dominator(i), dominance.onEveryExit(i)));
                 continue;
             }
             Target target = targetOf(insns[i]);
@@ -106,6 +115,9 @@ public final class MethodFlow {
             // Unreachable code: no frame ever reached this invoke. It keeps its
             // ordinal — the position is a property of the instruction list, not
             // of what the analyser managed to reach — but has no values to read.
+            // Nor a place in control flow: no path reaches it, so it would have no
+            // `dominator` and `on_every_exit` false, and since it emits no fact at
+            // all, it is no site's `dominator` either (`Dominance`).
             if (frame == null) {
                 ordinal++;
                 continue;
@@ -151,7 +163,8 @@ public final class MethodFlow {
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
             lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver,
                                    receiverParameter, receiverField, receiverOnThis, result,
-                                   implementationOf(insns[i]), arguments));
+                                   implementationOf(insns[i]), arguments,
+                                   dominance.dominator(i), dominance.onEveryExit(i)));
         }
         return lines;
     }
@@ -161,11 +174,229 @@ public final class MethodFlow {
      *  {@link #callSites} and {@link #methodReturns} can never disagree about
      *  which value a given instruction popped. */
     private static Frame<SourceValue>[] analyze(String callerSymbol, MethodNode method) {
+        return analyze(callerSymbol, method, new Analyzer<>(new CopyTransparentSourceInterpreter()));
+    }
+
+    private static Frame<SourceValue>[] analyze(String callerSymbol, MethodNode method,
+                                                Analyzer<SourceValue> analyzer) {
         try {
-            return new Analyzer<>(new CopyTransparentSourceInterpreter())
-                .analyze(ownerOf(callerSymbol), method);
+            return analyzer.analyze(ownerOf(callerSymbol), method);
         } catch (AnalyzerException unanalysable) {
             return null;
+        }
+    }
+
+    /** The analyser, recording the method's control-flow graph as it walks it: every
+     *  normal edge and every exception-handler edge ASM's own {@code Analyzer} follows,
+     *  once each (it re-visits an instruction whenever a frame merged into it changes).
+     *  JSR/RET subroutines, still found in old library jars, are followed as ASM follows
+     *  them.
+     *
+     *  <p>Recording what the analyser follows, rather than re-deriving the graph from the
+     *  instruction list, means the two can never disagree about which instructions are
+     *  reachable: a site with a frame is exactly a site with a node. */
+    private static final class FlowGraph extends Analyzer<SourceValue> {
+        private final Set<Long> seen = new HashSet<>();
+        private final List<int[]> normal = new ArrayList<>();
+        private final List<int[]> exceptional = new ArrayList<>();
+
+        FlowGraph(SourceInterpreter interpreter) {
+            super(interpreter);
+        }
+
+        @Override
+        protected void newControlFlowEdge(int insnIndex, int successorIndex) {
+            if (seen.add(((long) insnIndex << 32) | successorIndex)) {
+                normal.add(new int[] {insnIndex, successorIndex});
+            }
+        }
+
+        @Override
+        protected boolean newControlFlowExceptionEdge(int insnIndex, int successorIndex) {
+            // Negated so the two kinds of edge between one pair of instructions keep their
+            // own entries: `~` maps every index, 0 included, to a negative.
+            if (seen.add(((long) ~insnIndex << 32) | successorIndex)) {
+                exceptional.add(new int[] {insnIndex, successorIndex});
+            }
+            return true;
+        }
+
+        /** Each instruction's dominators over the recorded graph (spec
+         *  2026-11-02-per-path-truth rule 9), by Cooper, Harvey and Kennedy's iterative
+         *  algorithm ("A Simple, Fast Dominance Algorithm", 2001): near-linear on the
+         *  reducible graphs compilers emit, and it runs on every method of every jar named
+         *  in {@code extract_libraries}.
+         *
+         *  <p>**Two nodes per instruction: before it runs and after it completed.** An
+         *  exception handler can be entered while an instruction in its range is running —
+         *  a call that throws has not completed — so a handler edge leaves the BEFORE node,
+         *  and a normal edge the AFTER node. A call dominates a later point only where it
+         *  COMPLETED on every path there: {@code try { a(); } catch (E e) { b(); }} does not
+         *  put {@code a} before {@code b}, since {@code b} runs exactly when {@code a} did
+         *  not finish. Node 0 is the method's entry, before instruction 0. */
+        Dominance dominance(AbstractInsnNode[] insns, Frame<SourceValue>[] frames) {
+            int n = insns.length;
+            int nodes = 2 * n + 1;
+            List<List<Integer>> successors = new ArrayList<>(nodes);
+            List<List<Integer>> predecessors = new ArrayList<>(nodes);
+            for (int node = 0; node < nodes; node++) {
+                successors.add(new ArrayList<>(2));
+                predecessors.add(new ArrayList<>(2));
+            }
+            if (n > 0) edge(successors, predecessors, 0, before(0));
+            for (int i = 0; i < n; i++) {
+                if (frames[i] != null) edge(successors, predecessors, before(i), after(i));
+            }
+            for (int[] e : normal) edge(successors, predecessors, after(e[0]), before(e[1]));
+            for (int[] e : exceptional) edge(successors, predecessors, before(e[0]), before(e[1]));
+
+            // Reverse postorder from the entry, iteratively: a method can be long enough
+            // that a recursive walk would overflow the stack.
+            int[] order = new int[nodes];
+            Arrays.fill(order, -1);
+            int[] reversePostorder = new int[nodes];
+            int count = 0;
+            boolean[] visited = new boolean[nodes];
+            int[] stack = new int[nodes];
+            int[] next = new int[nodes];
+            int depth = 0;
+            stack[depth++] = 0;
+            visited[0] = true;
+            List<Integer> postorder = new ArrayList<>(nodes);
+            while (depth > 0) {
+                int node = stack[depth - 1];
+                List<Integer> out = successors.get(node);
+                if (next[node] < out.size()) {
+                    int successor = out.get(next[node]++);
+                    if (!visited[successor]) {
+                        visited[successor] = true;
+                        stack[depth++] = successor;
+                    }
+                } else {
+                    depth--;
+                    postorder.add(node);
+                }
+            }
+            for (int k = postorder.size() - 1; k >= 0; k--) {
+                int node = postorder.get(k);
+                order[node] = count;
+                reversePostorder[count++] = node;
+            }
+
+            int[] idom = new int[nodes];
+            Arrays.fill(idom, -1);
+            idom[0] = 0;
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (int k = 1; k < count; k++) {
+                    int node = reversePostorder[k];
+                    int chosen = -1;
+                    for (int predecessor : predecessors.get(node)) {
+                        if (idom[predecessor] == -1) continue;
+                        chosen = chosen == -1 ? predecessor
+                            : intersect(predecessor, chosen, idom, order);
+                    }
+                    if (chosen != -1 && idom[node] != chosen) {
+                        idom[node] = chosen;
+                        changed = true;
+                    }
+                }
+            }
+
+            // The nearest site above each node in the dominator tree, filled in reverse
+            // postorder so a node's immediate dominator is always done first: one pass,
+            // however long the chains of non-call instructions between sites are.
+            boolean[] site = new boolean[n];
+            for (int i = 0; i < n; i++) {
+                site[i] = frames[i] != null && isSite(insns[i]);
+            }
+            int[] nearest = new int[nodes];
+            Arrays.fill(nearest, -1);
+            for (int k = 1; k < count; k++) {
+                int node = reversePostorder[k];
+                int above = idom[node];
+                boolean siteAbove = above != 0 && above % 2 == 0 && site[(above - 2) / 2];
+                nearest[node] = siteAbove ? (above - 2) / 2 : nearest[above];
+            }
+
+            // What dominates every normal return: the chain above their common dominator.
+            // No reachable return, nothing does.
+            boolean[] onEveryExit = new boolean[nodes];
+            int common = -1;
+            for (int i = 0; i < n; i++) {
+                if (frames[i] == null || !isReturn(insns[i].getOpcode())) continue;
+                common = common == -1 ? before(i) : intersect(before(i), common, idom, order);
+            }
+            if (common != -1) {
+                for (int node = common; ; node = idom[node]) {
+                    onEveryExit[node] = true;
+                    if (node == 0) break;
+                }
+            }
+            return new Dominance(insns, nearest, onEveryExit);
+        }
+
+        private static int before(int insn) {
+            return 2 * insn + 1;
+        }
+
+        private static int after(int insn) {
+            return 2 * insn + 2;
+        }
+
+        private static void edge(List<List<Integer>> successors, List<List<Integer>> predecessors,
+                                 int from, int to) {
+            successors.get(from).add(to);
+            predecessors.get(to).add(from);
+        }
+
+        private static int intersect(int one, int other, int[] idom, int[] order) {
+            while (one != other) {
+                while (order[one] > order[other]) one = idom[one];
+                while (order[other] > order[one]) other = idom[other];
+            }
+            return one;
+        }
+    }
+
+    /** Whether an instruction is one {@code callSites} numbers: an invoke or a throw. */
+    private static boolean isSite(AbstractInsnNode insn) {
+        return insn.getOpcode() == Opcodes.ATHROW || targetOf(insn) != null;
+    }
+
+    /** {@code call_site}'s {@code dominator} and {@code on_every_exit} for each reached
+     *  instruction (D00 §5, spec 2026-11-02-per-path-truth rule 9).
+     *
+     *  <p>{@code dominator} is the ordinal of the nearest site that completed on every path
+     *  from the entry to this one, null where none did. {@code on_every_exit} is whether this
+     *  site completed on every path from the entry to a normal return; a method with no
+     *  normal return (it always throws) has none on every exit, since a value an exception
+     *  carried out is never used. Both are written on a throw site too, which shares the
+     *  ordinal sequence: a throw completes nothing, so it dominates no other site. */
+    private static final class Dominance {
+        private final int[] ordinals;
+        private final int[] nearest;
+        private final boolean[] onEveryExit;
+
+        Dominance(AbstractInsnNode[] insns, int[] nearest, boolean[] onEveryExit) {
+            // Every invoke and throw takes an ordinal, reached or not (`callSites`).
+            this.ordinals = new int[insns.length];
+            int ordinal = 0;
+            for (int i = 0; i < insns.length; i++) {
+                ordinals[i] = isSite(insns[i]) ? ordinal++ : -1;
+            }
+            this.nearest = nearest;
+            this.onEveryExit = onEveryExit;
+        }
+
+        Integer dominator(int insn) {
+            int above = nearest[FlowGraph.before(insn)];
+            return above < 0 ? null : ordinals[above];
+        }
+
+        boolean onEveryExit(int insn) {
+            return onEveryExit[FlowGraph.after(insn)];
         }
     }
 
@@ -1395,7 +1626,8 @@ public final class MethodFlow {
                                        int ordinal, Integer receiver, Integer receiverParameter,
                                        String receiverField, boolean receiverOnThis,
                                        Integer result, String implementation,
-                                       List<String> arguments) {
+                                       List<String> arguments, Integer dominator,
+                                       boolean onEveryExit) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -1432,7 +1664,18 @@ public final class MethodFlow {
         if (receiverOnThis) fact.put("receiver_field_kind", JsonOut.string("instance"));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
+        putPosition(fact, dominator, onEveryExit);
         return JsonOut.object(fact);
+    }
+
+    /** Rule 9's two fields (D00 §5). {@code dominator} is absent where no site dominates
+     *  this one — the rule {@code implementation} follows — and {@code on_every_exit} is
+     *  written on every site, false included: absent, a reader takes the position as not
+     *  computed, never as "runs on every path". */
+    private static void putPosition(TreeMap<String, String> fact, Integer dominator,
+                                    boolean onEveryExit) {
+        if (dominator != null) fact.put("dominator", String.valueOf(dominator));
+        fact.put("on_every_exit", String.valueOf(onEveryExit));
     }
 
     /** The type an {@code ATHROW} leaves with, or null where the stack value names
@@ -1508,7 +1751,8 @@ public final class MethodFlow {
      *  <p>{@code receiver} and {@code result} are null for the same reason. A throw
      *  returns nothing to anybody. */
     private static String throwSiteJson(String documentId, String callerSymbol, int ordinal,
-                                         String thrownOwner) {
+                                         String thrownOwner, Integer dominator,
+                                         boolean onEveryExit) {
         TreeMap<String, String> target = new TreeMap<>();
         target.put("owner", thrownOwner == null ? "null" : JsonOut.string(thrownOwner + "#"));
 
@@ -1522,6 +1766,7 @@ public final class MethodFlow {
         fact.put("receiver", "null");
         fact.put("result", "null");
         fact.put("arguments", JsonOut.array(List.of()));
+        putPosition(fact, dominator, onEveryExit);
         return JsonOut.object(fact);
     }
 
