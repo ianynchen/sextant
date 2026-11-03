@@ -78,10 +78,11 @@ SEXTANT_VERSION = version("sextant")
 #             bundle's `coverage.partial` as a number that could only be zero.
 #     6       `call_site` gains `dominator` (the nearest call that ran before it on
 #             every path), `on_every_exit` (whether it runs on every path to a
-#             normal return) and `post_dominator` (the nearest call that runs after it
-#             on every path to a normal return), read off the method's control-flow
+#             normal return), `post_dominator` (the nearest call that runs after it
+#             on every path to a normal return) and `reaches_return` (whether every
+#             path from it ends at a normal return), read off the method's control-flow
 #             graph (spec 2026-11-02-per-path-truth rule 9: the first two approved by
-#             the user 2026-11-02, the third ruled 2026-11-03 while 6 was unshipped).
+#             the user 2026-11-02, the last two ruled 2026-11-03 while 6 was unshipped).
 #             A fact set of the older vintage has none of them, and a reader
 #             takes an absent `on_every_exit` as "not computed": it would read every
 #             call as undecided rather than as one on a branch or not, so it is

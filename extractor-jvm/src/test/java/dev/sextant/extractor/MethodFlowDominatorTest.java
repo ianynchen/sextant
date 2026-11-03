@@ -74,6 +74,13 @@ class MethodFlowDominatorTest {
         return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
     }
 
+    /** The site's `reaches_return`, which every reached site carries. */
+    static boolean reachesReturn(String line) {
+        Matcher matcher = Pattern.compile("\"reaches_return\":(true|false)").matcher(line);
+        assertTrue(matcher.find(), "no reaches_return on " + line);
+        return Boolean.parseBoolean(matcher.group(1));
+    }
+
     private static void followedBy(List<String> lines, String call, String by) {
         assertEquals(ordinal(site(lines, by)), postDominator(site(lines, call)),
             call + " is post-dominated by " + by + " in " + lines);
@@ -279,6 +286,78 @@ class MethodFlowDominatorTest {
         List<String> lines = callSites("alwaysThrows");
         followedByNothing(lines, "a");
         followedByNothing(lines, "<init>");
+    }
+
+    // `reaches_return` (rule 9, ruled by the user 2026-11-03, option A): every path from the
+    // call's completion ends at a normal return — none in a throw, none looping forever.
+
+    @Test
+    void every_call_of_a_straight_line_reaches_a_return() throws Exception {
+        List<String> lines = callSites("straightLine");
+        for (String call : List.of("a", "b", "c")) {
+            assertTrue(reachesReturn(site(lines, call)), call);
+        }
+    }
+
+    /** Both of `earlyReturn`'s exits are normal returns, so every call reaches one. */
+    @Test
+    void a_call_before_an_early_return_reaches_a_return() throws Exception {
+        List<String> lines = callSites("earlyReturn");
+        for (String call : List.of("a", "b", "c")) {
+            assertTrue(reachesReturn(site(lines, call)), call);
+        }
+    }
+
+    @Test
+    void a_call_from_which_every_path_throws_reaches_no_return() throws Exception {
+        List<String> lines = callSites("alwaysThrows");
+        assertFalse(reachesReturn(site(lines, "a")));
+        assertFalse(reachesReturn(site(lines, "<init>")));
+    }
+
+    /** `a(); if (x) throw …; b();` — one path from `a` throws, so `a` does not reach a return
+     *  on every path; `b`, after the throw's branch, does. */
+    @Test
+    void a_throw_on_one_branch_means_not_every_path_reaches_a_return() throws Exception {
+        List<String> lines = callSites("throwOnBranch");
+        assertFalse(reachesReturn(site(lines, "a")));
+        assertTrue(reachesReturn(site(lines, "b")));
+    }
+
+    /** A throw a handler covers is still read as one that may leave the method: which
+     *  exceptions a handler catches is a matter of types this pass does not compare. So a
+     *  call before it does not reach a return on every path — `partial`, never a wrong
+     *  `resolved`. */
+    @Test
+    void a_caught_throw_is_still_read_as_one_that_may_leave() throws Exception {
+        List<String> lines = callSites("throwCaught");
+        assertFalse(reachesReturn(site(lines, "a")));
+        assertTrue(reachesReturn(site(lines, "b")));
+    }
+
+    /** `try { a(); } catch (…) { throw failed; } b();` — the handler is entered only where `a`
+     *  did NOT complete, so every path from `a`'s completion reaches `b` and the return; the
+     *  plain try/catch's calls reach it too. */
+    @Test
+    void a_handler_that_rethrows_is_not_a_path_from_a_completed_call() throws Exception {
+        List<String> lines = callSites("tryRethrows");
+        assertTrue(reachesReturn(site(lines, "a")));
+        assertTrue(reachesReturn(site(lines, "b")));
+        List<String> caught = callSites("tryCatch");
+        for (String call : List.of("e", "a", "b", "c", "d")) {
+            assertTrue(reachesReturn(site(caught, call)), call);
+        }
+    }
+
+    @Test
+    void a_loop_that_exits_reaches_a_return_and_one_that_never_does_does_not() throws Exception {
+        List<String> lines = callSites("whileLoop");
+        for (String call : List.of("a", "more", "b", "c")) {
+            assertTrue(reachesReturn(site(lines, call)), call);
+        }
+        List<String> forever = callSites("forever");
+        assertFalse(reachesReturn(site(forever, "a")));
+        assertFalse(reachesReturn(site(forever, "b")));
     }
 
     @Test

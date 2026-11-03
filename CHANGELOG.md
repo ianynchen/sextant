@@ -179,8 +179,10 @@ here would restate those documents rather than add anything.
   it"). `call_site` gains `dominator`, the nearest call that ran before it on every path, and
   `on_every_exit`, whether it runs on every path to a normal return, and — ruled by the user
   2026-11-03, "A: add post_dominator" — `post_dominator`, the nearest call that runs after it
-  on every path to a normal return (a path ending in a throw reaches none), all read off the
-  method's control-flow graph with exception-handler edges (D00 §5). Until now `a; b;` and
+  on every path to a normal return (a path ending in a throw reaches none), and
+  `reaches_return`, whether every path from it ends at a normal return (ruled 2026-11-03,
+  option A), all read off the method's control-flow graph with exception-handler edges
+  (D00 §5). Until now `a; b;` and
   `if (x) a; else b;` were the same facts. The fact schema goes from 5 to 6, so every fact set
   is re-extracted.
 - **Vert.x Web and Vert.x WebClient** (spec 2026-10-30-vertx-web; probe CP-56, Vert.x 4.5.10,

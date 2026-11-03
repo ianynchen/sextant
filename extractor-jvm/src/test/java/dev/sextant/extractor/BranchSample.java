@@ -111,6 +111,42 @@ public final class BranchSample {
         e();
     }
 
+    public void throwOnBranch(boolean x) {
+        a();
+        if (x) {
+            throw new IllegalStateException("one branch");
+        }
+        b();
+    }
+
+    public void tryRethrows() {
+        try {
+            a();
+        } catch (RuntimeException failed) {
+            throw failed;
+        }
+        b();
+    }
+
+    public void throwCaught(boolean x) {
+        a();
+        try {
+            if (x) {
+                throw new IllegalStateException("caught below");
+            }
+        } catch (IllegalStateException caught) {
+            c();
+        }
+        b();
+    }
+
+    public void forever() {
+        a();
+        while (true) {
+            b();
+        }
+    }
+
     public void alwaysThrows() {
         a();
         throw new IllegalStateException("never returns");

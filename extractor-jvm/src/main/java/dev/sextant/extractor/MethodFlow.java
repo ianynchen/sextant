@@ -107,7 +107,7 @@ public final class MethodFlow {
                 }
                 lines.add(throwSiteJson(documentId, callerSymbol, ordinal++,
                     thrownType(throwFrame), dominance.dominator(i), dominance.onEveryExit(i),
-                    dominance.postDominator(i)));
+                    dominance.postDominator(i), dominance.reachesReturn(i)));
                 continue;
             }
             Target target = targetOf(insns[i]);
@@ -166,7 +166,7 @@ public final class MethodFlow {
                                    receiverParameter, receiverField, receiverOnThis, result,
                                    implementationOf(insns[i]), arguments,
                                    dominance.dominator(i), dominance.onEveryExit(i),
-                                   dominance.postDominator(i)));
+                                   dominance.postDominator(i), dominance.reachesReturn(i)));
         }
         return lines;
     }
@@ -289,7 +289,33 @@ public final class MethodFlow {
             // `c` with post-dominator `u` is one from which a normal return is reachable,
             // and every such path passes `u`, so a run with `c` reaches `u`.
             Tree postDominators = Tree.of(exit, predecessors, successors, site);
-            return new Dominance(insns, dominators.nearest, onEveryExit, postDominators.nearest);
+
+            // Which nodes reach a normal return on EVERY path (rule 9, ruled by the user
+            // 2026-11-03, option A: `reaches_return`). A node is not one where it cannot reach
+            // the exit at all (every path from it throws or loops forever), or where any
+            // successor is not one — propagated backwards from those, once per node. A reached
+            // `ATHROW`'s AFTER node leads nowhere, so the throw fails even where a handler
+            // covers it: which exceptions a handler catches is a matter of types this pass does
+            // not compare, so a covered throw is still read as one that may leave the method.
+            boolean[] fails = new boolean[nodes];
+            List<Integer> pending = new ArrayList<>();
+            for (int node = 0; node < nodes; node++) {
+                if (node != exit && postDominators.order[node] == -1) {
+                    fails[node] = true;
+                    pending.add(node);
+                }
+            }
+            while (!pending.isEmpty()) {
+                int node = pending.remove(pending.size() - 1);
+                for (int predecessor : predecessors.get(node)) {
+                    if (!fails[predecessor]) {
+                        fails[predecessor] = true;
+                        pending.add(predecessor);
+                    }
+                }
+            }
+            return new Dominance(insns, dominators.nearest, onEveryExit, postDominators.nearest,
+                                 fails);
         }
 
         /** One dominator tree by Cooper, Harvey and Kennedy over {@code forward} from
@@ -432,9 +458,10 @@ public final class MethodFlow {
         private final int[] nearest;
         private final boolean[] onEveryExit;
         private final int[] nearestAfter;
+        private final boolean[] fails;
 
         Dominance(AbstractInsnNode[] insns, int[] nearest, boolean[] onEveryExit,
-                  int[] nearestAfter) {
+                  int[] nearestAfter, boolean[] fails) {
             // Every invoke and throw takes an ordinal, reached or not (`callSites`).
             this.ordinals = new int[insns.length];
             int ordinal = 0;
@@ -444,6 +471,13 @@ public final class MethodFlow {
             this.nearest = nearest;
             this.onEveryExit = onEveryExit;
             this.nearestAfter = nearestAfter;
+            this.fails = fails;
+        }
+
+        /** Whether every path from this site's completion ends at a normal return: none in a
+         *  throw, none looping forever. False on a throw site, which completes nothing. */
+        boolean reachesReturn(int insn) {
+            return !fails[FlowGraph.after(insn)];
         }
 
         /** The nearest site that completes on every path from this one's completion to a
@@ -1691,7 +1725,8 @@ public final class MethodFlow {
                                        String receiverField, boolean receiverOnThis,
                                        Integer result, String implementation,
                                        List<String> arguments, Integer dominator,
-                                       boolean onEveryExit, Integer postDominator) {
+                                       boolean onEveryExit, Integer postDominator,
+                                       boolean reachesReturn) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -1728,20 +1763,22 @@ public final class MethodFlow {
         if (receiverOnThis) fact.put("receiver_field_kind", JsonOut.string("instance"));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
-        putPosition(fact, dominator, onEveryExit, postDominator);
+        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn);
         return JsonOut.object(fact);
     }
 
-    /** Rule 9's three fields (D00 §5). {@code dominator} and {@code post_dominator} are
+    /** Rule 9's four fields (D00 §5). {@code dominator} and {@code post_dominator} are
      *  absent where no site dominates or post-dominates this one — the rule
-     *  {@code implementation} follows — and {@code on_every_exit} is written on every site,
-     *  false included: absent, a reader takes the position as not computed, never as "runs
-     *  on every path". */
+     *  {@code implementation} follows — and {@code on_every_exit} and {@code reaches_return}
+     *  are written on every site, false included: absent, a reader takes the position as not
+     *  computed, never as "runs on every path" or "reaches a return". */
     private static void putPosition(TreeMap<String, String> fact, Integer dominator,
-                                    boolean onEveryExit, Integer postDominator) {
+                                    boolean onEveryExit, Integer postDominator,
+                                    boolean reachesReturn) {
         if (dominator != null) fact.put("dominator", String.valueOf(dominator));
         fact.put("on_every_exit", String.valueOf(onEveryExit));
         if (postDominator != null) fact.put("post_dominator", String.valueOf(postDominator));
+        fact.put("reaches_return", String.valueOf(reachesReturn));
     }
 
     /** The type an {@code ATHROW} leaves with, or null where the stack value names
@@ -1818,7 +1855,8 @@ public final class MethodFlow {
      *  returns nothing to anybody. */
     private static String throwSiteJson(String documentId, String callerSymbol, int ordinal,
                                          String thrownOwner, Integer dominator,
-                                         boolean onEveryExit, Integer postDominator) {
+                                         boolean onEveryExit, Integer postDominator,
+                                       boolean reachesReturn) {
         TreeMap<String, String> target = new TreeMap<>();
         target.put("owner", thrownOwner == null ? "null" : JsonOut.string(thrownOwner + "#"));
 
@@ -1832,7 +1870,7 @@ public final class MethodFlow {
         fact.put("receiver", "null");
         fact.put("result", "null");
         fact.put("arguments", JsonOut.array(List.of()));
-        putPosition(fact, dominator, onEveryExit, postDominator);
+        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn);
         return JsonOut.object(fact);
     }
 

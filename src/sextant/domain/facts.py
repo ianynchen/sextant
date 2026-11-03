@@ -489,6 +489,10 @@ class CallSiteFact(BaseModel):
     # nearest call site in this method that runs after this one on EVERY path from it to a
     # normal return, absent where none does — including where no normal return is reachable.
     post_dominator: int | None = None
+    # Rule 9 (ruled by the user 2026-11-03, option A): whether every path from this call's
+    # completion ends at a normal return — none in a throw, none looping forever. Written on
+    # every site the extractor reaches, so None is "not computed", never "reaches a return".
+    reaches_return: bool | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM
     # `invokedynamic` bootstrapped by `LambdaMetafactory`, whose second

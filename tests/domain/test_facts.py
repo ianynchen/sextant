@@ -735,6 +735,7 @@ def test_a_call_site_round_trips_its_control_flow_position(tmp_path: Path):
         dominator=1,
         on_every_exit=False,
         post_dominator=5,
+        reaches_return=False,
     )
     plain = CallSiteFact(
         document_id="doc_1",
@@ -750,9 +751,19 @@ def test_a_call_site_round_trips_its_control_flow_position(tmp_path: Path):
     _document, facts = read_fact_file(path)
 
     line = json.loads(site_line)
-    assert (line["dominator"], line["on_every_exit"], line["post_dominator"]) == (1, False, 5)
+    assert (
+        line["dominator"],
+        line["on_every_exit"],
+        line["post_dominator"],
+        line["reaches_return"],
+    ) == (1, False, 5, False)
     assert facts == [site, plain]
-    assert (plain.dominator, plain.on_every_exit, plain.post_dominator) == (None, None, None)
+    assert (plain.dominator, plain.on_every_exit, plain.post_dominator, plain.reaches_return) == (
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 def test_a_constant_fact_keeps_its_value_in_the_type_the_class_file_recorded():
