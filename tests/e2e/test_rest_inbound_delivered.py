@@ -1499,8 +1499,9 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     the caller (sites 3 and 5 on this bytecode): two calls on branches (the ruling of
     2026-11-03, "A: every row partial"). The body IS a part this row publishes — its
     `request_shape`, `{"wire_type": "string"}` — so the ruling of 2026-11-03 that a split
-    setting no published part does not count (option A) leaves both counted. Whether a payload
-    split should count is open (`test_a_ktor_body_set_on_two_branches_is_resolved`)."""
+    setting no published part does not count (option A) leaves both counted. That is true: the
+    `null` branch sends `NullBody`, so the shape depends on the branch. Ruled 2026-11-03 (keep
+    `partial`); a separate resolution for the shape is OI-279."""
     http = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in ktor_rows
@@ -2067,22 +2068,6 @@ def test_an_inherited_row_carries_the_condition_of_the_controller_serving_it(
 # ---------------------------------------------------------------------------------------
 
 VERTX_WEB = FIXTURES / "orders-vertx-web"
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="needs a ruling: the body sets the row's published `request_shape`, so by the "
-    "2026-11-03 ruling (a split that sets no PUBLISHED part does not count) both of Ktor's "
-    "inline `setBody` branches count (rule-9-fix-3-report.md, addendum)",
-)
-def test_a_ktor_body_set_on_two_branches_is_resolved(ktor_rows: list[dict]):
-    """The coordinator's case for the 2026-11-03 ruling: `placeOrder`'s POST `resolved` again."""
-    assert (
-        "POST",
-        "orders.example.com",
-        "/orders",
-        "resolved",
-    ) in {(r["method"], r["peer"], r["path"], r["resolution"]) for r in ktor_rows}
 
 
 @pytest.fixture(scope="module")
