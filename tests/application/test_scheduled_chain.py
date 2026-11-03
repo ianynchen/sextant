@@ -20,6 +20,7 @@ from click.testing import CliRunner
 from fixture_build import FIXTURES, compile_fixture
 from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve import values
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import scheduled_chain
@@ -3572,3 +3573,157 @@ def test_probe_q11_keyed_through_id_on_two_calls(tmp_path):
         ("None", "AJob#execute", "c1", "resolved", "None"),
         ("None", "BJob#execute", "c2", "resolved", "None"),
     ]
+
+
+def _scheduled_on_many_branches(count: int) -> list:
+    """`y(){ t = trigger("c2"); if (f1) scheduleJob(newJob(AJob).build(), t); … if (fN) …;
+    scheduleJob(newJob(CJob).build(), t); }` — each earlier call a stated hand-off of the trigger
+    on its own branch, so the last call's trigger window splits `count` times; its own job is
+    built after them, so the job is read whatever the trigger window does."""
+    trigger_jvm, trigger = _cron_helper()
+    y = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    facts = [
+        *_classes("AJob", "CJob"),
+        *trigger,
+        _method_symbol("y", "()V"),
+        _site(y, 0, _TRIGGERS, "trigger", trigger_jvm, result=1, arguments=(_string("c2"),)),
+    ]
+    places: dict[int, tuple[int | None, bool]] = {0: (None, True)}
+
+    def scheduled(at: int, job: str) -> list:
+        return [
+            _site(
+                y,
+                at,
+                JOB_BUILDER,
+                "newJob",
+                f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+                result=at,
+                arguments=(_class(job),),
+            ),
+            _site(
+                y,
+                at + 1,
+                JOB_BUILDER,
+                "build",
+                "()Lorg/quartz/JobDetail;",
+                receiver=at,
+                result=at + 1,
+            ),
+            _site(
+                y,
+                at + 2,
+                "org/quartz/Scheduler#",
+                "scheduleJob",
+                _SCHEDULE_JVM,
+                receiver=99,
+                result=at + 2,
+                arguments=(
+                    CallArgument(kind="unresolved", source=at + 1),
+                    CallArgument(kind="unresolved", source=1),
+                ),
+            ),
+        ]
+
+    for branch in range(count):
+        at = 10 + 3 * branch
+        facts += scheduled(at, "AJob")
+        places.update({at: (0, False), at + 1: (at, False), at + 2: (at + 1, False)})
+    facts += scheduled(40, "CJob")
+    places.update({40: (0, True), 41: (40, True), 42: (41, True)})
+    return _placed(facts, y, places)
+
+
+@pytest.mark.pins("scheduled_chain.a-CAPPED-walk-keeps-its-row")
+def test_a_walk_past_the_path_cap_keeps_the_last_calls_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Review 3 re-review, m-A: a walk past the path cap answers `non_enumerable`. Like `escapes`
+    and `cycle`, that is a part not read on the path, never a reason to drop a row. With the cap
+    lowered to one path, the last call's trigger window (two branched calls before it) passes
+    it: its job is still read, so CJob keeps its row, the trigger unknown, `partial`."""
+    monkeypatch.setattr(values, "_PATH_CAP", 1)
+    rows = _scheduled(tmp_path, _scheduled_on_many_branches(2))
+    assert ("CJob#execute", "None", "partial", "None") in _refused_rows(rows), _refused_rows(rows)
+
+
+def _trigger_helper_on_branches() -> list:
+    """`base(){ tb = newTrigger(); if (x) tb.withIdentity("a"); if (y) tb.startNow(); return tb;
+    }` and `y(){ scheduleJob(newJob(AJob).build(), base().withSchedule(cronSchedule(c)).build());
+    }`: the trigger's root is in the helper, so the chain is walked back across its return
+    (ruling 5), and the helper's two branched calls make that path `partial` (rule 9)."""
+    builder = "Lorg/quartz/TriggerBuilder;"
+    base_jvm = f"(){builder}"
+    helper = _MODULE + method_descriptor(_TRIGGERS, "base", base_jvm)
+    y = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _TRIGGERS, construct_kind="class"),
+        *_job_class("AJob", interfaces=("org/quartz/Job#",), declares=("execute",)),
+        _method_symbol("base", base_jvm),
+        _site(helper, 0, TRIGGER_BUILDER, "newTrigger", f"(){builder}", result=1),
+        _site(
+            helper,
+            1,
+            TRIGGER_BUILDER,
+            "withIdentity",
+            f"(Ljava/lang/String;){builder}",
+            receiver=1,
+            result=2,
+            arguments=(CallArgument(kind="string", value="a"),),
+        ),
+        _site(helper, 2, TRIGGER_BUILDER, "startNow", f"(){builder}", receiver=1, result=3),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=helper,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=1),
+        ),
+        _method_symbol("y", "()V"),
+        *_job_chain(y, "AJob"),
+        _site(y, 3, _TRIGGERS, "base", base_jvm, result=4),
+        _site(
+            y,
+            4,
+            CRON_BUILDER,
+            "cronSchedule",
+            "(Ljava/lang/String;)Lorg/quartz/CronScheduleBuilder;",
+            result=5,
+            arguments=(CallArgument(kind="string", value="0 0 * * * ?"),),
+        ),
+        _site(
+            y,
+            5,
+            TRIGGER_BUILDER,
+            "withSchedule",
+            f"(Lorg/quartz/ScheduleBuilder;){builder}",
+            receiver=4,
+            result=6,
+            arguments=(CallArgument(kind="unresolved", source=5),),
+        ),
+        _site(y, 6, TRIGGER_BUILDER, "build", "()Lorg/quartz/Trigger;", receiver=6, result=7),
+        _site(
+            y,
+            7,
+            "org/quartz/Scheduler#",
+            "scheduleJob",
+            _SCHEDULE_JVM,
+            receiver=20,
+            result=8,
+            arguments=(
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="unresolved", source=7),
+            ),
+        ),
+    ]
+    return _placed(facts, helper, {0: (None, True), 1: (0, False), 2: (0, False)})
+
+
+@pytest.mark.pins("scheduled_chain.a-trigger-walked-back-on-a-PARTIAL-path-keeps-its-row")
+def test_a_trigger_walked_back_on_a_partial_path_keeps_its_row_partial(tmp_path: Path):
+    """Review 3 re-review, M-B, for the Quartz reader: the trigger walked back into a helper
+    with two branched calls is read on a `partial` path. Its row is kept — rule 4, never
+    dropped — and is no surer than `partial`."""
+    rows = _scheduled(tmp_path, _trigger_helper_on_branches())
+    assert {(str(_handler_of(row)), row["resolution"]) for row in rows} == {
+        ("AJob#execute", "partial")
+    }, rows

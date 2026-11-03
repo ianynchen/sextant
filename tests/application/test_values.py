@@ -5979,6 +5979,105 @@ def _loop_facts() -> list[Fact]:
     return facts
 
 
+def _rerun_facts() -> list[Fact]:
+    """Review 3's re-review shapes, at the positions javac 21 gives them (`Loops.java`):
+
+    - `resetExitMid`: `o = create(); while (true) { o.setPort(80); Client.of(o); if
+      (Client.flag()) return; o.setPort(443); }` — the use always sees 80;
+    - `nestedProducer`: `for (…) { o = create(); for (…) { Client.of(o); o.setPort(443); } }` —
+      the producer and the use share one loop group with the inner setter."""
+    reset = _symbol(_USES, "resetExitMid", "()V")
+    nested = _symbol(_USES, "nestedProducer", "()V")
+    port = {value: CallArgument(kind="int", value=value) for value in (80, 443)}
+
+    def at(fact: Fact, dominator, every, post, group) -> Fact:
+        assert isinstance(fact, CallSiteFact)
+        return fact.model_copy(
+            update={
+                "dominator": dominator,
+                "on_every_exit": every,
+                "post_dominator": post,
+                "reaches_return": True,
+                "loop_group": group,
+            }
+        )
+
+    return [
+        _declared(_USES, "resetExitMid", "()V"),
+        at(_site(reset, 0, _CREATE, result=1), None, True, 1, None),
+        at(_set("resetExitMid", 1, _SET_PORT, port[80], result=2), 0, True, 2, 1),
+        at(_site(reset, 2, _CLIENT_OF, arguments=_results(1)), 1, True, 3, 1),
+        at(_site(reset, 3, (_PKG + "Client#", "flag", "()Z")), 2, True, None, 1),
+        at(_set("resetExitMid", 4, _SET_PORT, port[443], result=4), 3, False, 1, 1),
+        _declared(_USES, "nestedProducer", "()V"),
+        at(_site(nested, 0, _CREATE, result=1), None, False, None, 0),
+        at(_site(nested, 1, _CLIENT_OF, arguments=_results(1)), 0, False, 2, 0),
+        at(_set("nestedProducer", 2, _SET_PORT, port[443], result=2), 1, False, None, 0),
+    ]
+
+
+def _guarded(method: str, ordinals: range, held: dict[str, Any], last: int) -> list[Fact]:
+    """`if (fK) o.setPort(K);` at each of `ordinals` in `method`, on the value `held` names."""
+    return [
+        _placed(
+            _site(
+                method,
+                at,
+                _SET_PORT,
+                kind="virtual",
+                arguments=[CallArgument(kind="int", value=at)],
+                result=100 + at,
+                **held,
+            ),
+            None if at == ordinals.start else ordinals.start - 1,
+            False,
+            last,
+            True,
+        )
+        for at in ordinals
+    ]
+
+
+def _cross_facts(name: str, counts: tuple[int, ...]) -> list[Fact]:
+    """Review 3's re-review m-B: a chain of frames, each with `counts[k]` guarded setters on one
+    object before handing it on — the first frame `Uses.<name>` builds it, the last calls
+    `Client.of(o)`. `Uses.cross(){ o = create(); <setters>; hop1(o); }`,
+    `hop1(o){ <setters>; hop2(o); }`, …, `hopN(o){ <setters>; Client.of(o); }`."""
+    caller = _symbol(_USES, name, "()V")
+    first = counts[0]
+    facts: list[Fact] = [
+        _declared(_USES, name, "()V"),
+        _placed(_site(caller, 0, _CREATE, result=1), None, True, first + 1, True),
+        *_guarded(caller, range(1, first + 1), {"receiver": 1}, first + 1),
+        _placed(
+            _site(
+                caller, first + 1, (_SETUP, f"{name}Hop1", _TAKES_OPTIONS), arguments=_results(1)
+            ),
+            0,
+            True,
+            None,
+            True,
+        ),
+    ]
+    for hop, count in enumerate(counts[1:], start=1):
+        body = _symbol(_SETUP, f"{name}Hop{hop}", _TAKES_OPTIONS)
+        then = (
+            (_SETUP, f"{name}Hop{hop + 1}", _TAKES_OPTIONS) if hop + 1 < len(counts) else _CLIENT_OF
+        )
+        facts += _setup(
+            f"{name}Hop{hop}",
+            *_guarded(body, range(count), {"receiver_parameter": 0}, count),
+            _placed(
+                _site(body, count, then, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        )
+    return facts
+
+
 def _many_facts(count: int) -> list[Fact]:
     """`many<count>() { o = create(); if (f0) o.setPort(0); … if (fN) o.setPort(N); Client.of(o);
     }` — review 3's M2 input: `count` guarded setters on one object, as config mapping code
@@ -6148,7 +6247,16 @@ def branches(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
         facts / "branches.jsonl",
         _document(),
         straight_line(
-            [*_branch_facts(), *_frame_facts(), *_loop_facts(), *_many_facts(3), *_many_facts(9)]
+            [
+                *_branch_facts(),
+                *_frame_facts(),
+                *_loop_facts(),
+                *_rerun_facts(),
+                *_cross_facts("crossTwo", (8, 8)),
+                *_cross_facts("crossThree", (4, 4, 4)),
+                *_many_facts(3),
+                *_many_facts(9),
+            ]
         ),
     )
     write_fixture_module_fact(facts)
@@ -6399,11 +6507,15 @@ def test_a_setter_in_an_outer_loop_reaches_a_use_in_the_inner_one(branches):
     assert _loop_chains(branches, "nested") == [((0,), False), ((0, 2), True)]
 
 
-@pytest.mark.pins("values.a-value-PRODUCED-in-the-loop-is-new-each-time-round")
-def test_a_setter_on_an_object_built_each_time_round_is_not_read_back(branches):
+@pytest.mark.pins(
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop"
+)
+def test_a_setter_on_an_object_built_each_time_round_stays_partial(branches):
     """`for (…) { o = create(); Client.of(o); o.setPort(443); }`: the object is built again
-    before every use, so the setter's object is never used: one row."""
-    assert _loop_chains(branches, "fresh") == [((0,), False)]
+    before every use, so no run uses 443 — but the five facts cannot tell this from nested
+    loops whose producer is in the outer one (review 3 re-review, M-A: the same facts, one loop
+    group). So the 443 row is kept, `partial`, never `resolved`; the unset row is exact."""
+    assert _loop_chains(branches, "fresh") == [((0,), False), ((0, 2), True)]
 
 
 @pytest.mark.pins("values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window")
@@ -6424,3 +6536,54 @@ def test_paths_that_end_alike_are_one_however_the_choices_went(branches):
     bindings — `escapes`, and the value with nothing done to it."""
     caller = _symbol(_USES, "many9", "()V")
     assert len(_bindings(branches, caller, 10)) == 2
+
+
+@pytest.mark.pins("values.a-path-with-a-LOOP-LATER-call-is-never-resolved")
+def test_a_loop_later_call_is_never_proven_whatever_post_dominates_it(branches):
+    """Review 3 re-review, C-A: `while (true) { o.setPort(80); Client.of(o); if (flag())
+    return; o.setPort(443); }`. The use post-dominates the later setter (the loop's exit is
+    between them), but the ordinal order the window gathers in is not the run order across the
+    back edge: every use sees 80, set after 443. So a path holding a loop-later call is never
+    `resolved` — the 443 row `partial`; the 80 row exact."""
+    assert _loop_chains(branches, "resetExitMid", use=2) == [((0, 1), False), ((0, 1, 4), True)]
+
+
+@pytest.mark.pins(
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop"
+)
+def test_a_producer_in_an_outer_loop_does_not_drop_the_inner_setter(branches):
+    """Review 3 re-review, M-A: `for (…) { o = create(); for (…) { Client.of(o);
+    o.setPort(443); } }` — the producer and the use share one loop group, the nested loops
+    being one component, yet the inner setter reaches the next use on the SAME object. The 443
+    row is kept, `partial`; nothing is dropped."""
+    assert _loop_chains(branches, "nestedProducer") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.the-PATH-CAP-counts-the-whole-path-across-frames")
+def test_paths_past_the_cap_across_two_frames_are_one_row(branches):
+    """Review 3 re-review, m-B: eight guarded setters in the caller and eight in the method it
+    hands the value to — 256 paths in each window, 65,536 on the whole path. The cap counts the
+    whole path: one row, `non_enumerable`, stated."""
+    found = producers_of(
+        value_index(branches),
+        _at(branches, _symbol(_SETUP, "crossTwoHop1", _TAKES_OPTIONS), 8),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert found == (Producer(reason="non_enumerable"),)
+
+
+@pytest.mark.pins("values.the-PATH-CAP-counts-the-whole-path-across-frames")
+def test_paths_past_the_cap_across_three_frames_are_one_row(branches):
+    """Three frames of four guarded setters each: 16 paths a window, 4,096 on the whole path."""
+    found = producers_of(
+        value_index(branches),
+        _at(branches, _symbol(_SETUP, "crossThreeHop2", _TAKES_OPTIONS), 4),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert found == (Producer(reason="non_enumerable"),)

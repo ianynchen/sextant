@@ -262,15 +262,34 @@ publishes `search` while its port is unknown.
      `dominator` chain), so it splits and counts toward the several-splits rule; not where the
      value was produced in that same loop (a new object each time round), and not in another
      loop. `for (…) { Client.of(o); o.setPort(443); }` gives two rows: port unset `resolved`
-     (the first time round, which the facts prove a run makes) and port 443 `partial` (nothing
-     proves the loop goes round twice: the use is not on the setter's `post_dominator`
-     chain). The same holds where the use is in a callee called from the loop: the call that
-     leads on to it is the use the caller's window reads.
+     (the first time round, which the facts prove a run makes) and port 443 `partial`. The
+     same holds where the use is in a callee called from the loop: the call that leads on to
+     it is the use the caller's window reads. **Fix round 2 (review 3 re-review):**
+     - *A path that ran a loop-later call is never `resolved`* (C-A). The window gathers its
+       calls in ordinal order, which is not the run order across the back edge, so no proof
+       read off it — the `post_dominator` chain included — holds:
+       `while (true) { o.setPort(80); use(o); if (flag()) return; o.setPort(443); }` has the use
+       on the later setter's chain, yet every use sees 80. The other proofs read no ordinal
+       order: `dominator`, `post_dominator` and `reaches_return` are facts about the graph,
+       the path without the call is a first time round the facts prove, and the several-splits
+       count counts contexts, not order.
+     - *Even where the value is produced in the use's loop group* (M-A): nested loops are one
+       group, so a producer in the outer loop shares it with an inner loop whose later call
+       reaches the next use on the same object. The five facts cannot tell that from a value
+       built afresh before every use (`fresh` and `nestedProducer` have the same facts), so the
+       call stays in the window and its row is `partial`; nothing is dropped.
    - *The path bound* (review 3, M2): a window with two or more splits records one mark
      instead of each choice, so paths that gather the same calls are one; a window whose paths
      still pass 256 is one path ending `non_enumerable`, its parts unknown, stated. Twenty
      guarded setters on one object were a million paths, 32 s and 2.16 GB; now one row, under
-     0.1 s and 0.1 GB. An unproven side's answers are inexact (`partial`), as is
+     0.1 s and 0.1 GB. The cap counts the WHOLE path across frames too (fix round 2, m-B):
+     `_windowed` stops enumerating once its answers pass 256, so eight guarded setters in a
+     caller and eight in its callee (65,536 paths) are one `non_enumerable` row.
+   - *Readers keep every row* (fix round 2, M-B; rule 4): the rootless walk-back
+     (`chains._walk_back`) keeps a producer it cannot call exact, its row no surer than
+     `partial` (`ChainEnd.inexact`, read by `fluent` and the Quartz reader), and a walk back
+     past the cap keeps the terminal's row with its parts unread. Quartz keeps a capped
+     walk's row as it keeps an `escapes` one (`_UNREAD_ENDS`, m-A). An unproven side's answers are inexact (`partial`), as is
      every path of a window with two or more splits. A fact with no `on_every_exit` is
      undecided: every call in its window splits, unproven.
    - *Quartz* (`scheduled_chain._ran_before`, `values.Path.ran_before`): in one method, on

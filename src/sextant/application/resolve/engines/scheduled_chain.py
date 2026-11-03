@@ -113,6 +113,7 @@ from sextant.application.resolve.values import (
     ESCAPES,
     EXPRESSION,
     LITERAL,
+    NON_ENUMERABLE,
     RECEIVER,
     STRING,
     SYMBOL,
@@ -167,9 +168,10 @@ _CLASS = "class"
 _ANY_PATH = Path()
 # The reasons a window path ENDS with (spec 2026-11-02 rules 1-2): something the walk could not
 # follow may have changed the value (`escapes`), or the walk met a call it is already reading
-# (`cycle`). Either way the part is unknown on that path, and rule 4 keeps the path's row with
-# that part unknown — never drops it (review 2, M3).
-_UNREAD_ENDS = (ESCAPES, CYCLE)
+# (`cycle`), or the walk passed the path cap (`non_enumerable`, review 3 re-review m-A). Each
+# way the part is unknown on that path, and rule 4 keeps the path's row with that part unknown —
+# never drops it (review 2, M3).
+_UNREAD_ENDS = (ESCAPES, CYCLE, NON_ENUMERABLE)
 
 _RESOLVED = "resolved"
 _UNRESOLVED = "unresolved"
@@ -476,7 +478,9 @@ def _entries_of(end: ChainEnd, context: _Context) -> Iterator[TriggerEntry]:
     for row in found:
         resolution = (
             _row_resolution(row.handler, row.narrowed and len(branched) > 1, row.resolution)
-            if row.tied and not row.undecided
+            # A trigger chain the walk back reached on an inexact path (spec 2026-11-02 rule 9,
+            # review 3 re-review M-B) is kept, never surer than `partial`.
+            if row.tied and not row.undecided and not end.inexact
             else _PARTIAL
         )
         named = f"trigger {row.name + ' ' if row.name else ''}"

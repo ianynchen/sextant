@@ -2633,6 +2633,11 @@ class _Walk:
         reached: list[_Reached] = []
         windows = self._window(method, held, after, used_at)
         for steps, gathered in windows:
+            if len(reached) > _PATH_CAP:
+                # The cap counts the WHOLE path (review 3 re-review, m-B): each window keeps
+                # under it, but the windows of the frames a path crosses multiply. Past it, one
+                # answer, the parts unknown, the reason stated — and no more enumerated.
+                return ((trail, _unresolved(NON_ENUMERABLE)),)
             crossed = _combine(trail, steps)
             if crossed is None:
                 # This path already chose another body at one of these hand-offs.
@@ -2655,6 +2660,8 @@ class _Walk:
                     for path, answer in self._resolve(position, crossed, frames)
                 )
             )
+        if len(reached) > _PATH_CAP:
+            return ((trail, _unresolved(NON_ENUMERABLE)),)
         return tuple(reached)
 
     def _identities_past(
@@ -2795,6 +2802,12 @@ class _Walk:
                     ran_proven, skip_proven = self._reaches_use(
                         method, held, ordinal, used_at, in_body
                     )
+                    # A call after the use by ordinal is in the window only by the loop it
+                    # shares with the use (`_inside`): the ordinal order the window gathers in is
+                    # not the run order across the back edge, so no proof read off it holds, and
+                    # a path that ran the call is never exact (review 3 re-review, C-A).
+                    if used_at is not None and ordinal > used_at:
+                        ran_proven = False
                     ran: _Trail = (_Step((_SPLIT, method, ordinal), _RAN),)
                     if not ran_proven:
                         ran += (_Step((_UNPROVEN, method, ordinal, used_at, _RAN), _UNPROVEN),)
@@ -2897,14 +2910,12 @@ class _Walk:
         after: int,
         used_at: int | None,
         in_body: bool,
-        origin: int | None = None,
     ) -> list[tuple[int, tuple[_Window, ...], int | None]]:
         """What happens to `held` in the window `_window` reads, as `(ordinal, outcomes,
         parent)` in the order it happens: each outcome is one path's step — a gathered call, a
         reason, or one body's whole window — and `parent` the configuring call whose result a
-        call is made on, None for a call on `held` itself. `origin` is where the value the
-        window is about was produced (`after`, unless this reads a configuring call's result)."""
-        inside = self._inside(method, after, used_at, after if origin is None else origin)
+        call is made on, None for a call on `held` itself."""
+        inside = self._inside(method, after, used_at)
         kind, key = held
         if kind == _VALUE:
             on = self._index.receivers.get((method, key), ())
@@ -2943,12 +2954,7 @@ class _Walk:
                 events.extend(
                     (later, outcomes, ordinal if parent is None else parent)
                     for later, outcomes, parent in self._events(
-                        method,
-                        (_VALUE, int(str(result))),
-                        ordinal,
-                        used_at,
-                        in_body,
-                        after if origin is None else origin,
+                        method, (_VALUE, int(str(result))), ordinal, used_at, in_body
                     )
                 )
         for ordinal, slot in handed:
@@ -2959,9 +2965,7 @@ class _Walk:
             events.append((_END_OF_BODY, (((), ESCAPES),), None))
         return sorted(events, key=lambda event: event[0])
 
-    def _inside(
-        self, method: str, after: int, used_at: int | None, origin: int
-    ) -> Callable[[int], bool]:
+    def _inside(self, method: str, after: int, used_at: int | None) -> Callable[[int], bool]:
         """Whether a call at an ordinal of `method` is in the window from after `after` to the
         use at `used_at` (None: the end of the body).
 
@@ -2969,11 +2973,13 @@ class _Walk:
         review 3's M1). Between the producer and the use by ordinal is in the window. A call
         AFTER the use by ordinal is too where it shares the use's `loop_group`: it can run before
         a later run of the use — `for (…) { use(o); o.setPort(443); }` — so it is one more call
-        on a branch for that use (it is never on the use's `dominator` chain, so it splits).
-        Not where the value was produced in that same loop (`origin`): a value built again each
-        time round is a new object before every use, and the call's is never used again."""
+        on a branch for that use (it is never on the use's `dominator` chain, so it splits), and
+        a path that ran it is never exact (`_window`). **Also where the value is produced in
+        that loop group** (review 3 re-review, M-A): nested loops are ONE group, so a producer in
+        the outer loop shares the group with an inner loop whose later call reaches the next use
+        on the same object, and the five facts cannot tell that from a value built again each
+        time round — so the call stays in, its path `partial`, and nothing is dropped."""
         group = None if used_at is None else self._loop_group(method, used_at)
-        made_in = None if origin < 0 else self._loop_group(method, origin)
 
         def inside(ordinal: int) -> bool:
             if ordinal <= after:
@@ -2983,7 +2989,6 @@ class _Walk:
             return (
                 ordinal != used_at
                 and group is not None
-                and group != made_in
                 and self._loop_group(method, ordinal) == group
             )
 

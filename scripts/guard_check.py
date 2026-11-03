@@ -8770,6 +8770,44 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "chains.a-PARTIAL-path-keeps-its-row": Guard(
+        what="the walk back from a rootless terminal keeps a path it cannot call exact: the "
+        "row is the terminal's, which the code makes (review 3 re-review, M-B; rule 4)",
+        why="an SQS request with two branched `messageBody` calls derives no row at all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if not producer.chain:\n            continue\n",
+                replace="        if not producer.chain or producer.inexact:  # guard disabled\n"
+                "            continue\n",
+            ),
+        ),
+    ),
+    "fluent.an-INEXACT-chain-end-is-at-most-partial": Guard(
+        what="a chain the walk back reached on an inexact path gives a row no surer than "
+        "`partial` (review 3 re-review, M-B)",
+        why="an SQS request with two branched `messageBody` calls publishes a combination no run "
+        "makes at `resolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if end.inexact and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-CAPPED-walk-back-keeps-the-terminals-row": Guard(
+        what="a walk back past the path cap keeps the terminal's row, its parts unread "
+        "(review 3 re-review, M-B)",
+        why="an SQS request with nine branched calls derives no row at all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if not producer.chain and producer.reason == NON_ENUMERABLE:\n",
+                replace="        if False:  # guard disabled\n",
+            ),
+        ),
+    ),
     "values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window": Guard(
         what="a call after the use by ordinal that shares the use's `loop_group` is in its "
         "window: it can run before a later run of the use (rule 9, ruled by the user "
@@ -8797,16 +8835,52 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "values.a-value-PRODUCED-in-the-loop-is-new-each-time-round": Guard(
-        what="a later call in the use's loop is not in the window where the value was produced "
-        "in that same loop: each time round is a new object",
-        why="`for (…) { o = create(); use(o); o.setPort(443); }` publishes a 443 row no run "
-        "sends, the setter's object being dropped before the next use",
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop": Guard(
+        what="a call after the use in the use's loop group is in the window even where the value "
+        "is produced in that group: nested loops are one group, and the five facts cannot tell "
+        "a fresh object from the outer loop's (review 3 re-review, M-A)",
+        why="`for (…) { o = create(); for (…) { use(o); o.setPort(443); } }` drops the 443 row "
+        "every later inner run sends",
         edits=(
             Edit(
                 path=_VALUES,
-                find="                and group != made_in\n",
-                replace="                # guard disabled\n",
+                find="                and group is not None\n",
+                replace="                and group is not None\n"
+                "                and group != self._loop_group(method, after)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-path-with-a-LOOP-LATER-call-is-never-resolved": Guard(
+        what="the side of a split that ran a call after the use in its loop is never proven: "
+        "the window's ordinal order is not the run order across the back edge (review 3 "
+        "re-review, C-A)",
+        why="`while (true) { o.setPort(80); use(o); if (flag()) return; o.setPort(443); }` "
+        "publishes port 443 `resolved`, though every use sees 80",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                        ran_proven = False\n",
+                replace="                        pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.the-PATH-CAP-counts-the-whole-path-across-frames": Guard(
+        what="the path cap counts the whole path, across the frames it crosses, not one window "
+        "(review 3 re-review, m-B)",
+        why="eight guarded setters in a caller and eight in its callee give 65,536 paths; a "
+        "third frame gives 16.7 million",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if len(reached) > _PATH_CAP:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="        if len(reached) > _PATH_CAP:\n"
+                "            return ((trail, _unresolved(NON_ENUMERABLE)),)\n"
+                "        return tuple(reached)\n",
+                replace="        return tuple(reached)  # guard disabled\n",
             ),
         ),
     ),
@@ -9338,6 +9412,30 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "scheduled_chain.a-CAPPED-walk-keeps-its-row": Guard(
+        what="a walk past the path cap (`non_enumerable`) is a part not read on the path, kept "
+        "like `escapes` and `cycle` (review 3 re-review, m-A)",
+        why="a job whose trigger window passes the cap loses its row",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="_UNREAD_ENDS = (ESCAPES, CYCLE, NON_ENUMERABLE)\n",
+                replace="_UNREAD_ENDS = (ESCAPES, CYCLE)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-trigger-walked-back-on-a-PARTIAL-path-keeps-its-row": Guard(
+        what="a trigger chain the walk back reached on an inexact path is no surer than "
+        "`partial` (review 3 re-review, M-B)",
+        why="a trigger built in a helper with two branched calls publishes its row `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            if row.tied and not row.undecided and not end.inexact\n",
+                replace="            if row.tied and not row.undecided  # guard disabled\n",
+            ),
+        ),
+    ),
     "scheduled_chain.ONE-BUILD-is-one-job-only-in-ONE-EXECUTION": Guard(
         what="two binds at one `build()` site are one job only where both paths reached it in "
         "one execution (review 2, C2)",
@@ -9385,8 +9483,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/scheduled_chain.py",
-                find="_UNREAD_ENDS = (ESCAPES, CYCLE)\n",
-                replace="_UNREAD_ENDS = (ESCAPES,)  # guard disabled by scripts/guard_check.py\n",
+                find="_UNREAD_ENDS = (ESCAPES, CYCLE, NON_ENUMERABLE)\n",
+                replace="_UNREAD_ENDS = (ESCAPES, NON_ENUMERABLE)  # guard disabled\n",
             ),
         ),
     ),

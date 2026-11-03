@@ -35,7 +35,12 @@ here would restate those documents rather than add anything.
   parts unknown, rather than 30 s and 2 GB for one site. A call after the use that shares
   its `loop_group` (ruled 2026-11-03) is in the window, so
   `for (…) { Client.of(o); o.setPort(443); }` gives the unset row `resolved` and the 443 row
-  `partial`, never dropping either. Quartz
+  `partial`, never dropping either. Fix round 2 (review 3 re-review): a path that ran such a
+  loop-later call is never `resolved` (the window's ordinal order is not the run order across
+  the back edge); a value produced in the use's loop group no longer drops the later call;
+  the path cap counts the whole path across frames; the walk back from a rootless terminal
+  keeps a `partial` path's row (an SQS request with two branched `messageBody` calls had no
+  row at all) and a capped walk's; Quartz keeps a capped walk's row. Quartz
   marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
   every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
   unmarked, and C stays a root.

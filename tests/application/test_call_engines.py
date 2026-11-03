@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from fixture_module import declared_parameters
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
@@ -7094,6 +7095,108 @@ def test_a_request_started_in_a_helper_and_sent_by_its_caller_is_one_row(tmp_pat
     rows = [(r["path"], r["resolution"]) for r in found]
     assert rows == [("/acme/orders", "resolved")]
     assert [r["caller"] for r in found] == [send]
+
+
+def _sqs_built_on_branches(count: int) -> list:
+    """`base(){ return SendMessageRequest.builder().queueUrl(Q); }` and `send(){ b = base();
+    if (x1) b.messageBody("1"); … if (xN) b.messageBody("N"); sqs.sendMessage(b.build()); }`,
+    each `messageBody` on its own branch (spec 2026-11-02 rule 9), at the positions javac gives
+    them (review 3 re-review, M-B, `probe_r4_sqs.py`)."""
+    base = _sqs_method("base", _SQS_BUILDER_JVM)
+    send = _sqs_method("send")
+    build, sent = count + 1, count + 2
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "base", _SQS_BUILDER_JVM),
+        _declared_method(_SQS_PRODUCER, "send", "()V"),
+        _call(base, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            base,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=base,
+            ordinal=2,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(owner=_SQS_PRODUCER, name="base", descriptor=_SQS_BUILDER_JVM),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+            dominator=None,
+            on_every_exit=True,
+            post_dominator=build,
+            reaches_return=True,
+        ),
+        *[
+            CallSiteFact(
+                document_id="doc_1",
+                caller=send,
+                target=CallTarget(
+                    owner=_SQS_REQUEST,
+                    name="messageBody",
+                    descriptor="(Ljava/lang/String;)" + _SQS_BUILDER_JVM[2:],
+                ),
+                invoke_kind="virtual",
+                ordinal=at,
+                receiver=5,
+                result=10 + at,
+                arguments=[CallArgument(kind="string", value=str(at))],
+                dominator=0,
+                on_every_exit=False,
+                post_dominator=build,
+                reaches_return=True,
+            )
+            for at in range(1, count + 1)
+        ],
+        _call(send, _SQS_REQUEST, "build", build, receiver=5, result=7).model_copy(
+            update={
+                "dominator": 0,
+                "on_every_exit": True,
+                "post_dominator": sent,
+                "reaches_return": True,
+            }
+        ),
+        _sqs_send(send, sent, source=7).model_copy(
+            update={"dominator": build, "on_every_exit": True, "reaches_return": True}
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=5, value=None),
+    ]
+    return straight_line(facts)
+
+
+@pytest.mark.pins("chains.a-PARTIAL-path-keeps-its-row")
+@pytest.mark.pins("fluent.an-INEXACT-chain-end-is-at-most-partial")
+def test_a_request_with_two_branched_calls_keeps_its_row_partial(tmp_path: Path):
+    """Review 3's re-review, M-B, and rule 4 ("never drop a row"): two `messageBody` calls on
+    branches make every path `partial` (ruled 2026-11-03). The walk back still reaches the root
+    on each, so the request is sent to the queue: the row is kept, `partial`, never dropped."""
+    workspace = _resolve_fluent_walked(tmp_path, _sqs_built_on_branches(2), _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert {(r["path"], r["resolution"]) for r in found} == {("/acme/orders", "partial")}
+
+
+@pytest.mark.pins("chains.a-CAPPED-walk-back-keeps-the-terminals-row")
+def test_a_request_past_the_path_cap_keeps_one_row(tmp_path: Path):
+    """The same with nine branched calls: the window passes the path cap and the walk back
+    answers `non_enumerable`, with no chain. The send is still a call to this catalog's
+    terminal: one row, whose parts the walk did not read, never `resolved` and never dropped."""
+    workspace = _resolve_fluent_walked(tmp_path, _sqs_built_on_branches(9), _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert len(found) == 1
+    assert found[0]["resolution"] != "resolved"
 
 
 _OKHTTP_BUILDER = "okhttp3/Request$Builder#"

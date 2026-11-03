@@ -71,6 +71,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
+    NON_ENUMERABLE,
     RECEIVER,
     Path,
     ValueIndex,
@@ -210,6 +211,10 @@ class ChainEnd:
     # ruling 5, spec 2026-10-30), for reading the captures on that path alone: each caller
     # of a shared helper reads its own arguments. None for a chain walked from its root.
     path: Path | None = None
+    # The walk back reached the root on a path it cannot call exact (spec 2026-11-02 rule 9: a
+    # side of a split no fact proves, or two or more splits on the path), or did not reach it at
+    # all past the path cap: the row is kept, no surer than `partial` (rule 4: never dropped).
+    inexact: bool = False
 
 
 def chain_ends(workspace: Workspace, catalog: Catalog) -> Iterator[ChainEnd]:
@@ -724,6 +729,8 @@ class _ChainContext:
     # The path a chain walked back across methods took (`ChainEnd.path`); None on a chain
     # walked from its root.
     path: Path | None = None
+    # `ChainEnd.inexact`: the walk back reached this chain on an inexact path.
+    inexact: bool = False
 
 
 def _prefix_captures(
@@ -932,9 +939,16 @@ def _walk_back(
     reaches. The end carries the path, so each caller of a shared helper reads its own
     arguments (`ChainEnd.path`).
 
-    A path passed through a branch (`inexact`) is not a chain as written: which branch's
-    calls ran is not known, and folding the shared receiver's chain alone could state a
-    verb the branch changed. It derives nothing, rather than a row the code may not make."""
+    **A path the walk cannot call exact (`inexact`) keeps its row, no surer than `partial`**
+    (review 3 re-review, M-B; rule 4, "never drop a row"). Rule 9 marks such a path where no
+    fact proves a run takes one side of a split to the terminal, or where two or more calls on
+    branches give combinations no run makes, and a merge marks one where the receiver's chain
+    is shared by several branches. The chain read on it is the calls that path ran; the row is
+    the terminal's, which the code does make, so it is kept and its resolution capped.
+
+    **A walk that passed the path cap (`non_enumerable`) read no chain**: the terminal is still
+    a call to this catalog's terminal, so it is one row of its own, its parts the walk did not
+    read, `partial` at best — never dropped."""
     if not rootless.declared:
         return
     assert context.values is not None
@@ -946,7 +960,17 @@ def _walk_back(
         along_receivers=True,
         configuring=rootless.configuring,
     ):
-        if not producer.chain or producer.inexact:
+        if not producer.chain and producer.reason == NON_ENUMERABLE:
+            captures: dict[str, Any] = {}
+            _fold_site(terminal, captures, context)
+            _walk(
+                terminal,
+                captures,
+                terminal=None,
+                context=replace(context, root=terminal, path=path, inexact=True),
+            )
+            continue
+        if not producer.chain:
             continue
         chain = [_site_at(caller, ordinal, context_of) for caller, ordinal in producer.chain]
         root = _matching_root(chain[0], context.roots)
@@ -963,7 +987,12 @@ def _walk_back(
         for site in chain[1:]:
             _fold_site(site, captures, context_of(str(site["caller"])))
         _fold_site(terminal, captures, context)
-        _walk(terminal, captures, terminal=None, context=replace(context, root=chain[0], path=path))
+        _walk(
+            terminal,
+            captures,
+            terminal=None,
+            context=replace(context, root=chain[0], path=path, inexact=producer.inexact),
+        )
 
 
 def _site_at(
@@ -1059,6 +1088,7 @@ def _walk(
                 captures,
                 _end_consumers(terminal, context),
                 context.path,
+                context.inexact,
             )
         )
 

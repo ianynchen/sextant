@@ -851,6 +851,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # A handler not readable here (spec §3b): its identity is read, whether it passes the
         # request on is decided in code this analysis does not read, so the row is `partial`
         # and a `handler_pass_through` question names that code.
+        # A chain the walk back reached on an inexact path (spec 2026-11-02 rule 9, review 3
+        # re-review M-B) is kept, never surer than `partial`.
+        if end.inexact and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.PARTIAL)
         read_resolution = resolution
         unreadable = answering.outcome == UNREADABLE
         if unreadable and resolution == str(Resolution.RESOLVED):
