@@ -18,6 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
@@ -305,7 +306,7 @@ def _cron_trigger(caller: str, *identity: str) -> list[CallSiteFact]:
 def _scheduled(
     tmp_path: Path, facts: list[CallSiteFact], catalog: Catalog | None = None
 ) -> list[dict]:
-    write_fact_file(tmp_path / "facts" / "Triggers.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Triggers.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace.load_facts(tmp_path / "facts")
@@ -2029,6 +2030,45 @@ def test_one_trigger_scheduled_with_two_jobs_is_a_row_each(tmp_path: Path):
     ]
 
 
+def _placed(facts: list, caller: str, places: dict[int, tuple[int | None, bool]]) -> list:
+    """`facts`, with `caller`'s sites at `places` given their position in its control flow
+    (`dominator`, `on_every_exit`; D00 §5, spec 2026-11-02 rule 9)."""
+    return [
+        fact.model_copy(
+            update={"dominator": places[fact.ordinal][0], "on_every_exit": places[fact.ordinal][1]}
+        )
+        if isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal in places
+        else fact
+        for fact in facts
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-refusal-needs-the-binder-to-have-RUN-BEFORE-on-every-path")
+def test_one_trigger_scheduled_on_two_branches_is_not_refused(tmp_path: Path):
+    """Review 2's C3: `if (useB) scheduler.scheduleJob(newJob(BJob).build(), t); else
+    scheduler.scheduleJob(newJob(CJob).build(), t);` — P4's two calls, now on two branches
+    (spec 2026-11-02 rule 9). The window still holds BJob's call before CJob's, but it is not
+    on CJob's `dominator` chain, so it did not run before it on every path: CJob runs on `c2`
+    whenever `useB` is false. Its row is `partial` and unmarked, never refused, and so CJob
+    stays a root."""
+    y = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    branched = {
+        0: (None, True),
+        10: (0, False),
+        11: (10, False),
+        12: (11, False),
+        20: (0, False),
+        21: (20, False),
+        22: (21, False),
+    }
+    rows = _scheduled(tmp_path, _placed(_one_trigger_two_calls("CJob"), y, branched))
+    assert _refused_rows(rows) == [
+        ("AJob#execute", "c1", "resolved", "None"),
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "partial", "None"),
+    ]
+
+
 @pytest.mark.pins("scheduled_chain.the-JOB-handed-to-scheduleJob-is-STATED")
 def test_one_trigger_scheduled_twice_with_the_same_job_is_one_row(tmp_path: Path):
     """The same BJob detail handed to `scheduleJob` twice with one trigger: ONE row, B@c2
@@ -2336,6 +2376,105 @@ def test_a_helper_that_schedules_called_twice_refuses_the_second_job(tmp_path: P
     assert _refused_rows(_scheduled(tmp_path, _helper_schedules_twice())) == [
         ("BJob#execute", "c2", "resolved", "None"),
         ("CJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-refusal-needs-the-binder-to-have-RUN-BEFORE-on-every-path")
+@pytest.mark.pins("values.a-binder-INSIDE-a-helper-runs-before-only-on-every-exit")
+def test_a_helper_that_schedules_on_one_branch_refuses_nothing(tmp_path: Path):
+    """`sched(j, t) { if (ok) scheduler.scheduleJob(j, t); }`, called twice: the first call's
+    `scheduleJob` is not `on_every_exit` in `sched`, so it did not bind the trigger before the
+    second call on every path (rule 9, across a hand-off). The second job's row is `partial`
+    and unmarked."""
+    sched = _MODULE + method_descriptor(
+        _TRIGGERS, "sched", "(Lorg/quartz/JobDetail;Lorg/quartz/Trigger;)V"
+    )
+    rows = _scheduled(tmp_path, _placed(_helper_schedules_twice(), sched, {0: (None, False)}))
+    assert _refused_rows(rows) == [
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "partial", "None"),
+    ]
+
+
+def _trigger_maker_schedules() -> tuple[str, list]:
+    """`Trigger mk() { t = trigger("c2"); scheduler.scheduleJob(newJob(BJob).build(), t); return
+    t; }`, and `y() { t = mk(); scheduler.scheduleJob(newJob(CJob).build(), t); }`: the first
+    bind is inside a callee whose RETURN the trigger's path reads. Returns `mk`'s symbol."""
+    trigger_jvm, trigger = _cron_helper()
+    mk = _MODULE + method_descriptor(_TRIGGERS, "mk", "()Lorg/quartz/Trigger;")
+    y = _MODULE + method_descriptor(_TRIGGERS, "y", "()V")
+    facts = [
+        *_classes("BJob", "CJob"),
+        *trigger,
+        _method_symbol("mk", "()Lorg/quartz/Trigger;"),
+        _site(mk, 0, _TRIGGERS, "trigger", trigger_jvm, result=1, arguments=(_string("c2"),)),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=mk,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=1),
+        ),
+        _method_symbol("y", "()V"),
+        _site(y, 0, _TRIGGERS, "mk", "()Lorg/quartz/Trigger;", result=1),
+    ]
+    for caller, at, job in ((mk, 10, "BJob"), (y, 20, "CJob")):
+        facts += [
+            _site(
+                caller,
+                at,
+                JOB_BUILDER,
+                "newJob",
+                f"(Ljava/lang/Class;){_JOB_BUILDER_TYPE}",
+                result=at,
+                arguments=(_class(job),),
+            ),
+            _site(
+                caller,
+                at + 1,
+                JOB_BUILDER,
+                "build",
+                "()Lorg/quartz/JobDetail;",
+                receiver=at,
+                result=at + 1,
+            ),
+            _site(
+                caller,
+                at + 2,
+                "org/quartz/Scheduler#",
+                "scheduleJob",
+                _SCHEDULE_JVM,
+                receiver=99,
+                result=at + 2,
+                arguments=(
+                    CallArgument(kind="unresolved", source=at + 1),
+                    CallArgument(kind="unresolved", source=1),
+                ),
+            ),
+        ]
+    return mk, facts
+
+
+@pytest.mark.pins("values.a-binder-in-a-RETURNED-callee-ran-before-through-its-call")
+def test_a_bind_inside_a_callee_whose_return_is_read_runs_before_the_callers_call(tmp_path: Path):
+    """The bind in `mk` is `on_every_exit` there, and `mk()` is on the second call's
+    `dominator` chain, so it ran first on every path (rule 9, across a return): the second job
+    is refused, as P4 inline is."""
+    _, facts = _trigger_maker_schedules()
+    assert _refused_rows(_scheduled(tmp_path, facts)) == [
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "resolved", "trigger is already bound to BJob"),
+    ]
+
+
+@pytest.mark.pins("scheduled_chain.a-refusal-needs-the-binder-to-have-RUN-BEFORE-on-every-path")
+def test_a_bind_on_one_branch_of_a_returned_callee_refuses_nothing(tmp_path: Path):
+    """The same, with `mk`'s `scheduleJob` on one branch: not `on_every_exit`, so whether it
+    bound the trigger before `y`'s call is undecided — no refusal."""
+    mk, facts = _trigger_maker_schedules()
+    rows = _scheduled(tmp_path, _placed(facts, mk, {12: (11, False)}))
+    assert _refused_rows(rows) == [
+        ("BJob#execute", "c2", "resolved", "None"),
+        ("CJob#execute", "c2", "partial", "None"),
     ]
 
 

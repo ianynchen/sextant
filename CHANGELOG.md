@@ -17,6 +17,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A call on one branch is no longer read as a call on every path** (spec 2026-11-02 rule 9,
+  review 2's C3 and M4). Reading each call site's new `dominator` and `on_every_exit`: the
+  value walk SPLITS a path at a call between a value's producer and its use that is not on
+  every path to the use — one path where it ran, one where it did not — so
+  `if (tls) o.setPort(443); client.get(…)` gives a path with port 443 and one with the port
+  unset, never 443 alone. Where two or more calls split one window, or the use is a return
+  (whose position the facts do not give), every path from the split is `partial`. Quartz
+  marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
+  every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
+  unmarked, and C stays a root.
 - **The value walk follows a value HANDED to another method before it is used** (spec
   2026-11-02 rules 1-3). Its `escapes` window counted only calls made ON the value, so
   `o = new Options().setHost("search"); configure(o); WebClient.create(vertx, o)` read

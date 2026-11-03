@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 from fixture_module import declared_parameters, write_fixture_module_fact
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve import path_prefix
 from sextant.application.resolve.call_edges import record_call_edges
@@ -1803,7 +1804,7 @@ def walked(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     the passes that own them. Handed back OPEN — every test reads through it."""
     tmp_path = tmp_path_factory.mktemp("values")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "values.jsonl", _document(), _facts())
+    write_fact_file(facts / "values.jsonl", _document(), straight_line(_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -1921,7 +1922,7 @@ def bridged(tmp_path_factory: pytest.TempPathFactory) -> dict[int, DuckDbWorkspa
     for mask in (0, 2):
         tmp_path = tmp_path_factory.mktemp(f"values_bridge_{mask}")
         facts = tmp_path / "facts"
-        write_fact_file(facts / "bridge.jsonl", _document(), _bridge_facts(mask))
+        write_fact_file(facts / "bridge.jsonl", _document(), straight_line(_bridge_facts(mask)))
         write_fixture_module_fact(facts)
         workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
         workspace.load_facts(facts)
@@ -3771,7 +3772,7 @@ def _unseen_facts() -> list[Fact]:
 def unseen(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_unseen")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "unseen.jsonl", _document(), _unseen_facts())
+    write_fact_file(facts / "unseen.jsonl", _document(), straight_line(_unseen_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4354,7 +4355,7 @@ def _cycle_facts() -> list[Fact]:
 def objects(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_objects")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "objects.jsonl", _document(), _object_facts())
+    write_fact_file(facts / "objects.jsonl", _document(), straight_line(_object_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4626,7 +4627,7 @@ def _fetch_facts() -> list[Fact]:
 def fetched(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_fetch")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "fetch.jsonl", _document(), _fetch_facts())
+    write_fact_file(facts / "fetch.jsonl", _document(), straight_line(_fetch_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4783,7 +4784,7 @@ def _chain_facts() -> list[Fact]:
 def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_chain")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "chain.jsonl", _document(), _chain_facts())
+    write_fact_file(facts / "chain.jsonl", _document(), straight_line(_chain_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -5417,7 +5418,7 @@ def _handoff_facts() -> list[Fact]:
 def handoffs(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_handoffs")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "handoffs.jsonl", _document(), _handoff_facts())
+    write_fact_file(facts / "handoffs.jsonl", _document(), straight_line(_handoff_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -5655,7 +5656,7 @@ def test_which_constant_a_value_is_survives_a_hand_off(tmp_path: Path):
     the value is, and that is `GET` on one path and `PUT` on the other, whatever `equals`
     did. Before rule 8 both paths answered `escapes` and apollo-portal lost 51 verbs."""
     facts = tmp_path / "facts"
-    write_fact_file(facts / "identity.jsonl", _document(), _identity_facts())
+    write_fact_file(facts / "identity.jsonl", _document(), straight_line(_identity_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
@@ -5780,3 +5781,164 @@ def test_a_configuring_result_stored_in_a_field_escapes(handoffs):
     """`storeResult(o) { this.options = o.setPort(1); }`: the stored result is the same
     object, now in a field."""
     assert _use_of(handoffs, "storedResult", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+# **Rule 9** (spec 2026-11-02, the fact approved by the user that day): a call between a value's
+# producer and its use that is not on every path to the use SPLITS the path — one where it ran,
+# one where it did not. Each `Uses#<name>()` is written with the position the extractor gives
+# it (`dominator`, `on_every_exit`), so the branch is in the facts as it is in the bytecode.
+
+
+def _placed(fact: Fact, dominator: int | None, every: bool) -> Fact:
+    """`fact` at a stated place in its method's control flow."""
+    assert isinstance(fact, CallSiteFact)
+    return fact.model_copy(update={"dominator": dominator, "on_every_exit": every})
+
+
+def _set(name: str, ordinal: int, target: tuple[str, str, str], argument: CallArgument, **given):
+    """A setter called on the value (id 1) in `Uses.<name>`."""
+    return _site(
+        _symbol(_USES, name, "()V"),
+        ordinal,
+        target,
+        kind="virtual",
+        receiver=given.pop("receiver", 1),
+        arguments=[argument],
+        **given,
+    )
+
+
+def _branch_facts() -> list[Fact]:
+    caller = {name: _symbol(_USES, name, "()V") for name in ("tls", "either", "fluent", "made")}
+    tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
+    make = _symbol(_SETUP, "make", "()" + _OPTIONS_TYPE)
+    port = {value: CallArgument(kind="int", value=value) for value in (1, 2, 443)}
+    return [
+        _type(_SETUP),
+        _type(_USES),
+        # `o = create(); if (tls) o.setPort(443); Client.of(o);` — review 2's M4.
+        _declared(_USES, "tls", "()V"),
+        _placed(_site(caller["tls"], 0, _CREATE, result=1), None, True),
+        _placed(_set("tls", 1, _SET_PORT, port[443], result=2), 0, False),
+        _placed(_site(caller["tls"], 2, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `if (x) o.setPort(1); else o.setPort(2);` — two split calls setting one part.
+        _declared(_USES, "either", "()V"),
+        _placed(_site(caller["either"], 0, _CREATE, result=1), None, True),
+        _placed(_set("either", 1, _SET_PORT, port[1], result=2), 0, False),
+        _placed(_set("either", 2, _SET_PORT, port[2], result=3), 0, False),
+        _placed(_site(caller["either"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `if (x) o.setHost("a").setPort(1);` — the second call is made on the first's result,
+        # so it runs only where the first did.
+        _declared(_USES, "fluent", "()V"),
+        _placed(_site(caller["fluent"], 0, _CREATE, result=1), None, True),
+        _placed(_set("fluent", 1, _SET_HOST, _string("a")[0], result=2), 0, False),
+        _placed(_set("fluent", 2, _SET_PORT, port[1], receiver=2, result=3), 1, False),
+        _placed(_site(caller["fluent"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `maybeTune(o) { if (tls) o.setPort(443); }`, handed the value on a straight line.
+        *_setup(
+            "maybeTune",
+            _placed(
+                _on_parameter(tune, 0, _SET_PORT, arguments=[port[443]], result=1), None, False
+            ),
+        ),
+        *_uses("tuned", _handed("tuned", 1, (_SETUP, "maybeTune", _TAKES_OPTIONS)), last=2),
+        # `Options make() { o = create(); if (x) o.setPort(1); return o; }`, and
+        # `Client.of(make())`: the use is a RETURN, and which return is not in the facts.
+        _declared(_SETUP, "make", "()" + _OPTIONS_TYPE),
+        _placed(_site(make, 0, _CREATE, result=1), None, True),
+        _placed(
+            _site(make, 1, _SET_PORT, kind="virtual", receiver=1, arguments=[port[1]], result=2),
+            0,
+            False,
+        ),
+        _returns(
+            _SETUP, "make", "()" + _OPTIONS_TYPE, 0, CallArgument(kind="unresolved", source=1)
+        ),
+        _declared(_USES, "made", "()V"),
+        _site(caller["made"], 0, (_SETUP, "make", "()" + _OPTIONS_TYPE), result=1),
+        _site(caller["made"], 1, _CLIENT_OF, arguments=_results(1)),
+    ]
+
+
+@pytest.fixture(scope="module")
+def branches(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_branches")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "branches.jsonl", _document(), straight_line(_branch_facts()))
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _chains(producers: tuple[Producer, ...]) -> list[tuple[tuple[int, ...], bool]]:
+    """Each producer's chain as the ordinals it ran, and whether it is inexact."""
+    return sorted(
+        (tuple(at for _, at in producer.chain), producer.inexact) for producer in producers
+    )
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+def test_a_call_on_one_branch_splits_the_path_in_two(branches):
+    """Review 2's M4: `o = create(); if (tls) o.setPort(443); Client.of(o)`. The call is not on
+    the use's `dominator` chain, so a run reaches the use with it and a run reaches it without:
+    two paths, one with the port set and one with it unset, both exact — never port 443 alone,
+    which is false whenever `tls` is."""
+    assert _chains(_use_of(branches, "tls", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), False)]
+    # The value walk, which declares no configuring call: the path with the call ends at
+    # `escapes`, the one without reads the factory, as the near-miss with nothing between does.
+    assert sorted(map(str, _walked_use(branches, "tls"))) == ["escapes", "external"]
+
+
+def test_a_call_on_every_path_to_the_use_does_not_split(handoffs):
+    """The near-miss: the same calls on a straight line (`ordered`, every call on the use's
+    `dominator` chain) are one path, as before rule 9."""
+    assert len(_use_of(handoffs, "ordered", _OPTIONS_SETTERS)) == 1
+
+
+@pytest.mark.pins("values.two-or-more-SPLIT-calls-make-every-path-of-the-window-inexact")
+def test_two_split_calls_give_every_combination_each_inexact(branches):
+    """`if (x) o.setPort(1); else o.setPort(2);`: the fact does not say which branch each call
+    is on, so the split gives every combination — neither, either, both — including two no run
+    makes. Rule 9's "not claimed": every path from such a split is `partial`, never
+    `resolved`."""
+    assert _chains(_use_of(branches, "either", _OPTIONS_SETTERS)) == [
+        ((0,), True),
+        ((0, 1), True),
+        ((0, 1, 2), True),
+        ((0, 2), True),
+    ]
+
+
+@pytest.mark.pins("values.a-call-on-a-SKIPPED-calls-result-is-skipped-too")
+def test_a_call_on_a_skipped_calls_result_is_skipped_with_it(branches):
+    """`if (x) o.setHost("a").setPort(1);`: `setPort` is made on `setHost`'s result, so no path
+    runs it without `setHost` — three paths, not four."""
+    assert [chain for chain, _ in _chains(_use_of(branches, "fluent", _OPTIONS_SETTERS))] == [
+        (0,),
+        (0, 1),
+        (0, 1, 2),
+    ]
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+def test_a_call_inside_a_callee_not_on_every_exit_splits_the_path(branches):
+    """`maybeTune(o) { if (tls) o.setPort(443); }` handed the value: the call is not
+    `on_every_exit` in the callee, so the caller's use is reached with it and without it."""
+    tuned = _symbol(_USES, "tuned", "()V")
+    tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
+    assert sorted(producer.chain for producer in _use_of(branches, "tuned", _OPTIONS_SETTERS)) == [
+        ((tuned, 0),),
+        ((tuned, 0), (tune, 0)),
+    ]
+
+
+@pytest.mark.pins("values.a-split-before-a-RETURN-is-undecided-and-inexact")
+def test_a_call_not_on_every_exit_before_a_returned_value_is_undecided(branches):
+    """`make() { o = create(); if (x) o.setPort(1); return o; }`: the use is a return, and the
+    facts do not say which return or whether the call is on every path to it — a call not on
+    every exit may still be on every path to the return that hands `o` back. Both paths are
+    kept, each `partial`."""
+    assert _chains(_use_of(branches, "made", _OPTIONS_SETTERS)) == [((0,), True), ((0, 1), True)]

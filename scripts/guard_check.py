@@ -8717,8 +8717,64 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            events.append((ordinal, self._handed_to(method, ordinal, slot)))\n",
+                find="            events.append((ordinal, self._handed_to(method, ordinal, slot), None))\n",
                 replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path": Guard(
+        what="a call between a value's producer and its use that is not on every path to the "
+        "use (not on the use's `dominator` chain, or not `on_every_exit` in a body the value "
+        "was handed to) splits the path: one where it ran, one where it did not (spec "
+        "2026-11-02 rule 9)",
+        why="`if (tls) o.setPort(443); client.get(…)` publishes port 443 `resolved`, false "
+        "whenever `tls` is false (review 2, M4)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if ordinal != _END_OF_BODY and outcomes != (((), ()),) and not "
+                "always(ordinal):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.two-or-more-SPLIT-calls-make-every-path-of-the-window-inexact": Guard(
+        what="where two or more calls in one window split it, every path from the split is "
+        "inexact (`partial`): the fact does not say which branch a call is on (rule 9, "
+        "not claimed)",
+        why="`if (x) setPort(1); else setPort(2);` publishes `neither` and `both` at "
+        "`resolved`, combinations no run makes",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        unsure = len(splits) > 1 or (bool(splits) and used_at is None)\n",
+                replace="        unsure = bool(splits) and used_at is None  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-before-a-RETURN-is-undecided-and-inexact": Guard(
+        what="where the use is a RETURN, any split is undecided and inexact: which return is "
+        "not in the facts, so a call not on every exit may be on every path to that one",
+        why="`if (x) { o.setPort(1); return o; }` would publish the port-unset path at "
+        "`resolved` for a value no run returns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        unsure = len(splits) > 1 or (bool(splits) and used_at is None)\n",
+                replace="        unsure = len(splits) > 1  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-on-a-SKIPPED-calls-result-is-skipped-too": Guard(
+        what="a call made on a configuring call's result runs only where that call ran: where "
+        "the split skips the configuring call, it skips the call on its result too",
+        why='`if (x) o.setHost("a").setPort(1);` gains a path with the port set and the host '
+        "not, which no run makes",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if parent in skipped:\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -9073,6 +9129,46 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/engines/scheduled_chain.py",
                 find="    for outer in entered:\n",
                 replace="    for outer in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-refusal-needs-the-binder-to-have-RUN-BEFORE-on-every-path": Guard(
+        what="a pairing call is refused only where the call that bound the trigger ran before "
+        "it on every path: on its `dominator` chain in one method, `on_every_exit` in a body "
+        "a hand-off entered (spec 2026-11-02 rule 9, review 2 C3)",
+        why="`if (useB) scheduleJob(B, t); else scheduleJob(C, t);` marks C refused and drops "
+        "it as a root, though C runs whenever `useB` is false",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return trigger.ran_before(\n",
+                replace="    return True or trigger.ran_before(  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-binder-INSIDE-a-helper-runs-before-only-on-every-exit": Guard(
+        what="a stated call inside a body a hand-off entered ran before a later call only "
+        "where it is `on_every_exit` in that body (rule 9, across a hand-off)",
+        why="`sched(j, t){ if (ok) scheduleJob(j, t); }` called twice marks the second job "
+        "refused, though the first call may not have bound the trigger",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if not _on_every_exit(index, *point):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-binder-in-a-RETURNED-callee-ran-before-through-its-call": Guard(
+        what="a stated call inside a callee whose return the path read ran before a later "
+        "call where it is `on_every_exit` there and the callee's one call ran before (rule 9)",
+        why="`t = mk(); scheduleJob(C, t)` with `mk` binding the trigger to B reads the bind "
+        "as undecided and publishes C as running, though Quartz refuses it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        len(set(calls)) == 1\n",
+                replace="        False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

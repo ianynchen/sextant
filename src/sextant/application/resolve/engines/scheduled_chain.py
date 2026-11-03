@@ -955,8 +955,9 @@ def _first_binder(
     The walk meets frames backward (`Path.stated_by_frame`): each frame it crosses out to or
     descends into ran before the one met just before it — `y(){ scheduleJob(B, t); h(t); }`
     ran `y`'s call before any of `h`'s. So the frames are read last-met first, and within a
-    frame its calls in the window's order, which is the run order the window itself assumes
-    (review 2, C3/M4: no control-flow fact yet)."""
+    frame its calls in the window's order. A call the window holds only on some paths is on
+    this path because the walk split there (spec 2026-11-02 rule 9); whether it ran before
+    the call being read on EVERY path is `_ran_before`'s."""
     for frame in reversed(trigger.stated_by_frame()):
         for caller, ordinal, slot, entered in frame:
             site = context.index.sites.get((caller, ordinal))
@@ -966,17 +967,22 @@ def _first_binder(
     return None
 
 
-def _ran_before(binder: tuple[str, int], consumer: Mapping[str, Any], trigger: Path) -> bool:
-    """Whether the call at `binder` runs before `consumer` on every path that reaches both —
-    the one place a refusal from an EARLIER call rests on order (C1, C2 and M1 of review 2).
-
-    Today the walk's own window is the whole evidence: it places `binder` before the use by
-    ordinal, and an entered body runs to its end before its caller's next call. The facts
-    carry no control flow (review 2, C3, and M4: a call on one branch is gathered as though
-    it ran on every path), so this answers True wherever the window put the binder on the
-    path. A fact that proves order (dominance, a block per call) is to be read HERE and in
-    `_first_binder`, and nowhere else, when the user rules on it."""
-    return True
+def _ran_before(
+    binder: tuple[str, int, int, tuple[tuple[str, int], ...]],
+    consumer: Mapping[str, Any],
+    trigger: Path,
+    context: _Context,
+) -> bool:
+    """Whether the stated call at `binder` runs before `consumer` on every path that reaches
+    both — the one place a refusal from an EARLIER call rests on order (C1, C2 and M1 of
+    review 2) — read off the control-flow fact (spec 2026-11-02 rule 9, `Path.ran_before`):
+    in one method, the binder is on the consumer's `dominator` chain; across a hand-off, it
+    is `on_every_exit` in the callee and the hand-off is on the chain. Anything else is
+    undecided (review 2, C3): `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` puts
+    `B` before `C` in the window, and the row for `C` is `partial`, never refused."""
+    return trigger.ran_before(
+        context.index, binder, (str(consumer["caller"]), int(str(consumer["ordinal"])))
+    )
 
 
 def _for_job_binds(end: ChainEnd, context: _Context) -> list[tuple[_Bound | None, Path]] | None:
@@ -1060,7 +1066,7 @@ def _refusal(
             bound = next(iter(binds.values()))
     else:
         first = _first_binder(trigger, effects, context)
-        if first is not None and not _ran_before(first[:2], consumer, trigger):
+        if first is not None and not _ran_before(first, consumer, trigger, context):
             known = False
         elif first is not None:
             caller, ordinal, slot, entered = first

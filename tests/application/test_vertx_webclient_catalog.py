@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent, _resolve_fluent_walked
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.facts import (
     CallArgument,
@@ -117,7 +118,7 @@ def _send() -> tuple[str, str, list[CallArgument]]:
 
 
 def _rows(tmp_path: Path, body: _Body) -> list[dict]:
-    workspace = _resolve_fluent(tmp_path, body.sites, _vertx_webclient())
+    workspace = _resolve_fluent(tmp_path, straight_line(body.sites), _vertx_webclient())
     rows = [dict(row) for row in workspace.query("endpoints")]
     workspace.close()
     return rows
@@ -504,7 +505,7 @@ def test_a_statement_style_request_keeps_what_each_statement_set(tmp_path: Path)
         [CallArgument(kind="unresolved")],
     )
     body.call(REQUEST, "send", _SEND, typed, [])
-    workspace = _resolve_fluent(tmp_path, body.sites, _vertx_webclient())
+    workspace = _resolve_fluent(tmp_path, straight_line(body.sites), _vertx_webclient())
     rows = [dict(row) for row in workspace.query("endpoints")]
     entries = sorted(
         (r["kind"], r["name"], r["value"]) for r in workspace.query("endpoint_metadata")
