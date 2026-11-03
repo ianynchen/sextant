@@ -165,14 +165,14 @@ publishes `search` while its port is unknown.
 9. **A call on a branch is not a call on every path** [option A ruled by the user,
    2026-11-02: "A: fact per call"; the exact fact below approved by the user 2026-11-02: "Approve, build it";
    `post_dominator` ruled 2026-11-03: "A: add post_dominator"; several splits ruled 2026-11-03:
-   "A: every row partial"].
+   "A: every row partial"; `reaches_return` ruled 2026-11-03: option A].
    The facts today give each call its `ordinal` (instruction order) and nothing else, so
    `a; b;` and `if (x) a; else b;` are the same facts (review 2, C3), and
    `if (tls) o.setDefaultPort(443); client.get(…)` publishes port 443 `resolved` — false
    when `tls` is false (review 2, M4). D00 reserved this as "an enrichment of this same field
    in a later phase".
 
-   **The fact.** Each `call_site` gains three fields, computed by the extractor from the
+   **The fact.** Each `call_site` gains four fields, computed by the extractor from the
    method's control-flow graph (ASM's `Analyzer`, exception-handler edges included):
    - `dominator`: the `ordinal` of the nearest call site in the same method that runs
      before this call on EVERY path from the method's entry to this call; absent where none
@@ -184,6 +184,9 @@ publishes `search` while its port is unknown.
      method that runs after this call on EVERY path from it to a normal return; absent where
      none does. A path that ends in a throw reaches no normal return and constrains nothing,
      so a call from which every path throws has none.
+   - `reaches_return` (ruled 2026-11-03, option A): true where every path from the call ends
+     at a normal return; false where any path ends in a throw or loops forever. Absent
+     `post_dominator` alone cannot tell "no call follows" from "no return follows"; this does.
 
    **The readers.** Both sit in the one place each reader decides order (`_ran_before`, the
    walk's window):
@@ -224,15 +227,22 @@ publishes `search` while its port is unknown.
      a handler edge leaves the BEFORE node, so a call that may have thrown dominates nothing
      in its catch and is skipped by it for `post_dominator`. The post-dominator tree is the
      same algorithm on the reversed edges, rooted at a normal-exit node every reached
-     `*RETURN` feeds. All three fields are written on throw sites too. An unreachable invoke,
-     and a body the analyser cannot walk, emit no site at all.
+     `*RETURN` feeds. `reaches_return` marks every node that cannot reach that exit (every
+     path throws or loops forever) and propagates the mark backwards to every predecessor; a
+     reached `ATHROW` leads nowhere, so even a throw a handler covers counts as one that may
+     leave (handler types are not compared — the answer errs towards false). All four fields
+     are written on throw sites too. An unreachable invoke, and a body the analyser cannot
+     walk, emit no site at all.
    - *The walk* (`values._Walk._window`, `_reaches_use`, `_windowed`): a split records the
      choice on the trail (`_SPLIT`); a call made on a configuring call's result is skipped
      with it. The side WITH the call is proven where the use (a call in the same frame) is on
      its `post_dominator` chain; where the window runs to the end of an entered body, where
-     any `post_dominator` proves a normal return follows; where the use is a RETURN, where
-     that holds and every return of the method hands the value back (the side without the
-     call needs the latter too). An unproven side's answers are inexact (`partial`), as is
+     a normal return follows the call — any `post_dominator`, or `reaches_return` true (ruled
+     2026-11-03, option A), which is what a setter with no call after it has; where the use
+     is a RETURN, where that holds and every return of the method hands the value back (the
+     side without the call needs the latter too). `Options make(tls) { o = new; if (tls)
+     o.setSsl(true); return o; }` gives both rows `resolved`; a setter every path from which
+     throws stays `partial`. An unproven side's answers are inexact (`partial`), as is
      every path of a window with two or more splits. A fact with no `on_every_exit` is
      undecided: every call in its window splits, unproven.
    - *Quartz* (`scheduled_chain._ran_before`, `values.Path.ran_before`): in one method, on
@@ -241,16 +251,15 @@ publishes `search` while its port is unknown.
      use's method or one enclosing it; inside a callee whose return the path read,
      `on_every_exit` there and that call ran before. Anything else is undecided.
    - *Cost*, measured: the extractor on `spring-core-7.0.9.jar` (29,432 call sites), 5 runs
-     each, 1.00-1.11 s before and 1.18-1.27 s after, JVM start included (about +0.13 s); the
-     facts are strictly additive. `mall-admin`, the largest field corpus: scan 1.3-1.5 s
+     each: 1.00-1.11 s before, 1.18-1.27 s with three fields, and 1.17-1.25 s with all four (0.99-1.08 s before in the same runs),
+     JVM start included; the facts are strictly additive. `mall-admin`, the largest field corpus: scan 1.3-1.5 s
      before and 1.4 s after, resolve 3.9 s before and 3.9-4.0 s after. Per window, the worst
      seen on eleven corpora is 4 split calls and 5 paths (`yudao-module-infra`); no cap is
      set. Every published table on the six pinned and five unpinned corpora is identical
      before and after.
-   - *Not proven, so `partial`*: `post_dominator` is absent both where no call follows a call
-     and where no normal return can follow it, so a setter that is the last call before a
-     return (`if (tls) o.setSsl(true); return o;`) cannot be proven to reach the return, and
-     its row is `partial`.
+   - *Not proven, so `partial`*: a setter from which some path throws or never ends and
+     which no call follows on every path to a return; a setter before one of several returns
+     that hand back different values; and every row of a window with two or more splits.
 
 ## 3. Not changed
 

@@ -8792,6 +8792,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-setter-that-REACHES-A-RETURN-reaches-the-returned-use": Guard(
+        what="a split call with no `post_dominator` whose `reaches_return` is true is one after "
+        "which a run returns (rule 9, ruled by the user 2026-11-03, option A)",
+        why="`Options make(tls){ o = new; if (tls) o.setSsl(true); return o; }` publishes its "
+        "ssl row `partial` though every run with the setter returns `o`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        returns = bool(_post_dominators(self._index, method, ordinal)) or "
+                "_reaches_return(\n",
+                replace="        returns = bool(_post_dominators(self._index, method, ordinal)) or "
+                "False and _reaches_return(\n",
+            ),
+        ),
+    ),
+    "values.reaches_return-FALSE-is-not-a-return": Guard(
+        what="a call whose `reaches_return` is false or absent is not read as reaching a return",
+        why="`if (x) { o.setPort(1); throw …; } return o;` publishes port 1 `resolved` for a "
+        "value no run returns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    return row is not None and row.get("reaches_return") is True\n',
+                replace="    return row is not None  # guard disabled\n",
+            ),
+        ),
+    ),
     "values.a-split-before-a-RETURN-needs-EVERY-return-to-hand-back-the-value": Guard(
         what="where the use is a RETURN of the value, a side of a split is exact only where "
         "every return of the method hands the value back",

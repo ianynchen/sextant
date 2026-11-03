@@ -1667,6 +1667,13 @@ def _post_dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[
     return frozenset(chain)
 
 
+def _reaches_return(index: ValueIndex, method: str, ordinal: int) -> bool:
+    """Whether every path from the call at `(method, ordinal)` ends at a normal return (rule 9,
+    ruled by the user 2026-11-03, option A); False where the facts do not say."""
+    row = index.sites.get((method, ordinal))
+    return row is not None and row.get("reaches_return") is True
+
+
 def _on_every_exit(index: ValueIndex, method: str, ordinal: int) -> bool:
     """Whether the call at `(method, ordinal)` runs on every path to a normal return (rule 9);
     False where the facts do not say."""
@@ -2779,9 +2786,10 @@ class _Walk:
 
         - **a call in this frame** (`used_at`): the use is on the call's `post_dominator` chain.
           `if (tls) { o.setPort(443); return; } use(o)` fails it, so that path is `partial`;
-        - **the end of an entered body** (`in_body`): a normal return is reachable from the call,
-          which a `post_dominator` proves. Absent, the facts cannot tell "no call follows" from
-          "no normal return follows", so the path is `partial`;
+        - **the end of an entered body** (`in_body`): a normal return follows the call — proven
+          by a `post_dominator` (a return is reachable and every such path passes it) or by
+          `reaches_return` (every path ends at one; ruled by the user 2026-11-03, option A),
+          which is what a setter with no call after it has;
         - **a RETURN of the value** (`used_at` None otherwise): that, and every normal return of
           the method returns the held value, so whichever return a run reaches is its use; the
           path without the call needs the second half too.
@@ -2790,7 +2798,9 @@ class _Walk:
         if used_at is not None:
             chain = _post_dominators(self._index, method, ordinal)
             return chain is not None and used_at in chain, True
-        returns = bool(_post_dominators(self._index, method, ordinal))
+        returns = bool(_post_dominators(self._index, method, ordinal)) or _reaches_return(
+            self._index, method, ordinal
+        )
         if in_body:
             return returns, True
         every = self._returned_everywhere(method, held)
