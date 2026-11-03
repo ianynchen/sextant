@@ -28,7 +28,7 @@ from fixture_module import declared_parameters, write_fixture_module_fact
 
 from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
-from sextant.application.resolve import path_prefix
+from sextant.application.resolve import path_prefix, values
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines import fluent
@@ -6455,6 +6455,17 @@ def test_a_few_branched_setters_are_each_their_own_partial_row(branches):
 
 
 @pytest.mark.pins("values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row")
+def test_a_window_stops_enumerating_at_the_cap(branches):
+    """The cap inside ONE window is what bounds the cost (review 3, M2): the whole-path cap in
+    `_windowed` gives the same row, but only after the window has built every path — 2^N of
+    them. So the window itself, nine guarded setters on one object, is one path ending
+    `non_enumerable`, never 512 built first."""
+    walk = values._Walk(value_index(branches), configuring=_OPTIONS_SETTERS)
+    assert walk._window(_symbol(_USES, "many9", "()V"), ("value", 1), 0, 10) == (
+        ((), "non_enumerable"),
+    )
+
+
 def test_a_window_with_too_many_paths_is_one_row_with_a_stated_reason(branches):
     """Review 3's M2: nine guarded setters give 512 paths, every one `partial` by the ruling,
     and the count doubles with each setter (twenty took 30.9 s and 2.15 GB). Past the cap the
