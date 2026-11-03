@@ -27,7 +27,12 @@ here would restate those documents rather than add anything.
   `if (tls) { o.setPort(443); return; } connect(o);` no run connects with 443, so that row is
   `partial`. A return of the value counts as the use. Where two or more calls on branches are
   in one window, every row from the split is `partial`, whichever parts they set (ruled
-  2026-11-03, "A: every row partial"). Quartz
+  2026-11-03, "A: every row partial"). Fix round 1 (review 3): the splits are counted per
+  PATH, across every frame the path enters, so a branched call in a helper and another in
+  its caller make every row `partial` too; a branched setter followed by a call to a body
+  that never returns normally is `partial`; and a window whose paths pass 256 (twenty
+  guarded setters on one object were a million) is one row ending `non_enumerable`, its
+  parts unknown, rather than 30 s and 2 GB for one site. Quartz
   marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
   every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
   unmarked, and C stays a root.

@@ -24,6 +24,7 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import scheduled_chain
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.shapes.chains import configuring_calls
 from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
@@ -304,8 +305,13 @@ def _cron_trigger(caller: str, *identity: str) -> list[CallSiteFact]:
 
 
 def _scheduled(
-    tmp_path: Path, facts: list[CallSiteFact], catalog: Catalog | None = None
+    tmp_path: Path,
+    facts: list[CallSiteFact],
+    catalog: Catalog | None = None,
+    roots: list[str] | None = None,
 ) -> list[dict]:
+    """The `scheduled_work` rows `facts` derive; with `roots` given, the handlers of the
+    scheduled roots are appended to it."""
     write_fact_file(tmp_path / "facts" / "Triggers.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
@@ -315,6 +321,13 @@ def _scheduled(
         catalog = catalog if catalog is not None else _quartz(_catalogs())
         skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
         assert skipped == []
+        if roots is not None:
+            record_roots(workspace)
+            roots.extend(
+                str(root["handler"])
+                for root in workspace.query("roots")
+                if root["root_kind"] == "scheduled"
+            )
         return workspace.query("scheduled_work")
     finally:
         workspace.close()
@@ -2061,7 +2074,9 @@ def test_one_trigger_scheduled_on_two_branches_is_not_refused(tmp_path: Path):
         21: (20, False),
         22: (21, False),
     }
-    rows = _scheduled(tmp_path, _placed(_one_trigger_two_calls("CJob"), y, branched))
+    roots: list[str] = []
+    rows = _scheduled(tmp_path, _placed(_one_trigger_two_calls("CJob"), y, branched), roots=roots)
+    assert any("/CJob#execute(" in root for root in roots), roots
     assert _refused_rows(rows) == [
         ("AJob#execute", "c1", "resolved", "None"),
         ("BJob#execute", "c2", "resolved", "None"),

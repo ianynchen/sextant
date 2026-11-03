@@ -8733,8 +8733,8 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="            if ordinal != _END_OF_BODY and outcomes != (((), ()),) and not "
-                "always(ordinal):\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+                "always(ordinal)\n",
+                replace="            if False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8747,8 +8747,52 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        several = len(splits) > 1\n",
-                replace="        several = False  # guard disabled\n",
+                find="    return len(splits) > 1 or any(step.context[0] in (_SEVERAL, _UNPROVEN) for "
+                "step in path)\n",
+                replace="    return len(splits) > 1 or any(step.context[0] == _UNPROVEN for step in "
+                "path)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.several-splits-are-counted-over-the-whole-PATH": Guard(
+        what="two or more calls on branches anywhere on a path from the producer to the use, "
+        "in whichever frames, make every row of the path `partial` (ruled by the user "
+        '2026-11-03, "A: every row partial", per path — review 3, C1)',
+        why='`y(){ if (z) o.setHost("h"); send(o); }` with `send(o){ if (z) o.setPort(1); '
+        'use(o); }` publishes "port without host" `resolved`, a run nobody makes',
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    return len(splits) > 1 or any(step.context[0] in (_SEVERAL, _UNPROVEN) for "
+                "step in path)\n",
+                replace="    return any(step.context[0] in (_SEVERAL, _UNPROVEN) for step in path)"
+                "  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row": Guard(
+        what="a window whose paths pass the cap is one path ending `non_enumerable`, stated, "
+        "never enumerated on (review 3, M2)",
+        why="twenty guarded setters on one object took 30.9 s and 2.15 GB for one site",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if len(paths) > _PATH_CAP:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-that-NEVER-RETURNS-blocks-the-path-to-the-use": Guard(
+        what="a call to a body this workspace read that has no normal return, on the way from "
+        "a split call to the use, means no run with the split call reaches the use (review 3, "
+        "m2)",
+        why="`if (tls) { o.setPort(443); boom(); } use(o)` with `boom()` always throwing "
+        "publishes port 443 `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    return target in index.never_return\n",
+                replace="    return False  # guard disabled\n",
             ),
         ),
     ),
@@ -8761,8 +8805,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            return chain is not None and used_at in chain, True\n",
-                replace="            return True, True  # guard disabled\n",
+                find="            if chain is None or used_at not in chain:\n",
+                replace="            if chain is None or used_at not in chain:\n"
+                "                return True, True  # guard disabled\n"
+                "            if False:\n",
             ),
         ),
     ),
@@ -8800,10 +8846,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        returns = bool(_post_dominators(self._index, method, ordinal)) or "
-                "_reaches_return(\n",
-                replace="        returns = bool(_post_dominators(self._index, method, ordinal)) or "
-                "False and _reaches_return(\n",
+                find="        returns = (bool(chain) or _reaches_return(self._index, method, "
+                "ordinal)) and not any(\n",
+                replace="        returns = (bool(chain) or False and _reaches_return(self._index, method, "
+                "ordinal)) and not any(  # guard disabled\n",
             ),
         ),
     ),

@@ -242,7 +242,18 @@ publishes `search` while its port is unknown.
      is a RETURN, where that holds and every return of the method hands the value back (the
      side without the call needs the latter too). `Options make(tls) { o = new; if (tls)
      o.setSsl(true); return o; }` gives both rows `resolved`; a setter every path from which
-     throws stays `partial`. An unproven side's answers are inexact (`partial`), as is
+     throws stays `partial`. A call on the way to a body this workspace read that has no
+     normal return (`boom()` that always throws) is a throw the method's own facts cannot see:
+     no run with the split call gets past it, so that side is `partial` (review 3, m2).
+   - *Several splits are counted per PATH* (review 3, C1): two or more calls on branches
+     anywhere on the path from the producer to the use — in one window, or one in a helper's
+     window and one in its caller's, or one in a factory and one in the code using what it
+     returns — make every row of the path `partial` (`values._unsure`).
+   - *The path bound* (review 3, M2): a window with two or more splits records one mark
+     instead of each choice, so paths that gather the same calls are one; a window whose paths
+     still pass 256 is one path ending `non_enumerable`, its parts unknown, stated. Twenty
+     guarded setters on one object were a million paths, 32 s and 2.16 GB; now one row, under
+     0.1 s and 0.1 GB. An unproven side's answers are inexact (`partial`), as is
      every path of a window with two or more splits. A fact with no `on_every_exit` is
      undecided: every call in its window splits, unproven.
    - *Quartz* (`scheduled_chain._ran_before`, `values.Path.ran_before`): in one method, on

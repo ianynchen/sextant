@@ -12,6 +12,8 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN
 from sextant.domain.symbols import bare_descriptor
@@ -2071,6 +2073,7 @@ def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dic
     try:
         tables["open_questions"] = [dict(row) for row in workspace.query("open_questions")]
         tables["roots"] = [dict(row) for row in workspace.query("roots")]
+        tables["branched_options"] = _branched_options(workspace)
     finally:
         workspace.close()
     result = CliRunner().invoke(
@@ -2638,6 +2641,62 @@ def test_vertx_a_router_built_in_a_base_class_takes_the_prefix_a_third_method_mo
 
 
 # Task 12: outbound parts, absolute URLs and the Hono helper ---------------------------
+
+
+_WEB_CLIENT_OPTIONS = "io/vertx/ext/web/client/WebClientOptions#"
+
+
+def _branched_options(workspace: DuckDbWorkspace) -> list[dict]:
+    """The value walk's paths to the options object `BranchedSearchClient` hands
+    `WebClient.create` — the chain of calls each path ran on it, and whether it is exact —
+    read on the fixture's own javac bytecode (rule 9's fact as the extractor writes it)."""
+    sites = [
+        row
+        for row in effective_call_sites(workspace)
+        if "/BranchedSearchClient#<init>(" in str(row["caller"]) and row["name"] == "create"
+    ]
+    assert len(sites) == 1, "the fixture must build its client once"
+    setters = {
+        (str(row["owner"]), str(row["name"]), str(row["descriptor"]))
+        for row in effective_call_sites(workspace)
+        if row["owner"] == _WEB_CLIENT_OPTIONS and str(row["name"]).startswith("setDefault")
+    }
+    return [
+        {
+            "chain": [str(workspace_row_name(workspace, at)) for at in producer.chain],
+            "exact": not producer.inexact,
+        }
+        for producer in producers_of(
+            value_index(workspace),
+            sites[0],
+            1,
+            {(_WEB_CLIENT_OPTIONS, "<init>"), *((owner, name) for owner, name, _ in setters)},
+            along_receivers=True,
+            configuring=setters,
+        )
+    ]
+
+
+def workspace_row_name(workspace: DuckDbWorkspace, at: tuple[str, int]) -> str:
+    """The method a chain step `(caller, ordinal)` calls."""
+    [row] = [
+        row for row in effective_call_sites(workspace) if (row["caller"], row["ordinal"]) == at
+    ]
+    return str(row["name"])
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+def test_vertx_a_port_set_on_one_branch_is_two_paths_on_real_bytecode(vertx_tables):
+    """Spec 2026-11-02 rule 9, §4's fixture-level test (review 3, m1): `BranchedSearchClient`
+    sets the default port only `if (tls)`. On the extractor's own output for javac's bytecode,
+    the walk reaches the options object on two paths — one with `setDefaultPort` and one
+    without — both exact. Before rule 9 the facts carried no branch and the walk read one path,
+    with the port, as if every run set it. (The published row still merges the two paths —
+    `client_base._Options`, item 2.)"""
+    assert sorted((path["chain"], path["exact"]) for path in vertx_tables["branched_options"]) == [
+        (["<init>", "setDefaultHost"], True),
+        (["<init>", "setDefaultHost", "setDefaultPort"], True),
+    ]
 
 
 def _vertx_calls(rows: list[dict], caller_class: str) -> set[tuple]:
