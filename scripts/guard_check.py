@@ -8746,9 +8746,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if ordinal != _END_OF_BODY and outcomes != (((), ()),) and not "
-                "always(ordinal)\n",
-                replace="            if False  # guard disabled by scripts/guard_check.py\n",
+                find="            and not always(ordinal)\n",
+                replace="            and False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8789,9 +8788,9 @@ GUARDS: dict[str, Guard] = {
         "false whenever `x` is false",
         edits=(
             Edit(
-                path=_CHAINS,
-                find='        and not always(int(site["ordinal"]))\n',
-                replace="        and False  # guard disabled\n",
+                path=_VALUES,
+                find="            and not always(ordinal)\n",
+                replace="            and False  # guard disabled\n",
             ),
         ),
     ),
@@ -8816,7 +8815,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    return several_or_unproven(splits, bool(captures.get(_UNPROVEN)))\n",
+                find="    return inexact(Path(trail)) or bool(captures.get(_UNPROVEN))\n",
                 replace="    return bool(captures.get(_UNPROVEN))  # guard disabled\n",
             ),
         ),
@@ -8828,9 +8827,9 @@ GUARDS: dict[str, Guard] = {
         "`resolved`, though no run sends there",
         edits=(
             Edit(
-                path=_CHAINS,
-                find="            not proofs[key][0 if key in ran else 1] for key in proofs\n",
-                replace="            False for key in proofs  # guard disabled\n",
+                path=_VALUES,
+                find="                    if not ran_proven:\n",
+                replace="                    if False:  # guard disabled\n",
             ),
         ),
     ),
@@ -8840,8 +8839,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        and _without_rule_9(snapshot) != _without_rule_9(after[index])\n",
-                replace="        # guard disabled\n",
+                find="            changed = _without_rule_9(snapshot) != _without_rule_9(after[index])\n",
+                replace="            changed = True  # guard disabled\n",
             ),
         ),
     ),
@@ -8853,9 +8852,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            and (counting is None or counting(str(step.context[1]), "
-                "int(step.context[2])))\n",
-                replace="            and True  # guard disabled\n",
+                find="    if counting is None:\n        return True\n    return any(\n",
+                replace="    if True:  # guard disabled\n        return True\n    return any(\n",
             ),
         ),
     ),
@@ -8866,8 +8864,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                if self._counting is None or self._counting(method, ordinal)\n",
-                replace="                if True  # guard disabled\n",
+                find="        several = len(counted) > 1\n",
+                replace="        several = len(splitting) > 1  # guard disabled\n",
             ),
         ),
     ),
@@ -8879,8 +8877,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        if counting is None or counting(method, ordinal)\n",
-                replace="        if True  # guard disabled\n",
+                find="    return counts_split(parts, published)\n",
+                replace="    return True  # guard disabled\n",
             ),
         ),
     ),
@@ -8905,8 +8903,106 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    if 2 ** (behind + len(calls)) > PATH_CAP:\n",
-                replace="    if 2 ** len(calls) > PATH_CAP:  # guard disabled\n",
+                find="    width = held * (1 if context.path is None else 2 ** split_sites(context.path))\n",
+                replace="    width = 1  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-whose-PARTS-ARE-NOT-KNOWN-counts": Guard(
+        what="a call on a branch whose path ends at a reason (`escapes`, `cycle`, the cap) counts "
+        "toward the several-splits rule: its parts are not known (review 3 re-review 2, C-1)",
+        why="`if (x) Objects.hash(b); if (x) b.setUri(c)` publishes `/a` and `/c` `resolved` "
+        "beside a call that may have changed the url",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        isinstance(gathered, str)\n        or any(",
+                replace="        False  # guard disabled\n        or any(",
+            ),
+        ),
+    ),
+    "values.a-HAND-OFF-split-counts-by-what-its-BODY-sets": Guard(
+        what="a branched hand-off into a body the walk read counts by the calls the body makes "
+        "on the value, in whichever method (review 3 re-review 2, C-1)",
+        why="`if (x) helper(b); if (x) b.queueUrl(Q2)`, `helper` setting the queue, publishes "
+        "`/acme/helper` `resolved`, a queue no run sends to",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        or any(counting(made_in, ordinal) for made_in, ordinal in gathered)\n",
+                replace="        or any(counting(made_in, ordinal) for made_in, ordinal in gathered "
+                "if made_in == method)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-on-a-configuring-calls-result-runs-WHERE-THAT-CALL-DOES": Guard(
+        what="a call made on a configuring call's result that is on that call's "
+        "`post_dominator` chain is no split of its own (review 3 re-review 2, m-1)",
+        why='`if (x) b.setUri("/b").setUri("/c")` publishes a `/b` row no run sends, and makes '
+        "every row `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            chain = _post_dominators(self._index, method, parent)\n"
+                "            return chain is not None and ordinal in chain\n",
+                replace="            return False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it": Guard(
+        what="the forward chain walk reads a hand-off of the chain's value by rules 1 and 2, "
+        "through the value walk's own code (`values.HandOffs`; review 3 re-review 2, C-2)",
+        why='`setB(b){ b.setUri("/b") }`, then `b = get("/a"); setB(b); execute(b.build())` '
+        "publishes `/a` `resolved`, which no run sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if producer is None or context.hand_offs is None:\n        return []\n",
+                replace="    if True:  # guard disabled\n        return []\n",
+            ),
+        ),
+    ),
+    "chains.a-hand-off-into-code-we-do-NOT-HAVE-leaves-the-parts-unknown": Guard(
+        what="a path of the forward walk through a hand-off into code we do not have has every "
+        "part a step sets unknown (rule 2; review 3 re-review 2, C-2)",
+        why="`Objects.hash(b)` before `execute(b.build())` publishes the root's `/a` though the "
+        "call may have changed it",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        _fold(captures, dict.fromkeys(context.step_parts, _unread(gathered)))\n",
+                replace="        pass  # guard disabled\n",
+            ),
+            Edit(
+                path=_CHAINS,
+                find="                parts.update(context.step_parts)\n",
+                replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.rows-of-ONE-IDENTITY-that-DIFFER-in-a-published-part-are-partial": Guard(
+        what="two chains of one row identity that differ in a published column or metadata "
+        "make the one row no surer than `partial` (review 3 re-review 2, m-2)",
+        why='`if (x) r.putHeader("X-Tenant", "acme"); r.send()` publishes one `resolved` row '
+        "carrying a header one run does not send",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if published != self.published:\n            self.differs = True\n",
+                replace="        if False:  # guard disabled\n            self.differs = True\n",
+            ),
+        ),
+    ),
+    "fluent.rows-of-ONE-IDENTITY-EQUAL-in-every-part-keep-the-most-EXACT": Guard(
+        what="two chains of one row identity equal in every published column give the row the "
+        "more exact resolution of the two (review 3 re-review 2, m-2)",
+        why="a request every run sends to `/b` is published `partial` because a branched "
+        "request to `/b` came first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='                row["resolution"] = resolution\n',
+                replace="                pass  # guard disabled\n",
             ),
         ),
     ),
@@ -9032,8 +9128,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            > 1\n        )\n        # Which ordinals a later event",
-                replace="            > 99  # guard disabled\n        )\n        # Which ordinals a later event",
+                find="        several = len(counted) > 1\n",
+                replace="        several = len(counted) > 99  # guard disabled\n",
             ),
         ),
     ),
@@ -9044,7 +9140,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if len(paths) > PATH_CAP:\n",
+                find="            if len(paths) * width > PATH_CAP:\n",
                 replace="            if False:  # guard disabled\n",
             ),
         ),

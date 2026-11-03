@@ -17,6 +17,24 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The forward chain walk follows a hand-off of the chain's value, and counts what it cannot
+  see** (rule 9 fix round 4, review 3 re-review 2). `setB(b){ b.setUri("/b"); }` then `b =
+  get("/a"); setB(b); http.execute(b.build())` published `GET /a`, `resolved`, which no run
+  sends: the walk read a hand-off as nothing. It now reads it by rules 1 and 2 through the value
+  walk's own code (`values.HandOffs`): into a body we have, the calls the body makes on its
+  parameter fold at the hand-off's place, each path through the body its own by rule 9 there;
+  into code we do not have (`Objects.hash(b)`), every part a step sets is unknown on that path
+  and its row no surer than `partial`. The split and its enumeration are now written once
+  (`values.Flow.paths`) for both walks: a split whose parts are not known — an `escapes`, a
+  hand-off into code we do not have — counts toward the several-splits rule, and a branched
+  hand-off into a body counts by what the body sets (`/acme/helper resolved` is gone from the
+  SQS walk back); and a call on a configuring call's result that is on its `post_dominator`
+  chain is no split of its own, so `if (x) b.setUri("/b").setUri("/c")` is `/a` and `/c`, both
+  `resolved`, in both walks. Two chains of one row identity that differ in a published column
+  or metadata (a header put on one branch) leave the one row `partial`, since the table holds
+  one row per identity; equal in everything, the row keeps the more exact resolution. Every
+  capture a fluent step sets is now in `fluent.PUBLISHED_PARTS` or the commented
+  `fluent.UNPUBLISHED_PARTS`, enforced by an architecture test.
 - **The forward chain walk reads branches by rule 9** (review 3 re-review, the walk's branch
   blindness). A statement-style call it folds into a chain (void, or `returns_receiver`) was
   folded whatever branch it was on: `if (x) b.setUri("…/b"); execute(b.build())` published

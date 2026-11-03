@@ -239,6 +239,19 @@ PUBLISHED_PARTS = frozenset(
         "collected",
     }
 )
+# The capture names a fluent step may carry that are no part of a row (review 3 re-review 2,
+# m-3: every capture a step sets is in one set or the other, `tests/architecture/
+# test_published_parts_are_complete.py`). Each says why:
+UNPUBLISHED_PARTS = frozenset(
+    {
+        # The ladder a `url` capture is read through where its argument is a call
+        # (`chains._VIA_KEYS`): an instruction for reading the `url` part, which the same entry
+        # captures, never a value of its own.
+        "url_via",
+        # The same ladder for the `channel` part.
+        "channel_via",
+    }
+)
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -322,7 +335,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_call_endpoints.sql's own contract — it only guards against what
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
-    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]] = set()
+    seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], _Kept] = {}
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
@@ -483,7 +496,7 @@ class _DeriveContext:
     carrier_rules: CarrierRules
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
-    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]]
+    seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], "_Kept"]
     # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
     # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
     # chain may carry any number, which is why D01 gives it a side table rather than
@@ -904,6 +917,30 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             and path is not None
             and (verb is not None or verbless)
         )
+        # Through `_metadata_row` like every other entry this engine writes, so the value is
+        # masked by the same redactor on the same rule — a query parameter named
+        # `access_token` is exactly the shape that matters.
+        entries = [
+            *(
+                _metadata_row(entry, context, direction, verb, path)
+                for entry in captures.get(_COLLECTED) or ()
+            ),
+            *(
+                _metadata_row(
+                    {
+                        "kind": QUERY_KIND,
+                        "name": {"kind": "string", "value": name},
+                        "value": None if value is None else {"kind": "string", "value": value},
+                    },
+                    context,
+                    direction,
+                    verb,
+                    path,
+                )
+                for name, value in query
+            ),
+        ]
+        kept: _Kept | None = None
         if path is not None and (verb is not None or verbless) and not ranked:
             # `verb or ""` — single_call's own dedup key (`_matching_method`'s
             # caller): a verbless row has no method to distinguish it by, so
@@ -943,30 +980,32 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 None if inbound else peer,
                 handler if inbound else None,
             )
-            if key in context.seen:
-                continue
-            context.seen.add(key)
-        metadata: list[dict[str, Any]] = [] if ranked else context.metadata
-        for entry in captures.get(_COLLECTED) or ():
-            metadata.append(_metadata_row(entry, context, direction, verb, path))
-        # Below the dedup `continue` on purpose: a row the key already saw writes no second
-        # copy of its own query parameters either. Through `_metadata_row` like every other
-        # entry this engine writes, so the value is masked by the same redactor on the same
-        # rule — a query parameter named `access_token` is exactly the shape that matters.
-        for name, value in query:
-            metadata.append(
-                _metadata_row(
-                    {
-                        "kind": QUERY_KIND,
-                        "name": {"kind": "string", "value": name},
-                        "value": None if value is None else {"kind": "string", "value": value},
-                    },
-                    context,
-                    direction,
-                    verb,
-                    path,
-                )
+            # **Rule 4 for rows of one identity** (review 3 re-review 2, m-2). Every column this
+            # row publishes beside its identity, with its metadata: two chains equal in all of
+            # it are one request, and the row keeps the more exact resolution of the two; two
+            # that differ in any of it are two requests the table cannot hold apart (one row
+            # per identity, its metadata keyed to it), so the one row is true of neither alone
+            # and no surer than `partial`.
+            published = (
+                handler,
+                request_shape,
+                response_shape,
+                consumes,
+                produces,
+                path_kind,
+                method_kind,
+                entries,
             )
+            seen = context.seen.get(key)
+            if seen is not None:
+                seen.merged(published, resolution)
+                continue
+            kept = _Kept(published)
+            context.seen[key] = kept
+        metadata: list[dict[str, Any]] = [] if ranked else context.metadata
+        # Below the dedup `continue` on purpose: a row the key already saw writes no second
+        # copy of its own metadata either.
+        metadata.extend(entries)
         if source is not None:
             # Finding 4: the channel-sourced chain reached a wire — the source
             # channel's wire end is this row, an outbound `fed_by`.
@@ -1060,6 +1099,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             if len(variants) > 1 and variant_row["resolution"] == str(Resolution.RESOLVED):
                 variant_row = {**variant_row, "resolution": str(Resolution.NARROWED)}
             context.rows.append(variant_row)
+            if kept is not None:
+                kept.rows.append(variant_row)
             if variant_unread is not None and context.unread is not None:
                 file_unread(context.unread, variant_row, variant_unread)
 
@@ -1091,6 +1132,32 @@ def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:
     if isinstance(argument, str):
         return argument
     return _string_value(argument) or static_field_value(argument, context.verb_fields)
+
+
+class _Kept:
+    """The row(s) one identity published (`_derive`'s dedup key), with what the first chain to
+    reach it published beside the key: a later chain of the same identity changes their
+    resolution, never adds a row (review 3 re-review 2, m-2)."""
+
+    def __init__(self, published: tuple[Any, ...]) -> None:
+        self.published = published
+        self.differs = False
+        self.rows: list[dict[str, Any]] = []
+
+    def merged(self, published: tuple[Any, ...], resolution: str) -> None:
+        """Another chain of this identity: equal in every published column, a row keeps the
+        more exact resolution of the two (a row one of several handlers answers stays
+        `narrowed`); different in any, every row is no surer than `partial`."""
+        if published != self.published:
+            self.differs = True
+        for row in self.rows:
+            if self.differs:
+                row["resolution"] = weaker(row["resolution"], str(Resolution.PARTIAL))
+            elif (
+                row["resolution"] != str(Resolution.NARROWED)
+                and weaker(resolution, row["resolution"]) == row["resolution"]
+            ):
+                row["resolution"] = resolution
 
 
 @dataclass(frozen=True)

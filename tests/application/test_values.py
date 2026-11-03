@@ -6307,13 +6307,16 @@ def test_two_split_calls_give_every_combination_each_inexact(branches):
 
 
 @pytest.mark.pins("values.a-call-on-a-SKIPPED-calls-result-is-skipped-too")
+@pytest.mark.pins("values.a-call-on-a-configuring-calls-result-runs-WHERE-THAT-CALL-DOES")
 def test_a_call_on_a_skipped_calls_result_is_skipped_with_it(branches):
     """`if (x) o.setHost("a").setPort(1);`: `setPort` is made on `setHost`'s result, so no path
-    runs it without `setHost` — three paths, not four."""
-    assert [chain for chain, _ in _chains(_use_of(branches, "fluent", _OPTIONS_SETTERS))] == [
-        (0,),
-        (0, 1),
-        (0, 1, 2),
+    runs it without `setHost`; and it is on `setHost`'s `post_dominator` chain, so no path runs
+    `setHost` without it either. ONE split, two paths, both exact (review 3 re-review 2, m-1:
+    `Flow.paths`, the rule both walks share). Before, a third path ran `setHost` alone, which no
+    run makes, and the two splits made every path `partial`."""
+    assert _chains(_use_of(branches, "fluent", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1, 2), False),
     ]
 
 

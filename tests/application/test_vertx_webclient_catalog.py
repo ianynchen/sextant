@@ -517,11 +517,15 @@ def test_a_statement_style_request_keeps_what_each_statement_set(tmp_path: Path)
     assert entries == [("header", "X-Tenant", "acme"), ("query", "a", "b")]
 
 
+@pytest.mark.pins("fluent.rows-of-ONE-IDENTITY-that-DIFFER-in-a-published-part-are-partial")
 def test_a_header_put_on_one_branch_is_a_row_with_it_and_one_without(tmp_path: Path):
     """Rule 9 in the forward chain walk: `r = client.post(q); if (x) r.putHeader("X-Tenant",
     "acme"); r.send()`. The header is not on `send()`'s dominator chain, so the request is sent
     with it on one run and without it on another: two chain ends, the header on one. They are
-    one wire (`POST /q`), so one row, `resolved`, carrying the header that run sets."""
+    one wire (`POST /q`), and the published table holds one row per wire, so one row carrying
+    the header. The header is published (`collected`), and that row is false on the run
+    without it: until rows can differ in their metadata, the merged row is `partial` (review 3
+    re-review 2, m-2; rule 4)."""
     body = _Body()
     request = body.call(CLIENT, "postAbs", _URI, 90, [_string("http://prometheus:9090/q")])
     body.call(REQUEST, "putHeader", _STRING_STRING, request, [_string("X-Tenant"), _string("acme")])
@@ -549,7 +553,7 @@ def test_a_header_put_on_one_branch_is_a_row_with_it_and_one_without(tmp_path: P
     workspace.close()
 
     assert sorted((r["method"], r["path"], r["resolution"]) for r in rows) == [
-        ("POST", "/q", "resolved")
+        ("POST", "/q", "partial")
     ]
     assert entries == [("header", "X-Tenant", "acme")]
     assert sorted(ends) == [False, True]

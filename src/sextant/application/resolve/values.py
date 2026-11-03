@@ -250,8 +250,10 @@ _HANDED_TO = "handed-to"
 # the part the call binds finds the call (`Path.stated`).
 _STATED = "stated"
 # Whether a call that is NOT on every path to the use ran on this path (spec 2026-11-02 rule
-# 9, `_Walk._window`): one path where it ran, one where it did not, recorded as a choice so
-# two reads on one path agree on it.
+# 9, `Flow.paths`): one path where it ran, one where it did not, recorded as a choice so two
+# reads on one path agree on it. The context is `(_SPLIT, method, ordinal, counts)`: whether
+# the split counts for the reader's row is decided where the split is made, from what the
+# call sets (`_counted`), and travels with it.
 _SPLIT = "split"
 _RAN = "ran"
 _SKIPPED = "skipped"
@@ -1646,6 +1648,10 @@ _Reached = tuple[_Trail, Answer]
 # with several callees, and either the configuring calls it gathered — `(method, ordinal)`, in
 # the order they run — or the reason it ended (`escapes`, `cycle`).
 _Window = tuple[_Trail, tuple[tuple[str, int], ...] | str]
+# One thing done to a value in a window (`_Walk._events`, `Flow.paths`): its ordinal, the paths
+# it takes (`_Window`s), and the configuring call whose result it is made on, None for one made
+# on the value itself.
+_Event = tuple[int, tuple[_Window, ...], int | None]
 
 
 def _entered_through(steps: _Trail, method: str, ordinal: int) -> _Trail:
@@ -1692,32 +1698,54 @@ def counts_split(parts: AbstractSet[str] | None, published: AbstractSet[str] | N
     return published is None or parts is None or bool(set(parts) & set(published))
 
 
-def path_splits(path: "Path", counting: Counting = None) -> int:
-    """How many calls on branches a value walk's `path` split at that count for the reader
-    (`counting`), a window that held two or more such (`_SEVERAL`) counting as two — for a
-    reader adding its own splits to the path's. `split_sites` lists them all."""
-    return _split_count(path.trail, counting)
+def path_splits(path: "Path") -> int:
+    """How many calls on branches a value walk's `path` split at that count for the reader it
+    was walked for (`_counted`, decided at each split), a window that held two or more such
+    (`_SEVERAL`) counting as two — for a reader adding its own splits to the path's.
+    `split_sites` lists them all."""
+    return _split_count(path.trail, counted_only=True)
 
 
 def split_sites(path: "Path") -> int:
     """How many calls on branches a value walk's `path` split at, whatever they set — the
     count the path cap bounds."""
-    return _split_count(path.trail, None)
+    return _split_count(path.trail, counted_only=False)
 
 
-def _split_count(trail: _Trail, counting: Counting) -> int:
+def inexact(path: "Path") -> bool:
+    """Whether an answer on `path` is inexact by rule 9 (`_unsure`) — for a reader holding a
+    path of its own, such as the forward chain walk's (`shapes.chains`)."""
+    return _unsure(path.trail)
+
+
+def _split_count(trail: _Trail, counted_only: bool) -> int:
     splits = len(
         {
             step.context
             for step in trail
-            if step.context[0] == _SPLIT
-            and (counting is None or counting(str(step.context[1]), int(step.context[2])))
+            if step.context[0] == _SPLIT and (not counted_only or step.context[3])
         }
     )
     return splits + (2 if any(step.context[0] == _SEVERAL for step in trail) else 0)
 
 
-def _unsure(path: _Trail, counting: Counting = None) -> bool:
+def _counted(method: str, outcomes: "tuple[_Window, ...]", counting: Counting) -> bool:
+    """Whether a split in `method` whose sides are `outcomes` counts for the reader's row (the
+    user's ruling of 2026-11-03, option A; review 3 re-review 2, C-1): where the reader states
+    no parts (`counting` None), always; else where some outcome gathers a call that sets a part
+    the row shows, or ends in a reason (`escapes`, `cycle`, the cap), whose parts are not known.
+    A hand-off into a body the walk read is so judged by the calls the body makes on the value,
+    in whichever `method` they are, and one into code we do not have by its `escapes`."""
+    if counting is None:
+        return True
+    return any(
+        isinstance(gathered, str)
+        or any(counting(made_in, ordinal) for made_in, ordinal in gathered)
+        for _, gathered in outcomes
+    )
+
+
+def _unsure(path: _Trail) -> bool:
     """Whether an answer on `path` is inexact by rule 9 (`_Walk._window`).
 
     - **Two or more calls on branches anywhere on the PATH** (ruled by the user 2026-11-03,
@@ -1725,11 +1753,11 @@ def _unsure(path: _Trail, counting: Counting = None) -> bool:
       facts say whether a call is on every path, never which branch it is on, so the splits
       give every combination, including ones no run makes, whichever PUBLISHED parts the calls
       set (narrowed by the user's ruling of 2026-11-03, option A: a split that sets no part the
-      reader's row publishes does not count, `counting`) and whichever frames they are in. A
+      reader's row publishes does not count, `_counted`) and whichever frames they are in. A
       window that held two or more counted splits itself is marked once (`_SEVERAL`).
     - **A side of a split the facts do not prove a run takes to the use** (`_UNPROVEN`)."""
     return several_or_unproven(
-        _split_count(path, counting), any(step.context[0] == _UNPROVEN for step in path)
+        _split_count(path, counted_only=True), any(step.context[0] == _UNPROVEN for step in path)
     )
 
 
@@ -1953,6 +1981,153 @@ class Flow:
         row = self._index.sites.get((method, ordinal))
         group = None if row is None else row.get("loop_group")
         return None if group is None else int(str(group))
+
+    def paths(
+        self,
+        method: str,
+        held: tuple[str, int] | None,
+        events: "Sequence[_Event]",
+        used_at: int | None,
+        in_body: bool,
+        counting: Counting = None,
+        width: int = 1,
+    ) -> "tuple[_Window, ...]":
+        """Every path through `events` — what happens to one value in `method` between its
+        producer and its use at `used_at` (None: the end of the body), in run order, each event
+        `(ordinal, outcomes, parent)` — as `(choices, gathered calls or the reason it ended)`.
+        The one enumeration of rule 9 (spec 2026-11-02), for the value walk's window
+        (`_Walk._window`) and the forward chain walk's forks (`shapes.chains`) alike (review 3
+        re-review 2, check 4):
+
+        - **A call not on every path to the use** (`always`) SPLITS the path: one where it ran,
+          one where it did not, the choice recorded (`_SPLIT`, with whether it counts for the
+          reader, `_counted`), each side proven or marked `_UNPROVEN` (`reaches_use`). An event
+          that changes nothing on any path (`(((), ()),)`) is no split.
+        - **A call made on a configuring call's result** (`parent`) runs only where that call
+          did, and where it is on that call's `post_dominator` chain it runs wherever that call
+          does: it is no split of its own (review 3 re-review 2, m-1). `if (x)
+          b.setUri("/b").setUri("/c")` is ONE split.
+        - **Two or more counted splits** make every path inexact whatever each call did
+          (`_unsure`), so the choices are not recorded one by one: one `_SEVERAL` mark, and
+          paths that gather the same calls are one (review 3, M2).
+        - **The path cap** (`PATH_CAP`) counts the paths the reader already holds beside this
+          window's (`width`, 1 for a window read on its own): past it, one path ending
+          `non_enumerable`, the parts unknown, stated, never dropped."""
+        always = self.always(method, used_at)
+
+        def follows(parent: int | None, ordinal: int) -> bool:
+            if parent is None:
+                return False
+            chain = _post_dominators(self._index, method, parent)
+            return chain is not None and ordinal in chain
+
+        splitting = {
+            ordinal
+            for ordinal, outcomes, parent in events
+            if ordinal != _END_OF_BODY
+            and outcomes != (((), ()),)
+            and not always(ordinal)
+            and not follows(parent, ordinal)
+        }
+        counted = {
+            ordinal
+            for ordinal, outcomes, _ in events
+            if ordinal in splitting and _counted(method, outcomes, counting)
+        }
+        several = len(counted) > 1
+        # Which ordinals a later event is made on the result of: only those need remembering
+        # as skipped, so two paths differing only in a skip nothing reads are one.
+        parents = {parent for _, _, parent in events if parent is not None}
+        # Each path, with the events it did NOT run.
+        start: _Trail = (_Step((_SEVERAL,), _SEVERAL),) if several else ()
+        paths: list[tuple[_Trail, tuple[tuple[str, int], ...] | str, frozenset[int]]] = [
+            (start, (), frozenset())
+        ]
+        for ordinal, outcomes, parent in events:
+            skip: _Trail | None = None
+            if ordinal in splitting:
+                skip = ()
+                if not several:
+                    ran_proven, skip_proven = self.reaches_use(
+                        method, held, ordinal, used_at, in_body
+                    )
+                    split = (_SPLIT, method, ordinal, ordinal in counted)
+                    ran: _Trail = (_Step(split, _RAN),)
+                    if not ran_proven:
+                        ran += (_Step((_UNPROVEN, method, ordinal, used_at, _RAN), _UNPROVEN),)
+                    outcomes = tuple(((*ran, *more_steps), more) for more_steps, more in outcomes)
+                    skip = (_Step(split, _SKIPPED),)
+                    if not skip_proven:
+                        skip += (_Step((_UNPROVEN, method, ordinal, used_at, _SKIPPED), _UNPROVEN),)
+            remembered = frozenset({ordinal}) if ordinal in parents else frozenset()
+            following: list[tuple[_Trail, tuple[tuple[str, int], ...] | str, frozenset[int]]] = []
+            for steps, gathered, skipped in paths:
+                if isinstance(gathered, str):
+                    following.append((steps, gathered, skipped))
+                    continue
+                if parent in skipped:
+                    following.append((steps, gathered, skipped | remembered))
+                    continue
+                for more_steps, more in outcomes:
+                    merged = _combine(steps, more_steps)
+                    if merged is not None:
+                        following.append(
+                            (merged, more if isinstance(more, str) else (*gathered, *more), skipped)
+                        )
+                if skip is not None and (merged := _combine(steps, skip)) is not None:
+                    following.append((merged, gathered, skipped | remembered))
+            paths = list(dict.fromkeys(following))
+            if len(paths) * width > PATH_CAP:
+                # Past the bound: one path, the parts this window sets unknown, the reason
+                # stated (review 3, M2). Never dropped.
+                return (((), NON_ENUMERABLE),)
+        return tuple(dict.fromkeys((steps, gathered) for steps, gathered, _ in paths))
+
+
+class HandOffs:
+    """What is done to a value OTHER than calls made on it (spec 2026-11-02 rules 1-3), as the
+    value walk reads it (`_Walk._handed_events`), for a reader that walks the calls made on it
+    itself: the forward chain walk (`shapes.chains`, review 3 re-review 2, C-2). One rule, not a
+    second copy: a hand-off into a body this workspace read is that body's window over its
+    parameter, by rule 9 there; one into code we do not have, or a call that reaches the value
+    below an argument's top level or through a receiver the facts cannot name, is `escapes`.
+
+    `configuring` gives the calls that configure the value, as the value walk takes them: inside
+    an entered body, one of them is gathered and any other call on the parameter is `escapes`.
+    It is asked, and the walk built, the first time a value has anything done to it, since
+    most chains hand their value nowhere (GUIDELINES §8.7). One per chain run; it keeps each
+    entered body's window it has read."""
+
+    def __init__(
+        self,
+        index: ValueIndex,
+        configuring: Callable[[], AbstractSet[tuple[str, str, str]]],
+        counting: Counting = None,
+    ) -> None:
+        self._index = index
+        self._configuring = configuring
+        self._counting = counting
+        self._walk: _Walk | None = None
+
+    def of(self, method: str, value: int, after: int) -> "list[tuple[int, tuple[_Window, ...]]]":
+        """Each thing done to `value` in `method` after the ordinal `after`, other than a call on
+        it, in ordinal order: `(ordinal, outcomes)`, each outcome one path's choices and the
+        configuring calls it gathered, `(method, ordinal)` in run order, or the reason it
+        ended. Nothing for a value no hand-off can change (rule 3)."""
+        key = (method, value)
+        held_type = self._index.value_types.get(key)
+        if (
+            not self._index.handed.get(key)
+            and not self._index.nested.get(key)
+            and (held_type is None or not self._index.unread_receivers.get((method, held_type)))
+        ) or held_type in _UNCHANGEABLE:
+            return []
+        if self._walk is None:
+            self._walk = _Walk(
+                self._index, configuring=self._configuring(), counting=self._counting
+            )
+        events = self._walk._handed_events(method, (_VALUE, value), lambda ordinal: ordinal > after)
+        return [(ordinal, outcomes) for ordinal, outcomes, _ in sorted(events, key=lambda e: e[0])]
 
 
 class _Walk:
@@ -2829,7 +3004,7 @@ class _Walk:
                 reached.extend(self._identities_past(gathered, position, crossed, frames))
                 continue
             reached.extend(
-                (path, replace(answer, inexact=True) if _unsure(path, self._counting) else answer)
+                (path, replace(answer, inexact=True) if _unsure(path) else answer)
                 for path, answer in (
                     (
                         path,
@@ -2957,71 +3132,14 @@ class _Walk:
         an object IS."""
         if self._which_object or self._type_of(method, held) in _UNCHANGEABLE:
             return (((), ()),)
-        always = self._flow.always(method, used_at)
-        events = self._events(method, held, after, used_at, in_body)
-        splitting = {
-            ordinal
-            for ordinal, outcomes, _ in events
-            if ordinal != _END_OF_BODY and outcomes != (((), ()),) and not always(ordinal)
-        }
-        # Two or more splits here make every path from this window inexact whatever each call
-        # did (`_unsure`), so the choices are not recorded one by one: one `_SEVERAL` mark, and
-        # paths that gather the same calls collapse into one (review 3, M2).
-        several = (
-            sum(
-                1
-                for ordinal in splitting
-                if self._counting is None or self._counting(method, ordinal)
-            )
-            > 1
+        return self._flow.paths(
+            method,
+            held,
+            self._events(method, held, after, used_at, in_body),
+            used_at,
+            in_body,
+            self._counting,
         )
-        # Which ordinals a later event is made on the result of: only those need remembering
-        # as skipped, so two paths differing only in a skip nothing reads are one.
-        parents = {parent for _, _, parent in events if parent is not None}
-        # Each path, with the events it did NOT run: a call on a configuring call's result runs
-        # only where that call did.
-        start: _Trail = (_Step((_SEVERAL,), _SEVERAL),) if several else ()
-        paths: list[tuple[_Trail, tuple[tuple[str, int], ...] | str, frozenset[int]]] = [
-            (start, (), frozenset())
-        ]
-        for ordinal, outcomes, parent in events:
-            skip: _Trail | None = None
-            if ordinal in splitting:
-                skip = ()
-                if not several:
-                    ran_proven, skip_proven = self._flow.reaches_use(
-                        method, held, ordinal, used_at, in_body
-                    )
-                    ran: _Trail = (_Step((_SPLIT, method, ordinal), _RAN),)
-                    if not ran_proven:
-                        ran += (_Step((_UNPROVEN, method, ordinal, used_at, _RAN), _UNPROVEN),)
-                    outcomes = tuple(((*ran, *more_steps), more) for more_steps, more in outcomes)
-                    skip = (_Step((_SPLIT, method, ordinal), _SKIPPED),)
-                    if not skip_proven:
-                        skip += (_Step((_UNPROVEN, method, ordinal, used_at, _SKIPPED), _UNPROVEN),)
-            remembered = frozenset({ordinal}) if ordinal in parents else frozenset()
-            following: list[tuple[_Trail, tuple[tuple[str, int], ...] | str, frozenset[int]]] = []
-            for steps, gathered, skipped in paths:
-                if isinstance(gathered, str):
-                    following.append((steps, gathered, skipped))
-                    continue
-                if parent in skipped:
-                    following.append((steps, gathered, skipped | remembered))
-                    continue
-                for more_steps, more in outcomes:
-                    merged = _combine(steps, more_steps)
-                    if merged is not None:
-                        following.append(
-                            (merged, more if isinstance(more, str) else (*gathered, *more), skipped)
-                        )
-                if skip is not None and (merged := _combine(steps, skip)) is not None:
-                    following.append((merged, gathered, skipped | remembered))
-            paths = list(dict.fromkeys(following))
-            if len(paths) > PATH_CAP:
-                # Past the bound: one path, the parts this window sets unknown, the reason
-                # stated (review 3, M2). Never dropped.
-                return (((), NON_ENUMERABLE),)
-        return tuple(dict.fromkeys((steps, gathered) for steps, gathered, _ in paths))
 
     def _events(
         self,
@@ -3039,26 +3157,11 @@ class _Walk:
         kind, key = held
         if kind == _VALUE:
             on = self._index.receivers.get((method, key), ())
-            handed = self._index.handed.get((method, key), ())
-            nested = self._index.nested.get((method, key), ())
             stored = (method, key) in self._index.stored
         else:
             on = self._index.parameter_receivers.get((method, key), ())
-            handed = self._index.handed_parameters.get((method, key), ())
-            nested = self._index.nested_parameters.get((method, key), ())
             stored = (method, key) in self._index.stored_parameters
-        held_type = self._type_of(method, held)
-        unread = (
-            () if held_type is None else self._index.unread_receivers.get((method, held_type), ())
-        )
-        events: list[tuple[int, tuple[_Window, ...], int | None]] = []
-        # A call reaching the value below the top level of an argument (M3), and a call on a
-        # receiver the facts cannot name, of the value's own type (M4): either may be what
-        # changes it, and neither can be followed.
-        for ordinal in (*nested, *unread):
-            if not inside(ordinal):
-                continue
-            events.append((ordinal, (((), ESCAPES),), None))
+        events = self._handed_events(method, held, inside)
         for ordinal in on:
             if not inside(ordinal):
                 continue
@@ -3077,13 +3180,40 @@ class _Walk:
                         method, (_VALUE, int(str(result))), ordinal, used_at, in_body
                     )
                 )
+        if stored and in_body:
+            events.append((_END_OF_BODY, (((), ESCAPES),), None))
+        return sorted(events, key=lambda event: event[0])
+
+    def _handed_events(
+        self, method: str, held: tuple[str, int], inside: Callable[[int], bool]
+    ) -> list[_Event]:
+        """What `_events` reads other than the calls made ON `held`, at the ordinals `inside`
+        keeps: a call that may change it and cannot be followed (`escapes`), and each hand-off
+        of it, as the paths it takes (`_handed_to`)."""
+        kind, key = held
+        if kind == _VALUE:
+            handed = self._index.handed.get((method, key), ())
+            nested = self._index.nested.get((method, key), ())
+        else:
+            handed = self._index.handed_parameters.get((method, key), ())
+            nested = self._index.nested_parameters.get((method, key), ())
+        held_type = self._type_of(method, held)
+        unread = (
+            () if held_type is None else self._index.unread_receivers.get((method, held_type), ())
+        )
+        events: list[_Event] = []
+        # A call reaching the value below the top level of an argument (M3), and a call on a
+        # receiver the facts cannot name, of the value's own type (M4): either may be what
+        # changes it, and neither can be followed.
+        for ordinal in (*nested, *unread):
+            if not inside(ordinal):
+                continue
+            events.append((ordinal, (((), ESCAPES),), None))
         for ordinal, slot in handed:
             if not inside(ordinal):
                 continue
             events.append((ordinal, self._handed_to(method, ordinal, slot), None))
-        if stored and in_body:
-            events.append((_END_OF_BODY, (((), ESCAPES),), None))
-        return sorted(events, key=lambda event: event[0])
+        return events
 
     def _handed_to(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
         """The paths a hand-off at `(method, ordinal)`, argument `slot`, takes: one step where

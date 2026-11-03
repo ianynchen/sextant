@@ -72,18 +72,17 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     NON_ENUMERABLE,
-    PATH_CAP,
     RECEIVER,
     Counting,
     Flow,
+    HandOffs,
     Path,
     ValueIndex,
     cached_value_index,
     counts_split,
-    path_splits,
+    inexact,
     producer_paths,
     producers_of,
-    several_or_unproven,
     split_sites,
 )
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
@@ -184,19 +183,21 @@ _COLLECTED = "\x00collected"
 # chain's consumer, which knows what that call's arguments mean.
 _EXECUTED_BY = "\x00executed_by"
 # Rule 9 in the forward walk (spec 2026-11-02 rule 9, review 3 re-review: the walk was blind to
-# branches). The calls folded into the chain in place since its last fork, each with the call
-# whose result it was made on (or None) and the captures as they stood before it, so a fork can
-# rebuild the captures without any of them (`_forked`); the calls on branches decided on this
-# path; and whether a side of one of them no fact proves. None of the three reaches a row.
+# branches). The calls folded into the chain in place since its last fork — and the hand-offs of
+# its value, with the paths the value walk reads each to take (review 3 re-review 2, C-2) — each
+# with the call whose result it was made on (or None) and the captures as they stood before it,
+# so a fork can rebuild the captures on each path (`_forked`); the choices this path made
+# (`values.Path`'s trail, read by the value walk's own rules); whether a part on it was not read
+# (a hand-off into code we do not have, the cap); and how many paths the chain has split into so
+# far, which the cap bounds. None of the four reaches a row.
 _FOLDS = "\x00folds"
-_SPLITS = "\x00splits"
+_TRAIL = "\x00trail"
 _UNPROVEN = "\x00unproven"
-_RULE_9 = (_FOLDS, _SPLITS, _UNPROVEN)
+_WIDTH = "\x00width"
+_RULE_9 = (_FOLDS, _TRAIL, _UNPROVEN, _WIDTH)
 # The part a `collects` step sets (headers, query parameters), as a reader names it among the
 # parts its rows show (`chain_ends`' `published`).
 _COLLECTED_PART = "collected"
-# What a capture holds where the walk passed the path cap (`PATH_CAP`): the part is not read.
-_CAPPED = MappingProxyType({"kind": "unresolved", "reason": NON_ENUMERABLE})
 _ARG_REFERENCE = re.compile(r"^arg(\d+)$")
 
 # A `when` guard's own two keys (D02 §2's `fluent` style): `{arg: int,
@@ -342,6 +343,18 @@ def chain_ends(
             undeclared_poisons,
         )
     )
+    # Rules 1 and 2 in the forward walk (review 3 re-review 2, C-2), read by the value walk's
+    # own code. Inside a body the chain's value is handed to, a call configures it as it does in
+    # the chain's own method: it is void, or it returns the object it was called on (`_walk`).
+    # Built only where a hand-off is met (`values.HandOffs`).
+    hand_offs = HandOffs(
+        walk_index,
+        lambda: configuring_calls(catalog, walk_index.sites.values()) | _void_calls(walk_index),
+        counting,
+    )
+    step_parts = frozenset(
+        field for step in steps for field in step["captures"] if field not in _VIA_KEYS
+    )
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
@@ -394,6 +407,9 @@ def chain_ends(
             values=walk_index,
             flow=flow,
             counting=counting,
+            hand_offs=hand_offs,
+            context_of=context_of,
+            step_parts=step_parts,
             caller=caller,
             sites=sites,
             by_receiver=by_receiver,
@@ -778,6 +794,14 @@ class _ChainContext:
     counting: Counting = None
     # `ChainEnd.inexact`: the walk back reached this chain on an inexact path.
     inexact: bool = False
+    # Rules 1 and 2 in the forward walk (review 3 re-review 2, C-2): what the value walk reads a
+    # hand-off of the chain's value to do (`values.HandOffs`), one per run; each method's own
+    # context, for folding a call a hand-off's body makes (`chain_ends`' `context_of`); and
+    # every part a step of the catalog can set, which a hand-off into code we do not have
+    # leaves unknown.
+    hand_offs: HandOffs | None = None
+    context_of: Callable[[str], "_ChainContext"] | None = None
+    step_parts: frozenset[str] = frozenset()
 
 
 def _prefix_captures(
@@ -1120,7 +1144,7 @@ def _walk(
         # constructor row itself wherever its key is looked up; excluded
         # here so a `<init>` root never chains into itself.
         nexts = [s for s in context.by_receiver.get(chain_key, []) if s is not site]
-    forked, terminal = _fold_or_fork(nexts, captures, terminal, context)
+    forked, terminal = _fold_or_fork(nexts, captures, terminal, context, None, site)
     if forked or consumers:
         return
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
@@ -1149,6 +1173,7 @@ def _fold_or_fork(
     terminal: dict[str, Any] | None,
     context: _ChainContext,
     parent: tuple[str, int] | None = None,
+    producer: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     """`_walk`'s step over the rows called on one value, in ordinal order: each row that
     configures the value folds into `captures` in place, and each other row forks a walk of
@@ -1166,11 +1191,30 @@ def _fold_or_fork(
     **A call folded in place is one the chain may not have run** (spec 2026-11-02 rule 9, the
     value walk's rule, `values.Flow`): `if (x) b.setUri(u)` is folded here in ordinal order and
     LOGGED (`_FOLDS`); the next fork, or the chain's end, decides it (`_forked`), forking the
-    chain where it is not on every path to that point."""
+    chain where it is not on every path to that point.
+
+    **A hand-off of the value** (`producer`'s, before the chain reaches its terminal) is read as
+    the value walk reads it (rules 1 and 2, review 3 re-review 2, C-2; `_handed`): into a body
+    we have, the calls it makes on its parameter fold here, at the hand-off's place, each path
+    through the body its own; into code we do not have, every part a step sets is unknown on
+    that path. Logged like a fold, so the next fork decides it by the same rule."""
     forked = False
-    for next_site in nexts:
+    handed = _handed(producer, nexts, captures, context)
+    for next_site, outcomes in _in_order(nexts, handed):
+        if outcomes is not None:
+            if terminal is not None:
+                continue
+            captures[_FOLDS] = (
+                *captures.get(_FOLDS, ()),
+                (next_site, parent, dict(captures), outcomes),
+            )
+            _apply(outcomes[0][1], captures, context)
+            continue
         if _chain_key(next_site) is None or _configures(next_site, context):
-            captures[_FOLDS] = (*captures.get(_FOLDS, ()), (next_site, parent, dict(captures)))
+            captures[_FOLDS] = (
+                *captures.get(_FOLDS, ()),
+                (next_site, parent, dict(captures), None),
+            )
             _fold_site(next_site, captures, context)
             if _reaches_terminal(next_site, context):
                 terminal = next_site
@@ -1184,11 +1228,11 @@ def _fold_or_fork(
                 # as `_walk`'s does.
                 handed_on = _continuations(next_site, captures, context)
                 for consumer in handed_on:
-                    for handed in _configured_for(next_site, consumer, captures, context):
-                        _continue(consumer, handed, context)
+                    for handed_captures in _configured_for(next_site, consumer, captures, context):
+                        _continue(consumer, handed_captures, context)
                 on_it = [s for s in context.by_receiver.get(same_object, []) if s is not next_site]
                 forked_on_it, terminal = _fold_or_fork(
-                    on_it, captures, terminal, context, _site_key(next_site)
+                    on_it, captures, terminal, context, _site_key(next_site), next_site
                 )
                 forked = forked or forked_on_it or bool(handed_on)
             continue
@@ -1199,6 +1243,121 @@ def _fold_or_fork(
     return forked, terminal
 
 
+# The paths a hand-off of the chain's value takes, as the value walk reads them
+# (`values.HandOffs.of`): each one path's choices and the calls it gathered, or its reason.
+_Outcomes = tuple[tuple[tuple[Any, ...], tuple[tuple[str, int], ...] | str], ...]
+
+
+def _handed(
+    producer: dict[str, Any] | None,
+    nexts: Sequence[dict[str, Any]],
+    captures: dict[str, Any],
+    context: _ChainContext,
+) -> list[tuple[dict[str, Any], _Outcomes]]:
+    """The hand-offs of `producer`'s value after it, in ordinal order, each with the paths the
+    value walk reads it to take (rules 1 and 2, review 3 re-review 2, C-2): `values.HandOffs`,
+    the value walk's own code. A call the catalog itself reads (`_declared_use`) is not one: the
+    walk reads it by its own words. An outcome whose gathered calls fold nothing (`_acts`) is
+    the hand-off doing nothing, as a fold that changes nothing is no split."""
+    if producer is None or context.hand_offs is None:
+        return []
+    value = _chain_key(producer)
+    if value is None:
+        return []
+    method = str(producer["caller"])
+    on_it = {_site_key(site) for site in nexts}
+    by_ordinal: dict[int, dict[str, Any]] | None = None
+    found: list[tuple[dict[str, Any], _Outcomes]] = []
+    for ordinal, outcomes in context.hand_offs.of(
+        method, int(str(value)), int(producer["ordinal"])
+    ):
+        if by_ordinal is None:
+            by_ordinal = {int(site["ordinal"]): site for site in context.sites}
+        site = by_ordinal.get(ordinal)
+        if site is None or (method, ordinal) in on_it or _declared_use(site, captures, context):
+            continue
+        if all(
+            not isinstance(gathered, str)
+            and not any(_acts(*_gathered_site(*call, context)) for call in gathered)
+            for _, gathered in outcomes
+        ):
+            outcomes = (((), ()),)
+        found.append((site, outcomes))
+    return found
+
+
+def _in_order(
+    calls: Sequence[dict[str, Any]], handed: Sequence[tuple[dict[str, Any], _Outcomes]]
+) -> list[tuple[dict[str, Any], _Outcomes | None]]:
+    """The calls made on a value (None) and its hand-offs (their paths), in ordinal order."""
+    merged: list[tuple[dict[str, Any], _Outcomes | None]] = [(call, None) for call in calls]
+    if not handed:
+        return merged
+    merged.extend(handed)
+    return sorted(merged, key=lambda entry: int(entry[0]["ordinal"]))
+
+
+def _declared_use(site: dict[str, Any], captures: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether a call the chain's value is handed to is one the catalog itself reads — a root, a
+    step, a terminal, or a consumer one of its joins declares — so the walk reads it by the
+    catalog's words, never as a hand-off."""
+    if _matching_step(site, context.steps) is not None:
+        return True
+    if _matching_root(site, context.roots) is not None:
+        return True
+    name = str(site["name"])
+    if name in context.terminal_names or name in context.via_argument_names:
+        return True
+    filters = [join for join in context.via_argument_names.values() if join is not None]
+    declared = captures.get(_CONTINUE)
+    if isinstance(declared, _JoinFilter):
+        filters.append(declared)
+    return any(_joins(site, join) for join in filters)
+
+
+def _gathered_site(
+    method: str, ordinal: int, context: _ChainContext
+) -> tuple[dict[str, Any], _ChainContext]:
+    """The call `(method, ordinal)` a path gathered, with the context of the method it is in:
+    a hand-off's body is read in its own frame, as the walk back reads a chain across methods."""
+    at = context
+    if method != context.caller and context.context_of is not None:
+        at = context.context_of(method)
+    return next(site for site in at.sites if int(site["ordinal"]) == ordinal), at
+
+
+def _acts(site: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether folding `site` can change the chain (`_fold_site`): it matches a step, it is a
+    member of an undeclared owner the catalog poisons, or it is a terminal."""
+    return (
+        _matching_step(site, context.steps) is not None
+        or site["owner"] in context.undeclared_owners
+        or _reaches_terminal(site, context)
+    )
+
+
+def _apply(
+    gathered: tuple[tuple[str, int], ...] | str, captures: dict[str, Any], context: _ChainContext
+) -> None:
+    """One path's calls folded into `captures`, in place, each in its own frame — or, where the
+    path ended at a reason (a hand-off into code we do not have, a `cycle`), every part a step
+    of the catalog sets made unknown (rule 2: never "nothing happened")."""
+    if isinstance(gathered, str):
+        _fold(captures, dict.fromkeys(context.step_parts, _unread(gathered)))
+        return
+    for call in gathered:
+        site, at = _gathered_site(*call, context)
+        _fold_site(site, captures, at)
+        if _reaches_terminal(site, at):
+            _hold_executing_call(site, captures, at)
+
+
+def _unread(reason: str) -> Mapping[str, Any]:
+    """What a part holds where the walk could not read it, and why: immutable, as every
+    unresolved capture the walk writes is (`_POISONED`)."""
+    return MappingProxyType({"kind": "unresolved", "reason": reason})
+
+
 def _forked(
     use: dict[str, Any] | None,
     captures: dict[str, Any],
@@ -1207,125 +1366,98 @@ def _forked(
 ) -> list[dict[str, Any]]:
     """The captures a chain carries on to `use` (a fork, a consumer it is handed to, or None:
     the chain's end, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
-    by the value walk's own split and proof (`values.Flow`), never a copy of it.
+    by the value walk's own enumeration (`values.Flow.paths`), never a copy of it.
 
-    Each call folded in place since the last fork (`_FOLDS`) that is not on every path to the
-    use — not on its `dominator` chain, or not `on_every_exit` where the use is the end — FORKS
-    the chain: one path with it, one without. A configuring call AFTER the use by ordinal that
-    shares its `loop_group` (`siblings`) can run before a later run of the use, so it is a call
-    on a branch for it too, its with-side never proven. A side the facts do not prove a run
-    takes to the use (`Flow.reaches_use`) is marked, and two or more calls on branches anywhere
-    on the path make every row from it `partial` (`ChainEnd.inexact`). Past `PATH_CAP` paths,
-    one path: the parts those calls set unread, stated (`non_enumerable`). Never a row dropped.
-    The decisions are made once: each path carries on with no folds left to decide."""
+    Each call folded in place since the last fork (`_FOLDS`), and each hand-off of the value with
+    the paths its body takes, is one event; a configuring call AFTER the use by ordinal that
+    shares its `loop_group` (`siblings`) can run before a later run of the use, so it is one
+    too. `Flow.paths` splits each event not on every path to the use, proves each side, makes a
+    call on a configuring call's result run where that call did, collapses two or more counted
+    splits, and caps the paths the chain holds (`_WIDTH`, with a walk back's). Each path's
+    captures are rebuilt from those before the first event, folding what it gathered in order;
+    a path that ended at a reason has every part its events set unknown (rule 2), its row
+    `partial`. A fold that changed nothing is no split. Never a row dropped. The decisions are
+    made once: each path carries on with no folds left to decide, and its choices on its trail
+    (`_TRAIL`), counted by the value walk's rule (`_unsure`)."""
     folds = captures.get(_FOLDS, ())
     assert context.flow is not None
     flow = context.flow
     method = context.caller if use is None else str(use["caller"])
     used_at = None if use is None else int(use["ordinal"])
-    always = flow.always(method, used_at)
     inside = flow.inside(method, -1, used_at)
+    base = {key: value for key, value in captures.items() if key != _FOLDS}
     # A fold that changed nothing (a void call no step names, which captures nothing) is no
     # split, as an event that changes nothing on any path is none in the value walk.
-    after = [*(snapshot for _, _, snapshot in folds[1:]), captures]
-    branched = [
-        index
-        for index, (site, _, snapshot) in enumerate(folds)
-        if str(site["caller"]) == method
-        and not always(int(site["ordinal"]))
-        and _without_rule_9(snapshot) != _without_rule_9(after[index])
-    ]
-    later = [
-        site
+    after = [*(snapshot for _, _, snapshot, _ in folds[1:]), captures]
+    events: list[tuple[int, _Outcomes, int | None]] = []
+    for index, (site, parent, snapshot, outcomes) in enumerate(folds):
+        if outcomes is None:
+            changed = _without_rule_9(snapshot) != _without_rule_9(after[index])
+            outcomes = (((), (_site_key(site),)),) if changed else (((), ()),)
+        events.append((int(site["ordinal"]), outcomes, None if parent is None else parent[1]))
+    events += [
+        (int(site["ordinal"]), (((), (_site_key(site),)),), None)
         for site in siblings
         if used_at is not None
         and int(site["ordinal"]) > used_at
         and (_chain_key(site) is None or _configures(site, context))
         and inside(int(site["ordinal"]))
     ]
-    base = {key: value for key, value in captures.items() if key != _FOLDS}
-    if not branched and not later:
+    if not events:
         return [base]
-    calls = [folds[index][0] for index in branched] + later
-    splits = frozenset(captures.get(_SPLITS, frozenset())) | {_site_key(site) for site in calls}
-    # The cap counts the WHOLE path, as the value walk's does (`_windowed`): every split this
-    # chain made at an earlier fork, across a continuation, or on the walk back to its root,
-    # whatever it sets — the paths multiply whether or not a split counts toward the row.
-    behind = len(captures.get(_SPLITS, ())) + (
-        0 if context.path is None else split_sites(context.path)
-    )
-    if 2 ** (behind + len(calls)) > PATH_CAP:
-        capped = _replayed(base, folds, {_site_key(folds[index][0]) for index in branched}, context)
-        for site in calls:
-            unread: dict[str, Any] = {}
-            _fold_site(site, unread, context)
-            capped.update(dict.fromkeys(unread, _CAPPED))
-        capped[_SPLITS] = splits
-        capped[_UNPROVEN] = True
-        return [capped]
-    proofs = {
-        _site_key(site): flow.reaches_use(method, None, int(site["ordinal"]), used_at, use is None)
-        for site in calls
-    }
+    held = captures.get(_WIDTH, 1)
+    # The cap counts the WHOLE path, as the value walk's does (`_windowed`): every path this
+    # chain split into at an earlier fork or across a continuation, and those of a walk back to
+    # its root, whatever they set — the paths multiply whether or not a split counts.
+    width = held * (1 if context.path is None else 2 ** split_sites(context.path))
+    windows = flow.paths(method, None, events, used_at, use is None, context.counting, width)
+    # Every event ran its first path, in place, and nothing was decided: the captures as folded.
+    first = [outcomes[0] for _, outcomes, _ in events]
+    if all(
+        not steps and not isinstance(gathered, str) for steps, gathered in first
+    ) and windows == (((), tuple(call for _, gathered in first for call in gathered)),):
+        return [base]
+    start = {key: value for key, value in folds[0][2].items() if key != _FOLDS} if folds else base
     variants: list[dict[str, Any]] = []
-    # Every call ran first: where two paths give one wire, the row a reader keeps (the first)
-    # carries everything the calls on it set — a header on one branch is a header the request
-    # may carry, never a header dropped.
-    for ran_mask in reversed(range(2 ** len(calls))):
-        ran = {_site_key(site) for bit, site in enumerate(calls) if ran_mask >> bit & 1}
-        skipped = {_site_key(folds[index][0]) for index in branched} - ran
-        variant = _replayed(base, folds, skipped, context)
-        for site in later:
-            if _site_key(site) in ran:
-                _fold_site(site, variant, context)
-        variant[_SPLITS] = splits
-        variant[_UNPROVEN] = bool(captures.get(_UNPROVEN)) or any(
-            not proofs[key][0 if key in ran else 1] for key in proofs
-        )
+    for trail, gathered in windows:
+        if isinstance(gathered, str):
+            variant = dict(base)
+            _fold(variant, dict.fromkeys(_parts_of(events, context), _unread(gathered)))
+            variant[_UNPROVEN] = True
+        else:
+            variant = dict(start)
+            _apply(gathered, variant, context)
+            if captures.get(_UNPROVEN):
+                variant[_UNPROVEN] = True
+        variant[_TRAIL] = (*captures.get(_TRAIL, ()), *trail)
+        variant[_WIDTH] = held * len(windows)
         variants.append(variant)
     return variants
 
 
-def _replayed(
-    base: dict[str, Any],
-    folds: Sequence[tuple[dict[str, Any], tuple[str, int] | None, dict[str, Any]]],
-    skipped: set[tuple[str, int]],
-    context: _ChainContext,
-) -> dict[str, Any]:
-    """`base` (the captures after every fold in `folds`) as it would be had the calls in
-    `skipped` not run — nor any call made on a skipped call's result: rebuilt from the captures
-    as they stood before the first skipped call, folding the ones after it again in order."""
-    first = next(
-        (index for index, (site, _, _) in enumerate(folds) if _site_key(site) in skipped), None
-    )
-    if first is None:
-        return dict(base)
-    rebuilt = {key: value for key, value in folds[first][2].items() if key != _FOLDS}
-    dropped = set(skipped)
-    for site, parent, _ in folds[first:]:
-        if _site_key(site) in dropped or parent in dropped:
-            dropped.add(_site_key(site))
-            continue
-        _fold_site(site, rebuilt, context)
-        if _reaches_terminal(site, context):
-            _hold_executing_call(site, rebuilt, context)
-    for key in (_SPLITS, _UNPROVEN):
-        if key in base:
-            rebuilt[key] = base[key]
-    return rebuilt
+def _parts_of(
+    events: Sequence[tuple[int, _Outcomes, int | None]], context: _ChainContext
+) -> set[str]:
+    """Every part the events' paths could set: what each gathered call folds, and every part a
+    step sets for a path that ends at a reason — what a path past the cap leaves unread."""
+    parts: set[str] = set()
+    for _, outcomes, _ in events:
+        for _, gathered in outcomes:
+            if isinstance(gathered, str):
+                parts.update(context.step_parts)
+                continue
+            scratch: dict[str, Any] = {}
+            _apply(gathered, scratch, context)
+            parts.update(field for field in scratch if not field.startswith("\x00"))
+    return parts
 
 
 def _unsure(captures: Mapping[str, Any], context: _ChainContext) -> bool:
-    """Whether a chain end is inexact by rule 9: the calls on branches its own walk split at,
-    with the value walk's back to its root where it walked back (`path_splits`), counted by the
-    one rule (`values.several_or_unproven`)."""
-    counting = context.counting
-    splits = sum(
-        1
-        for method, ordinal in captures.get(_SPLITS, ())
-        if counting is None or counting(method, ordinal)
-    ) + (0 if context.path is None else path_splits(context.path, counting))
-    return several_or_unproven(splits, bool(captures.get(_UNPROVEN)))
+    """Whether a chain end is inexact by rule 9: the choices its own walk made (`_TRAIL`), with
+    the value walk's back to its root where it walked back, counted by the value walk's one
+    rule (`values.inexact`), or a part on its path not read (`_UNPROVEN`)."""
+    trail = (*captures.get(_TRAIL, ()), *(() if context.path is None else context.path.trail))
+    return inexact(Path(trail)) or bool(captures.get(_UNPROVEN))
 
 
 def _counts(
@@ -1335,10 +1467,14 @@ def _counts(
     undeclared_owners: tuple[str, ...],
     undeclared_poisons: tuple[str, ...],
 ) -> bool:
-    """Whether a split at `site` counts for rows showing `published` (`values.counts_split`):
-    the parts it sets are the capture names its step declares (`collects` as `collected`), or
-    the poisons an undeclared member sets — the same data the walk folds. A site this run
-    cannot read sets parts not known, so it counts."""
+    """Whether a call `site` a split gathered counts for rows showing `published`
+    (`values.counts_split`): the parts it sets are the capture names its step declares
+    (`collects` as `collected`), or the poisons an undeclared member sets — the same data the
+    walk folds; a call no step names passes through uncaptured (D02 §4) and sets none. A site
+    this run cannot read sets parts not known, so it counts. A split is judged by every call
+    its paths gather, and one whose path ends at a reason (a hand-off into code we do not have)
+    counts whatever this says: its parts are not known (`values._counted`, review 3 re-review
+    2, C-1)."""
     if site is None:
         return True
     step = _matching_step(dict(site), steps)
@@ -1372,25 +1508,31 @@ def _configured_for(
     handle(spec)` hands `handle` the topic; a call made after `consumer` never reaches it.
 
     One set of captures per path, as `_forked` decides them with `consumer` as the use (rule
-    9): a configuring call on one branch is handed on with it and without it."""
+    9): a configuring call on one branch is handed on with it and without it. A hand-off of the
+    value before `consumer` folds what its body does, as `_fold_or_fork` reads it (C-2)."""
     handed = dict(captures)
     visited: set[Any] = set()
 
-    def fold(value: Any, parent: tuple[str, int] | None) -> None:
+    def fold(producer: dict[str, Any], parent: tuple[str, int] | None) -> None:
+        value = _chain_key(producer)
         if value is None or value in visited:
             return
         visited.add(value)
-        for call in context.by_receiver.get(value, []):
+        calls = context.by_receiver.get(value, [])
+        for call, outcomes in _in_order(calls, _handed(producer, calls, handed, context)):
             if call is site or call is consumer:
                 continue
             if int(call["ordinal"]) >= int(consumer["ordinal"]):
                 continue
-            if _chain_key(call) is None or _configures(call, context):
-                handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed)))
+            if outcomes is not None:
+                handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed), outcomes))
+                _apply(outcomes[0][1], handed, context)
+            elif _chain_key(call) is None or _configures(call, context):
+                handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed), None))
                 _fold_site(call, handed, context)
-                fold(_chain_key(call), _site_key(call))
+                fold(call, _site_key(call))
 
-    fold(_chain_key(site), None)
+    fold(site, None)
     return _forked(consumer, handed, (), context)
 
 
@@ -1732,6 +1874,18 @@ def configuring_calls(
             _matching_step(dict(site), flagged) is not None
             or _matching_step(dict(site), terminals) is not None
         )
+    )
+
+
+def _void_calls(index: ValueIndex) -> frozenset[tuple[str, str, str]]:
+    """Every call of the module that returns nothing (D00 §5: `result` null), as `(owner, name,
+    descriptor)`: inside a body the chain's value is handed to, such a call on it configures it,
+    as a void call in the chain's own method does (`_walk`). A construction is not one: it makes
+    its value."""
+    return frozenset(
+        (str(site["owner"]), str(site["name"]), str(site.get("descriptor")))
+        for site in index.sites.values()
+        if site.get("result") is None and site["name"] != "<init>"
     )
 
 

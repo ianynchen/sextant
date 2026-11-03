@@ -297,6 +297,36 @@ publishes `search` while its port is unknown.
      splits that set a published part count toward the several-splits rule (ruled 2026-11-03,
      option A). Ktor's inline `setBody` is two `setBody` calls on two branches, and the body is
      a published part (`request_shape`), so a Ktor request with a body is `partial`.
+   - *The forward walk follows hand-offs, and counts what it cannot see* (fix round 4, review
+     3 re-review 2). Rules 1 and 2 hold in the forward chain walk, by the value walk's own code
+     (`values.HandOffs`, `_Walk._handed_events`): a hand-off of the chain's value before its
+     terminal into a body we have folds the calls the body makes on its parameter, in order, at
+     the hand-off's place, each path through the body its own by the body's own positions
+     (`on_every_exit`, `reaches_return`); inside the body a call configures the value as in the
+     chain's own method (void, or `returns_receiver`), and any other call on it is `escapes`. A
+     hand-off into code we do not have, a call reaching the value below an argument's top level
+     and a call through a receiver the facts cannot name leave every part a step of the catalog
+     sets unknown on that path, its row no surer than `partial` (an address not read is
+     `unresolved` by `fluent`'s own rule). A call the catalog itself reads (a root, a step, a
+     terminal, a join's consumer) is read by its words, not as a hand-off. The enumeration —
+     split, proof, the skipped-parent rule, the several-splits collapse and the path cap — is
+     written once (`values.Flow.paths`) and both walks call it; the forward walk's cap counts the
+     paths it already holds (`width`), with a walk back's. **A split is counted by what its paths
+     set** (`values._counted`): a path ending at a reason (`escapes`, `cycle`, the cap) sets
+     parts not known, so it counts; a branched hand-off into a body counts where a call the body
+     makes sets a published part. **A call on a configuring call's result that is on that
+     call's `post_dominator` chain is no split of its own**: it runs on every path that call's
+     run takes to a return, so `if (x) b.setUri("/b").setUri("/c")` is one split (`/a`, `/c`,
+     both `resolved`), in both walks — the `post_dominator` fact read as the side-proof already
+     reads it. M-1 (a builder handed to a module method that builds and sends it) already kept
+     its row through the walk back (ruling 5) once `call_edges` are derived, as the pipeline
+     derives them; the review's probe had not derived them.
+   - *Rows of one identity* (fix round 4, m-2; rule 4). The published table holds one row per
+     identity (protocol, direction, verb, path, and caller and peer, or handler inbound), its
+     metadata keyed to it, so two chains that differ only in a published column or in metadata
+     (a header put on one branch) cannot be two rows without a schema change: the one row is
+     no surer than `partial`. Two chains equal in every published column and metadata are one
+     request, and the row keeps the more exact resolution of the two (`fluent._Kept`).
    - *Readers keep every row* (fix round 2, M-B; rule 4): the rootless walk-back
      (`chains._walk_back`) keeps a producer it cannot call exact, its row no surer than
      `partial` (`ChainEnd.inexact`, read by `fluent` and the Quartz reader), and a walk back
