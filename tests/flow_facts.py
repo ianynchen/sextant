@@ -1,12 +1,13 @@
 """Hand-built call sites, given the control-flow position the extractor writes for code with
-no branch in it (D00 §5's `dominator`, `on_every_exit`, `post_dominator` and `reaches_return`,
-spec 2026-11-02-per-path-truth rule 9).
+no branch in it (D00 §5's `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and
+`loop_group`, spec 2026-11-02-per-path-truth rule 9).
 
 A reader takes a site with no `on_every_exit` as "position not computed", which is undecided
 — the walk then splits at every call between a value's producer and its use. A test that
 builds `o = create(); o.setHost("a"); use(o);` by hand means the straight line, so it states
 the straight line: each site's `dominator` is the site before it in the same method, its
-`post_dominator` the site after it, and every site runs on every exit and reaches a return. A site the test already
+`post_dominator` the site after it, every site runs on every exit and reaches a return, and
+none is in a loop (no `loop_group`). A site the test already
 gave a position keeps it.
 
 Its own module beside `fixture_build`, for the reason that file gives: several directories

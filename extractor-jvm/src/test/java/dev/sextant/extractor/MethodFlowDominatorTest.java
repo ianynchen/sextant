@@ -11,8 +11,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.VarInsnNode;
 
 /** {@code call_site}'s {@code dominator} and {@code on_every_exit} (D00 §5, spec
  *  2026-11-02-per-path-truth rule 9), one control-flow shape per test, read off the
@@ -71,6 +75,12 @@ class MethodFlowDominatorTest {
     /** The site's `post_dominator`, or null where the key is absent. */
     static Integer postDominator(String line) {
         Matcher matcher = Pattern.compile("\"post_dominator\":(\\d+)").matcher(line);
+        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+    }
+
+    /** The site's `loop_group`, or null where the key is absent. */
+    static Integer loopGroup(String line) {
+        Matcher matcher = Pattern.compile("\"loop_group\":(\\d+)").matcher(line);
         return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
     }
 
@@ -358,6 +368,89 @@ class MethodFlowDominatorTest {
         List<String> forever = callSites("forever");
         assertFalse(reachesReturn(site(forever, "a")));
         assertFalse(reachesReturn(site(forever, "b")));
+    }
+
+    // `loop_group` (rule 9, ruled by the user 2026-11-03, option A for M1): the lowest call
+    // ordinal in the non-trivial strongly connected component of the control-flow graph that
+    // holds the call; absent where the call is in no cycle.
+
+    @Test
+    void a_method_with_no_loop_has_no_loop_group() throws Exception {
+        List<String> lines = callSites("straightLine");
+        for (String call : List.of("a", "b", "c")) {
+            assertNull(loopGroup(site(lines, call)), call);
+        }
+    }
+
+    /** `a(); while (more()) { b(); } c();` — the condition and the body are one cycle, named by
+     *  its lowest call ordinal; `a` and `c` are in none. */
+    @Test
+    void a_while_loops_condition_and_body_share_one_group() throws Exception {
+        List<String> lines = callSites("whileLoop");
+        assertNull(loopGroup(site(lines, "a")));
+        assertNull(loopGroup(site(lines, "c")));
+        int lowest = Math.min(ordinal(site(lines, "more")), ordinal(site(lines, "b")));
+        assertEquals(lowest, loopGroup(site(lines, "more")));
+        assertEquals(lowest, loopGroup(site(lines, "b")));
+    }
+
+    @Test
+    void a_do_while_body_and_condition_share_one_group() throws Exception {
+        List<String> lines = callSites("doWhileLoop");
+        assertNull(loopGroup(site(lines, "a")));
+        assertNull(loopGroup(site(lines, "c")));
+        assertEquals(ordinal(site(lines, "b")), loopGroup(site(lines, "b")));
+        assertEquals(ordinal(site(lines, "b")), loopGroup(site(lines, "more")));
+    }
+
+    /** An inner loop's calls lie in the outer loop's component: every call of the outer body,
+     *  the inner loop's included, is one group, so any of them can run before any other. */
+    @Test
+    void nested_loops_are_one_group() throws Exception {
+        List<String> lines = callSites("nestedLoops");
+        assertNull(loopGroup(site(lines, "a")));
+        assertNull(loopGroup(site(lines, "e")));
+        int group = ordinal(site(lines, "b"));
+        for (String call : List.of("b", "c", "d")) {
+            assertEquals(group, loopGroup(site(lines, call)), call);
+        }
+    }
+
+    @Test
+    void two_separate_loops_are_two_groups() throws Exception {
+        List<String> lines = callSites("twoLoops");
+        assertEquals(ordinal(site(lines, "a")), loopGroup(site(lines, "a")));
+        assertEquals(ordinal(site(lines, "b")), loopGroup(site(lines, "b")));
+    }
+
+    /** The handler's edge back into the loop keeps the catch in the loop's group. */
+    @Test
+    void a_loop_with_a_try_catch_is_one_group() throws Exception {
+        List<String> lines = callSites("loopWithTryCatch");
+        int group = ordinal(site(lines, "more"));
+        for (String call : List.of("more", "a", "b")) {
+            assertEquals(group, loopGroup(site(lines, call)), call);
+        }
+        assertNull(loopGroup(site(lines, "c")));
+    }
+
+    /** An invoke no path reaches emits no site, so no group; the reached one has none either. */
+    @Test
+    void an_unreachable_call_is_no_site_and_in_no_group() throws Exception {
+        MethodNode method = new MethodNode(Opcodes.ACC_PUBLIC, "dead", "()V", null, null);
+        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        method.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, OWNER, "a", "()V", false));
+        method.instructions.add(new InsnNode(Opcodes.RETURN));
+        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        method.instructions.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, OWNER, "b", "()V", false));
+        method.instructions.add(new InsnNode(Opcodes.RETURN));
+        method.maxLocals = 1;
+        method.maxStack = 1;
+        String symbol = new ClassScanner("com.acme/orders", "1.0.0")
+            .symbolOf(OWNER + "#dead(" + ClassScanner.disambiguatorOf("()V") + ").");
+        List<String> lines = MethodFlow.callSites("doc-branch-sample", symbol, method);
+        assertEquals(1, lines.size(), lines.toString());
+        assertNull(loopGroup(site(lines, "a")));
     }
 
     @Test

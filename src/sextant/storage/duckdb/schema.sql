@@ -1275,11 +1275,13 @@ SELECT document_id,
        -- this one on every path, NULL where none did; whether this one runs on every path to
        -- a normal return, NULL only where the position was never computed; the nearest call
        -- that runs after this one on every path to a normal return, NULL where none does; and
-       -- whether every path from this one ends at a normal return, NULL only where not computed.
+       -- whether every path from this one ends at a normal return, NULL only where not computed;
+       -- and the loop it is in, named by the loop's lowest call ordinal, NULL where none.
        (payload ->> 'dominator')::INTEGER      AS dominator,
        (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit,
        (payload ->> 'post_dominator')::INTEGER AS post_dominator,
-       (payload ->> 'reaches_return')::BOOLEAN AS reaches_return
+       (payload ->> 'reaches_return')::BOOLEAN AS reaches_return,
+       (payload ->> 'loop_group')::INTEGER     AS loop_group
 FROM raw_facts WHERE kind = 'call_site'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

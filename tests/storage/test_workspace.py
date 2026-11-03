@@ -1183,6 +1183,7 @@ def test_call_sites_projects_the_dominator_and_on_every_exit(tmp_path: Path):
             on_every_exit=True,
             post_dominator=2,
             reaches_return=True,
+            loop_group=1,
         ),
     ]
     write_fact_file(tmp_path / "facts" / "a.jsonl", document, sites)
@@ -1191,9 +1192,15 @@ def test_call_sites_projects_the_dominator_and_on_every_exit(tmp_path: Path):
     rows = workspace.query("call_sites")
     workspace.close()
     assert [
-        (row["dominator"], row["on_every_exit"], row["post_dominator"], row["reaches_return"])
+        (
+            row["dominator"],
+            row["on_every_exit"],
+            row["post_dominator"],
+            row["reaches_return"],
+            row["loop_group"],
+        )
         for row in rows
-    ] == [(None, None, None, None), (0, True, 2, True)]
+    ] == [(None, None, None, None, None), (0, True, 2, True, 1)]
 
 
 def test_the_method_returns_view_keeps_a_void_return_distinct_from_an_unread_one(

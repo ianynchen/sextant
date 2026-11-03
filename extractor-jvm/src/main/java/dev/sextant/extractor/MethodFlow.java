@@ -107,7 +107,8 @@ public final class MethodFlow {
                 }
                 lines.add(throwSiteJson(documentId, callerSymbol, ordinal++,
                     thrownType(throwFrame), dominance.dominator(i), dominance.onEveryExit(i),
-                    dominance.postDominator(i), dominance.reachesReturn(i)));
+                    dominance.postDominator(i), dominance.reachesReturn(i),
+                    dominance.loopGroup(i)));
                 continue;
             }
             Target target = targetOf(insns[i]);
@@ -166,7 +167,8 @@ public final class MethodFlow {
                                    receiverParameter, receiverField, receiverOnThis, result,
                                    implementationOf(insns[i]), arguments,
                                    dominance.dominator(i), dominance.onEveryExit(i),
-                                   dominance.postDominator(i), dominance.reachesReturn(i)));
+                                   dominance.postDominator(i), dominance.reachesReturn(i),
+                                   dominance.loopGroup(i)));
         }
         return lines;
     }
@@ -315,7 +317,100 @@ public final class MethodFlow {
                 }
             }
             return new Dominance(insns, dominators.nearest, onEveryExit, postDominators.nearest,
-                                 fails);
+                                 fails, loopGroups(insns, frames));
+        }
+
+        /** Each reached site's {@code loop_group} (rule 9, ruled by the user 2026-11-03, option
+         *  A for M1): the strongly connected components of the INSTRUCTION graph — every normal
+         *  and exception-handler edge the analyser followed — by Tarjan's algorithm, iteratively,
+         *  one linear pass. A component is a loop where it holds more than one instruction or an
+         *  instruction with an edge to itself; its id is the lowest ordinal of any site in it.
+         *  Two sites with one id can each reach the other; a nested loop's instructions lie in
+         *  the enclosing loop's component, so they share its id. -1 where a site is in no loop.
+         *
+         *  <p>One node per instruction, not two: a handler edge leaves an instruction while it
+         *  runs, and a cycle through it is still a cycle the instruction is on. */
+        int[] loopGroups(AbstractInsnNode[] insns, Frame<SourceValue>[] frames) {
+            int n = insns.length;
+            List<List<Integer>> out = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) out.add(new ArrayList<>(2));
+            boolean[] selfLoop = new boolean[n];
+            for (List<int[]> edges : List.of(normal, exceptional)) {
+                for (int[] e : edges) {
+                    out.get(e[0]).add(e[1]);
+                    if (e[0] == e[1]) selfLoop[e[0]] = true;
+                }
+            }
+            int[] index = new int[n];
+            int[] low = new int[n];
+            Arrays.fill(index, -1);
+            boolean[] onStack = new boolean[n];
+            int[] stack = new int[n];
+            int top = 0;
+            int[] callStack = new int[n];
+            int[] next = new int[n];
+            int counter = 0;
+            int[] component = new int[n];
+            Arrays.fill(component, -1);
+            int components = 0;
+            for (int root = 0; root < n; root++) {
+                if (index[root] != -1 || frames[root] == null) continue;
+                int depth = 0;
+                callStack[depth++] = root;
+                index[root] = low[root] = counter++;
+                stack[top++] = root;
+                onStack[root] = true;
+                while (depth > 0) {
+                    int node = callStack[depth - 1];
+                    List<Integer> successors = out.get(node);
+                    if (next[node] < successors.size()) {
+                        int successor = successors.get(next[node]++);
+                        if (index[successor] == -1) {
+                            index[successor] = low[successor] = counter++;
+                            stack[top++] = successor;
+                            onStack[successor] = true;
+                            callStack[depth++] = successor;
+                        } else if (onStack[successor]) {
+                            low[node] = Math.min(low[node], index[successor]);
+                        }
+                        continue;
+                    }
+                    depth--;
+                    if (depth > 0) {
+                        int parent = callStack[depth - 1];
+                        low[parent] = Math.min(low[parent], low[node]);
+                    }
+                    if (low[node] == index[node]) {
+                        int member;
+                        do {
+                            member = stack[--top];
+                            onStack[member] = false;
+                            component[member] = components;
+                        } while (member != node);
+                        components++;
+                    }
+                }
+            }
+            int[] size = new int[components];
+            for (int i = 0; i < n; i++) {
+                if (component[i] >= 0) size[component[i]]++;
+            }
+            int[] lowest = new int[components];
+            Arrays.fill(lowest, -1);
+            int ordinal = 0;
+            for (int i = 0; i < n; i++) {
+                if (!isSite(insns[i])) continue;
+                int c = component[i];
+                if (frames[i] != null && c >= 0 && lowest[c] == -1) lowest[c] = ordinal;
+                ordinal++;
+            }
+            int[] group = new int[n];
+            Arrays.fill(group, -1);
+            for (int i = 0; i < n; i++) {
+                int c = component[i];
+                if (c >= 0 && (size[c] > 1 || selfLoop[i])) group[i] = lowest[c];
+            }
+            return group;
         }
 
         /** One dominator tree by Cooper, Harvey and Kennedy over {@code forward} from
@@ -459,9 +554,10 @@ public final class MethodFlow {
         private final boolean[] onEveryExit;
         private final int[] nearestAfter;
         private final boolean[] fails;
+        private final int[] loopGroups;
 
         Dominance(AbstractInsnNode[] insns, int[] nearest, boolean[] onEveryExit,
-                  int[] nearestAfter, boolean[] fails) {
+                  int[] nearestAfter, boolean[] fails, int[] loopGroups) {
             // Every invoke and throw takes an ordinal, reached or not (`callSites`).
             this.ordinals = new int[insns.length];
             int ordinal = 0;
@@ -472,6 +568,12 @@ public final class MethodFlow {
             this.onEveryExit = onEveryExit;
             this.nearestAfter = nearestAfter;
             this.fails = fails;
+            this.loopGroups = loopGroups;
+        }
+
+        /** The loop group of the site at {@code insn}, or null where it is in no loop. */
+        Integer loopGroup(int insn) {
+            return loopGroups[insn] < 0 ? null : loopGroups[insn];
         }
 
         /** Whether every path from this site's completion ends at a normal return: none in a
@@ -1726,7 +1828,7 @@ public final class MethodFlow {
                                        Integer result, String implementation,
                                        List<String> arguments, Integer dominator,
                                        boolean onEveryExit, Integer postDominator,
-                                       boolean reachesReturn) {
+                                       boolean reachesReturn, Integer loopGroup) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -1763,22 +1865,23 @@ public final class MethodFlow {
         if (receiverOnThis) fact.put("receiver_field_kind", JsonOut.string("instance"));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
-        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn);
+        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn, loopGroup);
         return JsonOut.object(fact);
     }
 
-    /** Rule 9's four fields (D00 §5). {@code dominator} and {@code post_dominator} are
-     *  absent where no site dominates or post-dominates this one — the rule
-     *  {@code implementation} follows — and {@code on_every_exit} and {@code reaches_return}
-     *  are written on every site, false included: absent, a reader takes the position as not
-     *  computed, never as "runs on every path" or "reaches a return". */
+    /** Rule 9's five fields (D00 §5). {@code dominator}, {@code post_dominator} and
+     *  {@code loop_group} are absent where no site dominates or post-dominates this one, or it
+     *  is in no loop — the rule {@code implementation} follows — and {@code on_every_exit} and
+     *  {@code reaches_return} are written on every site, false included: absent, a reader takes
+     *  the position as not computed, never as "runs on every path" or "reaches a return". */
     private static void putPosition(TreeMap<String, String> fact, Integer dominator,
                                     boolean onEveryExit, Integer postDominator,
-                                    boolean reachesReturn) {
+                                    boolean reachesReturn, Integer loopGroup) {
         if (dominator != null) fact.put("dominator", String.valueOf(dominator));
         fact.put("on_every_exit", String.valueOf(onEveryExit));
         if (postDominator != null) fact.put("post_dominator", String.valueOf(postDominator));
         fact.put("reaches_return", String.valueOf(reachesReturn));
+        if (loopGroup != null) fact.put("loop_group", String.valueOf(loopGroup));
     }
 
     /** The type an {@code ATHROW} leaves with, or null where the stack value names
@@ -1856,7 +1959,7 @@ public final class MethodFlow {
     private static String throwSiteJson(String documentId, String callerSymbol, int ordinal,
                                          String thrownOwner, Integer dominator,
                                          boolean onEveryExit, Integer postDominator,
-                                       boolean reachesReturn) {
+                                       boolean reachesReturn, Integer loopGroup) {
         TreeMap<String, String> target = new TreeMap<>();
         target.put("owner", thrownOwner == null ? "null" : JsonOut.string(thrownOwner + "#"));
 
@@ -1870,7 +1973,7 @@ public final class MethodFlow {
         fact.put("receiver", "null");
         fact.put("result", "null");
         fact.put("arguments", JsonOut.array(List.of()));
-        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn);
+        putPosition(fact, dominator, onEveryExit, postDominator, reachesReturn, loopGroup);
         return JsonOut.object(fact);
     }
 

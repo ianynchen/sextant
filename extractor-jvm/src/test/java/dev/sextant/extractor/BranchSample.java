@@ -140,6 +140,38 @@ public final class BranchSample {
         b();
     }
 
+    public void nestedLoops(int n) {
+        a();
+        for (int i = 0; i < n; i++) {
+            b();
+            for (int j = 0; j < n; j++) {
+                c();
+            }
+            d();
+        }
+        e();
+    }
+
+    public void twoLoops(int n) {
+        for (int i = 0; i < n; i++) {
+            a();
+        }
+        for (int j = 0; j < n; j++) {
+            b();
+        }
+    }
+
+    public void loopWithTryCatch() {
+        while (more()) {
+            try {
+                a();
+            } catch (RuntimeException failed) {
+                b();
+            }
+        }
+        c();
+    }
+
     public void forever() {
         a();
         while (true) {

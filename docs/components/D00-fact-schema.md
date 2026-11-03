@@ -350,7 +350,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
 | `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so `owner_not_scanned` is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
-| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator` and `reaches_return` (the call's place in the method's control flow, rule 9), structured `arguments` | Call edges, dispatch, traces, endpoints |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
@@ -983,7 +983,7 @@ false sentence was written when neither half existed and nobody could notice.
 **`ordinal`** is the invoke's index within its method, assigned in instruction order and
 therefore deterministic (NFR-1). It is **the v1 of the control-flow position** this schema
 has always reserved a field for — enough for the call-graph phase to start from these
-facts. `dominator`, `on_every_exit`, `post_dominator` and `reaches_return` below are its **first enrichment** (fact schema 6,
+facts. `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` below are its **first enrichment** (fact schema 6,
 spec 2026-11-02-per-path-truth rule 9): `a; b;` and `if (x) a; else b;` had the same facts
 until then. They are still not the richer context a sequence diagram needs to show a `loop`
 or an `alt` without lying about it (§8 of `GUIDELINES.md`): they say whether a call runs on
@@ -1025,15 +1025,26 @@ handler catches is a matter of types the pass does not compare, so the answer er
 false. A setter with no `post_dominator` and `reaches_return` true is one after which a run
 returns: `if (tls) o.setSsl(true); return o;`.
 
-All four are written on every site the pass reaches, a throw site included (it shares the
+**`loop_group`** (ruled by the user 2026-11-03, option A for review 3's M1, while schema 6 was
+unshipped) names the loop a call is in: the non-trivial strongly connected component of the
+method's INSTRUCTION graph — every normal and exception-handler edge, one node per
+instruction — that holds the call, identified by the lowest `ordinal` of any site in it; absent
+where the call is in no cycle. Two calls with the same `loop_group` can each run again after
+the other; two calls without a shared group cannot reach back. That is exact for nested loops,
+since an inner loop's instructions lie in the outer loop's component. Computed by Tarjan's
+algorithm, one linear pass per method. `for (…) { use(o); o.setPort(443); }` puts the setter
+and the use in one group, so the setter can run before a later use.
+
+All five are written on every site the pass reaches, a throw site included (it shares the
 ordinal sequence; a throw completes nothing, so it is no site's `dominator` or
-`post_dominator`, has no `post_dominator` itself, and does not reach a return).
+`post_dominator`, has no `post_dominator` itself, and does not reach a return; it may be in a
+loop like any site).
 `on_every_exit` and `reaches_return` are written false as well as true, so **an absent one
 means the position was not computed** — a reader treats it as undecided, never as "runs on
 every path" or "reaches a return". Where the pass could not walk a body it emits no site at
 all, so no field; an unreachable invoke keeps its ordinal and emits no site either — it would
-have no `dominator`, no `post_dominator`, and `on_every_exit` and `reaches_return` false — and
-so is no site's `dominator` or `post_dominator`.
+have no `dominator`, no `post_dominator`, no `loop_group`, and `on_every_exit` and
+`reaches_return` false — and so is no site's `dominator` or `post_dominator` and names no loop.
 
 **`receiver` / `result`** are per-method value ids from a dataflow pass over the method's
 bytecode — `receiver` is null for a static call, `result` is null for a void one. They are
