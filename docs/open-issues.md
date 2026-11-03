@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-277 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-279 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -280,6 +280,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-274 | [SEXTANT-268](https://app.plane.so/portolan/browse/SEXTANT-268/) | Android modules are not detected: no java plugin, so no classes are read (outbound only) |
 | OI-275 | [SEXTANT-269](https://app.plane.so/portolan/browse/SEXTANT-269/) | Vert.x drops a refused route; give routes the `refused` column |
 | OI-276 | [SEXTANT-270](https://app.plane.so/portolan/browse/SEXTANT-270/) | Quartz collection forms of `scheduleJob`: the effect is stated, not built |
+| OI-277 | [SEXTANT-271](https://app.plane.so/portolan/browse/SEXTANT-271/) | Per-path truth review 2 minors (m1-m10) |
+| OI-278 | [SEXTANT-272](https://app.plane.so/portolan/browse/SEXTANT-272/) | Rule 9 review 3 minors: a finally copy counts as a split; Kotlin `?.` untested end to end |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
