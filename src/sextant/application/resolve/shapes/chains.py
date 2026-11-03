@@ -36,6 +36,7 @@ captures folded along the way — and what an end becomes is its consumer's busi
 change in behaviour, so a second consumer can read the same walk.
 """
 
+import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -73,6 +74,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_
 from sextant.application.resolve.values import (
     CYCLE,
     ESCAPES,
+    EXTERNAL,
     NON_ENUMERABLE,
     RECEIVER,
     Counting,
@@ -83,12 +85,18 @@ from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
     counts_split,
+    entered_position,
     inexact,
     producer_paths,
     producers_of,
     split_sites,
 )
-from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
+from sextant.domain.symbols import (
+    bare_descriptor,
+    method_descriptor,
+    parameter_types,
+    returned_type,
+)
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -953,6 +961,11 @@ class _RootlessWalk:
 
     declared: frozenset[tuple[str, str]]
     configuring: frozenset[tuple[str, str, str]]
+    # The types a chain of the catalog is built on, as the module's own calls show them: what
+    # each call matching a root hands back, and the owner of each call matching a step that
+    # names its owners (item 2 review, M1). A terminal called on another type is not this
+    # catalog's chain, whatever its name.
+    types: frozenset[str] = frozenset()
 
 
 def _rootless_walk(
@@ -976,25 +989,36 @@ def _rootless_walk(
         owners_by_name.setdefault(str(root["method"]), []).append(tuple(root["owners"]))
     for step in steps:
         owners_by_name.setdefault(str(step["method"]), []).append(step["owners"])
+    step_owners: dict[str, list[tuple[str, ...] | None]] = {}
+    for step in steps:
+        step_owners.setdefault(str(step["method"]), []).append(step["owners"])
     declared: set[tuple[str, str]] = set()
     in_module: set[tuple[str, str]] = set()
     root_names = {str(root["method"]) for root in roots}
     rooted = False
+    types: set[str] = set()
     for site in index.sites.values():
         name = str(site["name"])
-        if not rooted and name in root_names:
-            rooted = _matching_root(dict(site), roots) is not None
+        if name in root_names and _matching_root(dict(site), roots) is not None:
+            rooted = True
+            built = returned_type(str(site.get("descriptor") or "()V"))
+            if built is not None:
+                types.add(built)
         owner = str(site["owner"])
         named = owners_by_name.get(name)
         if named is None or not any(owners is None or owner in owners for owners in named):
             continue
+        if any(owner in owners for owners in step_owners.get(name, ()) if owners is not None):
+            types.add(owner)
         declared.add((owner, name))
         if _site_key(site) in index.reached:
             in_module.add((owner, name))
     if not rooted:
         return _RootlessWalk(frozenset(), frozenset())
     return _RootlessWalk(
-        frozenset(declared - in_module), configuring_calls(catalog, index.sites.values())
+        frozenset(declared - in_module),
+        configuring_calls(catalog, index.sites.values()),
+        frozenset(types),
     )
 
 
@@ -1026,7 +1050,9 @@ def _walk_back(
     the terminal's, which the code does make, so it is kept and its resolution capped.
 
     **A walk that passed the path cap (`non_enumerable`), or that ended where the receiver was
-    handed to code we do not have or re-entered (`escapes`, `cycle`; spec 2026-11-02 rule 2),
+    handed to code we do not have, re-entered, or came from code we do not have (`escapes`,
+    `cycle`, `external`; spec 2026-11-02 rule 2), on a terminal called on the catalog's own
+    builder type (`_RootlessWalk.types`),
     read no chain**: the terminal is still a call to this catalog's terminal, so it is one row of
     its own, its parts the walk did not read, `partial` at best — never dropped (rule 4, item 2's
     B list: `send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` derived nothing)."""
@@ -1043,13 +1069,12 @@ def _walk_back(
         counting=context.counting,
     ):
         if not producer.chain and producer.reason in _UNREAD_WALKS:
-            # Where the walk ended at `escapes` or `cycle`, the terminal is this catalog's chain
-            # only where the object it is called on was built from one of the catalog's roots —
-            # identity, which no hand-off changes (rule 8). A `build()` of another builder the
-            # walk merely names alike derives nothing here, as it did before.
-            if producer.reason != NON_ENUMERABLE and not _rooted_object(
-                terminal, context, context_of, rootless
-            ):
+            # Where the walk ended at `escapes`, `cycle` or `external` (code we do not have,
+            # rule 2), the terminal is this catalog's chain only where it is called on a type a
+            # chain of the catalog is built on (`_RootlessWalk.types`; item 2 review, M1): a
+            # catalog naming its terminal by name alone (`build`) does not reach another
+            # builder's `build()`.
+            if producer.reason != NON_ENUMERABLE and str(terminal["owner"]) not in rootless.types:
                 continue
             captures: dict[str, Any] = {}
             _fold_site(terminal, captures, context)
@@ -1085,33 +1110,10 @@ def _walk_back(
         )
 
 
-def _rooted_object(
-    terminal: dict[str, Any],
-    context: _ChainContext,
-    context_of: Callable[[str], _ChainContext],
-    rootless: _RootlessWalk,
-) -> bool:
-    """Whether the object `terminal` is called on was built by a chain starting at one of the
-    catalog's roots, read as WHICH object it is (`which_object`: no window, so no hand-off ends
-    the read) along the declared calls on its receivers."""
-    assert context.values is not None
-    return any(
-        producer.chain
-        and _matching_root(_site_at(*producer.chain[0], context_of), context.roots) is not None
-        for producer, _ in producer_paths(
-            context.values,
-            terminal,
-            RECEIVER,
-            rootless.declared,
-            along_receivers=True,
-            which_object=True,
-        )
-    )
-
-
 # Where a walk back reads no chain although the terminal is called (`_walk_back`): past the path
-# cap, a hand-off into code we do not have, a body re-entered while it is read.
-_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)
+# cap, a hand-off into code we do not have, a body re-entered while it is read, a value from code
+# we do not have.
+_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE, EXTERNAL)
 
 
 def _site_at(
@@ -1257,7 +1259,7 @@ def _fold_or_fork(
                 *captures.get(_FOLDS, ()),
                 (next_site, parent, dict(captures), outcomes),
             )
-            _apply(outcomes[0][1], captures, context)
+            _apply(outcomes[0][1], captures, context, outcomes[0][0])
             continue
         if _chain_key(next_site) is None or _configures(next_site, context):
             captures[_FOLDS] = (
@@ -1386,19 +1388,74 @@ def _acts(site: dict[str, Any], context: _ChainContext) -> bool:
 
 
 def _apply(
-    gathered: tuple[tuple[str, int], ...] | str, captures: dict[str, Any], context: _ChainContext
+    gathered: tuple[tuple[str, int], ...] | str,
+    captures: dict[str, Any],
+    context: _ChainContext,
+    trail: Sequence[Any] = (),
 ) -> None:
     """One path's calls folded into `captures`, in place, each in its own frame — or, where the
     path ended at a reason (a hand-off into code we do not have, a `cycle`), every part a step
-    of the catalog sets made unknown (rule 2: never "nothing happened")."""
+    of the catalog sets made unknown (rule 2: never "nothing happened").
+
+    **A call gathered inside a body a hand-off entered reads its arguments through that
+    hand-off** (item 2 review, C2; concern 6): `trail` is the path's, and where it names the
+    call that entered the body (`values.Path.entered_into`), a parameter argument of the call is
+    read at the entering call's own argument, in its frame (`values.entered_position`) — the one
+    rule the options reader and the Quartz binder read. So `setU(b, "/one")` and `setU(b,
+    "/two")` from two callers each set their own uri, never both each. A body entered twice on
+    one path whose entries hand the call different arguments, so that which one this call ran
+    with is not known, leaves what the call sets unread."""
     if isinstance(gathered, str):
         _fold(captures, dict.fromkeys(context.step_parts, _unread(gathered)))
         return
+    path = Path(tuple(trail)) if trail else None
     for call in gathered:
         site, at = _gathered_site(*call, context)
+        entries = () if path is None else path.entered_into(*call)
+        read = {
+            json.dumps(bound["arguments"], sort_keys=True, default=str): bound
+            for bound in (_read_through(site, entered, context) for entered in entries)
+        }
+        if len(read) > 1:
+            scratch: dict[str, Any] = {}
+            _fold_site(site, scratch, at)
+            _fold(
+                captures,
+                {
+                    field: _unread(NON_ENUMERABLE)
+                    for field in scratch
+                    if not field.startswith("\x00")
+                },
+            )
+            continue
+        if read:
+            site = next(iter(read.values()))
         _fold_site(site, captures, at)
         if _reaches_terminal(site, at):
             _hold_executing_call(site, captures, at)
+
+
+def _read_through(
+    site: dict[str, Any], entered: tuple[tuple[str, int], ...], context: _ChainContext
+) -> dict[str, Any]:
+    """`site` with each argument that is a parameter of the body it is in replaced by the
+    argument the call that entered the body was handed (`values.entered_position`), stamped
+    with that call's method and position, so it is read in the frame that handed it in."""
+    assert context.values is not None
+    arguments = list(site["arguments"] or [])
+    for slot, argument in enumerate(arguments):
+        if not isinstance(argument, Mapping) or argument.get("kind") != "parameter":
+            continue
+        outer, outer_slot = entered_position(context.values, site, slot, entered)
+        if outer is site:
+            continue
+        held = _arg_at(outer["arguments"], outer_slot)
+        if held is None:
+            continue
+        arguments[slot] = _captured_at(
+            _own_method(dict(held), dict(outer)), dict(outer), outer_slot
+        )
+    return {**site, "arguments": arguments}
 
 
 def _unread(reason: str) -> Mapping[str, Any]:
@@ -1492,7 +1549,7 @@ def _forked(
             variant[_UNPROVEN] = True
         else:
             variant = dict(start)
-            _apply(gathered, variant, context)
+            _apply(gathered, variant, context, trail)
             if captures.get(_UNPROVEN):
                 variant[_UNPROVEN] = True
         variant[_TRAIL] = (*captures.get(_TRAIL, ()), *trail)
@@ -1592,7 +1649,7 @@ def _configured_for(
                 continue
             if outcomes is not None:
                 handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed), outcomes))
-                _apply(outcomes[0][1], handed, context)
+                _apply(outcomes[0][1], handed, context, outcomes[0][0])
             elif _chain_key(call) is None or _configures(call, context):
                 handed[_FOLDS] = (*handed.get(_FOLDS, ()), (call, parent, dict(handed), None))
                 _fold_site(call, handed, context)
@@ -3142,6 +3199,9 @@ def _captured_at(
     """
     if argument is None:
         return None
+    # An argument read through a hand-off already says where it was read (`_read_through`).
+    if _CAPTURED_AT in argument:
+        return argument
     return {**argument, _CAPTURED_AT: (site["caller"], site["ordinal"], slot)}
 
 
@@ -3159,6 +3219,9 @@ def _own_method(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[s
     2026-09-21 §3c) reads the same key."""
     if argument is None:
         return None
+    # An argument read through a hand-off already carries its own method (`_read_through`).
+    if _CAPTURED_AT in argument:
+        return argument
     stamped = {**argument, "caller": site["caller"]}
     for key in ("elements", "candidates"):
         held = argument.get(key)

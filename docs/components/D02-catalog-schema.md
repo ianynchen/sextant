@@ -2403,7 +2403,9 @@ the text read, set and unread, proven unset, or unknown. **Proven unset** needs 
 by the options type's NO-ARGUMENT constructor and every call on it read; such a part takes the
 framework's own value, `unset` (Vert.x: `localhost`, 80, CP-56 row 132), a map from a part to a
 port number or a non-empty string, refused at load otherwise. Optional: a part with no `unset`
-value is unknown. A constructor handed anything (`new WebClientOptions(json)`), an unrooted
+value is unknown. **An object that may be held in a field is not known at all** (rule 2): a value
+of its chain stored in a field, or a method of its chain calling the options type through a field
+(D00 §5 records no store from a local). A constructor handed anything (`new WebClientOptions(json)`), an unrooted
 chain, a path ending `escapes` or `cycle`, a factory overload no rung declares and a client the
 walk does not reach leave every part not set by a read call unknown. A path rule 9 cannot call
 exact (a side of a split no fact proves; two or more splits that set a part the reader's rows

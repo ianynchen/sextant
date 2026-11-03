@@ -9172,7 +9172,7 @@ def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_it
         if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 1)
     ]
 
-    rows = _apache_walked_rows(tmp_path, facts)
+    rows = _apache_walked_rows(tmp_path, _with_root_descriptor(facts))
     assert len(rows) == 1, rows
     assert rows[0][2] in ("partial", "unresolved"), rows
 
@@ -14056,3 +14056,183 @@ def test_a_non_bool_returns_receiver_is_refused(tmp_path: Path, matches: dict):
     load and naming the key, never read as truthy."""
     with pytest.raises(CatalogError, match="returns_receiver"):
         _resolve_fluent(tmp_path, [], _fluent_catalog(matches, "invented-receiver"))
+
+
+_SET_U_JVM = "(Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;Ljava/lang/String;)V"
+# What javac writes for `ClassicRequestBuilder.get(String)` and `copy(ClassicHttpRequest)`: the
+# walk back reads the builder type a root hands back off it (`chains._RootlessWalk.types`).
+_ROOT_JVM = "(Ljava/lang/String;)Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;"
+_COPY_JVM = (
+    "(Lorg/apache/hc/core5/http/ClassicHttpRequest;)"
+    "Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;"
+)
+
+
+def _with_root_descriptor(facts: list) -> list:
+    """`facts` with each root call `ClassicRequestBuilder.get` spelled as javac writes it."""
+    return [
+        fact.model_copy(update={"target": fact.target.model_copy(update={"descriptor": _ROOT_JVM})})
+        if isinstance(fact, CallSiteFact)
+        and fact.target.name == "get"
+        and fact.target.owner == APACHE_BUILDER
+        else fact
+        for fact in facts
+    ]
+
+
+def _apache_rows_by_caller(tmp_path: Path, facts: list) -> list[tuple]:
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted(
+        (str(r["caller"]).split("#")[-1].split("(")[0], r["method"], r["path"], r["resolution"])
+        for r in rows
+    )
+
+
+def _apache_rows_with_roots(tmp_path: Path, facts: list) -> list[tuple]:
+    return _apache_rows_by_caller(tmp_path, _with_root_descriptor(facts))
+
+
+def _apache_sender(name: str, uri: str) -> list:
+    """`name(x) { b = get("http://svc/zero"); setU(b, uri); http.execute(b.build()); }`."""
+    caller = _http_method(name)
+    return [
+        _declared_method(_HTTP_OWNER, name, "(Z)V"),
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/zero")],
+            invoke_kind="static",
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=_HTTP_OWNER, name="setU", descriptor=_SET_U_JVM),
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="string", value=uri),
+            ],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.pins("chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF")
+def test_a_helper_setter_reads_the_uri_its_own_caller_hands_in(tmp_path: Path):
+    """Item 2 review, C2 (concern 6 in the forward chain walk): `a` and `c` each build
+    `get("/zero")` and hand it to `setU(b, u) { b.setUri(u); }` with their own uri. The step's
+    argument is `setU`'s parameter, read at the call that entered `setU` on the chain's own path
+    (`values.entered_position`): `a` sends `/one` and `c` sends `/two` — never both each, which
+    crossing the parameter to every caller of `setU` published, `resolved`."""
+    helper = _http_method("setU", _SET_U_JVM)
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, "setU", _SET_U_JVM),
+        _call(
+            helper,
+            APACHE_BUILDER,
+            "setUri",
+            0,
+            receiver=None,
+            result=4,
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ).model_copy(update={"receiver_parameter": 0}),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=0, value=None),
+        *_apache_sender("a", "http://svc/one"),
+        *_apache_sender("c", "http://svc/two"),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [
+        ("a", "GET", "/one", "resolved"),
+        ("c", "GET", "/two", "resolved"),
+    ]
+
+
+@pytest.mark.pins("chains.a-walk-back-ending-EXTERNAL-keeps-the-terminals-row")
+def test_a_builder_parameter_no_module_code_hands_in_keeps_its_row(tmp_path: Path):
+    """Item 2 review, M1 (rule 4): `sendNoCaller(b) { http.execute(b.build()); }`, public, with
+    no caller in the module. The walk back from `build()` ends `external` — the builder comes
+    from code we do not have — but the request is sent: one row, its parts unread. Before, no
+    row at all."""
+    send = _http_method("sendNoCaller", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendNoCaller", _SET_B_JVM),
+        _call(send, APACHE_BUILDER, "build", 0, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            1,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+        # A call of a root elsewhere, so the catalog's walk back runs in this module at all.
+        *_apache_sender("a", "http://svc/one"),
+    ]
+    rows = [row for row in _apache_rows_with_roots(tmp_path, facts) if row[0] == "sendNoCaller"]
+    assert len(rows) == 1, rows
+    assert rows[0][3] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("chains.a-walk-back-keeps-a-row-for-a-terminal-of-the-chains-OWN-TYPE")
+def test_a_builder_from_a_factory_no_root_names_keeps_its_row_where_it_escapes(tmp_path: Path):
+    """Item 2 review, M1: `copyEscaping(src) { b = ClassicRequestBuilder.copy(src);
+    Objects.requireNonNull(b); http.execute(b.build()); }`. `copy` is no root of the catalog,
+    but `build()` is called on the catalog's own builder type: the request is sent, one row, its
+    parts unread. The object-origin gate dropped it."""
+    caller = _http_method("copyEscaping")
+    facts = [
+        _declared_method(_HTTP_OWNER, "copyEscaping", "(Z)V"),
+        _call(
+            caller, APACHE_BUILDER, "copy", 0, receiver=None, result=3, invoke_kind="static"
+        ).model_copy(
+            update={"target": CallTarget(owner=APACHE_BUILDER, name="copy", descriptor=_COPY_JVM)}
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=_REQUIRE_NON_NULL,
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=4,
+            arguments=[CallArgument(kind="unresolved", source=3)],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+        *_apache_sender("a", "http://svc/one"),
+    ]
+    rows = [row for row in _apache_rows_with_roots(tmp_path, facts) if row[0] == "copyEscaping"]
+    assert len(rows) == 1, rows
+    assert rows[0][3] in ("partial", "unresolved"), rows

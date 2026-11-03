@@ -9135,8 +9135,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)\n",
-                replace="_UNREAD_WALKS = (NON_ENUMERABLE,)  # guard disabled\n",
+                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE, EXTERNAL)\n",
+                replace="_UNREAD_WALKS = (NON_ENUMERABLE, EXTERNAL)  # guard disabled\n",
             ),
         ),
     ),
@@ -9164,6 +9164,84 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="                    or _executed_unread(terminal, context),\n",
                 replace="                    or False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-object-STORED-in-a-field-is-not-known": Guard(
+        what="an options object stored in a field is not known: anything can change it there "
+        "(rule 2; item 2 review, C1)",
+        why="options configured through `this.opts` in a constructor publish Vert.x's "
+        "`localhost:80`, `resolved`, for a client whose host and port are set",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            if not producer.rooted or not producer.chain or self._stored(producer.chain):\n",
+                replace="            if not producer.rooted or not producer.chain:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-call-through-a-FIELD-of-the-options-type-may-be-on-the-object": Guard(
+        what="a method that calls an options type through a field may be calling the object "
+        "its chain built, whose store D00 §5 does not record (item 2 review, C1)",
+        why="`o = new …(); this.held = o; this.held.setDefaultPort(5); create(vertx, o)` "
+        "publishes `hd:80`, `resolved`, where Vert.x sends to `hd:5`",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            if caller in self._configured_through_fields:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF": Guard(
+        what="a step the forward walk folds from a body a hand-off entered reads a parameter "
+        "argument at the call that entered it (item 2 review, C2; concern 6)",
+        why='`setU(b, "/one")` and `setU(b, "/two")` from two callers publish both uris '
+        "for each caller, `resolved`, though each sends one",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if read:\n            site = next(iter(read.values()))\n",
+                replace="        if False:  # guard disabled\n            site = next(iter(read.values()))\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-ending-EXTERNAL-keeps-the-terminals-row": Guard(
+        what="a walk back from a rootless terminal that ends `external` keeps the terminal's "
+        "row, its parts unread (rule 2 and 4; item 2 review, M1)",
+        why="a public method's builder parameter, or a builder returned through the JDK, "
+        "derives no row for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE, EXTERNAL)\n",
+                replace="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-keeps-a-row-for-a-terminal-of-the-chains-OWN-TYPE": Guard(
+        what="the types a catalog's chain is built on include what each root call hands back "
+        "(item 2 review, M1)",
+        why="`b = ClassicRequestBuilder.copy(src); Objects.requireNonNull(b); "
+        "http.execute(b.build())` derives no row for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                types.add(built)\n",
+                replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-terminal-on-ANOTHER-type-is-not-the-chains": Guard(
+        what="a walk back keeps an unread terminal-only row only for a terminal called on a "
+        "type the catalog's chain is built on (item 2 review, M1)",
+        why="Quartz's name-only `terminal: [build]` reaches `JobBuilder.build()` from the "
+        "trigger walk and adds an unnamed `simpleSchedule()` entry no code schedules",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='            if producer.reason != NON_ENUMERABLE and str(terminal["owner"]) not in rootless.types:\n',
+                replace="            if False:  # guard disabled\n",
             ),
         ),
     ),

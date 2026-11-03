@@ -779,23 +779,26 @@ def test_a_request_naming_its_own_host_keeps_it(tmp_path: Path):
     ]
 
 
-@pytest.mark.pins("values.a-STATIC-FIELD-receiver-is-followed-to-its-writer")
-def test_an_options_object_held_in_a_constructor_written_field_is_read(tmp_path: Path):
-    """D00 §5: the constructor stores the options in `this.options`, `start()` builds the
-    client from that field into `this.client`, and `query()` calls `this.client.get("/q")` —
-    the receiver read off `this`'s field (`receiver_field`). The client is followed through
-    its field to the factory, and the options through theirs to the setters."""
+def _field_held(tmp_path: Path, options_in_a_field: bool) -> list[tuple]:
+    """`query()` calls `this.client.get("/q")`, the receiver read off `this`'s field
+    (`receiver_field`), and `start()` builds that client from options setting `search:9200` —
+    built in `start()` itself, or (`options_in_a_field`) by the constructor into
+    `this.options`, which `start()` reads."""
     owner = "com/acme/vertx/Search#"
     init = _MODULE + method_descriptor(owner, "<init>", "()V")
     start = _MODULE + method_descriptor(owner, "start", "()V")
     query = _MODULE + method_descriptor(owner, "query", "()V")
-    building = _Client(init)
+    building = _Client(init if options_in_a_field else start)
     made = building.options(
         ("setDefaultHost", _SET_HOST, _string("search")),
         ("setDefaultPort", _SET_PORT, _int(9200)),
     )
-    starting = _Client(start)
-    client = starting.create(CallArgument(kind="field", symbol=owner + "options."))
+    starting = building if not options_in_a_field else _Client(start)
+    client = starting.create(
+        CallArgument(kind="field", symbol=owner + "options.")
+        if options_in_a_field
+        else CallArgument(kind="unresolved", source=made)
+    )
     sending = _Client(query)
     get = sending.call(CLIENT, "get", _URI, None, [_string("/q")])
     sending.call(REQUEST, "send", _SEND, get, [])
@@ -804,14 +807,8 @@ def test_an_options_object_held_in_a_constructor_written_field_is_read(tmp_path:
     )
     facts = [
         *building.sites,
-        *starting.sites,
+        *(starting.sites if starting is not building else ()),
         *sending.sites,
-        FieldWriteFact(
-            document_id="doc_1",
-            field=owner + "options.",
-            value=CallArgument(kind="unresolved", source=made),
-            written_by=init,
-        ),
         FieldWriteFact(
             document_id="doc_1",
             field=owner + "client.",
@@ -819,11 +816,41 @@ def test_an_options_object_held_in_a_constructor_written_field_is_read(tmp_path:
             written_by=start,
         ),
     ]
+    if options_in_a_field:
+        facts.append(
+            FieldWriteFact(
+                document_id="doc_1",
+                field=owner + "options.",
+                value=CallArgument(kind="unresolved", source=made),
+                written_by=init,
+            )
+        )
     workspace = _resolve_fluent_walked(tmp_path, facts, _vertx_webclient())
     rows = [dict(row) for row in workspace.query("endpoints")]
     workspace.close()
+    return _calls(rows)
 
-    assert _calls(rows) == [("GET", "search:9200", "/q", "resolved")]
+
+@pytest.mark.pins("values.a-STATIC-FIELD-receiver-is-followed-to-its-writer")
+def test_a_client_held_in_a_constructor_written_field_is_read(tmp_path: Path):
+    """D00 §5: `start()` builds the client into `this.client`, and `query()` calls
+    `this.client.get("/q")` — the receiver read off `this`'s field (`receiver_field`). The
+    client is followed through its field to the factory, and the options it was handed, built
+    and configured in `start()` itself, to their setters: `search:9200`."""
+    assert _field_held(tmp_path, options_in_a_field=False) == [
+        ("GET", "search:9200", "/q", "resolved")
+    ]
+
+
+@pytest.mark.pins("client_base.an-object-STORED-in-a-field-is-not-known")
+def test_options_held_in_a_field_are_followed_but_not_known(tmp_path: Path):
+    """Item 2 review, C1 (rules 2 and 5): the constructor stores the options in
+    `this.options`, and `start()` builds the client from that field. Once in a field anything
+    can change the object — a call through the field, here or in another method, which the walk
+    does not read on the object it reaches — so no part of it is known, not even the setters it
+    did read: peer NULL, `partial`. Before, `search:9200` here, and Vert.x's `localhost:80`,
+    `resolved`, where the constructor configured the object through the field."""
+    assert _field_held(tmp_path, options_in_a_field=True) == [("GET", None, "/q", "partial")]
 
 
 @pytest.mark.pins("client_base.every-call-returning-the-options-configures-them")

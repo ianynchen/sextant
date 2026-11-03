@@ -17,6 +17,20 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Options kept in a field are not proven unset, a helper's step reads its own caller's
+  argument, and a walk back that ends at code we do not have keeps its row** (item 2 fix round
+  1). Options configured through `this.opts` in a constructor published Vert.x's own
+  `localhost:80`, `resolved`, for a client whose host and port were set; an object stored in a
+  field (`ValueIndex.stored`), or one whose method calls the options type through a field (a
+  store from a local, `this.held = o`, has no fact), is now not known: peer NULL, `partial`.
+  `setU(b, "/one")` and `setU(b, "/two")` from two callers published both uris for each, both
+  `resolved`; the forward chain walk now reads a step gathered in a helper through the call that
+  entered it (`values.Path.entered_into`, `entered_position`), the options reader's rule. The
+  walk back from a rootless terminal keeps the terminal's row where it ends `external` too, and
+  decides whether the terminal is the catalog's by the type it is called on (what a root hands
+  back, an owner a step names), so a builder from `copy(src)` or a public method's parameter is
+  a row, and Quartz's name-only `terminal: [build]` still does not reach `JobBuilder.build()`.
+
 - **A Vert.x client's defaults are one answer per path, and Vert.x's own defaults are used
   where a path proves them** (spec 2026-11-02-per-path-truth rules 4-6, item 2). The options
   reader merged its paths: a part two paths read differently was unread, and a part one path

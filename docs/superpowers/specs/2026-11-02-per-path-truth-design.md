@@ -108,6 +108,19 @@ publishes `search` while its port is unknown.
    (`chains._executing_calls`, `_executed_unread`); the mount reader already asked which object
    (`which_object`), so a router handed away before its mount kept its prefix — measured, not
    changed.
+
+   **Fix round 1** (item 2 review, 2026-11-03). *C1*: an options object is not proven, and not
+   known at all, where it may be held in a field — a value of its chain in `ValueIndex.stored`
+   or a parameter in `stored_parameters`, or a method of its chain that calls the options type
+   through a field (`client_base._Options._stored`, `_configured_through_fields`), since D00 §5
+   records no store from a local. *C2*: the forward chain walk reads a step gathered in an
+   entered body through the entering call (`chains._apply`, `_read_through`), the same
+   `Path.entered_into` and `entered_position`; a body entered twice on one path with different
+   arguments leaves what the step sets unread. *M1*: the walk back keeps the terminal-only row
+   for `external` too (`_UNREAD_WALKS`), and the gate is the terminal's owner type
+   (`_RootlessWalk.types`: what a root call hands back, an owner a step names), replacing the
+   object-origin test. *C3* (a same-method `build()` handed to the JDK before `execute`) is built
+   and held back, pending the user's decision on `Objects.requireNonNull` (OI-262).
 7. **A hand-off to a call a catalog declares takes its effect from the catalog** [ruled by the
    user, 2026-11-02: "predict the framework's behavior exactly, including its errors", DR-6].
    A catalog-declared call is not code we do not have: the catalog is the measured statement of

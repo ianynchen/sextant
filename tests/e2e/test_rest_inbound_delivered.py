@@ -2955,3 +2955,45 @@ def test_quarkus_reactive_routes_verbless_and_regex(quarkus_endpoints):
     assert len(files) == 1, sorted(str(r["path"]) for r in inbound)
     assert (files[0]["method"], files[0]["resolution"]) == ("GET", "resolved")
     assert _is_pattern(files[0]), files[0]
+
+
+# Per-path truth, item 2 fix round 1 ----------------------------------------------------------
+
+
+@pytest.mark.pins("client_base.an-object-STORED-in-a-field-is-not-known")
+@pytest.mark.pins("client_base.a-call-through-a-FIELD-of-the-options-type-may-be-on-the-object")
+def test_vertx_options_kept_in_a_field_are_not_proven_unset(vertx_outbound):
+    """Item 2 review, C1 (rules 2 and 5): options stored in a field are configured through it
+    (`opts.setDefaultHost("ctor")` in the constructor) or may be later (`init()` sets the
+    port), calls the walk does not read on the object it reaches. Once in a field anything can
+    change it, so no part is proven unset: peer NULL, `partial` — never Vert.x's `localhost:80`
+    or `held:80`, `resolved`, for a client whose host and port are set. `this.holder = o;
+    this.holder.setDefaultPort(5)` stores from a local, which D00 §5 records no fact for, so the
+    call through a field of the options type in the same method is taken to be on the object."""
+    assert _vertx_rows(vertx_outbound, "FieldOptionsClient") == {
+        ("GET", "/field-ctor", None, "partial"),
+        ("GET", "/field-held", None, "partial"),
+        ("GET", "/field-holder", None, "partial"),
+    }
+
+
+@pytest.mark.pins("client_base.an-object-STORED-in-a-field-is-not-known")
+def test_vertx_request_options_kept_in_a_field_are_not_read_as_unset(vertx_outbound):
+    """C1 for a request's own options: `init()` sets the host on the stored `RequestOptions`,
+    so the client's default host is not proven to be the one the request takes. The object is
+    not known whole (rule 2): its uri and host are unread, one row, never dropped."""
+    assert _vertx_rows(vertx_outbound, "StoredRequestOptionsClient") == {
+        ("GET", None, None, "unresolved"),
+    }
+
+
+@pytest.mark.pins("chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF")
+def test_vertx_a_request_step_in_a_helper_reads_its_own_callers_argument(vertx_outbound):
+    """Item 2 review, C2 (concern 6 in the forward chain walk): `port(request, 61)` and
+    `port(request, 62)` hand each caller's request to one helper doing `request.port(port)`.
+    The step's argument is the helper's parameter, read at the call that entered the helper on
+    the chain's own path, so each request carries its caller's port: `fw:61` and `fw:62`."""
+    assert _vertx_rows(vertx_outbound, "HelperRequestPort") == {
+        ("GET", "/fw1", "fw:61", "resolved"),
+        ("GET", "/fw2", "fw:62", "resolved"),
+    }

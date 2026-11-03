@@ -835,6 +835,15 @@ class _Options:
         }
         owners |= set(returns)
         self._owners = frozenset(owners)
+        # The methods that make a call on an options type THROUGH A FIELD (`receiver_field`):
+        # the field may hold the object a chain in that method built, and D00 §5 records no
+        # store from a local (`this.held = o; this.held.setDefaultPort(5)`), so the walk cannot
+        # rule it out (item 2 review, C1). One pass over the call sites.
+        self._configured_through_fields = frozenset(
+            str(site["caller"])
+            for site in values.sites.values()
+            if site.get("receiver_field") and str(site.get("owner")) in owners
+        )
         # The calls that configure an options object, as the walk names one — `(owner, name,
         # descriptor)` exactly — read off the module's own calls: a setter, and every call on an
         # options type returning a type `configures` says is that same object. Once per reading,
@@ -943,7 +952,10 @@ class _Options:
             counting=self._counts,
         ):
             exact = not producer.inexact and not inexact(path)
-            if not producer.rooted or not producer.chain:
+            # An object stored in a field (rule 2; item 2 review, C1): once there anything can
+            # change it — a call through the field, here or in another method — and the walk
+            # reads none of those calls on the object it reaches, so nothing about it is known.
+            if not producer.rooted or not producer.chain or self._stored(producer.chain):
                 found.append((_Read(_UNKNOWN, False, exact), path))
                 continue
             parts: dict[str, str | None] = {}
@@ -956,6 +968,25 @@ class _Options:
         read = tuple(dict.fromkeys(found))
         self._read[key] = read
         return read
+
+    def _stored(self, chain: tuple[tuple[str, int], ...]) -> bool:
+        """Whether the object a chain built may be held in a field, where anything can change it
+        (`ValueIndex.stored`, `stored_parameters`: "once in a field, anything can change it"):
+        the value a construction made or a call of the chain handed back was stored, or a
+        parameter a call of the chain is made on was; or a method of the chain configures an object
+        of the options type through a field (`_configured_through_fields`), which may be this
+        one."""
+        for caller, ordinal in chain:
+            if caller in self._configured_through_fields:
+                return True
+            row = self._values.sites[(caller, ordinal)]
+            made = row.get("receiver") if row.get("name") == "<init>" else row.get("result")
+            if made is not None and (caller, int(str(made))) in self._values.stored:
+                return True
+            on = row.get("receiver_parameter")
+            if on is not None and (caller, int(str(on))) in self._values.stored_parameters:
+                return True
+        return False
 
     def _built_bare(self, root: tuple[str, int]) -> bool:
         """Whether a chain's first call is an options type's NO-ARGUMENT constructor (rule 5):
