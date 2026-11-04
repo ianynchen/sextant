@@ -28,3 +28,7 @@ def test_the_broker_families_are_distinct_protocols():
 def test_the_two_group_d_protocols_are_members():
     assert Protocol.TEMPORAL.value == "temporal"
     assert Protocol.EVENTBUS.value == "eventbus"
+
+
+def test_actor_is_a_protocol():
+    assert Protocol.ACTOR.value == "actor"

@@ -576,6 +576,7 @@ column with its own evidence, never this one.
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
 | RSocket route | `rsocket` | NULL | the route the handler answers (`/orders/place`), or the class-level prefix alone for a `@ConnectMapping` naming none | the Spring RSocket catalog (F2 §3.6). Verbless for STOMP's reason: an RSocket route declares no verb. It shares `@MessageMapping` with STOMP and is told apart by the build, or by a `@ConnectMapping` anywhere in the module |
+| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |

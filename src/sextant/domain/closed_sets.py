@@ -176,6 +176,13 @@ class Protocol(StrEnum):
     # `amqp` is named for the protocol rather than for Rabbit.
     TEMPORAL = "temporal"
     EVENTBUS = "eventbus"
+    # Akka and Pekko actors (SEXTANT-178). A message to an actor is addressed by
+    # a name, not called by a verb: a Receptionist service key, a sharded entity
+    # type, or a distributed pub-sub topic. Like `eventbus`, the member is named
+    # for the KIND of wire, because `tests/architecture/test_source_rules.py`
+    # forbids a framework's name in every source file here — and one member
+    # serves both Akka and its Apache fork, whose wire is the same.
+    ACTOR = "actor"
 
 
 # The two markers an `endpoints` row can carry about its OWN address, stored as columns so the

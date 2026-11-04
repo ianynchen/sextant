@@ -53,6 +53,7 @@ PROTOCOLS = {
     "rsocket",
     "temporal",
     "eventbus",
+    "actor",
 }
 LANGUAGES = {"java", "kotlin", "golang", "rust", "typescript", "javascript", "swift", "scala"}
 JVM_NAMES = {"jvm", "java", "kotlin", "bytecode", "asm", "classfile", "classpath"}
