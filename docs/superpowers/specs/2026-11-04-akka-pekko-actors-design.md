@@ -1,6 +1,6 @@
 # Akka and Pekko actors — design
 
-**Status: DRAFT 2026-11-04.** Plane SEXTANT-178 (register `akka-pekko-actors`), the fourth
+**Status: APPROVED 2026-11-04** ("Approve, build it"), graph schema 14 → 15 and the `actor` protocol included. Plane SEXTANT-178 (register `akka-pekko-actors`), the fourth
 item of "Java/Kotlin complete" (SEXTANT-265). The user ruled **B** on 2026-11-04 ("I want
 it complete"): named cluster keys are endpoint rows, **and** every message send is followed
 to the actor that handles it, so a trace crosses actors.
