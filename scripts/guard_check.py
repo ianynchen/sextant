@@ -9089,14 +9089,15 @@ GUARDS: dict[str, Guard] = {
     ),
     "client_base.a-setter-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF": Guard(
         what="a setter gathered in a body a hand-off entered reads a parameter of that body at "
-        "the call that entered it on the path (item 1's review, concern 6)",
+        "the call that entered it on the path (item 1's review, concern 6; the shared rule "
+        "`values.read_through_hand_off`)",
         why="`port(o, 1001)` and `port(o, 1002)` read the helper's parameter across both "
         "callers, which disagree, and each row loses its peer",
         edits=(
             Edit(
-                path=_CLIENT_BASE,
-                find="        for entered in path.entered_into(caller, ordinal) or ((),):\n",
-                replace="        for entered in ((),):  # guard disabled\n",
+                path=_VALUES,
+                find="    for entered in path.entered_into(caller, ordinal) or ((),):\n",
+                replace="    for entered in ((),):  # guard disabled\n",
             ),
         ),
     ),
@@ -9201,8 +9202,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        if read:\n            site = next(iter(read.values()))\n",
-                replace="        if False:  # guard disabled\n            site = next(iter(read.values()))\n",
+                find="            site = bound\n",
+                replace="            pass  # guard disabled\n",
             ),
         ),
     ),
@@ -9242,6 +9243,19 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find='            if producer.reason != NON_ENUMERABLE and str(terminal["owner"]) not in rootless.types:\n',
                 replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-CONSTRUCTOR-roots-type-is-its-owner": Guard(
+        what="a constructor root builds its owner type, so a walk back from a terminal on it "
+        "keeps its unread row (item 2 re-review, N1)",
+        why="OkHttp's one root is `new Request.Builder()`; read off its descriptor it builds "
+        "nothing, and every OkHttp request whose walk back ends `escapes` loses its row",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='                if name == "<init>"\n',
+                replace="                if False  # guard disabled\n",
             ),
         ),
     ),

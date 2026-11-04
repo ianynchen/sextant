@@ -14236,3 +14236,82 @@ def test_a_builder_from_a_factory_no_root_names_keeps_its_row_where_it_escapes(t
     rows = [row for row in _apache_rows_with_roots(tmp_path, facts) if row[0] == "copyEscaping"]
     assert len(rows) == 1, rows
     assert rows[0][3] in ("partial", "unresolved"), rows
+
+
+_OK_BUILDER = "okhttp3/Request$Builder#"
+_OK_SEND_JVM = "(Lokhttp3/Request$Builder;)V"
+
+
+@pytest.mark.pins("chains.a-CONSTRUCTOR-roots-type-is-its-owner")
+def test_a_constructor_rooted_builder_handed_away_before_sending_keeps_its_row(tmp_path: Path):
+    """Item 2 re-review, N1: OkHttp's one root is `new Request.Builder()`, a constructor, whose
+    descriptor hands back nothing — the type it builds is its owner. `send(b) {
+    Objects.hash(b); client.newCall(b.build()); }`, called with `new
+    Request.Builder().url("https://svc/ok")`: the walk back from `build()` ends `escapes`, and
+    the request is sent, so it keeps its row, its parts unread. Read off the descriptor alone,
+    the chain had no type and the row was dropped."""
+    owner = "com/acme/http/OkSend#"
+    send = _MODULE + method_descriptor(owner, "send", _OK_SEND_JVM)
+    caller = _MODULE + method_descriptor(owner, "caller", "()V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + owner, construct_kind="class"),
+        _declared_method(owner, "send", _OK_SEND_JVM),
+        _declared_method(owner, "caller", "()V"),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner="java/util/Objects#", name="hash", descriptor="([Ljava/lang/Object;)I"
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="array", elements=[CallArgument(kind="parameter", value=0)])
+            ],
+        ),
+        _call(send, _OK_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            "okhttp3/OkHttpClient#",
+            "newCall",
+            2,
+            receiver=99,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+        _call(caller, _OK_BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            _OK_BUILDER,
+            "url",
+            1,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="string", value="https://svc/ok")],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=owner, name="send", descriptor=_OK_SEND_JVM),
+            invoke_kind="static",
+            ordinal=2,
+            receiver=None,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=2)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("okhttp"))
+    rows = [
+        (r["resolution"],)
+        for r in workspace.query("endpoints")
+        if "OkSend#send" in str(r["caller"])
+    ]
+    workspace.close()
+    assert len(rows) == 1, rows
+    assert rows[0][0] in ("partial", "unresolved"), rows

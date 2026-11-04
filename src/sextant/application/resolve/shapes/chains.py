@@ -36,7 +36,6 @@ captures folded along the way — and what an end becomes is its consumer's busi
 change in behaviour, so a second consumer can read the same walk.
 """
 
-import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -85,10 +84,10 @@ from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
     counts_split,
-    entered_position,
     inexact,
     producer_paths,
     producers_of,
+    read_through_hand_off,
     split_sites,
 )
 from sextant.domain.symbols import (
@@ -962,8 +961,8 @@ class _RootlessWalk:
     declared: frozenset[tuple[str, str]]
     configuring: frozenset[tuple[str, str, str]]
     # The types a chain of the catalog is built on, as the module's own calls show them: what
-    # each call matching a root hands back, and the owner of each call matching a step that
-    # names its owners (item 2 review, M1). A terminal called on another type is not this
+    # each call matching a root hands back (a constructor root, its owner), and the owner of
+    # each call matching a step that names its owners (item 2 review, M1; re-review, N1). A terminal called on another type is not this
     # catalog's chain, whatever its name.
     types: frozenset[str] = frozenset()
 
@@ -1001,7 +1000,13 @@ def _rootless_walk(
         name = str(site["name"])
         if name in root_names and _matching_root(dict(site), roots) is not None:
             rooted = True
-            built = returned_type(str(site.get("descriptor") or "()V"))
+            # A constructor root builds its owner (its descriptor hands back nothing); any
+            # other root builds what it hands back (item 2 re-review, N1).
+            built = (
+                str(site["owner"])
+                if name == "<init>"
+                else returned_type(str(site.get("descriptor") or "()V"))
+            )
             if built is not None:
                 types.add(built)
         owner = str(site["owner"])
@@ -1411,42 +1416,43 @@ def _apply(
     path = Path(tuple(trail)) if trail else None
     for call in gathered:
         site, at = _gathered_site(*call, context)
-        entries = () if path is None else path.entered_into(*call)
-        read = {
-            json.dumps(bound["arguments"], sort_keys=True, default=str): bound
-            for bound in (_read_through(site, entered, context) for entered in entries)
-        }
-        if len(read) > 1:
-            scratch: dict[str, Any] = {}
-            _fold_site(site, scratch, at)
-            _fold(
-                captures,
-                {
-                    field: _unread(NON_ENUMERABLE)
-                    for field in scratch
-                    if not field.startswith("\x00")
-                },
-            )
-            continue
-        if read:
-            site = next(iter(read.values()))
+        if path is not None:
+            bound = _read_through(site, path, context)
+            if bound is None:
+                scratch: dict[str, Any] = {}
+                _fold_site(site, scratch, at)
+                _fold(
+                    captures,
+                    {
+                        field: _unread(NON_ENUMERABLE)
+                        for field in scratch
+                        if not field.startswith("\x00")
+                    },
+                )
+                continue
+            site = bound
         _fold_site(site, captures, at)
         if _reaches_terminal(site, at):
             _hold_executing_call(site, captures, at)
 
 
 def _read_through(
-    site: dict[str, Any], entered: tuple[tuple[str, int], ...], context: _ChainContext
-) -> dict[str, Any]:
-    """`site` with each argument that is a parameter of the body it is in replaced by the
-    argument the call that entered the body was handed (`values.entered_position`), stamped
-    with that call's method and position, so it is read in the frame that handed it in."""
+    site: dict[str, Any], path: Path, context: _ChainContext
+) -> dict[str, Any] | None:
+    """`site` with each argument that is a parameter of the body it is in read where
+    `values.read_through_hand_off` says — at the argument the call that entered the body handed
+    in, stamped with that call's method and position, so it is read in the frame that handed it
+    in — or None where that rule leaves an argument unread (the body entered twice with
+    different arguments)."""
     assert context.values is not None
     arguments = list(site["arguments"] or [])
     for slot, argument in enumerate(arguments):
         if not isinstance(argument, Mapping) or argument.get("kind") != "parameter":
             continue
-        outer, outer_slot = entered_position(context.values, site, slot, entered)
+        position = read_through_hand_off(context.values, path, site, slot)
+        if position is None:
+            return None
+        outer, outer_slot = position
         if outer is site:
             continue
         held = _arg_at(outer["arguments"], outer_slot)

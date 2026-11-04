@@ -121,6 +121,12 @@ publishes `search` while its port is unknown.
    (`_RootlessWalk.types`: what a root call hands back, an owner a step names), replacing the
    object-origin test. *C3* (a same-method `build()` handed to the JDK before `execute`) is built
    and held back, pending the user's decision on `Objects.requireNonNull` (OI-262).
+
+   **Fix round 2** (re-review of fix round 1). *N1*: a constructor root's type is its owner
+   (`_RootlessWalk.types`). *Shared rule*: where a call gathered in an entered body is read —
+   the entering call's argument, or unread where the body was entered twice with different
+   arguments — is `values.read_through_hand_off`, which `client_base._Options._value` and
+   `chains._read_through` both call.
 7. **A hand-off to a call a catalog declares takes its effect from the catalog** [ruled by the
    user, 2026-11-02: "predict the framework's behavior exactly, including its errors", DR-6].
    A catalog-declared call is not code we do not have: the catalog is the measured statement of

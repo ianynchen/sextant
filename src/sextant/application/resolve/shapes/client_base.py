@@ -52,10 +52,10 @@ from sextant.application.resolve.values import (
     UNRESOLVED,
     Path,
     ValueIndex,
-    entered_position,
     inexact,
     producer_paths,
     producers_of,
+    read_through_hand_off,
     resolve_positions,
 )
 from sextant.domain.closed_sets import Resolution
@@ -1012,21 +1012,21 @@ class _Options:
         literal, or a configuration expression; None where the path gives anything else or
         several values (rule 6: pairing two setters' candidates would publish combinations no
         path makes). A setter gathered inside a body a hand-off entered reads a parameter of
-        that body at the call that entered it on this path (`entered_position`), so a helper
-        called by two callers sets each caller's own value (item 1's review, concern 6)."""
+        that body at the call that entered it on this path (`values.read_through_hand_off`), so a
+        helper called by two callers sets each caller's own value (item 1's review, concern 6)."""
+        position = read_through_hand_off(self._values, path, site, slot)
+        if position is None:
+            return None
         texts: set[str] = set()
-        caller, ordinal = str(site["caller"]), int(str(site["ordinal"]))
-        for entered in path.entered_into(caller, ordinal) or ((),):
-            at, at_slot = entered_position(self._values, site, slot, entered)
-            for reached in resolve_positions(
-                self._workspace, {"value": (at, at_slot)}, self._values, within=path
-            ):
-                answer = reached["value"]
-                stated = answer.kind == LITERAL and answer.literal_kind in (STRING, INT)
-                keyed = answer.kind == EXPRESSION and carries_expression(str(answer.value))
-                if answer.narrowed or answer.inexact or not (stated or keyed):
-                    return None
-                texts.add(str(answer.value))
+        for reached in resolve_positions(
+            self._workspace, {"value": position}, self._values, within=path
+        ):
+            answer = reached["value"]
+            stated = answer.kind == LITERAL and answer.literal_kind in (STRING, INT)
+            keyed = answer.kind == EXPRESSION and carries_expression(str(answer.value))
+            if answer.narrowed or answer.inexact or not (stated or keyed):
+                return None
+            texts.add(str(answer.value))
         return texts.pop() if len(texts) == 1 else None
 
 

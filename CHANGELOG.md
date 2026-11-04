@@ -17,6 +17,14 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A constructor-rooted builder handed away keeps its row, and one shared rule reads a helper's
+  argument through its hand-off** (item 2 fix round 2, re-review N1). The walk back's type gate
+  read a constructor root's type off its descriptor, which hands back nothing, so OkHttp's
+  `new Request.Builder()` chains had no type and `send(b) { Objects.requireNonNull(b);
+  client.newCall(b.build()); }` lost its row; a constructor root now builds its owner. The
+  "entered twice with different arguments → unread" decision both the options reader and the
+  forward chain walk made is one function, `values.read_through_hand_off`.
+
 - **Options kept in a field are not proven unset, a helper's step reads its own caller's
   argument, and a walk back that ends at code we do not have keeps its row** (item 2 fix round
   1). Options configured through `this.opts` in a constructor published Vert.x's own

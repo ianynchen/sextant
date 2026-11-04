@@ -1722,6 +1722,39 @@ def entered_position(
     return site, slot
 
 
+# The argument kinds whose fact IS the value, wherever it is written: two entries handing a
+# call one of these alike hand it one value.
+_STATED_KINDS = frozenset({"string", "int", "long", "boolean"})
+
+
+def read_through_hand_off(
+    index: ValueIndex, path: "Path", site: Mapping[str, Any], slot: int
+) -> tuple[Mapping[str, Any], int] | None:
+    """Where argument `slot` of a call `path` gathered is read (item 1's review, concern 6; the
+    one rule both the options reader and the forward chain walk read, item 2 re-review): at the
+    call itself where the path gathered it in no entered body; else at the argument the call
+    that entered the body handed in (`entered_position`). Where the path entered the body more
+    than once and the entries hand the call different arguments, which one this call ran with is
+    not known: None, the argument unread. Entries handing it one stated value alike are one."""
+    caller, ordinal = str(site["caller"]), int(str(site["ordinal"]))
+    found: dict[tuple[str, str | None], tuple[Mapping[str, Any], int]] = {}
+    for entered in path.entered_into(caller, ordinal) or ((),):
+        at, at_slot = entered_position(index, site, slot, entered)
+        arguments = at["arguments"] or []
+        argument = arguments[at_slot] if at_slot < len(arguments) else None
+        stated = (
+            isinstance(argument, Mapping)
+            and argument.get("kind") in _STATED_KINDS
+            and argument.get("source") is None
+        )
+        key = (
+            json.dumps(argument, sort_keys=True, default=str),
+            None if stated else f"{at['caller']}@{at['ordinal']}",
+        )
+        found.setdefault(key, (at, at_slot))
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
 def _dominators(index: ValueIndex, method: str, ordinal: int) -> frozenset[int] | None:
     """Every call in `method` that ran before the call at `ordinal` on EVERY path to it —
     its `dominator` chain (spec 2026-11-02 rule 9, D00 §5) — or None where the facts do not
