@@ -73,6 +73,19 @@ _COMPOSITE_BUILD_NOTE_PREFIX = "composite build: included builds not analyzed: "
 # recognises to decide whether an online retry is worth offering.
 _OFFLINE_REFUSAL_SUBSTRING = "available for offline mode"
 
+# The same refusal for a PLUGIN (OI-273 fix round 1). Offline, a plugin Gradle has never
+# cached reports "Plugin [id: ...] was not found in any of the following sources", its
+# plugin-repository line reading "could not resolve plugin artifact '<id>:<id>.gradle.
+# plugin:<version>'" — measured on Gradle 8.14.1 and 9.5.0 — and never the dependency
+# wording above. The first attempt is always offline, so the cache is all it consulted.
+_OFFLINE_PLUGIN_REFUSAL_SUBSTRING = "could not resolve plugin artifact"
+
+# Gradle's own build-failure banner: printed only once the build ENGINE ran, so its
+# presence proves the distribution was there (OI-273 fix round 1). A wrapper that
+# downloaded the distribution successfully prints `Downloading https://...` first, and the
+# build may then fail for any reason of its own.
+_BUILD_FAILURE_BANNER = "FAILURE: Build failed with an exception."
+
 # Positive evidence that Gradle's OWN wrapper bootstrap — never Gradle's real
 # build engine — produced this output (2M Task 3 fix round 1, C2). Verified
 # live against Gradle 9.7.1: a wrapper pointed at a distribution version that
@@ -160,7 +173,19 @@ def _distribution_absent_message(path: Path, output: str) -> str:
 
 
 def _is_distribution_absent(output: str) -> bool:
+    """Wrapper-bootstrap evidence, and no sign the build engine ever ran: the banner
+    alone was this detector's first cut and misread a bad `JAVA_HOME` (fix round 1, C2);
+    the bootstrap substrings alone misread a SUCCESSFUL download followed by a build
+    failure (OI-273 fix round 1). Both together."""
+    if _BUILD_FAILURE_BANNER in output:
+        return False
     return any(substring in output for substring in _WRAPPER_BOOTSTRAP_SUBSTRINGS)
+
+
+def _is_offline_refusal(output: str) -> bool:
+    """Something the local cache lacked and the network might have — a dependency or a
+    plugin — and so worth the one online retry `--allow-resolve` permits."""
+    return _OFFLINE_REFUSAL_SUBSTRING in output or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output
 
 
 def _read_json(out_file: Path) -> dict[str, Any]:
@@ -305,7 +330,7 @@ class GradleDetector:
         combined = first.stdout + first.stderr
         if _is_distribution_absent(combined):
             raise ValueError(_distribution_absent_message(path, combined))
-        if not (allow_resolve and _OFFLINE_REFUSAL_SUBSTRING in combined):
+        if not (allow_resolve and _is_offline_refusal(combined)):
             raise ValueError(combined.strip())
 
         second = self._run_once(gradle_command, path, out_file, offline=False)
@@ -395,7 +420,8 @@ class GradleDetector:
             packaging="jar" if project["classesDirs"] else "pom",
             # The source-directory sets Gradle says registered each EXISTING root
             # (OI-273 round 2) — never the directory's name, which a plugin's
-            # `srcDirs("src")` makes `src`. Keyed on the reported string, the same one `source_roots` came from.
+            # `srcDirs("src")` makes `src`. Keyed on the reported string, the same one
+            # `source_roots` came from.
             languages=frozenset(
                 language
                 for root in source_roots
@@ -504,13 +530,18 @@ class GradleDetector:
         **The design question this had to settle first, and its answer.** Gradle
         reports an inter-project dependency as a `ProjectComponentIdentifier`,
         which carries a project PATH — `:pricing-lib` — and no group, name or
-        version at all. A path cannot be the coordinate: D00 §2 requires `origin`
-        to survive being read on another machine, and a project path is meaningful
-        only inside the build that declares it. So the path is used only to JOIN,
-        and the coordinate comes from that project's own `group` and `name` — the
-        same `group:artifact` spelling Maven's siblings carry, and the spelling
-        `documents.origin` already uses, so `drop_borrowed_endpoints.sql` needs no
-        second shape to match on.
+        version at all. So the path is used to JOIN to that project's own record,
+        and the identity is the one `_identity` forms from it, the same one the
+        sibling has when it is analysed as a module — which is what
+        `drop_borrowed_endpoints.sql` matches `documents.origin` against.
+
+        For a grouped sibling that is its `group:artifact`, the spelling Maven's
+        siblings carry. For a sibling with NO group (OI-273, ruled 2026-11-03) it is
+        the root project's name plus the project path, because that is the only
+        identity such a project has: Gradle will not publish it. The path does become
+        part of the identity then, and D00 §2's portability holds anyway — the root
+        name and the path are the build's own declarations, the same on every
+        machine that checks the build out, never a filesystem location.
 
         **No transitive walk, because Gradle already did it.** `compileClasspath`
         is a RESOLVED configuration: an inter-project dependency's own api

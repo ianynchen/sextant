@@ -747,6 +747,71 @@ def test_distribution_absent_message_has_no_file_to_name_without_a_wrapper(tmp_p
     assert "org.gradle.wrapper.Download" in message
 
 
+# Captured from the real wrapper (Gradle 9.5.0's, examples/playport, a fresh Gradle user
+# home, `--offline`): the wrapper DOWNLOADED its distribution successfully, and then the
+# build itself failed resolving a plugin offline. Path shortened; otherwise verbatim.
+_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE = (
+    "Downloading https://services.gradle.org/distributions/gradle-9.5.0-bin.zip\n"
+    ".............10%.............20%..............30%.............40%.............50%"
+    "..............60%.............70%..............80%.............90%.............100%\n"
+    "\nFAILURE: Build failed with an exception.\n\n* Where:\n"
+    "Build file '/repo/playport/build.gradle.kts' line: 1\n\n* What went wrong:\n"
+    "Plugin [id: 'org.jetbrains.kotlin.jvm', version: '2.4.20', apply: false] was not found "
+    "in any of the following sources:\n\n"
+    "- Gradle Core Plugins (plugin is not in 'org.gradle' namespace)\n"
+    "- Included Builds (No included builds contain this plugin)\n"
+    "- Plugin Repositories (could not resolve plugin artifact "
+    "'org.jetbrains.kotlin.jvm:org.jetbrains.kotlin.jvm.gradle.plugin:2.4.20')\n"
+    "  Searched in the following repositories:\n    MavenRepo\n"
+    "    Gradle Central Plugin Repository\n\nBUILD FAILED in 17s\n"
+)
+
+
+@pytest.mark.pins("detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution")
+def test_a_download_that_succeeded_before_a_build_failure_is_not_distribution_absent():
+    """The wrapper prints `Downloading https://...` and its progress, succeeds, and then
+    the BUILD fails — Gradle's own banner says so. Reading the download line alone reported
+    "Gradle distribution not present" and hid Gradle's real reason (OI-273 fix round 1)."""
+    assert (
+        gradle_module._is_distribution_absent(_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE) is False
+    )
+
+
+@pytest.mark.pins("detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag")
+def test_an_offline_plugin_refusal_with_allow_resolve_retries_online_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Offline, a plugin Gradle has never cached fails as "could not resolve plugin artifact"
+    (measured on Gradle 8.14.1 and 9.5.0) — never as "available for offline mode", the
+    wording a missing DEPENDENCY gets. It is the same refusal: the cache lacks it and the
+    network might not, so `--allow-resolve` retries it online, as it does a dependency."""
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_file, offline):
+        calls.append(offline)
+        if offline:
+            return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
+        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+    assert data == {"projects": []}
+    assert calls == [True, False]
+
+
+def test_an_offline_plugin_refusal_without_the_flag_reports_gradles_own_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fake_run_once(gradle_command, path, out_file, offline):
+        return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError, match="could not resolve plugin artifact") as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+    assert "distribution not present" not in str(failure.value)
+
+
 # --- `_invoke`'s retry ladder, driven by a faked subprocess -----------------
 
 
@@ -1005,33 +1070,32 @@ def test_a_project_record_predating_the_release_field_reads_as_absence(tmp_path:
 
 @pytest.mark.pins("detect.a-NO-GROUP-sibling-is-read-as-an-unpublished-library-root")
 def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_path: Path):
-    """Two projects of one no-group build, `:app` calling a class in `:lib`. `lib`'s
-    compiled classes are on `app`'s compile classpath — a dependency in every sense —
-    so they are read the way a grouped sibling's are. It has no coordinates (Gradle
-    will not publish it), so it is marked unpublished exactly as the module itself
-    is: named by its module id, `Acme:lib`, with `.` for package and version, which
-    is what its symbols carry when `lib` is analysed on its own. Skipping it left every
-    call from `app` into `lib` pointing at classes nothing had read (OI-273 round 2)."""
-    lib_classes = tmp_path / "lib" / "build" / "classes" / "java" / "main"
-    lib_classes.mkdir(parents=True)
-    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
-    lib = _project(
-        tmp_path / "lib", path=":lib", group="", name="lib", classes_dirs=[str(lib_classes)]
-    )
+    """The no-group sibling Gradle actually produces: the ROOT project. Gradle gives every
+    subproject a default group (the root's name), so only the root has none, and
+    `:app` with `implementation project(':')` has it on its compile classpath — a
+    dependency in every sense, read the way a grouped sibling is. It has no coordinates
+    (Gradle will not publish it), so it is marked unpublished exactly as a module is:
+    named by its module id, the bare root name `Acme`, with `.` for package and version
+    (OI-273 round 2; fix round 1, review M2: this is the shape that must be tested)."""
+    root_classes = tmp_path / "build" / "classes" / "java" / "main"
+    root_classes.mkdir(parents=True)
+    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[str(root_classes)])
     app = _project(
         tmp_path / "app",
         path=":app",
-        group="",
+        group="Acme",
         name="app",
-        classpath=[{"path": str(lib_classes), "internal": True, "projectPath": ":lib"}],
+        version="unspecified",
+        classpath=[{"path": str(root_classes), "internal": True, "projectPath": ":"}],
     )
-    module = GradleDetector._module_of(tmp_path / "app", app, [root, lib, app])
+    module = GradleDetector._module_of(tmp_path / "app", app, [root, app])
 
-    assert module.sibling_coordinates == ("Acme:lib",)
+    assert module.module_id == "Acme:app"
+    assert module.sibling_coordinates == ("Acme",)
     assert [(r.coordinate, r.version, r.package, r.archive) for r in module.library_roots] == [
-        ("Acme:lib", ".", ".", lib_classes)
+        ("Acme", ".", ".", root_classes)
     ]
-    # The same string `lib` reports as its OWN id, which is what joins the two.
+    # The same string the root reports as its OWN id, which is what joins the two.
     assert module.sibling_coordinates == (
-        GradleDetector._module_of(tmp_path / "lib", lib, [root, lib, app]).module_id,
+        GradleDetector._module_of(tmp_path, root, [root, app]).module_id,
     )

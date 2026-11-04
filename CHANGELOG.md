@@ -22,9 +22,34 @@ here would restate those documents rather than add anything.
   ktor-samples projects declare no group. The identity is now the one Gradle itself gives
   (user ruling, measured on Gradle 9.8.2): a group with no version is `group:name` at version
   `unspecified`, which is what Gradle publishes; a project with no group cannot be published
-  at all, so its module id is the root project name and project path (`Noty:app`; a root
-  project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
+  at all, so its module id is its place in its build — a root project is its name alone
+  (`kotlin-ktor-exposed-starter`), a subproject that sets `group = ''` is the root name plus
+  its path (`Acme:empty`) — and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **A module's output in several directories is read in one scan.** A module with both Java
+  and Kotlin output was scanned once per directory, each scan rewrote the one type-header
+  document, and the last won: one language's dependency headers were lost and the coverage line
+  was false (4 read / 3 not found where the truth was 12 / 9). The extractor now takes every
+  directory in one run, so the header read sees every class and counts every directory's own
+  types as the module's. One walk retracts the previous run's facts for all of them.
+- **A root project used as a library no longer stops the reactor.** `implementation
+  project(':')` on a root with no group put its bare name (`Acme`) where a `group:artifact`
+  was expected, and the run ended at `not a library coordinate: 'Acme'`. An unpublished
+  library's facts now have their own subtree, `facts/lib/(unpublished)/<module id>/`.
+- **A folder-only project is skipped, not fatal.** `subprojects { apply plugin: 'java' }` gives
+  `:services` (holding `:services:orders`) a classes directory it never creates; analysed, it
+  had no language and the refusal stopped the whole reactor (pre-existing). A module with no
+  source and no compiled classes on disk is skipped: "no source and no compiled classes:
+  nothing to scan".
+- **Gradle's own reason is reported when a downloaded wrapper's build fails.** A wrapper that
+  downloaded its distribution and then failed was reported as "Gradle distribution not
+  present"; Gradle's build-failure banner now rules that out.
+- **`--allow-resolve` retries a plugin the offline cache lacks**, as it does a dependency.
+  Offline, Gradle reports such a plugin as "could not resolve plugin artifact", never as
+  "available for offline mode", and no retry was offered.
+- **A Kotlin plugin old enough to register its source set as a convention still names the
+  language** (Kotlin plugin 1.6.21 on Gradle 8.14.1, measured): the init script reads the
+  convention form beside the extension form.
 - **A Gradle sibling with no group is read as a library root.** It is on the compile
   classpath like a grouped sibling, so its classes are read under its module id and carry
   `. . .`, the symbols they have when it is analysed on its own. A subproject is rarely without

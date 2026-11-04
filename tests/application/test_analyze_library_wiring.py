@@ -18,11 +18,13 @@ from pathlib import Path
 
 import pytest
 
+from fixture_build import compile_fixture
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.domain.factfile import read_fact_file
+from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -395,6 +397,7 @@ def test_every_existing_output_directory_is_scanned_and_a_missing_one_is_skipped
 
 
 @pytest.mark.pins("analyze.an-UNPUBLISHED-library-root-writes-dots-not-maven")
+@pytest.mark.pins("analyze.an-UNPUBLISHED-library-root-has-its-own-fact-subtree")
 def test_an_unpublished_sibling_is_scanned_under_its_module_id_with_dots(tmp_path: Path):
     """A Gradle sibling with no group has no coordinates (OI-273 round 2): its classes
     are read like any sibling's, every document records its module id as `origin`, and
@@ -408,7 +411,10 @@ def test_an_unpublished_sibling_is_scanned_under_its_module_id_with_dots(tmp_pat
         (tmp_path / directory / package / name).write_bytes(
             (compiled / package / name).read_bytes()
         )
-    sibling = LibraryRoot(coordinate="Acme:lib", version=".", archive=tmp_path / "lib", package=".")
+    # The ROOT project of a build, the one no-group sibling Gradle produces by default: its
+    # module id is its bare name, with no `:` in it (fix round 1, review M2 — this aborted
+    # the whole reactor with "not a library coordinate: 'Acme'").
+    sibling = LibraryRoot(coordinate="Acme", version=".", archive=tmp_path / "lib", package=".")
     root = tmp_path / "run"
     root.mkdir()
     module = replace(
@@ -438,5 +444,48 @@ def test_an_unpublished_sibling_is_scanned_under_its_module_id_with_dots(tmp_pat
         .read_text(encoding="utf-8")
         .splitlines()[:2]
     )
-    assert document["origin"] == "Acme:lib"
+    assert document["origin"] == "Acme"
     assert symbol["symbol"].startswith("sextant-jvm . . . com/example/billing/BillingPort#")
+
+
+@pytest.mark.pins("analyze.ONE-scan-over-every-output-directory")
+def test_a_module_split_across_output_directories_reads_every_type_header(tmp_path: Path):
+    """A module with Java and Kotlin output has two classes directories. Scanned one run per
+    directory, each run wrote the one `__type_headers__.jsonl` and the last overwrote the first,
+    so the headers only the other directory's classes named were lost, and each run counted the
+    other directory's own types as "found in no archive" — the document's coverage line stated
+    4 read / 3 not found where the truth was 12 / 9 (review M1). The headers a module's output
+    names are the same whether its classes sit in one directory or two."""
+    advice = compile_fixture(REPO / "fixtures" / "orders-advice")
+    module = MavenDetector().detect(advice).modules[0]
+    whole = module.output_dirs[0]
+    package = Path("com") / "acme" / "advice"
+    for directory, name in (
+        ("java-main", "OrderController.class"),
+        ("kt-main", "OrderAdvice.class"),
+    ):
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes((whole / package / name).read_bytes())
+    split = replace(module, output_dirs=(tmp_path / "java-main", tmp_path / "kt-main"))
+
+    def headers(analysed: ModuleModel, root: Path) -> str:
+        root.mkdir()
+        workspace = DuckDbWorkspace(root / "ws.duckdb")
+        try:
+            analyze(
+                path=root,
+                workspace=workspace,
+                detectors=[_FakeDetector(analysed)],
+                scanners=[AsmScanner(extractor_jar())],
+                catalogs=_EmptyCatalogs(),
+                fact_root=root / "facts",
+                progress=NullProgress(),
+            )
+        finally:
+            workspace.close()
+        return (root / "facts" / "__type_headers__.jsonl").read_text(encoding="utf-8")
+
+    one = headers(module, tmp_path / "one")
+    two = headers(split, tmp_path / "two")
+    assert one.count("\n") > 2, one
+    assert two == one

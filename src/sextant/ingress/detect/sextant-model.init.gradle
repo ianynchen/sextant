@@ -96,6 +96,22 @@ gradle.rootProject { rp ->
                             languageSets[schema.name] = extension
                         }
                     }
+                    // And the older form of the same registration (OI-273 fix round 1,
+                    // review m1): a Kotlin plugin before the extension existed (1.6.21,
+                    // measured on Gradle 8.14.1) hangs its `kotlin` set on the source set
+                    // as a CONVENTION object, which Gradle 9 no longer has at all — hence
+                    // the `hasProperty` guard. Named the way the plugin named it, as above.
+                    if (main.hasProperty("convention")) {
+                        main.convention.plugins.each { conventionName, conventionObject ->
+                            if (!languageSets.containsKey(conventionName)
+                                    && conventionObject.hasProperty(conventionName)) {
+                                def set = conventionObject."$conventionName"
+                                if (set instanceof org.gradle.api.file.SourceDirectorySet) {
+                                    languageSets[conventionName] = set
+                                }
+                            }
+                        }
+                    }
                     languageSets.each { language, set ->
                         set.srcDirs.each { dir ->
                             def key = dir.absolutePath
@@ -136,10 +152,12 @@ gradle.rootProject { rp ->
                                 // entry in `projects[]`, which DOES carry a group
                                 // and a name, and form the coordinate from those.
                                 //
-                                // The path itself never becomes a coordinate: D00
-                                // §2 requires `origin` to survive being read on
-                                // another machine, and a project path is meaningful
-                                // only inside this build.
+                                // For a grouped project the path only joins, and the
+                                // coordinate is its group and name. A project with NO
+                                // group has no coordinate (Gradle will not publish it),
+                                // so the detector names it by the root project's name
+                                // plus this path (OI-273) — the build's own
+                                // declarations, the same on every machine.
                                 entry.projectPath = id.projectPath
                             }
                             classpath << entry

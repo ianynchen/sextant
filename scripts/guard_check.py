@@ -1272,6 +1272,78 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "analyze.ONE-scan-over-every-output-directory": Guard(
+        what="every output directory of a module goes to the extractor in ONE scan",
+        why="a scan per directory let the last overwrite the one type-header document and "
+        "counted the other directory's own types as found in no archive: a mixed module "
+        "stated 4 headers read / 3 not found where the truth was 12 / 9 (review M1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/extract/jvm/scanner.py",
+                find="                    for more in request.more_classes_dirs\n",
+                replace="                    for more in ()  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "analyze.an-UNPUBLISHED-library-root-has-its-own-fact-subtree": Guard(
+        what="an unpublished library root (a no-group sibling) is filed under its own "
+        "subtree by module id, never parsed as `group:artifact`",
+        why="the root project is the one no-group sibling Gradle produces by default, and its "
+        "module id has no colon: parsed as a coordinate it stopped the whole reactor with "
+        "`not a library coordinate: 'Acme'` (review M2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="                        fact_root, library.coordinate, "
+                "unpublished=library.unpublished\n",
+                replace="                        fact_root, library.coordinate, unpublished=False"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "api.a-module-with-NOTHING-TO-SCAN-is-skipped": Guard(
+        what="a module with no source root and no compiled output on disk is skipped with "
+        "its reason",
+        why="`subprojects { apply plugin: 'java' }` gives a folder-only project a classes "
+        "directory it never creates; analysed, it had no language and the refusal stopped "
+        "the whole reactor (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="    if not module.source_roots and not any(d.is_dir() for d in "
+                "module.output_dirs):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution": Guard(
+        what='Gradle\'s build-failure banner rules out "distribution not present"',
+        why="a wrapper that downloads its distribution prints `Downloading https://...`; when "
+        "the build then fails, reading that line reported a missing distribution and hid "
+        "Gradle's real reason (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="    if _BUILD_FAILURE_BANNER in output:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
+        what='an offline "could not resolve plugin artifact" is an offline refusal '
+        "`--allow-resolve` retries online",
+        why="a plugin the cache lacks fails offline with plugin wording, never the "
+        "dependency wording; without this `--allow-resolve` could not reach any build "
+        "whose plugins were not already cached (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find=" or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output",
+                replace="  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

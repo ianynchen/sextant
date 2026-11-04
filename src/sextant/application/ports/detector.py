@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from sextant.application.ports.selection import NoAdapterError
+from sextant.domain.symbols import NOT_APPLICABLE
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,11 @@ class LibraryRoot:
     # exactly as they do when that sibling is analysed as a module. `None`, the
     # default, is every published dependency.
     package: str | None = None
+
+    @property
+    def unpublished(self) -> bool:
+        """No coordinates at all: `coordinate` is a module id, not `group:artifact`."""
+        return self.package == NOT_APPLICABLE
 
 
 @dataclass(frozen=True)

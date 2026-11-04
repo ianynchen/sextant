@@ -451,6 +451,14 @@ def _skip_reason(module: ModuleModel) -> str | None:
     referenced loses its outbound clients and shapes entirely."""
     if module.packaging == "pom":
         return "packaging is pom"
+    # The same evidence in another build's words (OI-273 fix round 1): no source root on
+    # disk and no compiled output on disk is provably nothing to scan. A Gradle build that
+    # applies a compiling plugin in `subprojects { }` gives a folder-only project
+    # (`:services`, holding `:services:orders`) a classes directory it never creates;
+    # analysed, it had no language and the refusal stopped the whole reactor. A module
+    # WITH source and no classes is not this case: it is unbuilt, and stays refused.
+    if not module.source_roots and not any(d.is_dir() for d in module.output_dirs):
+        return "no source and no compiled classes: nothing to scan"
     return None
 
 
