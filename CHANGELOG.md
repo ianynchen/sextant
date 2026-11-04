@@ -25,6 +25,10 @@ here would restate those documents rather than add anything.
   at all, so its module id is the root project name and project path (`Noty:app`; a root
   project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **`sextant module analyze examples/x` with a relative path no longer crashes.** The Gradle
+  detector runs the project's own `./gradlew` from inside the project, where a relative path
+  named nothing, and the command died on an uncaught `FileNotFoundError`. The path is made
+  absolute where analysis starts.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was

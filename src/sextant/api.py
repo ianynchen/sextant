@@ -888,6 +888,10 @@ def _analyze(
     CLI's own thin wrapper still needs it to pick its two different print
     formats, the one difference between the CLI's and the library's own
     idea of "done"."""
+    # Absolute from here on: a detector runs the project's own build tool with the
+    # project as its working directory (`./gradlew`), and a relative path typed at the
+    # CLI names nothing from there (OI-273 round 2).
+    path = path.absolute()
     # Detection runs FIRST, before anything below creates so much as a
     # directory (2M design §2): a refused detection must be discovered
     # ahead of any workspace write, or a repository Sextant cannot analyze

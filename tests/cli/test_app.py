@@ -1345,3 +1345,25 @@ def test_cli_diff_of_a_workspace_outside_its_module_is_refused_by_name(
     )
 
     assert out.exit_code != 0 and "outside its module's `.sextant` directory" in out.output
+
+
+def test_a_relative_module_path_reaches_the_projects_own_gradle_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Users type `sextant module analyze examples/x`. The Gradle detector runs the
+    project's own `./gradlew` with the project as its working directory, so a RELATIVE
+    module path named a wrapper that does not exist from there and the command died on
+    an uncaught `FileNotFoundError`. The path is made absolute where analysis starts;
+    this wrapper only says it ran, which is all the test needs to see."""
+    project = tmp_path / "examples" / "x"
+    project.mkdir(parents=True)
+    (project / "settings.gradle").write_text("rootProject.name = 'x'\n")
+    wrapper = project / "gradlew"
+    wrapper.write_text("#!/bin/sh\necho 'the project wrapper ran'\nexit 1\n")
+    wrapper.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli, ["module", "analyze", "examples/x"])
+
+    assert not isinstance(result.exception, FileNotFoundError), result.exception
+    assert "the project wrapper ran" in result.output
