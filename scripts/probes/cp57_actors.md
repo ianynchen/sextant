@@ -64,7 +64,7 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
 9. **Classic pub-sub** constructors (Scala case classes): `Publish(String, Object)` / `(String, Object, boolean)`,
    `Subscribe(String, ActorRef)` / `(String, Option, ActorRef)` / `(String, String, ActorRef)`, `Send(String, Object,
    boolean)` / `(String, Object)`, `Put(ActorRef)`. They are `tell`-ed to the mediator, classic `tell(Object, ActorRef)`.
-10. **Akka and Pekko agree.** Every descriptor is identical after the package prefix. The only differences are in
+10. **Akka and Pekko agree on descriptors and verdicts.** Every descriptor is the same after the package prefix, and every row's verdict (this / new / abstract / not found) is the same. What differs is only the annotation of
     how the classifier reads Akka's bytecode: `BehaviorBuilder.onMessage` / `onMessageEquals` and `AbstractActor.getSender`
     reach their `new` through a same-class call in 2.6.21 (still a new immutable builder), and Akka's mutable
     `ReceiveBuilder.onMessage` reaches `this` through a same-class call. No verdict differs.
@@ -98,25 +98,28 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
 
 ## Observations
 
-Verbatim from the table `scripts/probes/cp57_actors/run.sh` generates (its `probe.py` runs `javap -c -p -s` on each
-class and classifies every `areturn`); the rows below are that output with the two families laid side by side, and
-nothing in the cells is typed by hand. The `1.1.3` column is Pekko and the `2.6.21` column is Akka. The column headers are the versions each family's jars REPORTED in their
-own `META-INF/MANIFEST.MF` `Implementation-Version` (read for all six artifacts of each family: every one of the
-twelve states `1.1.3` or `2.6.21`), not the version the fixtures' `pom.xml` asked for. The jars are the ones
-`fixtures/orders-actors-pekko` and `fixtures/orders-actors-akka` resolve, and `run.sh` rebuilds both with `clean`
-before it reads them, so no cell can come from a stale build. Descriptors are shown with the package prefix
-(`org/apache/pekko` or `akka`) written `~`; they are identical in both columns. "(via call)" means the `areturn` is
-the result of a call on the same class whose own result is that verdict.
+The table is the output of `scripts/probes/cp57_actors/run.sh`, pasted unedited from a fresh run: `probe.py` runs
+`javap -c -p -s` on each class in each family and prints the pipe table itself. The two column headers are
+the versions each family's jars REPORTED: `probe.py` opens `META-INF/MANIFEST.MF` in all six artifacts of the
+family and prints their `Implementation-Version`, not the version the fixtures' `pom.xml` asked for, and it aborts
+if an artifact is missing, has no such line, or the six disagree. The `1.1.3` column is Pekko
+(`fixtures/orders-actors-pekko`) and the `2.6.21` column is Akka (`fixtures/orders-actors-akka`); `run.sh`
+rebuilds both with `clean` before it reads them, so no cell can come from a stale build. Descriptors are
+shown once, with the package prefix (`org/apache/pekko` or `akka`) written `~`: the script aborts unless both
+families declare the same methods and the descriptors, once the prefix is replaced, are the same key. The cell is
+the `areturn` verdict ("via same-class call" means the `areturn` is the result of a call on the same class whose
+own result is that verdict). Descriptors and verdicts agree in every row; the only cells that differ are the
+"via same-class call" annotations, which record how Akka 2.6.21 reaches the same verdict.
 
 | owner.method descriptor | 1.1.3 | 2.6.21 |
 |---|---|---|
-| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
-| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
-| `actor.typed.javadsl.BehaviorBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via same-class call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via same-class call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via same-class call: new/other |
 | `actor.typed.javadsl.BehaviorBuilder.build` `()L~/actor/typed/Behavior;` | new/other | new/other |
-| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via call) |
-| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via call) |
-| `actor.typed.javadsl.ReceiveBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/ReceiveBuilder;` | this (via call) | this (via call) |
+| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via same-class call) |
+| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via same-class call) |
+| `actor.typed.javadsl.ReceiveBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
 | `actor.typed.javadsl.ReceiveBuilder.build` `()L~/actor/typed/javadsl/Receive;` | new/other | new/other |
 | `actor.typed.javadsl.Behaviors.receive` `(Ljava/lang/Class;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | new/other |
 | `actor.typed.javadsl.Behaviors.receive` `(L~/japi/function/Function2;L~/japi/function/Function2;)L~/actor/typed/Behavior;` | new/other | new/other |
@@ -128,20 +131,20 @@ the result of a call on the same class whose own result is that verdict.
 | `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
 | `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
 | `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
-| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via call) | this (via call) |
-| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via call) | this (via call) |
-| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
-| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
-| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via same-class call) | this (via same-class call) |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via same-class call) | this (via same-class call) |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandler;` | via same-class call: new/other | via same-class call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandler;` | via same-class call: new/other | via same-class call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandler;` | via same-class call: new/other | via same-class call: new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommandEquals` `-` | NOT FOUND | NOT FOUND |
 | `persistence.typed.javadsl.CommandHandlerBuilder.forAnyState` `()L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.forState` `(Ljava/util/function/Predicate;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.forState` `(Ljava/lang/Class;Ljava/util/function/Predicate;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.forStateType` `(Ljava/lang/Class;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.build` `()L~/persistence/typed/javadsl/CommandHandler;` | new/other | new/other |
-| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
-| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
-| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
 | `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
 | `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
 | `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
@@ -149,8 +152,8 @@ the result of a call on the same class whose own result is that verdict.
 | `japi.pf.ReceiveBuilder.matchAny` `(Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
 | `japi.pf.ReceiveBuilder.build` `()L~/actor/AbstractActor$Receive;` | new/other | new/other |
 | `actor.AbstractActor.receiveBuilder` `()L~/japi/pf/ReceiveBuilder;` | new/other | new/other |
-| `actor.AbstractActor.getSender` `()L~/actor/ActorRef;` | new/other | via call: new/other |
-| `actor.AbstractActor.getSelf` `()L~/actor/ActorRef;` | via call: new/other | via call: new/other |
+| `actor.AbstractActor.getSender` `()L~/actor/ActorRef;` | new/other | via same-class call: new/other |
+| `actor.AbstractActor.getSelf` `()L~/actor/ActorRef;` | via same-class call: new/other | via same-class call: new/other |
 | `actor.typed.ActorRef.tell` `(Ljava/lang/Object;)V` | abstract | abstract |
 | `actor.ActorRef.tell` `(Ljava/lang/Object;L~/actor/ActorRef;)V` | void/prim | void/prim |
 | `actor.ActorRef.forward` `(Ljava/lang/Object;L~/actor/ActorContext;)V` | void/prim | void/prim |
@@ -208,7 +211,6 @@ the result of a call on the same class whose own result is that verdict.
 | `pattern.Patterns.ask` `(L~/actor/ActorRef;Ljava/lang/Object;L~/util/Timeout;)Lscala/concurrent/Future;` | new/other | new/other |
 | `pattern.Patterns.pipe` `(Ljava/util/concurrent/CompletionStage;Lscala/concurrent/ExecutionContext;)L~/pattern/PipeToSupport$PipeableCompletionStage;` | new/other | new/other |
 | `pattern.Patterns.pipe` `(Lscala/concurrent/Future;Lscala/concurrent/ExecutionContext;)L~/pattern/PipeToSupport$PipeableFuture;` | new/other | new/other |
-
 
 ## Compiled fixture shapes (`fixtures/orders-actors-pekko`)
 

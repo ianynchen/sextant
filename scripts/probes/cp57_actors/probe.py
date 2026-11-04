@@ -3,6 +3,7 @@
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 ARGS = dict(a.split("=", 1) for a in sys.argv[1:])
@@ -159,27 +160,76 @@ def simple(desc):
     return desc.replace("Lorg/apache/pekko/", "L~pekko/").replace("Lakka/", "L~akka/")
 
 
+ARTIFACTS = (
+    "actor",
+    "actor-typed",
+    "cluster-typed",
+    "cluster-sharding-typed",
+    "cluster-tools",
+    "persistence-typed",
+)
+
+
+def reported_version(fam):
+    """The `Implementation-Version` the family's own jars state in their MANIFEST.MF (GUIDELINES
+    5.4). Read from every artifact the probe reads; aborts unless they all agree and none is
+    missing. Never taken from the pom or from the jar's file name."""
+    classpath = (FIX / f"orders-actors-{fam}/target/probe.cp").read_text().strip().split(":")
+    seen = {}
+    for artifact in ARTIFACTS:
+        stem = f"{fam}-{artifact}_2.13-"
+        jars = [c for c in classpath if Path(c).name.startswith(stem)]
+        if len(jars) != 1:
+            sys.exit(f"{fam}: expected one {stem}*.jar on the classpath, found {jars}")
+        with zipfile.ZipFile(jars[0]) as jar:
+            manifest = jar.read("META-INF/MANIFEST.MF").decode()
+        found = re.search(r"^Implementation-Version: (\S+)", manifest, flags=re.MULTILINE)
+        if not found:
+            sys.exit(f"{jars[0]}: no Implementation-Version in its manifest")
+        seen[artifact] = found.group(1)
+    if len(set(seen.values())) != 1:
+        sys.exit(f"{fam}: the jars report different versions: {seen}")
+    return next(iter(seen.values()))
+
+
+def measure(fam):
+    """{(class, method, descriptor): verdict} for one family, descriptors package-normalised."""
+    cells = {}
+    for _label, rel, names in ROWS:
+        cls = FAM[fam] + rel
+        text = javap(fam, cls)
+        short = rel
+        if text is None:
+            cells[(short, "*", "-")] = "NOT FOUND"
+            continue
+        ms = methods(text)
+        for name in names:
+            if name == "<init>":
+                hits = [m for m in ms if m["name"].endswith(cls.split(".")[-1]) or m["name"] == cls]
+            else:
+                hits = [m for m in ms if m["name"] == name]
+            if not hits:
+                cells[(short, name, "-")] = "NOT FOUND"
+            for m in hits:
+                desc = re.sub(r"L~(pekko|akka)/", "L~/", simple(m["desc"]))
+                cells[(short, name, desc)] = returns(m, ms)
+    return cells
+
+
 def main():
-    for fam in ("pekko", "akka"):
-        print(f"\n## {fam}\n")
-        for label, rel, names in ROWS:
-            cls = FAM[fam] + rel
-            text = javap(fam, cls)
-            if text is None:
-                print(f"- `{cls}`: NOT FOUND")
-                continue
-            ms = methods(text)
-            for name in names:
-                if name == "<init>":
-                    hits = [
-                        m for m in ms if m["name"].endswith(cls.split(".")[-1]) or m["name"] == cls
-                    ]
-                else:
-                    hits = [m for m in ms if m["name"] == name]
-                if not hits:
-                    print(f"- `{cls}` `{name}`: NOT FOUND")
-                for m in hits:
-                    print(f"- `{cls}` `{name}` `{simple(m['desc'])}` : {returns(m, ms)}")
+    versions = {fam: reported_version(fam) for fam in ("pekko", "akka")}
+    cells = {fam: measure(fam) for fam in ("pekko", "akka")}
+    keys = list(cells["pekko"])
+    if keys != list(cells["akka"]):
+        sys.exit(
+            "the two families do not declare the same methods: "
+            + str(set(keys) ^ set(cells["akka"]))
+        )
+    print(f"| owner.method descriptor | {versions['pekko']} | {versions['akka']} |")
+    print("|---|---|---|")
+    for key in keys:
+        cls, name, desc = key
+        print(f"| `{cls}.{name}` `{desc}` | {cells['pekko'][key]} | {cells['akka'][key]} |")
 
 
 def lambdas():
