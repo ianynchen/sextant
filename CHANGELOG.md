@@ -32,9 +32,15 @@ here would restate those documents rather than add anything.
   with no language" stopped the whole reactor (pre-existing). A generated directory Gradle
   reports, holding a file, now names the language of the set that registered it; it is still
   not a source root.
-- **A single module with nothing to read is refused with its reason**, not a traceback: "has
-  nothing to analyze: no source and no compiled classes: nothing to scan", or "cannot be
-  analyzed: no scanner accepts …".
+- **A single module with nothing to read is refused with its reason**, not a traceback, and
+  before anything is written: "is not analyzed: no source and no compiled classes: nothing to
+  scan", or "is not analyzed: no scanner accepts …". A refusal used to leave a workspace with
+  no `metadata.json` behind.
+- **A module in a language no scanner reads no longer stops the reactor.** A Scala-only
+  (Akka/Pekko) or Groovy-only module in a Gradle build ended the whole walk (pre-existing); it
+  is now skipped — "no scanner accepts groovy" — and the other modules are analysed. A module
+  mixing such a language with Java or Kotlin is analysed as before, every class directory
+  included.
 - **A module's output in several directories is read in one scan.** A module with both Java
   and Kotlin output was scanned once per directory, each scan rewrote the one type-header
   document, and the last won: one language's dependency headers were lost and the coverage line

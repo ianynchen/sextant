@@ -143,6 +143,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.ports.scanner import select_scanner
 from sextant.application.ports.selection import NoAdapterError
 from sextant.application.query.questions import QUESTIONS as _QUESTIONS
 from sextant.application.query.questions import QuestionRefused, answer
@@ -460,7 +461,21 @@ def _skip_reason(module: ModuleModel) -> str | None:
     # WITH source and no classes is not this case: it is unbuilt, and stays refused.
     if not module.source_roots and not any(d.is_dir() for d in module.output_dirs):
         return "no source and no compiled classes: nothing to scan"
+    # Classes in a language no registered scanner reads — an Akka/Pekko actor module, say
+    # (OI-273 fix round 3). Asked here, BEFORE anything is written, of the same
+    # registry and the same rule the scan stage selects by: the module is skipped with the
+    # scanner choice's own words, and the reactor goes on to the modules it can read.
+    try:
+        select_scanner(_scanners(), module.languages)
+    except NoAdapterError as refused:
+        return str(refused)
     return None
+
+
+def _scanners() -> list[AsmScanner]:
+    """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
+    asks before a module is analysed, so the two can never disagree."""
+    return [AsmScanner(extractor_jar())]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
@@ -786,7 +801,7 @@ def _analyzed(
             path=path,
             workspace=workspace,
             detectors=detectors,
-            scanners=[AsmScanner(extractor_jar())],
+            scanners=_scanners(),
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
@@ -924,29 +939,23 @@ def _analyze(
         return AnalyzeResult(modules=modules), True
 
     module = model.modules[0]
-    # The reactor's skip, stated for a single module too (OI-273 fix round 2): there is no
-    # other module to go on to, so it is a refusal naming the reason — never a traceback
-    # out of the scanner choice, and never a workspace written for nothing.
+    # The reactor's skip, stated for a single module too (OI-273 fix rounds 2 and 3): there
+    # is no other module to go on to, so it is a refusal naming the reason — never a
+    # traceback out of the scanner choice, and asked before anything is written, so no
+    # workspace is left behind without its `metadata.json`.
     reason = _skip_reason(module)
     if reason is not None:
-        raise DetectionError(f"{path} ({module.module_id}) has nothing to analyze: {reason}")
+        raise DetectionError(f"{path} ({module.module_id}) is not analyzed: {reason}")
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
-    try:
-        stage_result = _run_analyze(
-            path,
-            module,
-            model.notes,
-            resolved_workspace_dir,
-            allow_resolve,
-            progress_factory,
-            shadow=shadow,
-        )
-    except NoAdapterError as refused:
-        # Classes in no language any registered scanner reads: a fact about the module,
-        # stated, as the reactor states it.
-        raise DetectionError(f"{path} ({module.module_id}) cannot be analyzed: {refused}") from (
-            refused
-        )
+    stage_result = _run_analyze(
+        path,
+        module,
+        model.notes,
+        resolved_workspace_dir,
+        allow_resolve,
+        progress_factory,
+        shadow=shadow,
+    )
     outcome = ModuleOutcome(
         dir=_root_relative(path, module.root),
         module_id=module.module_id,

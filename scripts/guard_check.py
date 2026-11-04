@@ -1373,6 +1373,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "api.a-module-NO-SCANNER-reads-is-skipped-before-anything-is-written": Guard(
+        what="a module whose languages no registered scanner accepts is skipped (or, alone, "
+        "refused) with the scanner choice's own words, before its workspace is created",
+        why="a Scala-only or Groovy-only module in a Gradle reactor stopped the whole walk, so "
+        "the Java modules beside it were never analysed; alone, it left a workspace with no "
+        "`metadata.json` (OI-273 fix round 3)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        select_scanner(_scanners(), module.languages)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

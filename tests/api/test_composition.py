@@ -64,7 +64,7 @@ def test_no_module_kind_causes_a_skip(tmp_path: Path):
             version="1.0.0",
             root=Path("."),
             kind=kind,
-            languages=frozenset(),
+            languages=frozenset({"java"}),  # a language a scanner reads: only KIND is in question
             source_roots=(),
             # Compiled classes on disk, so the module has something to scan and only its
             # KIND is in question here.
@@ -118,7 +118,7 @@ def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module(tmp_path: P
         version="1.0.0",
         root=Path("."),
         kind="undetermined",
-        languages=frozenset(),
+        languages=frozenset({"java"}),  # a language a scanner reads: only KIND is in question
         source_roots=(),
         output_dirs=(tmp_path,),
     )

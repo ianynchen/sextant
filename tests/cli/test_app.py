@@ -1420,3 +1420,59 @@ def test_a_single_module_with_nothing_to_read_is_refused_by_name_not_a_traceback
     # A stated refusal exits through click; anything else reaching here is a traceback.
     assert isinstance(result.exception, SystemExit), repr(result.exception)
     assert said in result.output
+    # Refused BEFORE anything is written (review-3 m1): a `.sextant` holding a database and
+    # a module fact but no `metadata.json` is what `system analyze` later refuses to read.
+    assert not (tmp_path / ".sextant").exists()
+
+
+@pytest.mark.pins("api.a-module-NO-SCANNER-reads-is-skipped-before-anything-is-written")
+def test_a_reactor_module_no_scanner_reads_is_skipped_and_the_rest_analysed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An Akka/Pekko Scala module, or a Groovy one, in a Gradle reactor: classes on disk in a
+    language no registered scanner reads. The refusal used to stop the WHOLE reactor, so the
+    Java modules beside it were never analysed (pre-existing; OI-273 fix round 3). It is
+    skipped with the reason the single-module path states, and the walk goes on."""
+    from sextant import api
+    from sextant.application.ports.detector import ModuleModel, RepositoryModel
+
+    compiled = REPO / "fixtures" / "orders-soap-client" / "target" / "classes"
+    scala_classes = tmp_path / "actors" / "build" / "classes" / "scala" / "main"
+    shutil.copytree(compiled, scala_classes)
+    java_root = tmp_path / "billing"
+    java_root.mkdir()
+
+    def module(name: str, root: Path, languages: set[str], classes: Path) -> ModuleModel:
+        return ModuleModel(
+            module_id=f"shop:{name}",
+            coordinates=f"shop/{name}",
+            version="1.0.0",
+            root=root,
+            kind="undetermined",
+            languages=frozenset(languages),
+            source_roots=(),
+            output_dirs=(classes,),
+        )
+
+    class _Reactor:
+        def accepts(self, path: Path) -> bool:
+            return True
+
+        def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+            return RepositoryModel(
+                root=path,
+                modules=(
+                    module("actors", tmp_path / "actors", {"scala"}, scala_classes),
+                    module("billing", java_root, {"java"}, compiled),
+                ),
+                multi_module=True,
+            )
+
+    monkeypatch.setattr(api, "_DETECTORS", [_Reactor()])
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "skipped actors (shop:actors): no scanner accepts scala" in result.output
+    assert "analyzed billing (shop:billing)" in result.output
+    assert not (tmp_path / "actors" / ".sextant").exists()

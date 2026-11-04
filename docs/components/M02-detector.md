@@ -173,20 +173,24 @@ Maven reports one, `target/classes`.
 compiled output on disk is provably nothing to read — a Maven `pom` module's evidence in another
 build's words. `subprojects { apply plugin: 'java' }` gives a folder-only Gradle project such a
 shape, and analysing it used to stop the whole reactor. A single-module run with such a
-module is refused with the same reason, never a traceback.
+module is refused with the same reason, never a traceback, before anything is written. So is
+a module whose classes are in a language no scanner reads (a Scala-only or Groovy-only
+module): the reactor skips it with the scanner choice's own words and analyses the rest.
 
 **A Gradle module's languages are the source-directory sets Gradle reports**, never a
 directory's name (OI-273 round 2). The init script reports, per source root, which set
 registered it — the Java plugin's `java`, and every `SourceDirectorySet` another plugin hangs on
 the source set under its own name (`kotlin`, `groovy`), as an extension or, for an older plugin
-(Kotlin 1.6.21 on Gradle 8.14.1, measured), as a convention — and a module's languages are those of
-its roots that exist on disk, together with those of any generated directory Gradle reports
-(under the build directory, so never a source root) that holds a file — a module whose only
-code is generated (OpenAPI generator, jOOQ, protobuf) is written in the language of the set
-that compiles it. An empty generated directory, such as the annotation-processor output the
-java plugin creates on every compile, names nothing. `kotlin.srcDirs("src")` is therefore `kotlin`, and `src/main/java`
-in a Kotlin JVM project is both `java` and `kotlin`, because the Kotlin plugin registers it too.
-Maven still names a root's language by its directory, as before.
+(Kotlin 1.6.21 on Gradle 8.14.1, measured), as a convention — and a module's languages are those
+of its roots that exist on disk, together with those of any generated directory Gradle reports
+(under the build directory, so never a source root) that holds a file — a module whose only code
+is generated (OpenAPI generator, jOOQ, protobuf) is written in the language of the set that
+compiles it. An empty generated directory, such as the annotation-processor output the java
+plugin creates on every compile, names nothing.
+
+`kotlin.srcDirs("src")` is therefore `kotlin`, and `src/main/java` in a Kotlin JVM project is
+both `java` and `kotlin`, because the Kotlin plugin registers it too. Maven still names a root's
+language by its directory, as before.
 
 A repository holding three services produces three modules, **each with its own
 workspace**. A sibling module enters a dependent's analysis as a first-party dependency
