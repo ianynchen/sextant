@@ -418,15 +418,7 @@ class GradleDetector:
             # the CLI's existing skip gate (`_skip_reason`, 2M design §2)
             # recognise it without any Gradle-specific case there.
             packaging="jar" if project["classesDirs"] else "pom",
-            # The source-directory sets Gradle says registered each EXISTING root
-            # (OI-273 round 2) — never the directory's name, which a plugin's
-            # `srcDirs("src")` makes `src`. Keyed on the reported string, the same one
-            # `source_roots` came from.
-            languages=frozenset(
-                language
-                for root in source_roots
-                for language in project["sourceLanguages"].get(str(root), ())
-            ),
+            languages=GradleDetector._languages(project, source_roots),
             source_roots=source_roots,
             output_dirs=tuple(Path(entry) for entry in project["classesDirs"]),
             resource_roots=resource_roots,
@@ -495,6 +487,29 @@ class GradleDetector:
                 if Path(str(entry["path"])).is_file()
             ),
         )
+
+    @staticmethod
+    def _languages(project: dict[str, Any], source_roots: tuple[Path, ...]) -> frozenset[str]:
+        """The source-directory sets Gradle says registered each source directory (OI-273
+        round 2) — never a directory's name, which a plugin's `srcDirs("src")` makes `src`.
+
+        Two kinds of directory count. An EXISTING source root counts as it stands. A
+        directory Gradle reports that is not a root — generated, under the build directory —
+        counts when it holds a file (fix round 2, review N1): a module whose only code is
+        generated (OpenAPI generator, jOOQ, protobuf) is written in the language of the set
+        that compiles it, and without this it had classes and no language and stopped the
+        reactor. Holding a file, because the JDK's compiling plugin creates its
+        annotation-processor output directory on every compile, empty when no processor ran
+        — a compiler's scratch space, which must not name a language the module lacks."""
+        roots = {str(root) for root in source_roots}
+        found: set[str] = set()
+        for directory, languages in project["sourceLanguages"].items():
+            if directory in roots or (
+                Path(directory).is_dir()
+                and any(entry.is_file() for entry in Path(directory).rglob("*"))
+            ):
+                found.update(languages)
+        return frozenset(found)
 
     @staticmethod
     def _identity(project: dict[str, Any], reactor: Sequence[dict[str, Any]]) -> "_Identity":

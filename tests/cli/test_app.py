@@ -1367,3 +1367,56 @@ def test_a_relative_module_path_reaches_the_projects_own_gradle_wrapper(
 
     assert not isinstance(result.exception, FileNotFoundError), result.exception
     assert "the project wrapper ran" in result.output
+
+
+class _OneModuleDetector:
+    def __init__(self, module) -> None:
+        self._module = module
+
+    def accepts(self, path: Path) -> bool:
+        return True
+
+    def detect(self, path: Path, allow_resolve: bool = False):
+        from sextant.application.ports.detector import RepositoryModel
+
+        return RepositoryModel(root=path, modules=(self._module,))
+
+
+@pytest.mark.parametrize(
+    ("built", "said"),
+    [
+        (False, "no source and no compiled classes: nothing to scan"),
+        (True, "no scanner accepts a module with no language"),
+    ],
+)
+def test_a_single_module_with_nothing_to_read_is_refused_by_name_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, built: bool, said: str
+):
+    """A reactor states why it skips a module; a single-module run with the same shape ended
+    in a raw `NoAdapterError` traceback (OI-273 fix round 2). Real input never earns a
+    traceback: both shapes — nothing on disk to read, and classes in no language a scanner
+    reads — are refused with the reason, as a message."""
+    from sextant import api
+    from sextant.application.ports.detector import ModuleModel
+
+    classes = tmp_path / "build" / "classes"
+    if built:
+        classes.mkdir(parents=True)
+    module = ModuleModel(
+        module_id="x",
+        coordinates=".",
+        version=".",
+        root=tmp_path,
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(classes,),
+    )
+    monkeypatch.setattr(api, "_DETECTORS", [_OneModuleDetector(module)])
+
+    result = CliRunner().invoke(cli, ["module", "analyze", str(tmp_path)])
+
+    assert result.exit_code != 0
+    # A stated refusal exits through click; anything else reaching here is a traceback.
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    assert said in result.output

@@ -1219,8 +1219,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/gradle.py",
-                find='                for language in project["sourceLanguages"].get(str(root), ())\n',
-                replace="                for language in (root.name,)  # guard disabled by "
+                find="                found.update(languages)\n",
+                replace="                found.add(Path(directory).name)  # guard disabled by "
                 "scripts/guard_check.py\n",
             ),
         ),
@@ -1341,6 +1341,35 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/ingress/detect/gradle.py",
                 find=" or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output",
                 replace="  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "detect.a-GENERATED-source-directory-names-a-language": Guard(
+        what="a generated source directory Gradle reports, holding a file, names the "
+        "language of the set that registered it",
+        why="a module whose only code is generated (OpenAPI generator, jOOQ, protobuf) had "
+        "classes and no language, and the refusal stopped the whole reactor (review N1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            if directory in roots or (\n",
+                replace="            if directory in roots or False and (  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-CONVENTION-registered-source-set-names-a-language": Guard(
+        what="the init script reads a source-directory set a plugin registered as a "
+        "convention, not only as an extension",
+        why="a Kotlin plugin older than the extension (1.6.21 on Gradle 8.14.1, measured) "
+        "registers `kotlin` only as a convention; unread, a Kotlin-only module has no "
+        "language and is refused (review m1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/sextant-model.init.gradle",
+                find='                    if (main.hasProperty("convention")) {\n',
+                replace="                    if (false) {  // guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),

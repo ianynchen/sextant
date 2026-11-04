@@ -143,6 +143,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.ports.selection import NoAdapterError
 from sextant.application.query.questions import QUESTIONS as _QUESTIONS
 from sextant.application.query.questions import QuestionRefused, answer
 from sextant.application.query.trace import traces_of
@@ -923,16 +924,29 @@ def _analyze(
         return AnalyzeResult(modules=modules), True
 
     module = model.modules[0]
+    # The reactor's skip, stated for a single module too (OI-273 fix round 2): there is no
+    # other module to go on to, so it is a refusal naming the reason — never a traceback
+    # out of the scanner choice, and never a workspace written for nothing.
+    reason = _skip_reason(module)
+    if reason is not None:
+        raise DetectionError(f"{path} ({module.module_id}) has nothing to analyze: {reason}")
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
-    stage_result = _run_analyze(
-        path,
-        module,
-        model.notes,
-        resolved_workspace_dir,
-        allow_resolve,
-        progress_factory,
-        shadow=shadow,
-    )
+    try:
+        stage_result = _run_analyze(
+            path,
+            module,
+            model.notes,
+            resolved_workspace_dir,
+            allow_resolve,
+            progress_factory,
+            shadow=shadow,
+        )
+    except NoAdapterError as refused:
+        # Classes in no language any registered scanner reads: a fact about the module,
+        # stated, as the reactor states it.
+        raise DetectionError(f"{path} ({module.module_id}) cannot be analyzed: {refused}") from (
+            refused
+        )
     outcome = ModuleOutcome(
         dir=_root_relative(path, module.root),
         module_id=module.module_id,

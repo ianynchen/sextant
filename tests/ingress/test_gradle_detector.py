@@ -513,6 +513,39 @@ def test_a_root_that_does_not_exist_contributes_no_language(tmp_path: Path):
     assert GradleDetector._module_of(tmp_path, project).languages == {"kotlin"}
 
 
+@pytest.mark.pins("detect.a-GENERATED-source-directory-names-a-language")
+def test_a_module_whose_only_source_is_generated_takes_its_language_from_it(tmp_path: Path):
+    """An OpenAPI-generator API module, a jOOQ module, a protobuf contracts module: every
+    class is compiled from a directory a task writes under the build directory. That
+    directory is not a source ROOT — nobody edits it — but Gradle reports it in the
+    source set, registered by the plugin that compiles it, so it names the module's
+    language. Without that the module had classes and no language, and "no scanner accepts
+    a module with no language" stopped the whole reactor (OI-273 fix round 2, review N1)."""
+    generated = tmp_path / "build" / "generated" / "src" / "main" / "java"
+    (generated / "api").mkdir(parents=True)
+    (generated / "api" / "PricingApi.java").write_text("package api; class PricingApi {}\n")
+    project = _project(tmp_path, source_roots=[], source_languages={str(generated): ["java"]})
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.languages == {"java"}
+    assert module.source_roots == ()
+
+
+def test_an_empty_generated_directory_names_no_language(tmp_path: Path):
+    """Gradle's java plugin creates the annotation-processor output directory on every
+    compile, empty when no processor ran: a compiler's scratch space, not source. A Kotlin
+    module must not read as `java` because of it."""
+    kotlin = tmp_path / "src" / "main" / "kotlin"
+    kotlin.mkdir(parents=True)
+    processor = tmp_path / "build" / "generated" / "sources" / "annotationProcessor" / "java"
+    processor.mkdir(parents=True)
+    project = _project(
+        tmp_path,
+        source_roots=[str(kotlin)],
+        source_languages={str(kotlin): ["kotlin"], str(processor): ["java"]},
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"kotlin"}
+
+
 # --- schema roots: proto/avro stay sibling-to-source; the resource-nested
 # trio now follows the REPORTED resource root (fix round 1, I5) ------------
 

@@ -26,10 +26,19 @@ here would restate those documents rather than add anything.
   (`kotlin-ktor-exposed-starter`), a subproject that sets `group = ''` is the root name plus
   its path (`Acme:empty`) — and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **A module whose only source is generated is analysed.** An OpenAPI-generator, jOOQ or
+  protobuf module compiles every class from a directory a task writes under the build
+  directory; with no source root on disk it had no language, and "no scanner accepts a module
+  with no language" stopped the whole reactor (pre-existing). A generated directory Gradle
+  reports, holding a file, now names the language of the set that registered it; it is still
+  not a source root.
+- **A single module with nothing to read is refused with its reason**, not a traceback: "has
+  nothing to analyze: no source and no compiled classes: nothing to scan", or "cannot be
+  analyzed: no scanner accepts …".
 - **A module's output in several directories is read in one scan.** A module with both Java
   and Kotlin output was scanned once per directory, each scan rewrote the one type-header
   document, and the last won: one language's dependency headers were lost and the coverage line
-  was false (4 read / 3 not found where the truth was 12 / 9). The extractor now takes every
+  was false (4 read / 3 not found where the truth was 12 / 6). The extractor now takes every
   directory in one run, so the header read sees every class and counts every directory's own
   types as the module's. One walk retracts the previous run's facts for all of them.
 - **A root project used as a library no longer stops the reactor.** `implementation
