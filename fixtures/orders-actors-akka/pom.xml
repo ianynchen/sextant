@@ -1,0 +1,21 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-actors-akka</artifactId>
+  <version>1.0.0</version>
+  <!-- Akka typed actors, cluster sharding, receptionist, persistence and classic
+       pub-sub. API jars only; never runs. In its own module so that no other
+       fixture's pinned row counts move. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-actor_2.13</artifactId><version>2.6.21</version></dependency>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-actor-typed_2.13</artifactId><version>2.6.21</version></dependency>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-cluster-typed_2.13</artifactId><version>2.6.21</version></dependency>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-cluster-sharding-typed_2.13</artifactId><version>2.6.21</version></dependency>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-cluster-tools_2.13</artifactId><version>2.6.21</version></dependency>
+    <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-persistence-typed_2.13</artifactId><version>2.6.21</version></dependency>
+  </dependencies>
+</project>

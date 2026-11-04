@@ -73,6 +73,8 @@ PRIMED_FIXTURES = (
     "orders-streams",
     "orders-javalin",
     "orders-pekko",
+    "orders-actors-pekko",
+    "orders-actors-akka",
     "orders-ktor",
     "orders-ktor-classlambdas",
     "orders-gateway",
