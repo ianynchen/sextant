@@ -25,6 +25,12 @@ here would restate those documents rather than add anything.
   at all, so its module id is the root project name and project path (`Noty:app`; a root
   project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **Every output directory a build reports is scanned, not only the first.** Gradle reports
+  one classes directory per compiling plugin, and a Kotlin JVM project's first is
+  `build/classes/java/main`, which a Kotlin-only build never creates: the scan refused every
+  such module (`--classes must name a directory`), and a mixed Java/Kotlin project would have
+  lost one language's classes. A reported directory that does not exist is skipped. Maven
+  reports one directory, so its results are unchanged.
 - **A Gradle source directory's language is the plugin that registered it, not its name.**
   ktor-samples' `client-tools` declares `kotlin.srcDirs("src")`, so its language read as `src`
   and no scanner accepted the module. The init script now reports which source-directory set

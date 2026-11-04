@@ -140,6 +140,12 @@ never parsed from `settings.gradle`. Every path segment is kept, so `:libs:core`
 `:core` stay distinct. A reactor sibling with no group is not yet read as a library root:
 `_sibling_roots` skips it, because a library root's coordinate is a `group:artifact`.
 
+**Every compiled output directory the build reports is scanned** (OI-273 round 2). Gradle's
+`classesDirs` is a set — one directory per compiling plugin — so a Kotlin JVM project reports
+`build/classes/java/main` and `build/classes/kotlin/main`. Each that exists is scanned into the
+module's one fact tree; one that does not exist holds no classes and is skipped. Maven reports
+one, `target/classes`.
+
 **A Gradle module's languages are the source-directory sets Gradle reports**, never a
 directory's name (OI-273 round 2). The init script reports, per source root, which set
 registered it — the Java plugin's `java`, and every `SourceDirectorySet` another plugin hangs on

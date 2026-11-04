@@ -13,6 +13,7 @@ stated reason."""
 
 import json
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -347,3 +348,47 @@ def test_a_library_that_cannot_be_scanned_does_not_take_the_module_with_it(
     [reported] = result.libraries_not_scanned
     assert reported.startswith("com.example:gone: ")
     assert (tmp_path / "run" / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()
+
+
+@pytest.mark.pins("analyze.EVERY-existing-output-directory-is-scanned")
+def test_every_existing_output_directory_is_scanned_and_a_missing_one_is_skipped(
+    tmp_path: Path,
+):
+    """Gradle's `classesDirs` is a SET — one directory per compiling plugin — and a
+    Kotlin JVM project reports `build/classes/java/main` first, which a Kotlin-only
+    build never creates. Scanning only the first entry refused every such module, and
+    on a project with both languages would have silently dropped one language's
+    classes. Every directory that exists is scanned into the same fact tree; one that
+    does not exist holds no classes and is skipped, not an error (OI-273 round 2)."""
+    root = tmp_path / "run"
+    # Two classes directories holding different classes of one module, the way
+    # `build/classes/java/main` and `build/classes/kotlin/main` do — real bytecode from
+    # the `orders-soap-client` fixture, split between them.
+    compiled = REPO / "fixtures" / "orders-soap-client" / "target" / "classes"
+    package = Path("com") / "example" / "billing"
+    split = {"java-main": "BillingPort.class", "kotlin-main": "ConflictingOrderException.class"}
+    for directory, name in split.items():
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes(
+            (compiled / package / name).read_bytes()
+        )
+    module = replace(
+        _module(root, ()),
+        output_dirs=(tmp_path / "never-built", tmp_path / "java-main", tmp_path / "kotlin-main"),
+    )
+    root.mkdir(parents=True)
+    workspace = DuckDbWorkspace(root / "ws.duckdb")
+    try:
+        analyze(
+            path=root,
+            workspace=workspace,
+            detectors=[_FakeDetector(module)],
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=_EmptyCatalogs(),
+            fact_root=root / "facts",
+            progress=NullProgress(),
+        )
+    finally:
+        workspace.close()
+    written = {path.stem for path in (root / "facts").rglob("*.jsonl")}
+    assert {"BillingPort", "ConflictingOrderException"} <= written, sorted(written)

@@ -1225,6 +1225,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "analyze.EVERY-existing-output-directory-is-scanned": Guard(
+        what="analyze scans each output directory the build reports that exists, not only "
+        "the first",
+        why="a Kotlin JVM Gradle project reports `build/classes/java/main` first, which a "
+        "Kotlin-only build never creates: scanning the first alone refused every such "
+        "module, and on a mixed project would drop one language's classes in silence "
+        "(OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="    present = tuple(d for d in module.output_dirs if d.is_dir()) or "
+                "module.output_dirs[:1]\n",
+                replace="    present = module.output_dirs[:1]  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",
