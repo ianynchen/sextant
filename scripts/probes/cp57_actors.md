@@ -96,106 +96,119 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
 - `Relay.forward(Object msg, ActorRef<Object> to)` is one `invokeinterface ActorRef.tell(Object)V` whose argument
   is the parameter: no `new`, no constant.
 
-## Rows — Pekko 1.1.3 (Akka 2.6.21 identical after the package prefix)
+## Observations
 
-- `P.actor.typed.javadsl.BehaviorBuilder` `onMessage` `(Ljava/lang/Class;L~japi/function/Function;)L~actor/typed/javadsl/BehaviorBuilder;` : new/other
-- `P.actor.typed.javadsl.BehaviorBuilder` `onMessage` `(Ljava/lang/Class;L~japi/function/Predicate;L~japi/function/Function;)L~actor/typed/javadsl/BehaviorBuilder;` : new/other
-- `P.actor.typed.javadsl.BehaviorBuilder` `onMessageEquals` `(Ljava/lang/Object;L~japi/function/Creator;)L~actor/typed/javadsl/BehaviorBuilder;` : new/other
-- `P.actor.typed.javadsl.BehaviorBuilder` `build` `()L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.ReceiveBuilder` `onMessage` `(Ljava/lang/Class;L~japi/function/Function;)L~actor/typed/javadsl/ReceiveBuilder;` : this
-- `P.actor.typed.javadsl.ReceiveBuilder` `onMessage` `(Ljava/lang/Class;L~japi/function/Predicate;L~japi/function/Function;)L~actor/typed/javadsl/ReceiveBuilder;` : this
-- `P.actor.typed.javadsl.ReceiveBuilder` `onMessageEquals` `(Ljava/lang/Object;L~japi/function/Creator;)L~actor/typed/javadsl/ReceiveBuilder;` : this (via same-class call)
-- `P.actor.typed.javadsl.ReceiveBuilder` `build` `()L~actor/typed/javadsl/Receive;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `receive` `(Ljava/lang/Class;)L~actor/typed/javadsl/BehaviorBuilder;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `receive` `(L~japi/function/Function2;L~japi/function/Function2;)L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `receive` `(L~japi/function/Function2;)L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `receiveMessage` `(L~japi/Function;)L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `setup` `(L~japi/function/Function;)L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.Behaviors` `withTimers` `(L~japi/function/Function;)L~actor/typed/Behavior;` : new/other
-- `P.actor.typed.javadsl.AbstractBehavior` `newReceiveBuilder` `()L~actor/typed/javadsl/ReceiveBuilder;` : new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/BiFunction;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : this
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/Function;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : this
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommand` `(Ljava/lang/Class;Ljava/util/function/BiFunction;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : this
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommand` `(Ljava/lang/Class;Ljava/util/function/Function;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : this (via same-class call)
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommand` `(Ljava/lang/Class;Ljava/util/function/Supplier;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : this (via same-class call)
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onAnyCommand` `(Ljava/util/function/BiFunction;)L~persistence/typed/javadsl/CommandHandler;` : via same-class call: new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onAnyCommand` `(Ljava/util/function/Function;)L~persistence/typed/javadsl/CommandHandler;` : via same-class call: new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onAnyCommand` `(Ljava/util/function/Supplier;)L~persistence/typed/javadsl/CommandHandler;` : via same-class call: new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilderByState` `onCommandEquals`: NOT FOUND
-- `P.persistence.typed.javadsl.CommandHandlerBuilder` `forAnyState` `()L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilder` `forState` `(Ljava/util/function/Predicate;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilder` `forState` `(Ljava/lang/Class;Ljava/util/function/Predicate;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilder` `forStateType` `(Ljava/lang/Class;)L~persistence/typed/javadsl/CommandHandlerBuilderByState;` : new/other
-- `P.persistence.typed.javadsl.CommandHandlerBuilder` `build` `()L~persistence/typed/javadsl/CommandHandler;` : new/other
-- `P.japi.pf.ReceiveBuilder` `match` `(Ljava/lang/Class;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this (via same-class call)
-- `P.japi.pf.ReceiveBuilder` `match` `(Ljava/lang/Class;L~japi/pf/FI$TypedPredicate;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this (via same-class call)
-- `P.japi.pf.ReceiveBuilder` `match` `(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this (via same-class call)
-- `P.japi.pf.ReceiveBuilder` `matchEquals` `(Ljava/lang/Object;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this
-- `P.japi.pf.ReceiveBuilder` `matchEquals` `(Ljava/lang/Object;L~japi/pf/FI$TypedPredicate;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this
-- `P.japi.pf.ReceiveBuilder` `matchEquals` `(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this
-- `P.japi.pf.ReceiveBuilder` `matchAny` `(L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this
-- `P.japi.pf.ReceiveBuilder` `matchAny` `(Ljava/util/function/BooleanSupplier;L~japi/pf/FI$UnitApply;)L~japi/pf/ReceiveBuilder;` : this
-- `P.japi.pf.ReceiveBuilder` `build` `()L~actor/AbstractActor$Receive;` : new/other
-- `P.actor.AbstractActor` `receiveBuilder` `()L~japi/pf/ReceiveBuilder;` : new/other
-- `P.actor.AbstractActor` `getSender` `()L~actor/ActorRef;` : new/other
-- `P.actor.AbstractActor` `getSelf` `()L~actor/ActorRef;` : via same-class call: new/other
-- `P.actor.typed.ActorRef` `tell` `(Ljava/lang/Object;)V` : abstract
-- `P.actor.ActorRef` `tell` `(Ljava/lang/Object;L~actor/ActorRef;)V` : void/prim
-- `P.actor.ActorRef` `forward` `(Ljava/lang/Object;L~actor/ActorContext;)V` : void/prim
-- `P.actor.typed.RecipientRef` `tell` `(Ljava/lang/Object;)V` : abstract
-- `P.actor.typed.RecipientRef` `ask`: NOT FOUND
-- `P.actor.typed.javadsl.AskPattern` `ask` `(L~actor/typed/RecipientRef;L~japi/function/Function;Ljava/time/Duration;L~actor/typed/Scheduler;)Ljava/util/concurrent/CompletionStage;` : new/other
-- `P.cluster.sharding.typed.javadsl.EntityRef` `tell` `(Ljava/lang/Object;)V` : abstract
-- `P.cluster.sharding.typed.javadsl.EntityRef` `ask` `(L~japi/function/Function;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` : abstract
-- `P.actor.typed.javadsl.ActorContext` `ask` `(Ljava/lang/Class;L~actor/typed/RecipientRef;Ljava/time/Duration;L~japi/function/Function;L~japi/function/Function2;)V` : abstract
-- `P.actor.typed.javadsl.ActorContext` `messageAdapter` `(Ljava/lang/Class;L~japi/function/Function;)L~actor/typed/ActorRef;` : abstract
-- `P.actor.typed.javadsl.ActorContext` `pipeToSelf` `(Ljava/util/concurrent/CompletionStage;L~japi/function/Function2;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;)V` : void/prim
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` : void/prim
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/time/Duration;)V` : void/prim
-- `P.actor.typed.javadsl.TimerScheduler` `startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` : void/prim
-- `P.actor.typed.javadsl.TimerScheduler` `startSingleTimer` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.javadsl.TimerScheduler` `startSingleTimer` `(Ljava/lang/Object;Ljava/time/Duration;)V` : void/prim
-- `P.actor.typed.javadsl.TimerScheduler` `startPeriodicTimer` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` : abstract
-- `P.actor.typed.Scheduler` `scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : abstract
-- `P.actor.typed.Scheduler` `scheduleOnce` `(Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : abstract
-- `P.actor.typed.Scheduler` `scheduleWithFixedDelay` `(Lscala/concurrent/duration/FiniteDuration;Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : abstract
-- `P.actor.typed.Scheduler` `scheduleWithFixedDelay` `(Ljava/time/Duration;Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : abstract
-- `P.actor.Scheduler` `scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;L~actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;L~actor/ActorRef;)L~actor/Cancellable;` : new/other
-- `P.actor.Scheduler` `scheduleOnce` `(Ljava/time/Duration;L~actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;L~actor/ActorRef;)L~actor/Cancellable;` : new/other
-- `P.actor.Scheduler` `scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Lscala/Function0;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : new/other
-- `P.actor.Scheduler` `scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : abstract
-- `P.actor.Scheduler` `scheduleOnce` `(Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~actor/Cancellable;` : new/other
-- `P.actor.typed.receptionist.ServiceKey` `create` `(Ljava/lang/Class;Ljava/lang/String;)L~actor/typed/receptionist/ServiceKey;` : new/other
-- `P.cluster.sharding.typed.javadsl.EntityTypeKey` `create` `(Ljava/lang/Class;Ljava/lang/String;)L~cluster/sharding/typed/javadsl/EntityTypeKey;` : new/other
-- `P.cluster.sharding.typed.javadsl.Entity` `of` `(L~cluster/sharding/typed/javadsl/EntityTypeKey;L~japi/function/Function;)L~cluster/sharding/typed/javadsl/Entity;` : new/other
-- `P.cluster.sharding.typed.javadsl.ClusterSharding` `init` `(L~cluster/sharding/typed/javadsl/Entity;)L~actor/typed/ActorRef;` : abstract
-- `P.cluster.sharding.typed.javadsl.ClusterSharding` `entityRefFor` `(L~cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;)L~cluster/sharding/typed/javadsl/EntityRef;` : abstract
-- `P.cluster.sharding.typed.javadsl.ClusterSharding` `entityRefFor` `(L~cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;Ljava/lang/String;)L~cluster/sharding/typed/javadsl/EntityRef;` : abstract
-- `P.actor.typed.receptionist.Receptionist` `register` `(L~actor/typed/receptionist/ServiceKey;L~actor/typed/ActorRef;L~actor/typed/ActorRef;)L~actor/typed/receptionist/Receptionist$Command;` : new/other
-- `P.actor.typed.receptionist.Receptionist` `register` `(L~actor/typed/receptionist/ServiceKey;L~actor/typed/ActorRef;)L~actor/typed/receptionist/Receptionist$Command;` : new/other
-- `P.actor.typed.receptionist.Receptionist` `subscribe` `(L~actor/typed/receptionist/ServiceKey;L~actor/typed/ActorRef;)L~actor/typed/receptionist/Receptionist$Command;` : new/other
-- `P.actor.typed.receptionist.Receptionist` `find` `(L~actor/typed/receptionist/ServiceKey;L~actor/typed/ActorRef;)L~actor/typed/receptionist/Receptionist$Command;` : new/other
-- `P.cluster.pubsub.DistributedPubSubMediator$Publish` `<init>` `(Ljava/lang/String;Ljava/lang/Object;Z)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Publish` `<init>` `(Ljava/lang/String;Ljava/lang/Object;)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Subscribe` `<init>` `(Ljava/lang/String;Lscala/Option;L~actor/ActorRef;)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Subscribe` `<init>` `(Ljava/lang/String;L~actor/ActorRef;)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Subscribe` `<init>` `(Ljava/lang/String;Ljava/lang/String;L~actor/ActorRef;)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Send` `<init>` `(Ljava/lang/String;Ljava/lang/Object;Z)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Send` `<init>` `(Ljava/lang/String;Ljava/lang/Object;)V` : void/prim
-- `P.cluster.pubsub.DistributedPubSubMediator$Put` `<init>` `(L~actor/ActorRef;)V` : void/prim
-- `P.pattern.Patterns` `ask` `(L~actor/ActorSelection;Ljava/lang/Object;J)Lscala/concurrent/Future;` : new/other
-- `P.pattern.Patterns` `ask` `(L~actor/ActorSelection;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` : new/other
-- `P.pattern.Patterns` `ask` `(L~actor/ActorSelection;Ljava/lang/Object;L~util/Timeout;)Lscala/concurrent/Future;` : new/other
-- `P.pattern.Patterns` `ask` `(L~actor/ActorRef;Ljava/lang/Object;J)Lscala/concurrent/Future;` : new/other
-- `P.pattern.Patterns` `ask` `(L~actor/ActorRef;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` : new/other
-- `P.pattern.Patterns` `ask` `(L~actor/ActorRef;Ljava/lang/Object;L~util/Timeout;)Lscala/concurrent/Future;` : new/other
-- `P.pattern.Patterns` `pipe` `(Ljava/util/concurrent/CompletionStage;Lscala/concurrent/ExecutionContext;)L~pattern/PipeToSupport$PipeableCompletionStage;` : new/other
-- `P.pattern.Patterns` `pipe` `(Lscala/concurrent/Future;Lscala/concurrent/ExecutionContext;)L~pattern/PipeToSupport$PipeableFuture;` : new/other
+Verbatim from the table `scripts/probes/cp57_actors/run.sh` generates (its `probe.py` runs `javap -c -p -s` on each
+class and classifies every `areturn`); the rows below are that output with the two families laid side by side, and
+nothing in the cells is typed by hand. The `1.1.3` column is Pekko and the `2.6.21` column is Akka. The column headers are the versions each family's jars REPORTED in their
+own `META-INF/MANIFEST.MF` `Implementation-Version` (read for all six artifacts of each family: every one of the
+twelve states `1.1.3` or `2.6.21`), not the version the fixtures' `pom.xml` asked for. The jars are the ones
+`fixtures/orders-actors-pekko` and `fixtures/orders-actors-akka` resolve, and `run.sh` rebuilds both with `clean`
+before it reads them, so no cell can come from a stale build. Descriptors are shown with the package prefix
+(`org/apache/pekko` or `akka`) written `~`; they are identical in both columns. "(via call)" means the `areturn` is
+the result of a call on the same class whose own result is that verdict.
+
+| owner.method descriptor | 1.1.3 | 2.6.21 |
+|---|---|---|
+| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | via call: new/other |
+| `actor.typed.javadsl.BehaviorBuilder.build` `()L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via call) |
+| `actor.typed.javadsl.ReceiveBuilder.onMessage` `(Ljava/lang/Class;L~/japi/function/Predicate;L~/japi/function/Function;)L~/actor/typed/javadsl/ReceiveBuilder;` | this | this (via call) |
+| `actor.typed.javadsl.ReceiveBuilder.onMessageEquals` `(Ljava/lang/Object;L~/japi/function/Creator;)L~/actor/typed/javadsl/ReceiveBuilder;` | this (via call) | this (via call) |
+| `actor.typed.javadsl.ReceiveBuilder.build` `()L~/actor/typed/javadsl/Receive;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.receive` `(Ljava/lang/Class;)L~/actor/typed/javadsl/BehaviorBuilder;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.receive` `(L~/japi/function/Function2;L~/japi/function/Function2;)L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.receive` `(L~/japi/function/Function2;)L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.receiveMessage` `(L~/japi/Function;)L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.setup` `(L~/japi/function/Function;)L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.Behaviors.withTimers` `(L~/japi/function/Function;)L~/actor/typed/Behavior;` | new/other | new/other |
+| `actor.typed.javadsl.AbstractBehavior.newReceiveBuilder` `()L~/actor/typed/javadsl/ReceiveBuilder;` | new/other | new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/util/function/Predicate;Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this | this |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via call) | this (via call) |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommand` `(Ljava/lang/Class;Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | this (via call) | this (via call) |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/BiFunction;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Function;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onAnyCommand` `(Ljava/util/function/Supplier;)L~/persistence/typed/javadsl/CommandHandler;` | via call: new/other | via call: new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilderByState.onCommandEquals` `-` | NOT FOUND | NOT FOUND |
+| `persistence.typed.javadsl.CommandHandlerBuilder.forAnyState` `()L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilder.forState` `(Ljava/util/function/Predicate;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilder.forState` `(Ljava/lang/Class;Ljava/util/function/Predicate;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilder.forStateType` `(Ljava/lang/Class;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
+| `persistence.typed.javadsl.CommandHandlerBuilder.build` `()L~/persistence/typed/javadsl/CommandHandler;` | new/other | new/other |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
+| `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via call) | this (via call) |
+| `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
+| `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
+| `japi.pf.ReceiveBuilder.matchEquals` `(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
+| `japi.pf.ReceiveBuilder.matchAny` `(L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
+| `japi.pf.ReceiveBuilder.matchAny` `(Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this | this |
+| `japi.pf.ReceiveBuilder.build` `()L~/actor/AbstractActor$Receive;` | new/other | new/other |
+| `actor.AbstractActor.receiveBuilder` `()L~/japi/pf/ReceiveBuilder;` | new/other | new/other |
+| `actor.AbstractActor.getSender` `()L~/actor/ActorRef;` | new/other | via call: new/other |
+| `actor.AbstractActor.getSelf` `()L~/actor/ActorRef;` | via call: new/other | via call: new/other |
+| `actor.typed.ActorRef.tell` `(Ljava/lang/Object;)V` | abstract | abstract |
+| `actor.ActorRef.tell` `(Ljava/lang/Object;L~/actor/ActorRef;)V` | void/prim | void/prim |
+| `actor.ActorRef.forward` `(Ljava/lang/Object;L~/actor/ActorContext;)V` | void/prim | void/prim |
+| `actor.typed.RecipientRef.tell` `(Ljava/lang/Object;)V` | abstract | abstract |
+| `actor.typed.RecipientRef.ask` `-` | NOT FOUND | NOT FOUND |
+| `actor.typed.javadsl.AskPattern.ask` `(L~/actor/typed/RecipientRef;L~/japi/function/Function;Ljava/time/Duration;L~/actor/typed/Scheduler;)Ljava/util/concurrent/CompletionStage;` | new/other | new/other |
+| `cluster.sharding.typed.javadsl.EntityRef.tell` `(Ljava/lang/Object;)V` | abstract | abstract |
+| `cluster.sharding.typed.javadsl.EntityRef.ask` `(L~/japi/function/Function;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` | abstract | abstract |
+| `actor.typed.javadsl.ActorContext.ask` `(Ljava/lang/Class;L~/actor/typed/RecipientRef;Ljava/time/Duration;L~/japi/function/Function;L~/japi/function/Function2;)V` | abstract | abstract |
+| `actor.typed.javadsl.ActorContext.messageAdapter` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/ActorRef;` | abstract | abstract |
+| `actor.typed.javadsl.ActorContext.pipeToSelf` `(Ljava/util/concurrent/CompletionStage;L~/japi/function/Function2;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;)V` | void/prim | void/prim |
+| `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | void/prim | void/prim |
+| `actor.typed.javadsl.TimerScheduler.startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/time/Duration;)V` | void/prim | void/prim |
+| `actor.typed.javadsl.TimerScheduler.startTimerAtFixedRate` `(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | void/prim | void/prim |
+| `actor.typed.javadsl.TimerScheduler.startSingleTimer` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.javadsl.TimerScheduler.startSingleTimer` `(Ljava/lang/Object;Ljava/time/Duration;)V` | void/prim | void/prim |
+| `actor.typed.javadsl.TimerScheduler.startPeriodicTimer` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
+| `actor.typed.Scheduler.scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.typed.Scheduler.scheduleOnce` `(Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.typed.Scheduler.scheduleWithFixedDelay` `(Lscala/concurrent/duration/FiniteDuration;Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.typed.Scheduler.scheduleWithFixedDelay` `(Ljava/time/Duration;Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.Scheduler.scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;L~/actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;L~/actor/ActorRef;)L~/actor/Cancellable;` | new/other | new/other |
+| `actor.Scheduler.scheduleOnce` `(Ljava/time/Duration;L~/actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;L~/actor/ActorRef;)L~/actor/Cancellable;` | new/other | new/other |
+| `actor.Scheduler.scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Lscala/Function0;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | new/other | new/other |
+| `actor.Scheduler.scheduleOnce` `(Lscala/concurrent/duration/FiniteDuration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.Scheduler.scheduleOnce` `(Ljava/time/Duration;Ljava/lang/Runnable;Lscala/concurrent/ExecutionContext;)L~/actor/Cancellable;` | new/other | new/other |
+| `actor.typed.receptionist.ServiceKey.create` `(Ljava/lang/Class;Ljava/lang/String;)L~/actor/typed/receptionist/ServiceKey;` | new/other | new/other |
+| `cluster.sharding.typed.javadsl.EntityTypeKey.create` `(Ljava/lang/Class;Ljava/lang/String;)L~/cluster/sharding/typed/javadsl/EntityTypeKey;` | new/other | new/other |
+| `cluster.sharding.typed.javadsl.Entity.of` `(L~/cluster/sharding/typed/javadsl/EntityTypeKey;L~/japi/function/Function;)L~/cluster/sharding/typed/javadsl/Entity;` | new/other | new/other |
+| `cluster.sharding.typed.javadsl.ClusterSharding.init` `(L~/cluster/sharding/typed/javadsl/Entity;)L~/actor/typed/ActorRef;` | abstract | abstract |
+| `cluster.sharding.typed.javadsl.ClusterSharding.entityRefFor` `(L~/cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;)L~/cluster/sharding/typed/javadsl/EntityRef;` | abstract | abstract |
+| `cluster.sharding.typed.javadsl.ClusterSharding.entityRefFor` `(L~/cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;Ljava/lang/String;)L~/cluster/sharding/typed/javadsl/EntityRef;` | abstract | abstract |
+| `actor.typed.receptionist.Receptionist.register` `(L~/actor/typed/receptionist/ServiceKey;L~/actor/typed/ActorRef;L~/actor/typed/ActorRef;)L~/actor/typed/receptionist/Receptionist$Command;` | new/other | new/other |
+| `actor.typed.receptionist.Receptionist.register` `(L~/actor/typed/receptionist/ServiceKey;L~/actor/typed/ActorRef;)L~/actor/typed/receptionist/Receptionist$Command;` | new/other | new/other |
+| `actor.typed.receptionist.Receptionist.subscribe` `(L~/actor/typed/receptionist/ServiceKey;L~/actor/typed/ActorRef;)L~/actor/typed/receptionist/Receptionist$Command;` | new/other | new/other |
+| `actor.typed.receptionist.Receptionist.find` `(L~/actor/typed/receptionist/ServiceKey;L~/actor/typed/ActorRef;)L~/actor/typed/receptionist/Receptionist$Command;` | new/other | new/other |
+| `cluster.pubsub.DistributedPubSubMediator$Publish.<init>` `(Ljava/lang/String;Ljava/lang/Object;Z)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Publish.<init>` `(Ljava/lang/String;Ljava/lang/Object;)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Subscribe.<init>` `(Ljava/lang/String;Lscala/Option;L~/actor/ActorRef;)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Subscribe.<init>` `(Ljava/lang/String;L~/actor/ActorRef;)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Subscribe.<init>` `(Ljava/lang/String;Ljava/lang/String;L~/actor/ActorRef;)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Send.<init>` `(Ljava/lang/String;Ljava/lang/Object;Z)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Send.<init>` `(Ljava/lang/String;Ljava/lang/Object;)V` | void/prim | void/prim |
+| `cluster.pubsub.DistributedPubSubMediator$Put.<init>` `(L~/actor/ActorRef;)V` | void/prim | void/prim |
+| `pattern.Patterns.ask` `(L~/actor/ActorSelection;Ljava/lang/Object;J)Lscala/concurrent/Future;` | new/other | new/other |
+| `pattern.Patterns.ask` `(L~/actor/ActorSelection;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` | new/other | new/other |
+| `pattern.Patterns.ask` `(L~/actor/ActorSelection;Ljava/lang/Object;L~/util/Timeout;)Lscala/concurrent/Future;` | new/other | new/other |
+| `pattern.Patterns.ask` `(L~/actor/ActorRef;Ljava/lang/Object;J)Lscala/concurrent/Future;` | new/other | new/other |
+| `pattern.Patterns.ask` `(L~/actor/ActorRef;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;` | new/other | new/other |
+| `pattern.Patterns.ask` `(L~/actor/ActorRef;Ljava/lang/Object;L~/util/Timeout;)Lscala/concurrent/Future;` | new/other | new/other |
+| `pattern.Patterns.pipe` `(Ljava/util/concurrent/CompletionStage;Lscala/concurrent/ExecutionContext;)L~/pattern/PipeToSupport$PipeableCompletionStage;` | new/other | new/other |
+| `pattern.Patterns.pipe` `(Lscala/concurrent/Future;Lscala/concurrent/ExecutionContext;)L~/pattern/PipeToSupport$PipeableFuture;` | new/other | new/other |
+
 
 ## Compiled fixture shapes (`fixtures/orders-actors-pekko`)
 
@@ -391,6 +404,25 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
     invokestatic  #106                // Method onGet:(Ljava/lang/String;Lcom/acme/actors/OrderEntity$Get;)L~actor/typed/Behavior;
     areturn
 
+
+### Orders (persistence builder held in locals; Pekko build)
+
+`commandHandler()` keeps the `CommandHandlerBuilder` in local 1 and each `forState` result in its own local (2 and 3).
+`forAnyState().onCommand(..)` is a chain whose result is dropped; the `onCommand` calls on the locals are separate statements.
+
+- `commandHandler` `()LPK/persistence/typed/javadsl/CommandHandler;`
+    invokevirtual newCommandHandlerBuilder:()CommandHandlerBuilder ; astore_1
+    aload_1 ; invokevirtual CommandHandlerBuilder.forAnyState:()CommandHandlerBuilderByState
+    ldc Orders$Place ; invokedynamic apply(Orders)BiFunction ; invokevirtual CommandHandlerBuilderByState.onCommand:(Class,BiFunction)CommandHandlerBuilderByState
+    aload_1 ; invokedynamic test()Predicate ; invokevirtual CommandHandlerBuilder.forState:(Predicate)CommandHandlerBuilderByState ; astore_2
+    aload_2 ; ldc Orders$Cancel ; invokedynamic apply(Orders)BiFunction ; invokevirtual CommandHandlerBuilderByState.onCommand:(Class,BiFunction)CommandHandlerBuilderByState
+    aload_1 ; invokedynamic test()Predicate ; invokevirtual CommandHandlerBuilder.forState:(Predicate)CommandHandlerBuilderByState ; astore_3
+    aload_3 ; ldc Orders$Cancel ; invokedynamic apply(Orders)BiFunction ; invokevirtual CommandHandlerBuilderByState.onCommand:(Class,BiFunction)CommandHandlerBuilderByState
+    aload_1 ; invokevirtual CommandHandlerBuilder.build:()CommandHandler ; areturn
+
+The `onCommand` results are not used (no `astore`), so a read that follows `onCommand` through its return value finds
+nothing; the behavior is the local the call is made on. The handler references (`this::onPlace` etc.) are
+`invokedynamic` bootstraps naming the private methods directly.
 
 ### TwoReturns (scratch, compiled by run.sh)
 
