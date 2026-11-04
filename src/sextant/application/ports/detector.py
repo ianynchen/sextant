@@ -27,6 +27,13 @@ class LibraryRoot:
     coordinate: str
     version: str
     archive: Path
+    # The `<package>` its symbols carry (D00 §1), where that is NOT the coordinate
+    # spelled `group/artifact`. Only `.` today: a Gradle sibling with no group has no
+    # coordinates at all (OI-273 round 2), so `coordinate` holds its module id — still
+    # its `origin` and its `sibling_coordinates` entry — and its symbols read `. . .`,
+    # exactly as they do when that sibling is analysed as a module. `None`, the
+    # default, is every published dependency.
+    package: str | None = None
 
 
 @dataclass(frozen=True)

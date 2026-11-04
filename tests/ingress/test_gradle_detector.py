@@ -1001,3 +1001,37 @@ def test_a_project_record_predating_the_release_field_reads_as_absence(tmp_path:
     project = _minimal_project(dir_=str(tmp_path))
     project.pop("declaredRelease", None)
     assert GradleDetector._module_of(tmp_path, project).declared_release is None
+
+
+@pytest.mark.pins("detect.a-NO-GROUP-sibling-is-read-as-an-unpublished-library-root")
+def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_path: Path):
+    """Two projects of one no-group build, `:app` calling a class in `:lib`. `lib`'s
+    compiled classes are on `app`'s compile classpath — a dependency in every sense —
+    so they are read the way a grouped sibling's are. It has no coordinates (Gradle
+    will not publish it), so it is marked unpublished exactly as the module itself
+    is: named by its module id, `Acme:lib`, with `.` for package and version, which
+    is what its symbols carry when `lib` is analysed on its own. Skipping it left every
+    call from `app` into `lib` pointing at classes nothing had read (OI-273 round 2)."""
+    lib_classes = tmp_path / "lib" / "build" / "classes" / "java" / "main"
+    lib_classes.mkdir(parents=True)
+    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
+    lib = _project(
+        tmp_path / "lib", path=":lib", group="", name="lib", classes_dirs=[str(lib_classes)]
+    )
+    app = _project(
+        tmp_path / "app",
+        path=":app",
+        group="",
+        name="app",
+        classpath=[{"path": str(lib_classes), "internal": True, "projectPath": ":lib"}],
+    )
+    module = GradleDetector._module_of(tmp_path / "app", app, [root, lib, app])
+
+    assert module.sibling_coordinates == ("Acme:lib",)
+    assert [(r.coordinate, r.version, r.package, r.archive) for r in module.library_roots] == [
+        ("Acme:lib", ".", ".", lib_classes)
+    ]
+    # The same string `lib` reports as its OWN id, which is what joins the two.
+    assert module.sibling_coordinates == (
+        GradleDetector._module_of(tmp_path / "lib", lib, [root, lib, app]).module_id,
+    )

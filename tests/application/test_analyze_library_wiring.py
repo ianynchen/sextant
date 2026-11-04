@@ -392,3 +392,51 @@ def test_every_existing_output_directory_is_scanned_and_a_missing_one_is_skipped
         workspace.close()
     written = {path.stem for path in (root / "facts").rglob("*.jsonl")}
     assert {"BillingPort", "ConflictingOrderException"} <= written, sorted(written)
+
+
+@pytest.mark.pins("analyze.an-UNPUBLISHED-library-root-writes-dots-not-maven")
+def test_an_unpublished_sibling_is_scanned_under_its_module_id_with_dots(tmp_path: Path):
+    """A Gradle sibling with no group has no coordinates (OI-273 round 2): its classes
+    are read like any sibling's, every document records its module id as `origin`, and
+    its symbols carry `. . .` — the same identity they have when that sibling is analysed
+    as a module of its own — never a `maven` package spelled out of a build path."""
+    compiled = REPO / "fixtures" / "orders-soap-client" / "target" / "classes"
+    package = Path("com") / "example" / "billing"
+    split = {"app": "ConflictingOrderException.class", "lib": "BillingPort.class"}
+    for directory, name in split.items():
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes(
+            (compiled / package / name).read_bytes()
+        )
+    sibling = LibraryRoot(coordinate="Acme:lib", version=".", archive=tmp_path / "lib", package=".")
+    root = tmp_path / "run"
+    root.mkdir()
+    module = replace(
+        _module(root, (sibling,)),
+        module_id="Acme:app",
+        coordinates=".",
+        version=".",
+        output_dirs=(tmp_path / "app",),
+    )
+    workspace = DuckDbWorkspace(root / "ws.duckdb")
+    try:
+        analyze(
+            path=root,
+            workspace=workspace,
+            detectors=[_FakeDetector(module)],
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=_EmptyCatalogs(),
+            fact_root=root / "facts",
+            progress=NullProgress(),
+        )
+    finally:
+        workspace.close()
+    fact_root = root / "facts"
+    document, symbol = (
+        json.loads(line)
+        for line in next((fact_root / "lib").rglob("BillingPort.jsonl"))
+        .read_text(encoding="utf-8")
+        .splitlines()[:2]
+    )
+    assert document["origin"] == "Acme:lib"
+    assert symbol["symbol"].startswith("sextant-jvm . . . com/example/billing/BillingPort#")

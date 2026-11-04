@@ -1190,9 +1190,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/gradle.py",
-                find="        if group:\n            module_id = ",
+                find="        if group:\n            return _Identity(",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n"
-                "            module_id = ",
+                "            return _Identity(",
             ),
         ),
     ),
@@ -1205,8 +1205,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/gradle.py",
-                find='            if path_in_build == ":":\n',
-                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+                find='        if path_in_build == ":":\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1239,6 +1239,36 @@ GUARDS: dict[str, Guard] = {
                 "module.output_dirs[:1]\n",
                 replace="    present = module.output_dirs[:1]  # guard disabled by "
                 "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-NO-GROUP-sibling-is-read-as-an-unpublished-library-root": Guard(
+        what="a Gradle sibling with no group on the compile classpath is a library root, "
+        "named by its module id and marked unpublished",
+        why="it is on the classpath and its types are in this module's calls; skipped, every "
+        "call from a no-group module into its sibling points at classes nothing read "
+        "(OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            coordinate = identity.module_id\n",
+                replace="            if not identity.published:  # guard disabled by "
+                "scripts/guard_check.py\n                continue\n"
+                "            coordinate = identity.module_id\n",
+            ),
+        ),
+    ),
+    "analyze.an-UNPUBLISHED-library-root-writes-dots-not-maven": Guard(
+        what="a library root marked unpublished is scanned with `.` as its package, so its "
+        "symbols read `. . .`",
+        why="without it a no-group sibling's symbols would read `maven Acme/lib .` — a "
+        "package spelled out of a build path, and a different symbol from the one the same "
+        "class carries when that sibling is analysed as a module (OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="                    if library.package is None\n",
+                replace="                    if True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

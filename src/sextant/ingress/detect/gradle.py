@@ -46,7 +46,7 @@ import tempfile
 from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
 from sextant.domain.symbols import NOT_APPLICABLE
@@ -88,6 +88,16 @@ _WRAPPER_BOOTSTRAP_SUBSTRINGS = (
     "Downloading https",
     "Could not create local gradle distribution",
 )
+
+
+class _Identity(NamedTuple):
+    """A project's module id, the `<package> <version>` its symbols carry, and whether
+    it has Maven coordinates at all (`GradleDetector._identity`)."""
+
+    module_id: str
+    coordinates: str
+    version: str
+    published: bool
 
 
 class MissingInitScriptError(FileNotFoundError):
@@ -348,29 +358,7 @@ class GradleDetector:
         # single-project build gets anyway. The detector's own call site passes the
         # real list; tests that build one project pass nothing and get the
         # pre-W55 behaviour, which is what they are about.
-        name = project["name"]
-        group = project["group"]
-        # The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
-        # Gradle 9.8.2's measured behaviour). A group with no version publishes as
-        # `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
-        # group publishes as nothing at all — `publishToMavenLocal` refuses with "groupId
-        # cannot be empty" — so the project has no coordinates, its symbols carry `. . .`
-        # (D00 §1), and its only identity is its place in its build: the root project's
-        # name, then the project path with every segment kept (`Acme:libs:core`); the
-        # root project itself is its name alone. Both come from Gradle's own records, the
-        # root's being the reactor entry at path `:`.
-        if group:
-            module_id = f"{group}:{name}"
-            coordinates = f"{group}/{name}"
-            version = project["version"]
-        else:
-            path_in_build = project["path"]
-            if path_in_build == ":":
-                module_id = name
-            else:
-                root = {p["path"]: p for p in reactor}[":"]
-                module_id = f"{root['name']}{path_in_build}"
-            coordinates = version = NOT_APPLICABLE
+        identity = GradleDetector._identity(project, reactor)
         # Gradle NAMES a source/resource root as a build convention; it does
         # not promise the directory exists on disk (2M Task 3 fix round 1,
         # M1) — the same "no guess" discipline `MavenDetector`'s own
@@ -393,9 +381,9 @@ class GradleDetector:
         siblings = GradleDetector._sibling_roots(project, reactor)
         library_roots = library_roots + siblings
         return ModuleModel(
-            module_id=module_id,
-            coordinates=coordinates,
-            version=version,
+            module_id=identity.module_id,
+            coordinates=identity.coordinates,
+            version=identity.version,
             root=path,
             kind=GradleDetector._classify(path, project),
             # Gradle's own default is `jar` in every sense that matters here:
@@ -483,6 +471,30 @@ class GradleDetector:
         )
 
     @staticmethod
+    def _identity(project: dict[str, Any], reactor: Sequence[dict[str, Any]]) -> "_Identity":
+        """The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
+        Gradle 9.8.2's measured behaviour). A group with no version publishes as
+        `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
+        group publishes as nothing at all — `publishToMavenLocal` refuses with "groupId
+        cannot be empty" — so the project has no coordinates, its symbols carry `. . .`
+        (D00 §1), and its only identity is its place in its build: the root project's
+        name, then the project path with every segment kept (`Acme:libs:core`); the
+        root project itself is its name alone. Both come from Gradle's own records, the
+        root's being the reactor entry at path `:`. One rule for a module and for a
+        sibling read as its library root, so the two spell one project the same way."""
+        name = project["name"]
+        group = project["group"]
+        if group:
+            return _Identity(f"{group}:{name}", f"{group}/{name}", project["version"], True)
+        path_in_build = project["path"]
+        if path_in_build == ":":
+            module_id = name
+        else:
+            root = {p["path"]: p for p in reactor}[":"]
+            module_id = f"{root['name']}{path_in_build}"
+        return _Identity(module_id, NOT_APPLICABLE, NOT_APPLICABLE, False)
+
+    @staticmethod
     def _sibling_roots(
         project: dict[str, Any], reactor: Sequence[dict[str, Any]]
     ) -> tuple[LibraryRoot, ...]:
@@ -519,10 +531,12 @@ class GradleDetector:
             sibling = by_path.get(str(entry.get("projectPath") or ""))
             if sibling is None:
                 continue
-            group, name = sibling.get("group"), sibling.get("name")
-            if not group or not name:
-                continue
-            coordinate = f"{group}:{name}"
+            # A sibling with no group is read too (OI-273 round 2): it is on the
+            # classpath like any other. It has no coordinates, so it is named by its module
+            # id and marked unpublished — `.` for package and version — the identity its
+            # symbols carry when it is analysed as a module itself.
+            identity = GradleDetector._identity(sibling, reactor)
+            coordinate = identity.module_id
             # ONE ROOT PER CLASSES DIRECTORY, because `LibraryRoot.archive` is one
             # path and Gradle's `classesDirs` is a SET: it carries one entry per
             # compiled source set, so a project built from more than one of them
@@ -539,8 +553,9 @@ class GradleDetector:
                     (coordinate, str(directory)),
                     LibraryRoot(
                         coordinate=coordinate,
-                        version=str(sibling.get("version") or "unversioned"),
+                        version=str(identity.version or "unversioned"),
                         archive=directory,
+                        package=None if identity.published else NOT_APPLICABLE,
                     ),
                 )
         return tuple(found[key] for key in sorted(found))

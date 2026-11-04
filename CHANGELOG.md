@@ -25,6 +25,11 @@ here would restate those documents rather than add anything.
   at all, so its module id is the root project name and project path (`Noty:app`; a root
   project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **A Gradle sibling with no group is read as a library root.** It is on the compile
+  classpath like a grouped sibling, so its classes are read under its module id and carry
+  `. . .`, the symbols they have when it is analysed on its own. A subproject is rarely without
+  a group: Gradle defaults it to the root project's name plus its parent's path, dotted, and
+  publishes it there (`Acme:lib` at `unspecified`), so that is the identity it gets.
 - **Every output directory a build reports is scanned, not only the first.** Gradle reports
   one classes directory per compiling plugin, and a Kotlin JVM project's first is
   `build/classes/java/main`, which a Kotlin-only build never creates: the scan refused every

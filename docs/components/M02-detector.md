@@ -137,8 +137,21 @@ The module id and the symbol's `<package-manager> <package> <version>` ([D00](D0
 Both names in the no-group row are Gradle's own records — the root project name and every
 project's path arrive in the init script's document (the root is the entry at path `:`),
 never parsed from `settings.gradle`. Every path segment is kept, so `:libs:core` and
-`:core` stay distinct. A reactor sibling with no group is not yet read as a library root:
-`_sibling_roots` skips it, because a library root's coordinate is a `group:artifact`.
+`:core` stay distinct.
+
+**In practice the no-group row is a ROOT project.** Gradle gives every subproject a default
+group — the root project's name, then its parent's path, dotted: `Acme` for `:lib`,
+`Acme.libs` for `:libs:core` — and publishes it under that group (measured on Gradle 9.8.2:
+`:lib` of root `Acme`, with no group written anywhere, publishes
+`Acme/lib/unspecified/lib-unspecified.jar`). So such a subproject takes the second row,
+`Acme:lib` / `maven Acme/lib unspecified`, because that is what Gradle reports. Only a project
+whose group is empty — a root project, or a subproject that sets `group = ''` — takes the third.
+
+**A reactor sibling with no group is read as a library root too** (OI-273 round 2): it is on
+the compile classpath like any other. It is named by its module id — which is also its
+`origin` and its `sibling_coordinates` entry — and marked unpublished (`LibraryRoot.package`
+and `version` both `.`), so its classes carry `. . .`, the same symbols they have when that
+sibling is analysed as a module of its own.
 
 **Every compiled output directory the build reports is scanned** (OI-273 round 2). Gradle's
 `classesDirs` is a set — one directory per compiling plugin — so a Kotlin JVM project reports

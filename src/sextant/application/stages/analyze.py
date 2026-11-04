@@ -288,7 +288,9 @@ def analyze(
             library_report = scanner.scan(
                 ScanRequest(
                     module_id=module.module_id,
-                    coordinates=library.coordinate.replace(":", "/"),
+                    coordinates=library.coordinate.replace(":", "/")
+                    if library.package is None
+                    else library.package,
                     version=library.version,
                     classes_dir=library.archive,
                     out_dir=library_fact_root(fact_root, library.coordinate),
