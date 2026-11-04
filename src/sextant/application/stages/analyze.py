@@ -242,10 +242,11 @@ def analyze(
         discard_scanned_facts(fact_root, output_dir)
     # EVERY output directory the build reports, each scanned into the same fact tree
     # (OI-273 round 2): Gradle's `classesDirs` is a set, one directory per compiling
-    # plugin, and the first is `build/classes/java/main` — absent on a Kotlin-only build,
-    # and only half the classes on a mixed one. A reported directory that does not exist
-    # holds no classes and is skipped. Where none exists the first is still handed over,
-    # so the scanner's own refusal names it, as it always has (Maven reports one).
+    # plugin. The first may not exist at all (a plugin with nothing to compile never
+    # creates it), and on a module with two compiling plugins each holds part of it. A
+    # reported directory that does not exist holds no classes and is skipped. Where none
+    # exists the first is still handed over, so the scanner's own refusal names it, as it
+    # always has (Maven reports one).
     present = tuple(d for d in module.output_dirs if d.is_dir()) or module.output_dirs[:1]
     reports = [
         scanner.scan(
