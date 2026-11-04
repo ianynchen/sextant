@@ -127,6 +127,14 @@ publishes `search` while its port is unknown.
    the entering call's argument, or unread where the body was entered twice with different
    arguments — is `values.read_through_hand_off`, which `client_base._Options._value` and
    `chains._read_through` both call.
+
+   **C3, landed after the user's ruling of 2026-11-03 (OI-262, option B).** The JDK's null checks
+   are not hand-offs (rule 3's catalog data, `not_hand_offs` with `methods`:
+   `java.util.Objects`' `requireNonNull`, `requireNonNullElse`, `isNull`, `nonNull`). A built
+   value handed to code we do not have, or to a body that does anything, between its terminal and
+   the FIRST same-method consumer makes the row `partial` (`chains._handed_before_use`); a
+   hand-off after the first consumer leaves that request as built, and the one row keeps the most
+   exact reading.
 7. **A hand-off to a call a catalog declares takes its effect from the catalog** [ruled by the
    user, 2026-11-02: "predict the framework's behavior exactly, including its errors", DR-6].
    A catalog-declared call is not code we do not have: the catalog is the measured statement of

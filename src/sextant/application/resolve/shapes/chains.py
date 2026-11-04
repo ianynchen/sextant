@@ -2801,12 +2801,42 @@ def _executed_unread(terminal: dict[str, Any], context: _ChainContext) -> bool:
     executed is not known, so the row is no surer than `partial` (rule 2)."""
     if str(terminal["name"]) not in context.via_argument_names:
         return False
+    here = _consumers(terminal, context.sites, context.via_argument_names[str(terminal["name"])])
+    if here and _handed_before_use(terminal, here, context):
+        return True
     key = _site_key(terminal)
     if key not in context.identified:
         return False
-    return not _consumers(
-        terminal, context.sites, context.via_argument_names[str(terminal["name"])]
-    ) and not context.joined.get(key)
+    return not here and not context.joined.get(key)
+
+
+def _handed_before_use(
+    terminal: dict[str, Any], consumers: Sequence[dict[str, Any]], context: _ChainContext
+) -> bool:
+    """Whether the value `terminal` built is handed on, between the terminal and EVERY consumer
+    in its own method, in a way the walk cannot read as nothing (item 2 review, C3; rule 2): a
+    hand-off into code we do not have (`escapes`, `cycle`), or into a body that does anything to
+    it. Read per consumer (re-review, minor): a hand-off after the first execute leaves that
+    execute's request as built, and the one row of one identity keeps the most exact reading
+    (`fluent._Kept`), so only a hand-off before the first consumer makes the row `partial`. A
+    call the catalog itself reads (`_declared_use`: a step, a consumer) is read by its words,
+    not here."""
+    if context.hand_offs is None:
+        return False
+    value = _chain_key(terminal) if str(terminal["name"]) == "<init>" else terminal.get("result")
+    if value is None:
+        return False
+    first = min(int(consumer["ordinal"]) for consumer in consumers)
+    by_ordinal = {int(site["ordinal"]): site for site in context.sites}
+    for ordinal, outcomes in context.hand_offs.of(
+        str(terminal["caller"]), int(str(value)), int(terminal["ordinal"])
+    ):
+        site = by_ordinal.get(ordinal)
+        if ordinal >= first or site is None or _declared_use(site, {}, context):
+            continue
+        if any(isinstance(gathered, str) or gathered for _, gathered in outcomes):
+            return True
+    return False
 
 
 def _joined_through_values(

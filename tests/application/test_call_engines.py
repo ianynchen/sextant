@@ -9125,6 +9125,12 @@ _REQUIRE_NON_NULL = CallTarget(
     name="requireNonNull",
     descriptor="(Ljava/lang/Object;)Ljava/lang/Object;",
 )
+# A call into code this module does not have that the catalogs state nothing about: the stand-in
+# for "the value was handed to the JDK" (rule 2). `Objects.requireNonNull` is not one since the
+# user's ruling of 2026-11-03 (option B, `value-models/compiler-null-checks.yml`).
+_HANDED_TO_JDK = CallTarget(
+    owner="java/util/List#", name="of", descriptor="(Ljava/lang/Object;)Ljava/util/List;"
+)
 
 
 @pytest.mark.pins("chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row")
@@ -9132,7 +9138,7 @@ def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_it
     tmp_path: Path,
 ):
     """Item 2's B list, `chains._walk_back` (spec 2026-11-02 rule 4, "never drop a row"):
-    `sendEscaping(b) { Objects.requireNonNull(b); http.execute(b.build()); }`, called with
+    `sendEscaping(b) { List.of(b); http.execute(b.build()); }`, called with
     `get("/a")`. The JDK call is code we do not have, so the walk back from `build()` ends at
     `escapes` (rule 2) and reads no chain — but the request is sent: one row, its parts the walk
     did not read, never surer than `partial`. Measured on real javac 21 bytecode before the
@@ -9143,7 +9149,7 @@ def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_it
         CallSiteFact(
             document_id="doc_1",
             caller=send,
-            target=_REQUIRE_NON_NULL,
+            target=_HANDED_TO_JDK,
             invoke_kind="static",
             ordinal=0,
             receiver=None,
@@ -9184,7 +9190,7 @@ def test_a_built_request_handed_to_code_we_do_not_have_before_it_is_sent_keeps_i
 ):
     """Item 2's B list, `chains._joined_through_values` (rules 4 and 8): `makeOnce()` returns
     `get("http://svc/b").build()`, and `joinEscaping()` does `req = makeOnce();
-    Objects.requireNonNull(req); http.execute(req, h)`. Which `build()` made the request is
+    List.of(req); http.execute(req, h)`. Which `build()` made the request is
     identity, which no hand-off changes (rule 8), so the join pairs them; what the JDK call did
     to the request is not known (rule 2), so the row is no surer than `partial`. Measured on
     real javac 21 bytecode before the change: no row at all."""
@@ -9229,7 +9235,7 @@ def test_a_built_request_handed_to_code_we_do_not_have_before_it_is_sent_keeps_i
         CallSiteFact(
             document_id="doc_1",
             caller=join,
-            target=_REQUIRE_NON_NULL,
+            target=_HANDED_TO_JDK,
             invoke_kind="static",
             ordinal=1,
             receiver=None,
@@ -14199,7 +14205,7 @@ def test_a_builder_parameter_no_module_code_hands_in_keeps_its_row(tmp_path: Pat
 @pytest.mark.pins("chains.a-walk-back-keeps-a-row-for-a-terminal-of-the-chains-OWN-TYPE")
 def test_a_builder_from_a_factory_no_root_names_keeps_its_row_where_it_escapes(tmp_path: Path):
     """Item 2 review, M1: `copyEscaping(src) { b = ClassicRequestBuilder.copy(src);
-    Objects.requireNonNull(b); http.execute(b.build()); }`. `copy` is no root of the catalog,
+    List.of(b); http.execute(b.build()); }`. `copy` is no root of the catalog,
     but `build()` is called on the catalog's own builder type: the request is sent, one row, its
     parts unread. The object-origin gate dropped it."""
     caller = _http_method("copyEscaping")
@@ -14213,7 +14219,7 @@ def test_a_builder_from_a_factory_no_root_names_keeps_its_row_where_it_escapes(t
         CallSiteFact(
             document_id="doc_1",
             caller=caller,
-            target=_REQUIRE_NON_NULL,
+            target=_HANDED_TO_JDK,
             invoke_kind="static",
             ordinal=1,
             receiver=None,
@@ -14315,3 +14321,138 @@ def test_a_constructor_rooted_builder_handed_away_before_sending_keeps_its_row(t
     workspace.close()
     assert len(rows) == 1, rows
     assert rows[0][0] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("values.a-JDK-NULL-CHECK-is-not-a-hand-off")
+def test_a_jdk_null_check_on_a_builder_is_not_a_hand_off(tmp_path: Path):
+    """The user's ruling of 2026-11-03 (OI-262, option B): `Objects.requireNonNull` and the other
+    JDK null checks only test for null and throw, so `send(b) { Objects.requireNonNull(b);
+    http.execute(b.build()); }` called with `get("http://svc/a")` reads past the check and the
+    row is the caller's own, `GET /a`, `resolved`. Read as a hand-off, it was a row with nothing
+    read."""
+    send = _http_method("sendChecked", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendChecked", _SET_B_JVM),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=_REQUIRE_NON_NULL,
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(send, APACHE_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+    ]
+    handing = _apache_handing("callsChecked", [("hand", "sendChecked", _SET_B_JVM)], {})
+    caller = _http_method("callsChecked")
+    facts += [
+        fact
+        for fact in handing
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 1)
+    ]
+    assert _apache_walked_rows(tmp_path, _with_root_descriptor(facts)) == [
+        ("GET", "/a", "resolved")
+    ]
+
+
+def _apache_same_method(name: str, between: list[tuple[int, CallTarget]], executes: int = 1):
+    """`name() { req = get("http://svc/<name>").build(); <between>; http.execute(req, h)…; }`:
+    each `between` entry `(after_executes, target)` a static call handed `req`, placed after that
+    many executes; `executes` executes of the one request."""
+    caller = _http_method(name)
+    sites: list = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value=f"http://svc/{name}")],
+            invoke_kind="static",
+        ).model_copy(
+            update={"target": CallTarget(owner=APACHE_BUILDER, name="get", descriptor=_ROOT_JVM)}
+        ),
+        _call(caller, APACHE_BUILDER, "build", 1, receiver=3, result=4),
+    ]
+    ordinal = 2
+    for done in range(executes + 1):
+        for after, target in between:
+            if after == done:
+                sites.append(
+                    CallSiteFact(
+                        document_id="doc_1",
+                        caller=caller,
+                        target=target,
+                        invoke_kind="static",
+                        ordinal=ordinal,
+                        receiver=None,
+                        result=20 + ordinal,
+                        arguments=[CallArgument(kind="unresolved", source=4)],
+                    )
+                )
+                ordinal += 1
+        if done < executes:
+            sites.append(
+                _call(
+                    caller,
+                    APACHE_CLIENT,
+                    "execute",
+                    ordinal,
+                    receiver=9,
+                    result=40 + ordinal,
+                    arguments=[CallArgument(kind="unresolved", source=4)],
+                )
+            )
+            ordinal += 1
+    return [
+        _declared_method(_HTTP_OWNER, name, "(Z)V"),
+        *sites,
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.pins("chains.a-request-handed-to-the-JDK-before-its-SAME-METHOD-execute-is-partial")
+def test_a_built_request_handed_to_the_jdk_before_its_execute_in_one_method_is_partial(
+    tmp_path: Path,
+):
+    """Item 2 review, C3 (rule 2): `req = get("/c5b").build(); List.of(req).forEach(…);
+    http.execute(req, h)` in one method. The request was handed to code we do not have before it
+    was sent, so what it holds is not known: `partial`. The `source` match found the execute
+    first and never read that window, so the row was `resolved`. A null check there
+    (`Objects.requireNonNull(req)`, ruled not a hand-off) leaves it `resolved`."""
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        *_apache_same_method("handed", [(0, _HANDED_TO_JDK)]),
+        *_apache_same_method("checked", [(0, _REQUIRE_NON_NULL)]),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [
+        ("checked", "GET", "/checked", "resolved"),
+        ("handed", "GET", "/handed", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-hand-off-AFTER-the-first-execute-leaves-its-request-as-built")
+def test_a_hand_off_after_the_first_execute_leaves_that_request_as_built(tmp_path: Path):
+    """The re-review's minor on the held C3: `req = get("/twice").build(); http.execute(req);
+    List.of(req); http.execute(req)`. The first execute sends the request as built, before the
+    hand-off, and the one row of that identity keeps its most exact reading: `resolved`."""
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        *_apache_same_method("twice", [(1, _HANDED_TO_JDK)], executes=2),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [("twice", "GET", "/twice", "resolved")]

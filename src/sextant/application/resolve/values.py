@@ -1087,7 +1087,7 @@ def _record_hand_offs(row: Mapping[str, Any], method: str, ordinal: int, shapes:
         shapes.unread_receivers.setdefault((method, slot_of_type(owner)), []).append(ordinal)
     # The user's ruling of 2026-11-02: a call to an owner the catalogs declare in
     # `not_hand_offs` (a compiler's null checks) takes the value without handing it off.
-    if owner in shapes.not_hand_offs:
+    if owner in shapes.not_hand_offs or owner + str(row["name"]) in shapes.not_hand_offs:
         return
     arguments = row["arguments"] or []
     slots: tuple[str, ...] | None = None

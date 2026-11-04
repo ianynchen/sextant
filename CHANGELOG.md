@@ -17,6 +17,17 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The JDK's null checks are not hand-offs, and a request handed to the JDK before its execute
+  in one method is `partial`** (item 2 review C3; the user's ruling of 2026-11-03 on OI-262,
+  option B). A `not_hand_offs` entry may now name `methods` of its owner (D02 §1f), and
+  `java.util.Objects`' `requireNonNull` (three overloads), `requireNonNullElse`, `isNull` and
+  `nonNull` are declared, measured with `javap`: `send(b) { Objects.requireNonNull(b);
+  http.execute(b.build()); }` gives its caller's row, `resolved`. `req = …build();
+  List.of(req).forEach(r -> r.setPath(…)); http.execute(req, h)` published the built path,
+  `resolved`, because the same-method `source` match never read the window; a hand-off of the
+  built value before the first same-method execute now makes the row `partial` (a hand-off after
+  it leaves that request as built).
+
 - **A constructor-rooted builder handed away keeps its row, and one shared rule reads a helper's
   argument through its hand-off** (item 2 fix round 2, re-review N1). The walk back's type gate
   read a constructor root's type off its descriptor, which hands back nothing, so OkHttp's

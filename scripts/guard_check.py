@@ -9259,6 +9259,45 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.a-JDK-NULL-CHECK-is-not-a-hand-off": Guard(
+        what="a call to a method a `not_hand_offs` entry names under `methods` takes the value "
+        "without handing it off (the user's ruling of 2026-11-03, OI-262, option B)",
+        why="`Objects.requireNonNull(b)` before `http.execute(b.build())` makes every such "
+        "request a row with nothing read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    if owner in shapes.not_hand_offs or owner + str(row["name"]) in shapes.not_hand_offs:\n',
+                replace="    if owner in shapes.not_hand_offs:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-request-handed-to-the-JDK-before-its-SAME-METHOD-execute-is-partial": Guard(
+        what="a built request handed to code we do not have before its same-method execute is "
+        "no surer than `partial` (item 2 review, C3; rule 2)",
+        why='`List.of(req).forEach(r -> r.setPath("/elsewhere"))` before `execute(req)` '
+        "publishes the built path, `resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if here and _handed_before_use(terminal, here, context):\n",
+                replace="    if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-hand-off-AFTER-the-first-execute-leaves-its-request-as-built": Guard(
+        what="only a hand-off before the first same-method execute makes the row `partial` "
+        "(re-review minor on C3)",
+        why="`execute(req); List.of(req); execute(req)` makes the first request, sent as built, "
+        "`partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='    first = min(int(consumer["ordinal"]) for consumer in consumers)\n',
+                replace='    first = max(int(consumer["ordinal"]) for consumer in consumers)  # guard disabled\n',
+            ),
+        ),
+    ),
     "chains.a-CAPPED-walk-back-keeps-the-terminals-row": Guard(
         what="a walk back past the path cap keeps the terminal's row, its parts unread "
         "(review 3 re-review, M-B)",
@@ -9589,8 +9628,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="    if owner in shapes.not_hand_offs:\n",
-                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+                find='    if owner in shapes.not_hand_offs or owner + str(row["name"]) in shapes.not_hand_offs:\n',
+                replace='    if owner + str(row["name"]) in shapes.not_hand_offs:  # guard disabled\n',
             ),
         ),
     ),

@@ -5,9 +5,9 @@ displayName: Calls a compiler inserts that take a value without being a hand-off
 # every call that takes a value as a HAND-OFF: code that might change it. A call into code
 # this module does not have ends the path at `escapes`.
 #
-# `not_hand_offs` names the OWNER classes whose calls are not hand-offs at all. One
-# structural rule per owner, never per method: the owner is recognised, and every call to
-# it is read as taking the value without changing it.
+# `not_hand_offs` names the calls that are not hand-offs at all: an OWNER, every call to it,
+# or — with `methods` (ruled 2026-11-03) — the named methods of that owner, every overload of
+# each name. A call one names is read as taking the value without changing it.
 #
 # RULED BY THE USER, 2026-11-02 (per-path truth, fix round 1, review M2): Kotlin's
 # compiler-inserted null checks are NOT a hand-off. `kotlin.jvm.internal.Intrinsics` is the
@@ -23,4 +23,21 @@ displayName: Calls a compiler inserts that take a value without being a hand-off
 
 not_hand_offs:
   - owner: kotlin.jvm.internal.Intrinsics
+    by: docs/superpowers/specs/2026-11-02-per-path-truth-design.md
+  # RULED BY THE USER, 2026-11-03 (per-path truth, item 2 fix round 1, C3; OI-262, option B):
+  # the JDK's null checks are NOT a hand-off either. Each only tests its argument for null and
+  # returns it, a default, or a boolean, or throws; none calls a method on the value. Measured
+  # with `javap -public java.util.Objects` on JDK 21.0.13:
+  #   public static <T> T requireNonNull(T);
+  #   public static <T> T requireNonNull(T, java.lang.String);
+  #   public static <T> T requireNonNull(T, java.util.function.Supplier<java.lang.String>);
+  #   public static <T> T requireNonNullElse(T, T);
+  #   public static boolean isNull(java.lang.Object);
+  #   public static boolean nonNull(java.lang.Object);
+  # The class's other methods are left out on purpose: `equals`, `deepEquals`, `hashCode`,
+  # `hash`, `toString` and `compare` call the value's own methods (or a comparator), which may
+  # be the module's code, and `requireNonNullElseGet` calls a supplier. No other JDK method with
+  # this contract was found (`jdk.internal.util.Preconditions` is not callable from module code).
+  - owner: java.util.Objects
+    methods: [requireNonNull, requireNonNullElse, isNull, nonNull]
     by: docs/superpowers/specs/2026-11-02-per-path-truth-design.md

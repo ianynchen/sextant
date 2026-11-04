@@ -267,12 +267,16 @@ class YamlCatalogSource:
         return model
 
     def not_hand_offs(self) -> tuple[str, ...]:
-        """Every owner `value-models/*.yml` declares under `not_hand_offs`, as a type symbol (spec 2026-11-02,
-        the user's ruling on compiler null checks): a call to one of these classes takes a
-        value without being a hand-off of it, so the value walk's `escapes` window reads it as
-        nothing. Each entry is `{owner, by}`, `by` required as `identified_by`'s is; sorted,
-        so two runs build one tuple (NFR-1)."""
-        owners: set[str] = set()
+        """Every call `value-models/*.yml` declares under `not_hand_offs` (spec 2026-11-02, the
+        user's rulings on compiler null checks, 2026-11-02, and on the JDK's, 2026-11-03): a call
+        to one takes a value without being a hand-off of it, so the value walk's `escapes` window
+        reads it as nothing. Each entry is `{owner, methods?, by}`, `by` required as
+        `identified_by`'s is. Without `methods` the entry is the whole owner, spelled as a type
+        symbol (`a/b/Owner#`); with it, each named method of that owner, spelled as the type
+        symbol followed by the name (`a/b/Owner#method`), every overload of the name included.
+        `methods` is a non-empty list of identifiers, refused otherwise. Sorted, so two runs
+        build one tuple (NFR-1)."""
+        declared_calls: set[str] = set()
         for path in sorted((self._directory / "value-models").glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
             declared = raw.get("not_hand_offs") if isinstance(raw, dict) else None
@@ -286,10 +290,30 @@ class YamlCatalogSource:
                         f"loading value model {path}: a `not_hand_offs` entry needs an `owner` "
                         f"and the `by` that justifies it, got {entry!r}"
                     )
+                unknown = sorted(set(entry) - {"owner", "methods", "by"})
+                if unknown:
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry declares "
+                        f"`owner`, `methods` and `by`; unknown {unknown}"
+                    )
                 # Dotted, as every catalog spells a type (2E-prep §1c); the facts' symbol
                 # form is what a call site's `owner` carries.
-                owners.add(type_descriptor(str(entry["owner"])))
-        return tuple(sorted(owners))
+                owner = type_descriptor(str(entry["owner"]))
+                if "methods" not in entry:
+                    declared_calls.add(owner)
+                    continue
+                methods = entry["methods"]
+                if (
+                    not isinstance(methods, list)
+                    or not methods
+                    or not all(isinstance(name, str) and name.isidentifier() for name in methods)
+                ):
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry's `methods` is a "
+                        f"non-empty list of method names of `{entry['owner']}`, got {methods!r}"
+                    )
+                declared_calls.update(owner + str(name) for name in methods)
+        return tuple(sorted(declared_calls))
 
     def hand_off_effects(self) -> tuple[dict[str, Any], ...]:
         """Every entry `value-models/*.yml` declares under `hand_off_effects` (spec

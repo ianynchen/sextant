@@ -27,7 +27,7 @@ import pytest
 from fixture_module import declared_parameters, write_fixture_module_fact
 
 from flow_facts import straight_line
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve import path_prefix, values
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
@@ -6668,3 +6668,41 @@ def test_a_split_setting_no_published_part_does_not_count(branches):
     )
     assert {producer.inexact for producer in stated} == {False}
     assert {producer.inexact for producer in unstated} == {True}
+
+
+def _null_check_source(tmp_path: Path, entry: str) -> YamlCatalogSource:
+    models = tmp_path / "value-models"
+    models.mkdir(parents=True)
+    (models / "checks.yml").write_text(f"id: checks\nnot_hand_offs:\n{entry}", encoding="utf-8")
+    return YamlCatalogSource(tmp_path)
+
+
+def test_a_not_hand_offs_entry_may_name_the_methods_it_covers():
+    """The user's ruling of 2026-11-03 (OI-262, option B): an entry's optional `methods` limits
+    it to those methods of its owner — `java.util.Objects`' six null checks, never its `hash`,
+    `equals` or `toString`, which call the value's own methods. Absent, the whole owner, as the
+    Kotlin `Intrinsics` entry is."""
+    declared = YamlCatalogSource(catalogs_dir()).not_hand_offs()
+    assert "kotlin/jvm/internal/Intrinsics#" in declared
+    assert {d for d in declared if d.startswith("java/util/Objects#")} == {
+        "java/util/Objects#requireNonNull",
+        "java/util/Objects#requireNonNullElse",
+        "java/util/Objects#isNull",
+        "java/util/Objects#nonNull",
+    }
+
+
+@pytest.mark.parametrize(
+    "methods", ["requireNonNull", "[]", "[requireNonNull(Object)]", "['']", "[1]"]
+)
+def test_a_not_hand_offs_methods_list_that_is_not_a_list_of_method_names_is_refused(
+    tmp_path: Path, methods: str
+):
+    """`methods` is a non-empty list of method names, each a Java identifier: a bare string, an
+    empty list, a name with a descriptor or a non-name is refused at load, naming the file —
+    never read as "the whole owner"."""
+    source = _null_check_source(
+        tmp_path, f"  - {{owner: java.util.Objects, methods: {methods}, by: spec}}\n"
+    )
+    with pytest.raises(CatalogError, match="methods"):
+        source.not_hand_offs()
